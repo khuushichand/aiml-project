@@ -39,6 +39,10 @@ export const WorkflowIntegrationHost: React.FC<
 
   const shouldAutoShow = useMemo(() => {
     if (!autoShow) return false
+    // The home route already renders the dedicated LandingHub surface.
+    // Auto-opening the modal there duplicates the welcome UI and can block
+    // header controls behind the overlay.
+    if (location.pathname === "/") return false
     return autoShowPaths.includes(location.pathname)
   }, [autoShow, autoShowPaths, location.pathname])
 

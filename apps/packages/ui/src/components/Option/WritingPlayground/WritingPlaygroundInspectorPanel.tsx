@@ -37,7 +37,7 @@ const TAB_DEFINITIONS: TabDefinition[] = [
   },
   {
     key: "inspect",
-    label: "Inspect",
+    label: "Analysis",
     testId: "writing-inspector-tab-inspect"
   }
 ]

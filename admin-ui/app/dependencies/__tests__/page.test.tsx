@@ -85,23 +85,109 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+const getProviderRow = async (providerName: string) => {
+  const label = await screen.findByText(providerName);
+  const row = label.closest('tr');
+  expect(row).not.toBeNull();
+  return row as HTMLElement;
+};
+
 describe('DependenciesPage', () => {
-  it('renders dependency health grid with provider metrics', async () => {
+  it('renders dependency health grid with passive telemetry and unknown initial status', async () => {
     render(<DependenciesPage />);
 
     expect(await screen.findByRole('heading', { name: 'External Dependencies' })).toBeInTheDocument();
-    const openaiRow = (await screen.findByText('Openai')).closest('tr');
-    const anthropicRow = (await screen.findByText('Anthropic')).closest('tr');
+    const openaiRow = await getProviderRow('Openai');
+    const anthropicRow = await getProviderRow('Anthropic');
 
-    expect(openaiRow).not.toBeNull();
-    expect(anthropicRow).not.toBeNull();
-    expect(within(openaiRow as HTMLElement).getByText('Reachable')).toBeInTheDocument();
-    expect(within(openaiRow as HTMLElement).getByText('5.0%')).toBeInTheDocument();
-    expect(within(anthropicRow as HTMLElement).getByText('3.3%')).toBeInTheDocument();
+    expect(within(openaiRow).getByText('Unknown')).toBeInTheDocument();
+    expect(within(openaiRow).getByText('5.0%')).toBeInTheDocument();
+    expect(within(openaiRow).getAllByText('Never')).toHaveLength(2);
+    expect(within(anthropicRow).getByText('Unknown')).toBeInTheDocument();
+    expect(within(anthropicRow).getByText('3.3%')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'openai availability trend' })).toBeInTheDocument();
+    expect(apiMock.testLLMProvider).not.toHaveBeenCalled();
   });
 
-  it('runs per-provider connectivity test and updates displayed status', async () => {
+  it('refreshes passive telemetry without running provider connectivity checks', async () => {
+    const user = userEvent.setup();
+
+    render(<DependenciesPage />);
+
+    await getProviderRow('Openai');
+
+    expect(apiMock.getLLMProviders).toHaveBeenCalledTimes(1);
+    expect(apiMock.getLlmUsageSummary).toHaveBeenCalledTimes(2);
+    expect(apiMock.getMetricsText).toHaveBeenCalledTimes(1);
+    expect(apiMock.testLLMProvider).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /refresh data/i }));
+
+    await waitFor(() => {
+      expect(apiMock.getLLMProviders).toHaveBeenCalledTimes(2);
+    });
+    expect(apiMock.getLlmUsageSummary).toHaveBeenCalledTimes(4);
+    expect(apiMock.getMetricsText).toHaveBeenCalledTimes(2);
+    expect(apiMock.testLLMProvider).not.toHaveBeenCalled();
+  });
+
+  it('runs all enabled provider checks only after clicking run all checks', async () => {
+    const user = userEvent.setup();
+
+    apiMock.getLLMProviders.mockResolvedValueOnce({
+      providers: [
+        {
+          name: 'openai',
+          enabled: true,
+          default_model: 'gpt-4o-mini',
+          models: ['gpt-4o-mini'],
+        },
+        {
+          name: 'anthropic',
+          enabled: true,
+          default_model: 'claude-3-5-sonnet',
+          models: ['claude-3-5-sonnet'],
+        },
+        {
+          name: 'groq',
+          enabled: false,
+          default_model: 'llama-3.1-8b-instant',
+          models: ['llama-3.1-8b-instant'],
+        },
+      ],
+    });
+
+    render(<DependenciesPage />);
+
+    const openaiRow = await getProviderRow('Openai');
+    const anthropicRow = await getProviderRow('Anthropic');
+    const groqRow = await getProviderRow('Groq');
+
+    expect(apiMock.testLLMProvider).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /run all checks/i }));
+
+    await waitFor(() => {
+      expect(within(openaiRow).getByText('Reachable')).toBeInTheDocument();
+    });
+    expect(within(anthropicRow).getByText('Unreachable')).toBeInTheDocument();
+    expect(within(groqRow).getByText('Unknown')).toBeInTheDocument();
+    expect(apiMock.testLLMProvider).toHaveBeenCalledTimes(2);
+    expect(apiMock.testLLMProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'openai',
+        use_override: true,
+      })
+    );
+    expect(apiMock.testLLMProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'anthropic',
+        use_override: true,
+      })
+    );
+  });
+
+  it('runs per-provider connectivity test and updates displayed status only after click', async () => {
     const user = userEvent.setup();
 
     apiMock.getLLMProviders.mockResolvedValueOnce({
@@ -115,28 +201,25 @@ describe('DependenciesPage', () => {
       ],
     });
 
-    let callCount = 0;
-    apiMock.testLLMProvider.mockImplementation(async ({ provider }: { provider: string }) => {
-      callCount += 1;
-      if (provider === 'openai' && callCount === 1) {
-        throw new Error('initial timeout');
-      }
-      return { provider, status: 'ok', model: 'gpt-4o-mini' };
+    apiMock.testLLMProvider.mockResolvedValue({
+      provider: 'openai',
+      status: 'ok',
+      model: 'gpt-4o-mini',
     });
 
     render(<DependenciesPage />);
 
-    const openaiRow = (await screen.findByText('Openai')).closest('tr');
-    expect(openaiRow).not.toBeNull();
-    expect(within(openaiRow as HTMLElement).getByText('Unreachable')).toBeInTheDocument();
+    const openaiRow = await getProviderRow('Openai');
+    expect(within(openaiRow).getByText('Unknown')).toBeInTheDocument();
+    expect(apiMock.testLLMProvider).not.toHaveBeenCalled();
 
-    const testButton = within(openaiRow as HTMLElement).getByRole('button', {
+    const testButton = within(openaiRow).getByRole('button', {
       name: /test openai connectivity/i,
     });
     await user.click(testButton);
 
     await waitFor(() => {
-      expect(within(openaiRow as HTMLElement).getByText('Reachable')).toBeInTheDocument();
+      expect(within(openaiRow).getByText('Reachable')).toBeInTheDocument();
     });
     expect(apiMock.testLLMProvider).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -147,13 +230,20 @@ describe('DependenciesPage', () => {
   });
 
   it('highlights unreachable providers with red row styling and last-success info', async () => {
+    const user = userEvent.setup();
+
     render(<DependenciesPage />);
 
-    const anthropicLabel = await screen.findByText('Anthropic');
-    const row = anthropicLabel.closest('tr');
-    expect(row).not.toBeNull();
-    expect(row?.className).toContain('bg-red-50');
-    expect(within(row as HTMLElement).getByText('Unreachable')).toBeInTheDocument();
-    expect(within(row as HTMLElement).getByText('Never')).toBeInTheDocument();
+    const row = await getProviderRow('Anthropic');
+    expect(row.className).not.toContain('bg-red-50');
+    expect(within(row).getByText('Unknown')).toBeInTheDocument();
+
+    await user.click(within(row).getByRole('button', { name: /test anthropic connectivity/i }));
+
+    await waitFor(() => {
+      expect(within(row).getByText('Unreachable')).toBeInTheDocument();
+    });
+    expect(row.className).toContain('bg-red-50');
+    expect(within(row).getAllByText('Never')).toHaveLength(1);
   });
 });

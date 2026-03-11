@@ -39,6 +39,7 @@ export type PromptPreviewSummary = {
 type Props = {
   serverChatId: string | null
   settingsFingerprint: string
+  serverChatAssistantKind?: "character" | "persona" | null
 }
 
 interface PromptPreviewSectionPayload {
@@ -85,7 +86,9 @@ const SECTION_I18N_KEYS: Record<string, string> = {
   message_steering: "playground:section.message_steering",
   greeting: "playground:section.greeting",
   lorebook: "playground:section.lorebook",
-  world_book: "playground:section.world_book"
+  world_book: "playground:section.world_book",
+  persona_boundary: "playground:section.persona_boundary",
+  persona_exemplars: "playground:section.persona_exemplars"
 }
 
 const toBudgetStatus = (
@@ -170,7 +173,8 @@ export const normalizePreviewPayload = (payload: unknown): PromptPreviewSummary 
 
 export const PromptAssemblyPreview: React.FC<Props> = ({
   serverChatId,
-  settingsFingerprint
+  settingsFingerprint,
+  serverChatAssistantKind
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const [open, setOpen] = React.useState(false)
@@ -196,6 +200,7 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
     queryKey: [
       "promptAssemblyPreview",
       serverChatId,
+      serverChatAssistantKind,
       settingsFingerprint,
       resolvedSteering.mode,
       resolvedSteering.forceNarrate,
@@ -203,7 +208,9 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
       messageSteeringPrompts.impersonateUser,
       messageSteeringPrompts.forceNarrate
     ],
-    enabled: open && Boolean(serverChatId),
+    enabled:
+      open &&
+      Boolean(serverChatId),
     queryFn: async () => {
       if (!serverChatId) {
         return null

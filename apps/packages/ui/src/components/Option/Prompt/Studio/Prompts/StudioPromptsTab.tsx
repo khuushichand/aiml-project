@@ -77,6 +77,9 @@ export const StudioPromptsTab: React.FC = () => {
         name: `${prompt.name} (Copy)`,
         system_prompt: prompt.system_prompt,
         user_prompt: prompt.user_prompt,
+        prompt_format: prompt.prompt_format,
+        prompt_schema_version: prompt.prompt_schema_version,
+        prompt_definition: prompt.prompt_definition,
         few_shot_examples: prompt.few_shot_examples,
         modules_config: prompt.modules_config,
         change_description: `Duplicated from "${prompt.name}"`
@@ -107,10 +110,22 @@ export const StudioPromptsTab: React.FC = () => {
     if (searchText.trim()) {
       const q = searchText.toLowerCase()
       items = items.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          p.system_prompt?.toLowerCase().includes(q) ||
-          p.user_prompt?.toLowerCase().includes(q)
+        (p) => {
+          const structuredContent = Array.isArray(p.prompt_definition?.blocks)
+            ? p.prompt_definition.blocks
+                .map((block: any) =>
+                  typeof block?.content === "string" ? block.content : ""
+                )
+                .join(" ")
+                .toLowerCase()
+            : ""
+          return (
+            p.name.toLowerCase().includes(q) ||
+            p.system_prompt?.toLowerCase().includes(q) ||
+            p.user_prompt?.toLowerCase().includes(q) ||
+            structuredContent.includes(q)
+          )
+        }
       )
     }
     return items.sort(
@@ -317,8 +332,10 @@ export const StudioPromptsTab: React.FC = () => {
               const hasUser = !!record.user_prompt?.trim()
               const hasFewShot =
                 record.few_shot_examples && record.few_shot_examples.length > 0
+              const isStructured = record.prompt_format === "structured"
               return (
                 <div className="flex flex-col gap-1 max-w-md">
+                  {isStructured && <Tag color="geekblue">Structured</Tag>}
                   {hasSystem && (
                     <div className="flex items-start gap-2">
                       <Tag color="volcano" className="shrink-0">

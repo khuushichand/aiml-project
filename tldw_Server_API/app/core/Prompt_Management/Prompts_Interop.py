@@ -174,11 +174,25 @@ def add_keyword(keyword_text: str) -> tuple[Optional[int], Optional[str]]:
 
 def add_prompt(name: str, author: Optional[str], details: Optional[str],
                system_prompt: Optional[str] = None, user_prompt: Optional[str] = None,
-               keywords: Optional[list[str]] = None, overwrite: bool = False
+               keywords: Optional[list[str]] = None, overwrite: bool = False,
+               prompt_format: str = "legacy",
+               prompt_schema_version: Optional[int] = None,
+               prompt_definition: Optional[Any] = None,
                ) -> tuple[Optional[int], Optional[str], str]:
     """Adds or updates a prompt. See PromptsDatabase.add_prompt for details."""
     db = get_db_instance()
-    return db.add_prompt(name, author, details, system_prompt, user_prompt, keywords, overwrite)
+    return db.add_prompt(
+        name=name,
+        author=author,
+        details=details,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        prompt_format=prompt_format,
+        prompt_schema_version=prompt_schema_version,
+        prompt_definition=prompt_definition,
+        keywords=keywords,
+        overwrite=overwrite,
+    )
 
 def update_keywords_for_prompt(prompt_id: int, keywords_list: list[str]) -> None:
     """Updates keywords for a specific prompt. See PromptsDatabase.update_keywords_for_prompt for details."""

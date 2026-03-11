@@ -101,6 +101,10 @@ const OptionChatbooks = createSettingsRoute(
 const SidepanelChat = lazy(() => import("./sidepanel-chat"))
 const SidepanelSettings = lazy(() => import("./sidepanel-settings"))
 const SidepanelAgent = lazy(() => import("./sidepanel-agent"))
+const SidepanelCompanion = lazy(() => import("./sidepanel-companion"))
+const SidepanelCompanionConversation = lazy(
+  () => import("./sidepanel-companion-conversation")
+)
 const SidepanelPersona = lazy(() => import("./sidepanel-persona"))
 const SidepanelErrorBoundaryTest = lazy(() => import("./sidepanel-error-boundary-test"))
 const OptionRagSettings = createSettingsRoute(
@@ -190,9 +194,17 @@ const OptionGuardianSettings = createSettingsRoute(
 )
 const OptionChatbooksPlayground = lazy(() => import("./option-chatbooks-playground"))
 const OptionWatchlists = lazy(() => import("./option-watchlists"))
+const OptionCompanion = lazy(() => import("./option-companion"))
+const OptionCompanionConversation = lazy(
+  () => import("./option-companion-conversation")
+)
 const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
+const OptionSources = lazy(() => import("./option-sources"))
+const OptionSourcesNew = lazy(() => import("./option-sources-new"))
+const OptionSourcesDetail = lazy(() => import("./option-sources-detail"))
+const OptionAdminSources = lazy(() => import("./option-admin-sources"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionChatWorkflows = lazy(() => import("./option-chat-workflows"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
@@ -562,6 +574,21 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/sources",
+    element: <OptionSources />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.sources",
+      icon: Layers,
+      order: 9.5,
+      beta: true
+    }
+  },
+  { kind: "options", path: "/sources/new", element: <OptionSourcesNew /> },
+  { kind: "options", path: "/sources/:sourceId", element: <OptionSourcesDetail /> },
+  { kind: "options", path: "/admin/sources", element: <OptionAdminSources /> },
+  {
+    kind: "options",
     path: "/media",
     element: <OptionMedia />,
     nav: {
@@ -603,6 +630,24 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       icon: BookText,
       order: 2
     }
+  },
+  {
+    kind: "options",
+    path: "/companion",
+    element: <OptionCompanion />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.companion",
+      icon: Sparkles,
+      order: 2.5,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/companion/conversation",
+    element: <OptionCompanionConversation />,
+    targets: ALL_TARGETS
   },
   {
     kind: "options",
@@ -825,6 +870,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "sidepanel",
     path: "/agent",
     element: <SidepanelAgent />,
+    targets: ALL_TARGETS
+  },
+  {
+    kind: "sidepanel",
+    path: "/companion",
+    element: <SidepanelCompanion />,
+    targets: ALL_TARGETS
+  },
+  {
+    kind: "sidepanel",
+    path: "/companion/conversation",
+    element: <SidepanelCompanionConversation />,
     targets: ALL_TARGETS
   },
   {

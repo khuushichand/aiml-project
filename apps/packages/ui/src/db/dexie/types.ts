@@ -123,6 +123,8 @@ export type FewShotExample = {
 
 export type PromptSyncStatus = 'local' | 'synced' | 'pending' | 'conflict';
 export type PromptSourceSystem = 'workspace' | 'studio' | 'copilot';
+export type PromptFormat = 'legacy' | 'structured';
+export type StructuredPromptDefinition = Record<string, any>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Unified Prompt Type
@@ -167,6 +169,10 @@ export type Prompt = {
   serverUpdatedAt?: string | null;    // Server's updated_at for conflict detection
 
   // ─── Studio-specific Fields (progressive disclosure) ───
+  promptFormat?: PromptFormat;
+  promptSchemaVersion?: number | null;
+  structuredPromptDefinition?: StructuredPromptDefinition | null;
+  syncPayloadVersion?: number | null;
   fewShotExamples?: FewShotExample[] | null;
   modulesConfig?: PromptModule[] | null;
   versionNumber?: number | null;

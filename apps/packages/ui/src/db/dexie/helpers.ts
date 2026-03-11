@@ -446,6 +446,10 @@ export const savePrompt = async ({
   user_prompt,
   fewShotExamples,
   modulesConfig,
+  promptFormat,
+  promptSchemaVersion,
+  structuredPromptDefinition,
+  syncPayloadVersion,
   versionNumber,
   changeDescription,
   parentVersionId,
@@ -464,6 +468,10 @@ export const savePrompt = async ({
   user_prompt?: string
   fewShotExamples?: Prompt["fewShotExamples"]
   modulesConfig?: Prompt["modulesConfig"]
+  promptFormat?: Prompt["promptFormat"]
+  promptSchemaVersion?: Prompt["promptSchemaVersion"]
+  structuredPromptDefinition?: Prompt["structuredPromptDefinition"]
+  syncPayloadVersion?: Prompt["syncPayloadVersion"]
   versionNumber?: Prompt["versionNumber"]
   changeDescription?: Prompt["changeDescription"]
   parentVersionId?: Prompt["parentVersionId"]
@@ -502,6 +510,10 @@ export const savePrompt = async ({
     details,
     system_prompt: system_prompt ?? (is_system ? resolvedContent : undefined),
     user_prompt: user_prompt ?? (!is_system ? resolvedContent : undefined),
+    promptFormat: promptFormat ?? 'legacy',
+    promptSchemaVersion: promptSchemaVersion ?? null,
+    structuredPromptDefinition: structuredPromptDefinition ?? null,
+    syncPayloadVersion: syncPayloadVersion ?? 1,
     fewShotExamples: fewShotExamples ?? null,
     modulesConfig: modulesConfig ?? null,
     versionNumber: versionNumber ?? null,
@@ -587,6 +599,10 @@ export const updatePrompt = async ({
   user_prompt,
   fewShotExamples,
   modulesConfig,
+  promptFormat,
+  promptSchemaVersion,
+  structuredPromptDefinition,
+  syncPayloadVersion,
   versionNumber,
   changeDescription,
   parentVersionId,
@@ -608,6 +624,10 @@ export const updatePrompt = async ({
   user_prompt?: string
   fewShotExamples?: Prompt["fewShotExamples"]
   modulesConfig?: Prompt["modulesConfig"]
+  promptFormat?: Prompt["promptFormat"]
+  promptSchemaVersion?: Prompt["promptSchemaVersion"]
+  structuredPromptDefinition?: Prompt["structuredPromptDefinition"]
+  syncPayloadVersion?: Prompt["syncPayloadVersion"]
   versionNumber?: Prompt["versionNumber"]
   changeDescription?: Prompt["changeDescription"]
   parentVersionId?: Prompt["parentVersionId"]
@@ -641,6 +661,10 @@ export const updatePrompt = async ({
     details,
     system_prompt,
     user_prompt,
+    promptFormat,
+    promptSchemaVersion,
+    structuredPromptDefinition,
+    syncPayloadVersion,
     fewShotExamples,
     modulesConfig,
     versionNumber,

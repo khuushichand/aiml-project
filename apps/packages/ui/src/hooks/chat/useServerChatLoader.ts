@@ -9,6 +9,7 @@ import {
   type ServerChatMessage
 } from "@/services/tldw/TldwApiClient"
 import { getHistoriesWithMetadata, saveMessage } from "@/db/dexie/helpers"
+import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import { syncChatSettingsForServerChat } from "@/services/chat-settings"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
@@ -17,6 +18,10 @@ import {
   IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
   parseImageGenerationEventMirrorContent
 } from "@/utils/image-generation-chat"
+import {
+  characterToAssistantSelection,
+  personaToAssistantSelection
+} from "@/types/assistant-selection"
 
 type NotificationApi = {
   error: (payload: { message: string; description?: string }) => void
@@ -216,6 +221,82 @@ export const fetchAllServerChatMessages = async (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value)
 
+const resolveAssistantId = (value: unknown): string | null => {
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value)
+  }
+  return null
+}
+
+export const resolveServerChatAssistantIdentity = (
+  chat: Record<string, unknown> | null | undefined
+): {
+  assistantKind: "character" | "persona" | null
+  assistantId: string | null
+  characterId: string | number | null
+  personaMemoryMode: "read_only" | "read_write" | null
+} => {
+  const candidate = chat && typeof chat === "object" ? chat : null
+  const assistantKind =
+    candidate?.assistant_kind === "character" || candidate?.assistant_kind === "persona"
+      ? candidate.assistant_kind
+      : null
+  const assistantId = resolveAssistantId(candidate?.assistant_id)
+  const rawCharacterId =
+    candidate?.character_id ??
+    candidate?.characterId ??
+    null
+  const characterId =
+    typeof rawCharacterId === "number" && Number.isFinite(rawCharacterId)
+      ? rawCharacterId
+      : typeof rawCharacterId === "string" && rawCharacterId.trim().length > 0
+        ? rawCharacterId
+        : null
+  const personaMemoryMode =
+    candidate?.persona_memory_mode === "read_only" ||
+    candidate?.persona_memory_mode === "read_write"
+      ? candidate.persona_memory_mode
+      : null
+
+  if (assistantKind === "persona" && assistantId) {
+    return {
+      assistantKind,
+      assistantId,
+      characterId: characterId ?? null,
+      personaMemoryMode
+    }
+  }
+
+  if (assistantKind === "character" && assistantId) {
+    return {
+      assistantKind,
+      assistantId,
+      characterId: characterId ?? assistantId,
+      personaMemoryMode
+    }
+  }
+
+  if (characterId != null) {
+    return {
+      assistantKind: "character",
+      assistantId: String(characterId),
+      characterId,
+      personaMemoryMode: null
+    }
+  }
+
+  return {
+    assistantKind: null,
+    assistantId: null,
+    characterId: null,
+    personaMemoryMode
+  }
+}
+
 type MapServerMessagesArgs = {
   serverMessages: ServerChatMessage[]
   assistantName: string
@@ -228,7 +309,7 @@ export const mapServerChatMessagesToPlaygroundMessages = ({
   characterId
 }: MapServerMessagesArgs): Message[] => {
   let encounteredUserMessage = false
-  return serverMessages.map((m, index) => {
+  return serverMessages.map((m) => {
     const meta = m as unknown as Record<string, unknown>
     const createdAt = Date.parse(m.created_at)
     const metadataExtraCandidate =
@@ -265,8 +346,7 @@ export const mapServerChatMessagesToPlaygroundMessages = ({
       !explicitMessageType &&
       characterId != null &&
       m.role === "assistant" &&
-      !encounteredUserMessage &&
-      index === 0
+      !encounteredUserMessage
         ? "character:greeting"
         : undefined
 
@@ -372,6 +452,7 @@ export const useServerChatLoader = ({
   notification,
   t
 }: UseServerChatLoaderOptions) => {
+  const [, setSelectedAssistant] = useSelectedAssistant(null)
   const {
     messages,
     streaming,
@@ -387,12 +468,18 @@ export const useServerChatLoader = ({
     serverChatId,
     serverChatTitle,
     serverChatCharacterId,
+    serverChatAssistantKind,
+    serverChatAssistantId,
+    serverChatPersonaMemoryMode,
     serverChatMetaLoaded,
     temporaryChat,
     setServerChatLoadState,
     setServerChatLoadError,
     setServerChatTitle,
     setServerChatCharacterId,
+    setServerChatAssistantKind,
+    setServerChatAssistantId,
+    setServerChatPersonaMemoryMode,
     setServerChatState,
     setServerChatVersion,
     setServerChatTopic,
@@ -405,12 +492,18 @@ export const useServerChatLoader = ({
       serverChatId: state.serverChatId,
       serverChatTitle: state.serverChatTitle,
       serverChatCharacterId: state.serverChatCharacterId,
+      serverChatAssistantKind: state.serverChatAssistantKind,
+      serverChatAssistantId: state.serverChatAssistantId,
+      serverChatPersonaMemoryMode: state.serverChatPersonaMemoryMode,
       serverChatMetaLoaded: state.serverChatMetaLoaded,
       temporaryChat: state.temporaryChat,
       setServerChatLoadState: state.setServerChatLoadState,
       setServerChatLoadError: state.setServerChatLoadError,
       setServerChatTitle: state.setServerChatTitle,
       setServerChatCharacterId: state.setServerChatCharacterId,
+      setServerChatAssistantKind: state.setServerChatAssistantKind,
+      setServerChatAssistantId: state.setServerChatAssistantId,
+      setServerChatPersonaMemoryMode: state.setServerChatPersonaMemoryMode,
       setServerChatState: state.setServerChatState,
       setServerChatVersion: state.setServerChatVersion,
       setServerChatTopic: state.setServerChatTopic,
@@ -421,10 +514,6 @@ export const useServerChatLoader = ({
     }),
     shallow
   )
-
-  const serverChatTitleRef = React.useRef(serverChatTitle)
-  const serverChatCharacterIdRef = React.useRef(serverChatCharacterId)
-  const serverChatMetaLoadedRef = React.useRef(serverChatMetaLoaded)
 
   const serverChatLoadRef = React.useRef<{
     chatId: string | null
@@ -440,9 +529,6 @@ export const useServerChatLoader = ({
   messagesRef.current = messages
   streamingRef.current = streaming
   processingRef.current = isProcessing
-  serverChatTitleRef.current = serverChatTitle
-  serverChatCharacterIdRef.current = serverChatCharacterId
-  serverChatMetaLoadedRef.current = serverChatMetaLoaded
 
   React.useEffect(() => {
     return () => {
@@ -507,10 +593,13 @@ export const useServerChatLoader = ({
           await tldwClient.initialize().catch(() => null)
 
           let assistantName = "Assistant"
-          let chatTitle = serverChatTitleRef.current || ""
-          let characterId = serverChatCharacterIdRef.current ?? null
+          let chatTitle = serverChatTitle || ""
+          let characterId = serverChatCharacterId ?? null
+          let assistantKind = serverChatAssistantKind
+          let assistantId = serverChatAssistantId
+          let personaMemoryMode = serverChatPersonaMemoryMode
 
-          if (!serverChatMetaLoadedRef.current) {
+          if (!serverChatMetaLoaded) {
             try {
               const chat = await tldwClient.getChat(serverChatId)
               if (!canCommitCurrentLoad()) {
@@ -518,15 +607,17 @@ export const useServerChatLoader = ({
               }
               const meta = chat as unknown as Record<string, unknown>
               chatTitle = String(meta?.title || chatTitle || "")
-              const resolvedCharacterId =
-                (meta?.character_id as string | number | null | undefined) ??
-                (meta?.characterId as string | number | null | undefined) ??
-                null
-              if (resolvedCharacterId != null) {
-                characterId = resolvedCharacterId
-              }
+              const resolvedAssistantIdentity =
+                resolveServerChatAssistantIdentity(meta)
+              assistantKind = resolvedAssistantIdentity.assistantKind
+              assistantId = resolvedAssistantIdentity.assistantId
+              characterId = resolvedAssistantIdentity.characterId
+              personaMemoryMode = resolvedAssistantIdentity.personaMemoryMode
               setServerChatTitle(chatTitle || "")
-              setServerChatCharacterId(resolvedCharacterId ?? null)
+              setServerChatCharacterId(characterId)
+              setServerChatAssistantKind(assistantKind)
+              setServerChatAssistantId(assistantId)
+              setServerChatPersonaMemoryMode(personaMemoryMode)
               setServerChatState(
                 normalizeConversationState(
                   (meta?.state as string | null | undefined) ??
@@ -558,15 +649,45 @@ export const useServerChatLoader = ({
             }
           }
 
-          if (characterId != null) {
+          if (assistantKind === "persona" && assistantId) {
+            try {
+              const persona = await tldwClient.getPersonaProfile(assistantId)
+              if (persona) {
+                assistantName = persona.name || assistantName
+                await setSelectedAssistant(
+                  personaToAssistantSelection({
+                    ...persona,
+                    id: assistantId,
+                    name: persona.name || assistantName
+                  })
+                )
+              }
+            } catch {
+              await setSelectedAssistant(
+                personaToAssistantSelection({
+                  id: assistantId,
+                  name: assistantName
+                })
+              )
+            }
+          } else if (characterId != null) {
             try {
               const character = await tldwClient.getCharacter(characterId)
               if (character) {
                 assistantName = character.name || character.title || assistantName
+                await setSelectedAssistant(
+                  characterToAssistantSelection({
+                    ...character,
+                    id: String(character.id ?? characterId)
+                  })
+                )
               }
             } catch {
               // ignore character lookup failures
+              await setSelectedAssistant(null)
             }
+          } else {
+            await setSelectedAssistant(null)
           }
 
           const list = await fetchAllServerChatMessages(
@@ -608,11 +729,18 @@ export const useServerChatLoader = ({
             isProcessing: processingRef.current
           })
 
-          if (!shouldPreserveLocal) {
+          const shouldPreserveAtCommit = shouldPreserveLocalMessagesForServerLoad({
+            currentMessages: messagesRef.current,
+            serverMessages: mappedMessages,
+            isStreaming: streamingRef.current,
+            isProcessing: processingRef.current
+          })
+
+          if (!shouldPreserveLocal && !shouldPreserveAtCommit) {
             setHistory(history)
             setMessages(mappedMessages)
           }
-          if (!temporaryChat && !shouldPreserveLocal) {
+          if (!temporaryChat && !shouldPreserveLocal && !shouldPreserveAtCommit) {
             try {
               const localHistoryId = await ensureServerChatHistoryId(
                 serverChatId,
@@ -652,7 +780,6 @@ export const useServerChatLoader = ({
                         content: m.message,
                         images: Array.isArray(m.images) ? m.images : [],
                         source: [],
-                        serverMessageId: m.serverMessageId ?? String(m.id || ""),
                         generationInfo:
                           m.generationInfo &&
                           typeof m.generationInfo === "object" &&
@@ -727,16 +854,26 @@ export const useServerChatLoader = ({
   }, [
     ensureServerChatHistoryId,
     notification,
+    serverChatAssistantId,
+    serverChatAssistantKind,
+    serverChatCharacterId,
     serverChatId,
+    serverChatMetaLoaded,
+    serverChatPersonaMemoryMode,
+    serverChatTitle,
     setHistory,
     setIsLoading,
     setMessages,
+    setSelectedAssistant,
+    setServerChatAssistantId,
+    setServerChatAssistantKind,
     setServerChatCharacterId,
     setServerChatClusterId,
     setServerChatExternalRef,
     setServerChatLoadError,
     setServerChatLoadState,
     setServerChatMetaLoaded,
+    setServerChatPersonaMemoryMode,
     setServerChatSource,
     setServerChatState,
     setServerChatTitle,

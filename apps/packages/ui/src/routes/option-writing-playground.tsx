@@ -1,13 +1,14 @@
 import OptionLayout from "~/components/Layouts/Layout"
-import { PageShell } from "@/components/Common/PageShell"
 import { WritingPlayground } from "@/components/Option/WritingPlayground"
 
 const OptionWritingPlayground = () => {
   return (
     <OptionLayout>
-      <PageShell className="py-6" maxWidthClassName="max-w-7xl">
+      <div
+        data-testid="writing-playground-route-shell"
+        className="flex min-h-0 flex-1 overflow-hidden">
         <WritingPlayground />
-      </PageShell>
+      </div>
     </OptionLayout>
   )
 }

@@ -1,5 +1,6 @@
 import React from "react"
-import { Markdown } from "@/components/Common/Markdown"
+import Markdown from "@/components/Common/Markdown"
+import { parseSections } from "@/components/Review/SectionNavigator"
 import {
   hasLeadingTranscriptTimings,
   stripLeadingTranscriptTimings
@@ -48,6 +49,7 @@ interface ContentRendererProps {
   hideTranscriptTimings?: boolean
   searchQuery?: string
   className?: string
+  headingAnchorIds?: string[]
 }
 
 /**
@@ -62,7 +64,8 @@ export const ContentRenderer: React.FC<ContentRendererProps> = ({
   contentType,
   hideTranscriptTimings = false,
   searchQuery,
-  className
+  className,
+  headingAnchorIds
 }) => {
   const detected = contentType ?? detectContentType(content)
 
@@ -72,6 +75,15 @@ export const ContentRenderer: React.FC<ContentRendererProps> = ({
     }
     return content
   }, [content, detected, hideTranscriptTimings])
+
+  const resolvedHeadingAnchorIds = React.useMemo(() => {
+    if (headingAnchorIds && headingAnchorIds.length > 0) {
+      return headingAnchorIds
+    }
+    return parseSections(processedContent)
+      .filter((section) => section.id.startsWith("section-"))
+      .map((section) => section.id)
+  }, [headingAnchorIds, processedContent])
 
   if (detected === "plain") {
     return (
@@ -93,6 +105,7 @@ export const ContentRenderer: React.FC<ContentRendererProps> = ({
           searchQuery={searchQuery}
           codeBlockVariant="compact"
           className="prose prose-sm dark:prose-invert max-w-none"
+          headingAnchorIds={resolvedHeadingAnchorIds}
         />
       </div>
     )
@@ -109,6 +122,7 @@ export const ContentRenderer: React.FC<ContentRendererProps> = ({
         searchQuery={searchQuery}
         codeBlockVariant="compact"
         className="prose prose-sm dark:prose-invert max-w-none"
+        headingAnchorIds={resolvedHeadingAnchorIds}
       />
     </div>
   )

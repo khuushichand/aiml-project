@@ -8,11 +8,10 @@ import {
   Sparkles,
   Search,
   Command,
-  Loader2,
-  ArrowDown,
-  ArrowRight
+  Loader2
 } from "lucide-react"
 import { useWorkspaceStore } from "@/store/workspace"
+import { useTutorialStore } from "@/store/tutorials"
 import {
   WORKSPACE_CONFLICT_NOTICE_THROTTLE_MS,
   WORKSPACE_STORAGE_CHANNEL_NAME,
@@ -35,13 +34,20 @@ import { FEATURE_FLAGS, useFeatureFlag } from "@/hooks/useFeatureFlags"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import { WorkspaceHeader } from "./WorkspaceHeader"
 import { WorkspaceBanner } from "./WorkspaceBanner"
+import { WorkspaceStatusBar } from "./WorkspaceStatusBar"
 import { SourcesPane } from "./SourcesPane"
 import { ChatPane } from "./ChatPane"
 import { StudioPane } from "./StudioPane"
 import {
+  PaneResizer,
+  DEFAULT_LEFT_WIDTH,
+  DEFAULT_RIGHT_WIDTH
+} from "./PaneResizer"
+import {
   WORKSPACE_UNDO_WINDOW_MS,
   scheduleWorkspaceUndoAction,
-  undoWorkspaceAction
+  undoWorkspaceAction,
+  undoLatestWorkspaceAction
 } from "./undo-manager"
 import {
   buildWorkspaceGlobalSearchResults,
@@ -528,16 +534,30 @@ const WorkspacePlaygroundSkeleton: React.FC<{ isMobile: boolean }> = ({
 
 type WorkspacePlaygroundErrorBoundaryState = {
   hasError: boolean
+  errorMessage: string | null
+  showDetails: boolean
 }
 
 class WorkspacePlaygroundErrorBoundary extends React.Component<
   React.PropsWithChildren,
   WorkspacePlaygroundErrorBoundaryState
 > {
-  state: WorkspacePlaygroundErrorBoundaryState = { hasError: false }
+  state: WorkspacePlaygroundErrorBoundaryState = {
+    hasError: false,
+    errorMessage: null,
+    showDetails: false
+  }
 
-  static getDerivedStateFromError(): WorkspacePlaygroundErrorBoundaryState {
-    return { hasError: true }
+  static getDerivedStateFromError(
+    error: unknown
+  ): Partial<WorkspacePlaygroundErrorBoundaryState> {
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : "Unknown error"
+    return { hasError: true, errorMessage: message }
   }
 
   componentDidCatch(error: unknown): void {
@@ -551,10 +571,51 @@ class WorkspacePlaygroundErrorBoundary extends React.Component<
     }
   }
 
+  handleExportData = () => {
+    try {
+      const state = useWorkspaceStore.getState()
+      const blob = new Blob([JSON.stringify(state)], { type: "application/json" })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = `workspace-recovery-${Date.now()}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      // Silently fail — user can still reload.
+    }
+  }
+
+  handleClearCache = () => {
+    try {
+      useWorkspaceStore.persist.clearStorage()
+    } catch {
+      // Ignore — reload will still work.
+    }
+    this.handleReload()
+  }
+
+  handleSwitchWorkspace = () => {
+    try {
+      // Use the Zustand store API directly to clear the workspace ID.
+      // This avoids coupling to the internal shape of the persisted state.
+      useWorkspaceStore.setState({ workspaceId: null })
+    } catch {
+      // Ignore — reload will still work.
+    }
+    this.handleReload()
+  }
+
   render() {
     if (!this.state.hasError) {
       return this.props.children
     }
+
+    const truncatedError = this.state.errorMessage
+      ? this.state.errorMessage.length > 200
+        ? `${this.state.errorMessage.slice(0, 200)}...`
+        : this.state.errorMessage
+      : null
 
     return (
       <div className="flex h-full items-center justify-center p-6">
@@ -563,16 +624,69 @@ class WorkspacePlaygroundErrorBoundary extends React.Component<
             Something went wrong
           </h2>
           <p className="mt-2 text-sm text-text-muted">
-            The workspace hit an unexpected error. Reload to recover.
+            The workspace hit an unexpected error. You can try the options below
+            to recover.
           </p>
-          <button
-            type="button"
-            onClick={this.handleReload}
-            className="mt-4 rounded bg-primary px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-90"
-            data-testid="workspace-reload-button"
-          >
-            Reload workspace
-          </button>
+
+          {truncatedError && (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() =>
+                  this.setState((prev) => ({
+                    showDetails: !prev.showDetails
+                  }))
+                }
+                className="text-xs text-text-subtle underline hover:text-text-muted"
+                data-testid="workspace-error-details-toggle"
+              >
+                {this.state.showDetails ? "Hide details" : "Show details"}
+              </button>
+              {this.state.showDetails && (
+                <pre
+                  className="mt-1 max-h-24 overflow-auto rounded bg-surface2 p-2 text-left text-[11px] text-text-muted"
+                  data-testid="workspace-error-details"
+                >
+                  {truncatedError}
+                </pre>
+              )}
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={this.handleReload}
+              className="w-full rounded bg-primary px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-90"
+              data-testid="workspace-reload-button"
+            >
+              Reload workspace
+            </button>
+            <button
+              type="button"
+              onClick={this.handleExportData}
+              className="w-full rounded border border-border px-3 py-1.5 text-sm font-medium text-text transition hover:bg-surface2"
+              data-testid="workspace-export-recovery-button"
+            >
+              Export workspace data
+            </button>
+            <button
+              type="button"
+              onClick={this.handleClearCache}
+              className="w-full rounded border border-border px-3 py-1.5 text-sm font-medium text-text transition hover:bg-surface2"
+              data-testid="workspace-clear-cache-button"
+            >
+              Clear workspace cache
+            </button>
+            <button
+              type="button"
+              onClick={this.handleSwitchWorkspace}
+              className="w-full rounded border border-border px-3 py-1.5 text-sm font-medium text-text transition hover:bg-surface2"
+              data-testid="workspace-switch-from-error-button"
+            >
+              Switch to different workspace
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -643,9 +757,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
     accountQuotaBytes: null
   })
   const lastCrossTabSyncWarningRef = React.useRef(0)
-  const [showOnboardingOverlay, setShowOnboardingOverlay] =
-    React.useState(false)
   const onboardingInitializedRef = React.useRef(false)
+  const startTutorial = useTutorialStore((s) => s.startTutorial)
 
   // Workspace store
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
@@ -686,6 +799,9 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const isStoreHydrated = storeHydrated !== false
   const sourceStatusFailureRef = React.useRef<Record<number, number>>({})
   const lastStatusViewSignatureRef = React.useRef<string | null>(null)
+
+  const [leftPaneWidth, setLeftPaneWidth] = React.useState(DEFAULT_LEFT_WIDTH)
+  const [rightPaneWidth, setRightPaneWidth] = React.useState(DEFAULT_RIGHT_WIDTH)
 
   const leftPaneOpen = !leftPaneCollapsed
   const rightPaneOpen = !rightPaneCollapsed
@@ -861,7 +977,6 @@ const WorkspacePlaygroundBody: React.FC = () => {
   }, [])
 
   const dismissOnboardingOverlay = React.useCallback(() => {
-    setShowOnboardingOverlay(false)
     if (typeof window === "undefined") return
 
     try {
@@ -870,7 +985,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
         "1"
       )
     } catch {
-      // Ignore storage errors and still dismiss for this session.
+      // Ignore storage errors.
     }
   }, [])
 
@@ -1292,27 +1407,16 @@ const WorkspacePlaygroundBody: React.FC = () => {
       const dismissed = window.localStorage.getItem(
         WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY
       )
-      setShowOnboardingOverlay(dismissed !== "1")
+      if (dismissed !== "1") {
+        // Auto-start the guided Joyride tour for first-time users
+        startTutorial("workspace-playground-basics")
+        dismissOnboardingOverlay()
+      }
     } catch {
-      setShowOnboardingOverlay(true)
+      // On storage error, start the tour anyway for this session
+      startTutorial("workspace-playground-basics")
     }
-  }, [isStoreHydrated, workspaceId])
-
-  useEffect(() => {
-    if (!showOnboardingOverlay) return
-    if (typeof window === "undefined") return
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return
-      event.preventDefault()
-      dismissOnboardingOverlay()
-    }
-
-    window.addEventListener("keydown", handleEscape)
-    return () => {
-      window.removeEventListener("keydown", handleEscape)
-    }
-  }, [dismissOnboardingOverlay, showOnboardingOverlay])
+  }, [isStoreHydrated, workspaceId, startTutorial, dismissOnboardingOverlay])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -1324,6 +1428,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
       if (hasModifier && key === "k") {
         event.preventDefault()
         setGlobalSearchOpen(true)
+        return
+      }
+
+      if (hasModifier && key === "z" && !event.shiftKey) {
+        event.preventDefault()
+        undoLatestWorkspaceAction()
         return
       }
 
@@ -1818,7 +1928,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
                 <p className="text-xs text-text-muted">
                   {t(
                     "playground:workspace.externalUpdateActionHint",
-                    "Use latest reloads this tab. Keep mine keeps your current tab state. Fork copy duplicates your current state into a new workspace."
+                    "Reload from other tab refreshes this tab. Keep this version ignores the update. Save as new workspace copies your current state."
                   )}
                 </p>
               </div>
@@ -1827,22 +1937,25 @@ const WorkspacePlaygroundBody: React.FC = () => {
                   type="button"
                   className="rounded border border-primary/40 bg-primary px-2 py-1 text-xs font-medium text-white hover:opacity-90"
                   onClick={handleReloadWorkspaceFromSyncWarning}
+                  title={t("playground:workspace.useLatestTooltip", "Discard your changes in this tab and load the version from the other tab")}
                 >
-                  {t("playground:workspace.useLatest", "Use latest")}
+                  {t("playground:workspace.useLatest", "Reload from other tab")}
                 </button>
                 <button
                   type="button"
                   className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
                   onClick={handleForkWorkspaceFromSyncWarning}
+                  title={t("playground:workspace.forkCopyTooltip", "Duplicate your current state into a brand-new workspace")}
                 >
-                  {t("playground:workspace.forkCopy", "Fork copy")}
+                  {t("playground:workspace.forkCopy", "Save as new workspace")}
                 </button>
                 <button
                   type="button"
                   className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
                   onClick={handleDismissCrossTabSyncWarning}
+                  title={t("playground:workspace.keepMineTooltip", "Dismiss this notification and keep working with your current version")}
                 >
-                  {t("playground:workspace.keepMine", "Keep mine")}
+                  {t("playground:workspace.keepMine", "Keep this version")}
                 </button>
               </div>
             </div>
@@ -1850,126 +1963,6 @@ const WorkspacePlaygroundBody: React.FC = () => {
         </div>
       )}
 
-      {showOnboardingOverlay && (
-        <div
-          data-testid="workspace-onboarding-overlay"
-          className="absolute inset-0 z-[55] flex items-center justify-center bg-bg/80 px-4 py-6 backdrop-blur-[2px]"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="workspace-onboarding-title"
-        >
-          <div className="w-full max-w-5xl rounded-xl border border-border bg-surface p-5 shadow-card md:p-6">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="space-y-1.5">
-                <h2
-                  id="workspace-onboarding-title"
-                  className="text-lg font-semibold text-text"
-                >
-                  {t(
-                    "playground:workspace.onboardingTitle",
-                    "How Research Studio works"
-                  )}
-                </h2>
-                <p className="text-sm text-text-muted">
-                  {t(
-                    "playground:workspace.onboardingSubtitle",
-                    "Move from sources to answers to outputs in three steps."
-                  )}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="rounded border border-border px-2.5 py-1.5 text-xs font-medium text-text-muted transition hover:bg-surface2"
-                onClick={dismissOnboardingOverlay}
-              >
-                {t("common:dismiss", "Dismiss")}
-              </button>
-            </div>
-
-            <div className="mt-5 flex flex-col gap-2 md:flex-row md:items-stretch">
-              {[
-                {
-                  key: "sources",
-                  title: t("playground:workspace.onboardingAddSources", "Add sources"),
-                  description: t(
-                    "playground:workspace.onboardingAddSourcesDescription",
-                    "Bring in files, links, pasted text, or existing library content."
-                  ),
-                  pane: t("playground:sources.title", "Sources"),
-                  Icon: FileText
-                },
-                {
-                  key: "chat",
-                  title: t("playground:workspace.onboardingAskQuestions", "Ask questions"),
-                  description: t(
-                    "playground:workspace.onboardingAskQuestionsDescription",
-                    "Use chat to query selected sources and inspect cited answers."
-                  ),
-                  pane: t("playground:chat.title", "Chat"),
-                  Icon: MessageSquare
-                },
-                {
-                  key: "studio",
-                  title: t(
-                    "playground:workspace.onboardingGenerateOutputs",
-                    "Generate outputs"
-                  ),
-                  description: t(
-                    "playground:workspace.onboardingGenerateOutputsDescription",
-                    "Create summaries, quizzes, reports, and more from the same source set."
-                  ),
-                  pane: t("playground:studio.title", "Studio"),
-                  Icon: Sparkles
-                }
-              ].map((step, index, steps) => (
-                <React.Fragment key={step.key}>
-                  <section className="flex-1 rounded-lg border border-border bg-surface2/40 p-3.5">
-                    <div className="mb-2 flex items-center gap-2">
-                      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-primary/40 bg-primary/10 text-xs font-semibold text-primary">
-                        {index + 1}
-                      </span>
-                      <step.Icon className="h-4 w-4 text-primary" />
-                      <span className="text-sm font-semibold text-text">{step.title}</span>
-                    </div>
-                    <p className="text-xs leading-5 text-text-muted">
-                      {step.description}
-                    </p>
-                    <span className="mt-2 inline-flex rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-text-subtle">
-                      {step.pane}
-                    </span>
-                  </section>
-                  {index < steps.length - 1 && (
-                    <>
-                      <div className="hidden items-center justify-center md:flex">
-                        <ArrowRight
-                          className="h-5 w-5 animate-pulse text-primary/70"
-                          aria-hidden="true"
-                        />
-                      </div>
-                      <div className="flex items-center justify-center md:hidden">
-                        <ArrowDown
-                          className="h-5 w-5 animate-pulse text-primary/70"
-                          aria-hidden="true"
-                        />
-                      </div>
-                    </>
-                  )}
-                </React.Fragment>
-              ))}
-            </div>
-
-            <div className="mt-5 flex justify-end">
-              <button
-                type="button"
-                className="rounded bg-primary px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-90"
-                onClick={dismissOnboardingOverlay}
-              >
-                {t("playground:workspace.onboardingStart", "Start researching")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {isMobile ? (
         <>
@@ -1995,38 +1988,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
             isMobile
           />
 
-          <div
-            data-testid="workspace-session-status-strip"
-            className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-[linear-gradient(120deg,var(--surface)_0%,var(--surface-2)_100%)] px-3 py-2 shadow-card"
-          >
-            <div className="flex flex-wrap items-center gap-1.5">
-              {sessionSummaryItems.map((item) => (
-                <span
-                  key={item.key}
-                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs text-text-muted"
-                >
-                  <span>{item.label}</span>
-                  <span className="font-semibold text-text">{item.count}</span>
-                </span>
-              ))}
-              {currentNote.isDirty && (
-                <span className="inline-flex items-center rounded border border-warning/40 bg-warning/10 px-2 py-1 text-xs font-medium text-warning">
-                  {t("playground:studio.unsaved", "Unsaved")}
-                </span>
-              )}
-            </div>
-            {statusGuardrailsEnabled && activeWorkspaceOperations.length > 0 && (
-              <div
-                data-testid="workspace-activity-rail"
-                role="status"
-                aria-live="polite"
-                className="flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-text-muted"
-              >
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                <span>{activeWorkspaceOperations.join(" • ")}</span>
-              </div>
-            )}
-          </div>
+          <WorkspaceStatusBar
+            storageUsedBytes={workspaceStorageUsage.usedBytes}
+            storageQuotaBytes={workspaceStorageUsage.quotaBytes}
+            activeOperations={activeWorkspaceOperations}
+            statusGuardrailsEnabled={statusGuardrailsEnabled}
+          />
 
           <Tabs
             activeKey={activeTab}
@@ -2060,52 +2027,28 @@ const WorkspacePlaygroundBody: React.FC = () => {
             isMobile={false}
           />
 
-          <div
-            data-testid="workspace-session-status-strip"
-            className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-[linear-gradient(120deg,var(--surface)_0%,var(--surface-2)_100%)] px-3 py-2 shadow-card"
-          >
-            <div className="flex flex-wrap items-center gap-1.5">
-              {sessionSummaryItems.map((item) => (
-                <span
-                  key={item.key}
-                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface/90 px-2.5 py-1 text-xs text-text-muted"
-                >
-                  <span>{item.label}</span>
-                  <span className="font-semibold text-text">{item.count}</span>
-                </span>
-              ))}
-              {currentNote.isDirty && (
-                <span className="inline-flex items-center rounded border border-warning/40 bg-warning/10 px-2 py-1 text-xs font-medium text-warning">
-                  {t("playground:studio.unsaved", "Unsaved")}
-                </span>
-              )}
-            </div>
-            {statusGuardrailsEnabled && activeWorkspaceOperations.length > 0 && (
-              <div
-                data-testid="workspace-activity-rail"
-                role="status"
-                aria-live="polite"
-                className="flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-text-muted"
-              >
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                <span>{activeWorkspaceOperations.join(" • ")}</span>
-              </div>
-            )}
-          </div>
-
           <div className="flex min-h-0 flex-1 gap-2 px-2 py-2">
             {leftPaneOpen && (
-              <aside
-                id="workspace-sources-panel"
-                role="complementary"
-                aria-label={t("playground:workspace.sourcesPanel", "Sources panel")}
-                className="hidden w-72 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
-              >
-                <SourcesPane
-                  onHide={() => setLeftPaneCollapsed(true)}
-                  statusGuardrailsEnabled={statusGuardrailsEnabled}
+              <>
+                <aside
+                  id="workspace-sources-panel"
+                  role="complementary"
+                  aria-label={t("playground:workspace.sourcesPanel", "Sources panel")}
+                  className="hidden shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
+                  style={{ width: leftPaneWidth }}
+                >
+                  <SourcesPane
+                    onHide={() => setLeftPaneCollapsed(true)}
+                    statusGuardrailsEnabled={statusGuardrailsEnabled}
+                  />
+                </aside>
+                <PaneResizer
+                  pane="left"
+                  width={leftPaneWidth}
+                  onResize={setLeftPaneWidth}
+                  onReset={() => setLeftPaneWidth(DEFAULT_LEFT_WIDTH)}
                 />
-              </aside>
+              </>
             )}
 
             <Drawer
@@ -2137,14 +2080,23 @@ const WorkspacePlaygroundBody: React.FC = () => {
             </main>
 
             {rightPaneOpen && (
-              <aside
-                id="workspace-studio-panel"
-                role="complementary"
-                aria-label={t("playground:workspace.studioPanel", "Studio panel")}
-                className="hidden min-h-0 w-80 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
-              >
-                <StudioPane onHide={() => setRightPaneCollapsed(true)} />
-              </aside>
+              <>
+                <PaneResizer
+                  pane="right"
+                  width={rightPaneWidth}
+                  onResize={setRightPaneWidth}
+                  onReset={() => setRightPaneWidth(DEFAULT_RIGHT_WIDTH)}
+                />
+                <aside
+                  id="workspace-studio-panel"
+                  role="complementary"
+                  aria-label={t("playground:workspace.studioPanel", "Studio panel")}
+                  className="hidden min-h-0 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
+                  style={{ width: rightPaneWidth }}
+                >
+                  <StudioPane onHide={() => setRightPaneCollapsed(true)} />
+                </aside>
+              </>
             )}
 
             <Drawer
@@ -2164,6 +2116,13 @@ const WorkspacePlaygroundBody: React.FC = () => {
               <StudioPane />
             </Drawer>
           </div>
+
+          <WorkspaceStatusBar
+            storageUsedBytes={workspaceStorageUsage.usedBytes}
+            storageQuotaBytes={workspaceStorageUsage.quotaBytes}
+            activeOperations={activeWorkspaceOperations}
+            statusGuardrailsEnabled={statusGuardrailsEnabled}
+          />
         </>
       )}
 
@@ -2203,12 +2162,41 @@ const WorkspacePlaygroundBody: React.FC = () => {
               </span>
             }
           />
-          <p className="text-xs text-text-muted">
-            {t(
-              "playground:search.hint",
-              "Tip: use source:, chat:, or note: to filter results."
-            )}
-          </p>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-text-subtle">
+              {t("playground:search.filterBy", "Filter:")}
+            </span>
+            {(["source", "chat", "note"] as const).map((domain) => {
+              const isActive = globalSearchQuery.trim().toLowerCase().startsWith(`${domain}:`)
+              return (
+                <button
+                  key={domain}
+                  type="button"
+                  data-testid={`search-filter-chip-${domain}`}
+                  onClick={() => {
+                    if (isActive) {
+                      // Remove prefix
+                      setGlobalSearchQuery(
+                        globalSearchQuery.replace(new RegExp(`^${domain}:\\s*`, "i"), "")
+                      )
+                    } else {
+                      // Remove any existing prefix and add new one
+                      const stripped = globalSearchQuery.replace(/^\w+:\s*/, "")
+                      setGlobalSearchQuery(`${domain}: ${stripped}`)
+                    }
+                    globalSearchInputRef.current?.focus()
+                  }}
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium transition ${
+                    isActive
+                      ? "bg-primary/15 text-primary"
+                      : "bg-surface2 text-text-muted hover:bg-surface2/80 hover:text-text"
+                  }`}
+                >
+                  {getSearchDomainLabel(domain)}
+                </button>
+              )
+            })}
+          </div>
 
           <div className="custom-scrollbar max-h-[360px] space-y-1 overflow-y-auto rounded-lg border border-border p-1">
             {globalSearchResults.length === 0 ? (
@@ -2227,7 +2215,27 @@ const WorkspacePlaygroundBody: React.FC = () => {
                         )}
                   </span>
                 }
-              />
+              >
+                {!globalSearchQuery.trim() && (
+                  <div className="mt-1 space-y-1 text-xs text-text-subtle">
+                    <p>{t("playground:search.exampleTitle", "Try searching for:")}</p>
+                    {[
+                      t("playground:search.example1", "a keyword from your sources"),
+                      t("playground:search.example2", "a question you asked in chat"),
+                      t("playground:search.example3", "a note title or keyword")
+                    ].map((example) => (
+                      <button
+                        key={example}
+                        type="button"
+                        className="block w-full rounded px-2 py-0.5 text-left italic hover:bg-surface2"
+                        onClick={() => setGlobalSearchQuery(example)}
+                      >
+                        {example}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Empty>
             ) : (
               globalSearchResults.map((result, index) => {
                 const isActive = index === activeSearchResultIndex

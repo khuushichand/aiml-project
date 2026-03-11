@@ -21,6 +21,7 @@ import { SectionNavigator, type ContentSection } from "@/components/Review/Secti
 import { ComparisonSplit } from "@/components/Review/ComparisonSplit"
 import type { MediaReviewState, MediaReviewActions, MediaDetail } from "@/components/Review/media-review-types"
 import { getContent, MINIMAP_COLLAPSE_THRESHOLD } from "@/components/Review/media-review-types"
+import { scrollSectionIntoView } from "@/components/Review/reading-pane-section-navigation"
 
 interface MediaReviewReadingPaneProps {
   state: MediaReviewState
@@ -75,7 +76,7 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
   const {
     goRelative, scrollToCard, ensureDetail,
     removeFromSelection, addVisibleToSelection, replaceSelectionWithVisible,
-    handleCompareContent, handleChatAboutSelection,
+    handleChatAboutSelection,
     expandAllContent, collapseAllContent, expandAllAnalysis, collapseAllAnalysis,
     retryFetch
   } = actions
@@ -763,9 +764,8 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
               onNavigate={(section) => {
                 // Scroll the content area to the section offset
                 const contentEl = viewerRef?.current?.querySelector("[data-testid^='media-review-content-body-']")
-                if (contentEl) {
-                  contentEl.scrollTop = Math.max(0, section.offset / 10)
-                }
+                if (!contentEl) return
+                scrollSectionIntoView(contentEl, section)
               }}
               t={t}
             />
@@ -910,6 +910,13 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
                   />
                 </div>
               )}
+            </div>
+          ) : showPreviewMode && previewedDetail ? (
+            <div
+              ref={viewerParentRef}
+              className="relative flex-1 min-h-0 overflow-auto"
+            >
+              {renderCard(previewedDetail, 0)}
             </div>
           ) : (
             <>

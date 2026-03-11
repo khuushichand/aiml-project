@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  COMPANION_CONVERSATION_PATH,
+  COMPANION_PATH,
   FAMILY_WIZARD_SETTINGS_PATH,
   GUARDIAN_SETTINGS_PATH,
   PERSONA_DOCK_PATH,
+  isCompanionAvailable,
   isGuardianSettingsAvailable,
   isPersonaDockAvailable,
   isRouteEnabledForCapabilities
@@ -15,6 +18,7 @@ const makeCapabilities = (
 ): ServerCapabilities =>
   ({
     hasGuardian: false,
+    hasPersonalization: false,
     hasSelfMonitoring: false,
     hasPersona: false,
     ...overrides
@@ -91,5 +95,49 @@ describe("route capability gating", () => {
     })
     expect(isPersonaDockAvailable(caps)).toBe(true)
     expect(isRouteEnabledForCapabilities(PERSONA_DOCK_PATH, caps)).toBe(true)
+  })
+
+  it("hides the companion workspace when personalization capability is missing", () => {
+    const caps = makeCapabilities({
+      hasPersonalization: false
+    })
+    expect(isRouteEnabledForCapabilities(COMPANION_PATH, caps)).toBe(false)
+  })
+
+  it("enables the companion workspace when personalization capability is present", () => {
+    const caps = makeCapabilities({
+      hasPersonalization: true
+    })
+    expect(isCompanionAvailable(caps)).toBe(true)
+    expect(isRouteEnabledForCapabilities(COMPANION_PATH, caps)).toBe(true)
+  })
+
+  it("hides the companion conversation when either persona or personalization is missing", () => {
+    expect(
+      isRouteEnabledForCapabilities(
+        COMPANION_CONVERSATION_PATH,
+        makeCapabilities({
+          hasPersona: true,
+          hasPersonalization: false
+        })
+      )
+    ).toBe(false)
+    expect(
+      isRouteEnabledForCapabilities(
+        COMPANION_CONVERSATION_PATH,
+        makeCapabilities({
+          hasPersona: false,
+          hasPersonalization: true
+        })
+      )
+    ).toBe(false)
+  })
+
+  it("enables the companion conversation only when both persona and personalization are present", () => {
+    const caps = makeCapabilities({
+      hasPersona: true,
+      hasPersonalization: true
+    })
+    expect(isRouteEnabledForCapabilities(COMPANION_CONVERSATION_PATH, caps)).toBe(true)
   })
 })

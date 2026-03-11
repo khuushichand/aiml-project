@@ -1,6 +1,7 @@
 import React from "react"
 import { Tag, Checkbox, Pagination, Skeleton, Empty, Button } from "antd"
-import { includesId, type MediaReviewState, type MediaReviewActions } from "@/components/Review/media-review-types"
+import type { MediaReviewState, MediaReviewActions } from "@/components/Review/media-review-types"
+import { includesId } from "@/components/Review/media-review-types"
 
 interface MediaReviewResultsListProps {
   state: MediaReviewState

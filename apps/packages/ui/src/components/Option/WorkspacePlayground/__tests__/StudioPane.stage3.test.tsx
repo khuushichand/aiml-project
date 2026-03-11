@@ -330,6 +330,7 @@ const renderExpandedStudioPane = () => {
 describe("StudioPane Stage 3 information architecture and UX polish", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.removeItem("tldw:workspace-playground:recent-output-types:v1")
     isMobile = false
     workspaceStoreState.selectedSourceIds = ["source-1"]
     workspaceStoreState.getSelectedMediaIds = () => [101]
@@ -419,11 +420,11 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     renderExpandedStudioPane()
 
     expect(
-      screen.getByText("Select Audio Overview to configure TTS voice and speed.")
+      screen.getByText("Select Audio Summary to configure TTS voice and speed.")
     ).toBeInTheDocument()
     expect(screen.queryByText("TTS Provider")).not.toBeInTheDocument()
 
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "Audio Overview" }))
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Audio Summary" }))
 
     expect(await screen.findByText("TTS Provider")).toBeInTheDocument()
   })

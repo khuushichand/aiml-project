@@ -68,11 +68,23 @@
   "contextSaveToNotes": {
     "message": "Save to Notes"
   },
+  "contextSaveToCompanion": {
+    "message": "Save to Companion"
+  },
+  "contextSaveToCompanionNoSelection": {
+    "message": "Select text first to save to Companion."
+  },
   "contextSaveToNotesNoSelection": {
     "message": "Select text first to save to Notes."
   },
   "contextSidebarOpening": {
     "message": "Opening sidebar..."
+  },
+  "contextSaveToCompanionOpeningSidebar": {
+    "message": "Opening sidebar to save selection to companion..."
+  },
+  "contextSaveToCompanionDeliveryFailed": {
+    "message": "Could not open the sidebar to save this selection. Check that the tldw Assistant sidebar is allowed on this site and try again."
   },
   "contextSaveToNotesOpeningSidebar": {
     "message": "Opening sidebar to save note..."

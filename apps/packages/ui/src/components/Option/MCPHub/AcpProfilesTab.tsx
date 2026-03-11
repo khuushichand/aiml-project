@@ -51,7 +51,7 @@ export const AcpProfilesTab = () => {
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <Typography.Text type="secondary">
         ACP profiles define reusable MCP execution defaults.
       </Typography.Text>
@@ -65,7 +65,7 @@ export const AcpProfilesTab = () => {
 
       {createOpen ? (
         <Card title="Create ACP Profile">
-          <Space direction="vertical" style={{ width: "100%" }}>
+          <Space orientation="vertical" style={{ width: "100%" }}>
             <label htmlFor="mcp-profile-name">Profile Name</label>
             <input
               id="mcp-profile-name"
@@ -98,7 +98,7 @@ export const AcpProfilesTab = () => {
         locale={{ emptyText: <Empty description="No ACP profiles yet" /> }}
         renderItem={(profile) => (
           <List.Item>
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               <Typography.Text strong>{profile.name}</Typography.Text>
               <Space size={6}>
                 <Tag>{profile.owner_scope_type}</Tag>

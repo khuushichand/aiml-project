@@ -39,6 +39,7 @@ describe('AlertsPanel', () => {
         onAssign={onAssign}
         onSnooze={vi.fn()}
         onEscalate={vi.fn()}
+        localActionsEnabled
       />
     );
 
@@ -82,6 +83,7 @@ describe('AlertsPanel', () => {
         onAssign={vi.fn()}
         onSnooze={vi.fn()}
         onEscalate={vi.fn()}
+        localActionsEnabled
       />
     );
 
@@ -92,5 +94,31 @@ describe('AlertsPanel', () => {
     expect(screen.getByText('Assigned to alice@example.com')).toBeTruthy();
     expect(screen.getByText('Snoozed')).toBeTruthy();
     expect(screen.getByText('Snoozed for 1h')).toBeTruthy();
+  });
+
+  it('disables local-only alert action controls in safe mode', () => {
+    render(
+      <AlertsPanel
+        alerts={[baseAlert]}
+        history={[]}
+        showSnoozed={false}
+        assignableUsers={[
+          { id: '1', label: 'alice@example.com' },
+        ]}
+        loading={false}
+        onToggleShowSnoozed={vi.fn()}
+        onAcknowledge={vi.fn()}
+        onDismiss={vi.fn()}
+        onAssign={vi.fn()}
+        onSnooze={vi.fn()}
+        onEscalate={vi.fn()}
+        localActionsEnabled={false}
+      />
+    );
+
+    expect(screen.getByTestId('alert-assignee-select-alert-1')).toBeDisabled();
+    expect(screen.getByTestId('alert-snooze-duration-alert-1')).toBeDisabled();
+    expect(screen.getByTestId('alert-snooze-button-alert-1')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Escalate' })).toBeDisabled();
   });
 });

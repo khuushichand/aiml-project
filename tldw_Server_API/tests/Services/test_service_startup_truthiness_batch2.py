@@ -7,6 +7,7 @@ from tldw_Server_API.app.services import claims_alerts_scheduler
 from tldw_Server_API.app.services import claims_review_metrics_scheduler
 from tldw_Server_API.app.services import connectors_worker
 from tldw_Server_API.app.services import file_artifacts_export_gc_service
+from tldw_Server_API.app.services import ingestion_sources_cleanup_service
 from tldw_Server_API.app.services import kanban_activity_cleanup_service
 from tldw_Server_API.app.services import kanban_purge_service
 from tldw_Server_API.app.services import notifications_prune_service
@@ -21,6 +22,7 @@ pytestmark = pytest.mark.unit
 @pytest.mark.parametrize(
     ("env_var", "start_fn"),
     [
+        ("INGESTION_SOURCES_CLEANUP_ENABLED", ingestion_sources_cleanup_service.start_ingestion_sources_cleanup_scheduler),
         ("KANBAN_ACTIVITY_CLEANUP_ENABLED", kanban_activity_cleanup_service.start_kanban_activity_cleanup_scheduler),
         ("KANBAN_PURGE_ENABLED", kanban_purge_service.start_kanban_purge_scheduler),
         ("FILES_EXPORT_GC_ENABLED", file_artifacts_export_gc_service.start_file_artifacts_export_gc_scheduler),
@@ -52,6 +54,7 @@ async def test_service_startup_flags_accept_single_letter_y(monkeypatch: pytest.
 @pytest.mark.parametrize(
     ("env_var", "start_fn"),
     [
+        ("INGESTION_SOURCES_CLEANUP_ENABLED", ingestion_sources_cleanup_service.start_ingestion_sources_cleanup_scheduler),
         ("KANBAN_ACTIVITY_CLEANUP_ENABLED", kanban_activity_cleanup_service.start_kanban_activity_cleanup_scheduler),
         ("KANBAN_PURGE_ENABLED", kanban_purge_service.start_kanban_purge_scheduler),
         ("FILES_EXPORT_GC_ENABLED", file_artifacts_export_gc_service.start_file_artifacts_export_gc_scheduler),

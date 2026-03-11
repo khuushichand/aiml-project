@@ -410,6 +410,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     apiProvider: state.apiProvider,
     extraHeaders: state.extraHeaders,
     extraBody: state.extraBody,
+    llamaThinkingBudgetTokens: state.llamaThinkingBudgetTokens,
+    llamaGrammarMode: state.llamaGrammarMode,
+    llamaGrammarId: state.llamaGrammarId,
+    llamaGrammarInline: state.llamaGrammarInline,
+    llamaGrammarOverride: state.llamaGrammarOverride,
     jsonMode: state.jsonMode
   }))
   const numCtx = useStoreChatModelSettings((state) => state.numCtx)
@@ -5209,6 +5214,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         api_provider: resolvedProvider || undefined,
         extra_headers: parseJsonObject(currentChatModelSettings.extraHeaders),
         extra_body: parseJsonObject(currentChatModelSettings.extraBody),
+        thinking_budget_tokens:
+          currentChatModelSettings.llamaThinkingBudgetTokens,
+        grammar_mode: currentChatModelSettings.llamaGrammarMode,
+        grammar_id: currentChatModelSettings.llamaGrammarId,
+        grammar_inline: currentChatModelSettings.llamaGrammarInline,
+        grammar_override: currentChatModelSettings.llamaGrammarOverride,
         response_format: currentChatModelSettings.jsonMode
           ? { type: "json_object" }
           : undefined
@@ -5222,6 +5233,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       currentChatModelSettings.frequencyPenalty,
       currentChatModelSettings.historyMessageLimit,
       currentChatModelSettings.historyMessageOrder,
+      currentChatModelSettings.llamaGrammarId,
+      currentChatModelSettings.llamaGrammarInline,
+      currentChatModelSettings.llamaGrammarMode,
+      currentChatModelSettings.llamaGrammarOverride,
+      currentChatModelSettings.llamaThinkingBudgetTokens,
       currentChatModelSettings.jsonMode,
       currentChatModelSettings.numPredict,
       currentChatModelSettings.presencePenalty,

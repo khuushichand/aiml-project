@@ -163,7 +163,7 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
         path: `/api/v1/media/${id}?include_content=true&include_versions=false` as any,
         method: 'GET' as any
       })
-      const base = Array.isArray(data) ? (data as MediaItem[]).find((x) => x.id === id) : undefined
+      const base = Array.isArray(data) ? (data as MediaItem[]).find((x) => idsEqual(x.id, id)) : undefined
       const enriched = { ...d, id, title: (d as any)?.title ?? base?.title, type: (d as any)?.type ?? base?.type, created_at: (d as any)?.created_at ?? base?.created_at } as any
       setDetails((prev) => ({ ...prev, [id]: enriched }))
       setFailedIds((prev) => {
@@ -266,13 +266,13 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
 
   const toggleSelect = React.useCallback(async (id: string | number, event?: React.MouseEvent) => {
     if (event?.shiftKey && lastClickedRef.current != null && Array.isArray(data)) {
-      const lastIdx = data.findIndex((r) => idsEqual(r.id, lastClickedRef.current as string | number))
-      const currIdx = data.findIndex((r) => idsEqual(r.id, id))
+      const lastIdx = data.findIndex(r => idsEqual(r.id, lastClickedRef.current!))
+      const currIdx = data.findIndex(r => idsEqual(r.id, id))
       if (lastIdx !== -1 && currIdx !== -1) {
         const [start, end] = lastIdx < currIdx ? [lastIdx, currIdx] : [currIdx, lastIdx]
         const rangeIds = data.slice(start, end + 1).map(r => r.id)
-        const nextSelected = [...selectedIds]
-        const remaining = openAllLimit - nextSelected.length
+        const nextSelection = [...selectedIds]
+        const remaining = openAllLimit - nextSelection.length
         if (remaining <= 0) {
           message.warning(
             t('mediaPage.selectionLimitReached', {
@@ -282,7 +282,7 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
           )
           return
         }
-        const newIds = rangeIds.filter((rid) => !includesId(nextSelected, rid))
+        const newIds = rangeIds.filter((rid) => !includesId(nextSelection, rid))
         let toAdd = newIds
         if (newIds.length > remaining) {
           message.warning(
@@ -293,12 +293,8 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
           )
           toAdd = newIds.slice(newIds.length - remaining)
         }
-        toAdd.forEach((rid) => {
-          if (!includesId(nextSelected, rid)) {
-            nextSelected.push(rid)
-          }
-        })
-        setSelectedIds(nextSelected)
+        toAdd.forEach((rid) => nextSelection.push(rid))
+        setSelectedIds(nextSelection)
         toAdd.forEach((rid) => void ensureDetail(rid))
         setFocusedId(id)
         lastClickedRef.current = id
@@ -432,7 +428,7 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
         return
       }
       if (viewMode !== "all") {
-        const idx = viewerItems.findIndex((m) => m.id === id)
+        const idx = viewerItems.findIndex((m) => idsEqual(m.id, id))
         if (idx >= 0) viewerVirtualizer.scrollToIndex(idx, { align: "start" })
       }
     },
@@ -934,7 +930,6 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
     handleBatchMoveToTrash,
     handleBatchExport,
     handleBatchReprocess,
-    handleCompareContent,
     handleChatAboutSelection,
     expandAllContent,
     collapseAllContent,
@@ -943,7 +938,6 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
     getSelectedNumericIds,
     openTrashFromBatch,
     confirmBatchTrash,
-    resolveDetailForCompare,
     // Expose fetchList for query binding
     _fetchList: fetchList
   }

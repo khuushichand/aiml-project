@@ -186,6 +186,45 @@ class SandboxPolicy:
             return
         raise SandboxPolicy.RuntimeUnavailable(runtime, reasons=list(preflight.reasons or []))
 
+    @staticmethod
+    def _require_trust_level_supported(
+        runtime: RuntimeType,
+        trust: TrustLevel,
+        *,
+        runtime_preflights: Mapping[RuntimeType, RuntimePreflightResult] | None = None,
+    ) -> None:
+        if runtime == RuntimeType.seatbelt and trust == TrustLevel.untrusted:
+            raise SandboxPolicy.PolicyUnsupported(
+                runtime,
+                requirement="untrusted_requires_vm_runtime",
+                reasons=["trust_level_requires_vm_runtime"],
+            )
+
+        if runtime_preflights is None:
+            return
+
+        preflight = runtime_preflights.get(runtime)
+        if preflight is None:
+            return
+
+        supported = {
+            str(level).strip().lower()
+            for level in (preflight.supported_trust_levels or [])
+            if str(level).strip()
+        }
+        if runtime == RuntimeType.seatbelt and trust == TrustLevel.standard and "standard" not in supported:
+            raise SandboxPolicy.PolicyUnsupported(
+                runtime,
+                requirement="standard_not_enabled",
+                reasons=["seatbelt_standard_disabled"],
+            )
+        if supported and trust.value not in supported:
+            raise SandboxPolicy.PolicyUnsupported(
+                runtime,
+                requirement=f"trust_level:{trust.value}",
+                reasons=["trust_level_not_supported"],
+            )
+
     def select_runtime(
         self,
         requested: RuntimeType | None,
@@ -226,6 +265,11 @@ class SandboxPolicy:
 
         # Apply trust-level profile constraints
         trust = spec.trust_level or TrustLevel.standard
+        self._require_trust_level_supported(
+            spec.runtime,
+            trust,
+            runtime_preflights=runtime_preflights,
+        )
         profile = TRUST_PROFILES.get(trust, TRUST_PROFILES[TrustLevel.standard])
 
         if not spec.network_policy:
@@ -280,6 +324,11 @@ class SandboxPolicy:
 
         # Apply trust-level profile constraints
         trust = spec.trust_level or TrustLevel.standard
+        self._require_trust_level_supported(
+            spec.runtime,
+            trust,
+            runtime_preflights=runtime_preflights,
+        )
         profile = TRUST_PROFILES.get(trust, TRUST_PROFILES[TrustLevel.standard])
 
         if not spec.network_policy:

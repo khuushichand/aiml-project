@@ -1,8 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { WorkspacePlayground } from "../index"
 
 const ONBOARDING_KEY = "tldw:workspace-playground:onboarding-dismissed:v1"
+
+const mockStartTutorial = vi.fn()
 
 const testState = {
   isMobile: false,
@@ -70,6 +72,11 @@ vi.mock("@/store/workspace", () => ({
     selector(testState)
 }))
 
+vi.mock("@/store/tutorials", () => ({
+  useTutorialStore: (selector: (state: Record<string, unknown>) => unknown) =>
+    selector({ startTutorial: mockStartTutorial })
+}))
+
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     getMediaDetails: vi.fn().mockResolvedValue({})
@@ -99,6 +106,10 @@ vi.mock("../ChatPane", () => ({
 
 vi.mock("../StudioPane", () => ({
   StudioPane: () => <div data-testid="workspace-studio-pane">Studio</div>
+}))
+
+vi.mock("../WorkspaceStatusBar", () => ({
+  WorkspaceStatusBar: () => <div data-testid="workspace-status-bar" />
 }))
 
 if (!(globalThis as any).ResizeObserver) {
@@ -132,50 +143,38 @@ describe("WorkspacePlayground stage 1 onboarding walkthrough", () => {
     testState.workspaceChatSessions = {}
   })
 
-  it("shows a first-run three-step overlay when not previously dismissed", () => {
+  it("auto-starts the Joyride guided tour for first-time users", async () => {
     render(<WorkspacePlayground />)
 
-    expect(screen.getByTestId("workspace-onboarding-overlay")).toBeInTheDocument()
-    expect(screen.getByText("How Research Studio works")).toBeInTheDocument()
-    expect(screen.getByText("Add sources")).toBeInTheDocument()
-    expect(screen.getByText("Ask questions")).toBeInTheDocument()
-    expect(screen.getByText("Generate outputs")).toBeInTheDocument()
-  })
-
-  it("persists dismissal when the user starts researching", async () => {
-    render(<WorkspacePlayground />)
-
-    fireEvent.click(screen.getByRole("button", { name: "Start researching" }))
-
     await waitFor(() => {
-      expect(
-        screen.queryByTestId("workspace-onboarding-overlay")
-      ).not.toBeInTheDocument()
+      expect(mockStartTutorial).toHaveBeenCalledWith(
+        "workspace-playground-basics"
+      )
     })
-    expect(window.localStorage.getItem(ONBOARDING_KEY)).toBe("1")
-  })
-
-  it("dismisses with Escape and remembers dismissal across rerenders", async () => {
-    const { rerender } = render(<WorkspacePlayground />)
-
-    fireEvent.keyDown(window, { key: "Escape" })
-
-    await waitFor(() => {
-      expect(
-        screen.queryByTestId("workspace-onboarding-overlay")
-      ).not.toBeInTheDocument()
-    })
-    expect(window.localStorage.getItem(ONBOARDING_KEY)).toBe("1")
-
-    rerender(<WorkspacePlayground />)
+    // Overlay is no longer shown — tour uses Joyride tooltips instead
     expect(
       screen.queryByTestId("workspace-onboarding-overlay")
     ).not.toBeInTheDocument()
   })
 
-  it("does not show the overlay when already dismissed", () => {
+  it("persists dismissal so the tour does not auto-start again", async () => {
+    render(<WorkspacePlayground />)
+
+    await waitFor(() => {
+      expect(mockStartTutorial).toHaveBeenCalled()
+    })
+    expect(window.localStorage.getItem(ONBOARDING_KEY)).toBe("1")
+  })
+
+  it("does not auto-start the tour when already dismissed", () => {
     window.localStorage.setItem(ONBOARDING_KEY, "1")
 
+    render(<WorkspacePlayground />)
+
+    expect(mockStartTutorial).not.toHaveBeenCalled()
+  })
+
+  it("does not show a blocking onboarding overlay", () => {
     render(<WorkspacePlayground />)
 
     expect(

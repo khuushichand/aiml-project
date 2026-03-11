@@ -5,7 +5,7 @@
 - Endpoint: `POST /api/v1/chat/completions` (OpenAI-compatible)
 - Purpose: Route chat requests to configured LLM providers with optional streaming and persistence.
 - Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
-- OpenAPI tags: `chat`, `chat-dictionaries`, `chat-documents`
+- OpenAPI tags: `chat`, `chat-grammars`, `chat-dictionaries`, `chat-documents`
 
 ## Conversation Metadata Endpoints
 Conversation list/search, lifecycle updates, message trees, analytics, and knowledge-save endpoints live under `/api/v1/chat`. Session CRUD for character chats remains under `/api/v1/chats`.
@@ -16,6 +16,11 @@ Endpoints:
 - `GET /api/v1/chat/conversations/{id}/tree` — root-thread tree view with `max_depth` + truncation.
 - `GET /api/v1/chat/analytics` — UTC histogram buckets by date/topic/state.
 - `POST /api/v1/chat/knowledge/save` — save a snippet to Notes/Flashcards with backlinks.
+- `GET /api/v1/chat/grammars` — list saved user-scoped GBNF grammars for llama.cpp.
+- `POST /api/v1/chat/grammars` — create a saved user-scoped GBNF grammar.
+- `GET /api/v1/chat/grammars/{grammar_id}` — fetch one saved grammar.
+- `PATCH /api/v1/chat/grammars/{grammar_id}` — update grammar text or metadata.
+- `DELETE /api/v1/chat/grammars/{grammar_id}` — soft-delete by default; use `hard_delete=true` to permanently remove it.
 
 Note:
 - `/api/v1/chats` continues to serve character chat session CRUD and exports.
@@ -83,6 +88,24 @@ Provider-specific extensions:
   - `extra_headers`: include Bedrock guardrail headers like `X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, optional `X-Amzn-Bedrock-Trace`.
   - `extra_body`: include `amazon-bedrock-guardrailConfig` object when needed.
   - Merge behavior: `extra_headers`/`extra_body` are additive; explicit headers/body keys in the request win on conflicts.
+- llama.cpp advanced controls (`/api/v1/chat/completions` only in v1):
+  - `thinking_budget_tokens` (int, optional): app-level thinking budget. Only accepted when the resolved provider is llama.cpp and the deployment has a configured mapping for the upstream request key.
+  - `grammar_mode` (`none` | `library` | `inline`, optional): selects how the outbound GBNF grammar is resolved.
+  - `grammar_id` (string, optional): required when `grammar_mode=library`.
+  - `grammar_inline` (string, optional): required when `grammar_mode=inline`.
+  - `grammar_override` (string, optional): optional request-only override when using a saved grammar.
+  - Guardrails:
+    - These fields are rejected with `400` if the resolved provider is not llama.cpp.
+    - These fields are rejected with `400` when `strict_openai_compat` is active for the local-provider runtime.
+    - First-class llama.cpp controls override reserved `extra_body` keys such as `grammar` and the configured thinking-budget request key.
+  - Scope boundary:
+    - v1 support is limited to `POST /api/v1/chat/completions`.
+    - `/api/v1/messages` does not yet accept these first-class llama.cpp fields.
+
+Saved grammar resource notes:
+- Grammars are user-scoped and stored in the chat domain.
+- Grammar records expose `validation_status` as `unchecked | valid | invalid`.
+- `DELETE /api/v1/chat/grammars/{grammar_id}` soft-deletes unless `hard_delete=true` is sent.
 
 Minimal example (non-streaming):
 ```bash
@@ -181,6 +204,20 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
       "mode": "append",
       "assistant_prefill": "Draft: "
     }
+  }'
+```
+
+llama.cpp grammar example (inline):
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+    "api_provider": "llama.cpp",
+    "model": "llama.cpp/local-model",
+    "messages": [{"role":"user","content":"Reply with ok only."}],
+    "grammar_mode": "inline",
+    "grammar_inline": "root ::= \"ok\""
   }'
 ```
 
