@@ -65,8 +65,16 @@ async def test_authnz_admin_monitoring_repo_postgres_round_trip(test_db_pool: An
     )
     assert upserted_state["assigned_to_user_id"] == int(assignee_id)
 
+    cleared_state = await repo.upsert_alert_state(
+        alert_identity="alert:42",
+        assigned_to_user_id=None,
+        updated_by_user_id=int(actor_id),
+    )
+    assert cleared_state["assigned_to_user_id"] is None
+
     states = await repo.list_alert_states(["alert:42"])
     assert len(states) == 1
+    assert states[0]["assigned_to_user_id"] is None
     assert states[0]["dismissed_at"] == "2026-03-10T10:15:00Z"
 
     first_event = await repo.append_alert_event(

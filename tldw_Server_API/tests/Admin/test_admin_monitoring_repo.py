@@ -83,10 +83,17 @@ async def test_admin_monitoring_repo_rule_state_and_event_round_trip_sqlite(tmp_
         )
         assert upserted_state["assigned_to_user_id"] == int(assignee_id[0])
 
+        cleared_state = await repo.upsert_alert_state(
+            alert_identity="alert:7",
+            assigned_to_user_id=None,
+            updated_by_user_id=int(actor_id[0]),
+        )
+        assert cleared_state["assigned_to_user_id"] is None
+
         state_rows = await repo.list_alert_states(["alert:7"])
         assert len(state_rows) == 1
         assert state_rows[0]["alert_identity"] == "alert:7"
-        assert state_rows[0]["assigned_to_user_id"] == int(assignee_id[0])
+        assert state_rows[0]["assigned_to_user_id"] is None
 
         first_event = await repo.append_alert_event(
             alert_identity="alert:7",

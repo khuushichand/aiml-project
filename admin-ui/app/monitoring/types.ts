@@ -24,6 +24,7 @@ export type AlertHistoryAction =
   | 'acknowledged'
   | 'dismissed'
   | 'assigned'
+  | 'unassigned'
   | 'snoozed'
   | 'escalated';
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Admin monitoring control-plane endpoints for shared alert rules and overlay state."""
+
 import asyncio
 import json
 from typing import Any
@@ -49,7 +51,6 @@ _MONITORING_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
     UnicodeDecodeError,
-    HTTPException,
 )
 
 
@@ -79,13 +80,13 @@ async def _emit_admin_audit_event(
 
 
 async def _get_monitoring_repo() -> AuthnzAdminMonitoringRepo:
+    """Return the shared admin monitoring repository for the active AuthNZ backend."""
     pool = await get_db_pool()
-    repo = AuthnzAdminMonitoringRepo(pool)
-    await repo.ensure_schema()
-    return repo
+    return AuthnzAdminMonitoringRepo(pool)
 
 
 async def _get_users_repo() -> AuthnzUsersRepo:
+    """Return the AuthNZ users repository for assignee resolution."""
     pool = await get_db_pool()
     return AuthnzUsersRepo(db_pool=pool)
 
@@ -118,17 +119,27 @@ def _event_response_from_row(row: dict[str, Any]) -> AdminAlertEventResponse:
     )
 
 
+@router.on_event("startup")
+async def _admin_monitoring_startup() -> None:
+    """Ensure admin monitoring tables exist before request handling begins."""
+    repo = await _get_monitoring_repo()
+    await repo.ensure_schema_ready_once()
+
+
 @router.get("/monitoring/alert-rules", response_model=AdminAlertRuleListResponse)
 async def list_alert_rules(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AdminAlertRuleListResponse:
+    """Return platform-wide admin alert rules."""
     try:
         del principal
         repo = await _get_monitoring_repo()
         items = [AdminAlertRuleResponse(**row) for row in await repo.list_rules()]
         return AdminAlertRuleListResponse(items=items)
+    except HTTPException:
+        raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to list admin alert rules: {exc}")
+        logger.exception("Failed to list admin alert rules")
         raise HTTPException(status_code=500, detail="Failed to list alert rules") from exc
 
 
@@ -138,6 +149,7 @@ async def create_alert_rule(
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AdminAlertRuleCreateResponse:
+    """Create a shared admin monitoring alert rule."""
     try:
         repo = await _get_monitoring_repo()
         actor_id = _principal_actor_id(principal)
@@ -165,8 +177,15 @@ async def create_alert_rule(
             },
         )
         return AdminAlertRuleCreateResponse(item=AdminAlertRuleResponse(**created))
+    except HTTPException:
+        raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to create admin alert rule: {exc}")
+        logger.exception(
+            "Failed to create admin alert rule metric={} operator={} severity={}",
+            payload.metric,
+            payload.operator,
+            payload.severity,
+        )
         raise HTTPException(status_code=500, detail="Failed to create alert rule") from exc
 
 
@@ -176,6 +195,7 @@ async def delete_alert_rule(
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AdminAlertRuleDeleteResponse:
+    """Delete a shared admin monitoring alert rule."""
     try:
         repo = await _get_monitoring_repo()
         existing = await repo.get_rule(rule_id)
@@ -198,7 +218,7 @@ async def delete_alert_rule(
     except HTTPException:
         raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to delete admin alert rule: {exc}")
+        logger.exception("Failed to delete admin alert rule rule_id={}", rule_id)
         raise HTTPException(status_code=500, detail="Failed to delete alert rule") from exc
 
 
@@ -209,13 +229,21 @@ async def assign_alert(
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AdminAlertStateMutationResponse:
+    """Assign or unassign a monitoring alert in authoritative overlay state."""
     try:
-        users_repo = await _get_users_repo()
-        assignee = await users_repo.get_user_by_id(payload.assigned_to_user_id)
-        if assignee is None:
-            raise HTTPException(status_code=404, detail="unknown_user")
+        if payload.assigned_to_user_id is not None:
+            users_repo = await _get_users_repo()
+            assignee = await users_repo.get_user_by_id(payload.assigned_to_user_id)
+            if assignee is None:
+                raise HTTPException(status_code=404, detail="unknown_user")
         repo = await _get_monitoring_repo()
         actor_id = _principal_actor_id(principal)
+        event_action = "assigned" if payload.assigned_to_user_id is not None else "unassigned"
+        audit_action = (
+            "monitoring.alert.assign"
+            if payload.assigned_to_user_id is not None
+            else "monitoring.alert.unassign"
+        )
         state = await repo.upsert_alert_state(
             alert_identity=alert_identity,
             assigned_to_user_id=payload.assigned_to_user_id,
@@ -223,7 +251,7 @@ async def assign_alert(
         )
         await repo.append_alert_event(
             alert_identity=alert_identity,
-            action="assigned",
+            action=event_action,
             actor_user_id=actor_id,
             details_json=json.dumps({"assigned_to_user_id": payload.assigned_to_user_id}),
         )
@@ -234,14 +262,18 @@ async def assign_alert(
             category="system",
             resource_type="monitoring_alert",
             resource_id=alert_identity,
-            action="monitoring.alert.assign",
+            action=audit_action,
             metadata={"assigned_to_user_id": payload.assigned_to_user_id},
         )
         return AdminAlertStateMutationResponse(item=AdminAlertStateResponse(**state))
     except HTTPException:
         raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to assign monitoring alert: {exc}")
+        logger.exception(
+            "Failed to assign monitoring alert alert_identity={} assigned_to_user_id={}",
+            alert_identity,
+            payload.assigned_to_user_id,
+        )
         raise HTTPException(status_code=500, detail="Failed to assign alert") from exc
 
 
@@ -252,6 +284,7 @@ async def snooze_alert(
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AdminAlertStateMutationResponse:
+    """Snooze a monitoring alert in authoritative overlay state."""
     try:
         repo = await _get_monitoring_repo()
         actor_id = _principal_actor_id(principal)
@@ -277,8 +310,14 @@ async def snooze_alert(
             metadata={"snoozed_until": payload.snoozed_until.isoformat()},
         )
         return AdminAlertStateMutationResponse(item=AdminAlertStateResponse(**state))
+    except HTTPException:
+        raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to snooze monitoring alert: {exc}")
+        logger.exception(
+            "Failed to snooze monitoring alert alert_identity={} snoozed_until={}",
+            alert_identity,
+            payload.snoozed_until.isoformat(),
+        )
         raise HTTPException(status_code=500, detail="Failed to snooze alert") from exc
 
 
@@ -289,6 +328,7 @@ async def escalate_alert(
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AdminAlertStateMutationResponse:
+    """Escalate a monitoring alert in authoritative overlay state."""
     try:
         repo = await _get_monitoring_repo()
         actor_id = _principal_actor_id(principal)
@@ -314,8 +354,14 @@ async def escalate_alert(
             metadata={"severity": payload.severity},
         )
         return AdminAlertStateMutationResponse(item=AdminAlertStateResponse(**state))
+    except HTTPException:
+        raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to escalate monitoring alert: {exc}")
+        logger.exception(
+            "Failed to escalate monitoring alert alert_identity={} severity={}",
+            alert_identity,
+            payload.severity,
+        )
         raise HTTPException(status_code=500, detail="Failed to escalate alert") from exc
 
 
@@ -325,6 +371,7 @@ async def list_alert_history(
     limit: int = Query(50, ge=1, le=500),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AdminAlertHistoryListResponse:
+    """List recent authoritative admin monitoring alert history entries."""
     try:
         del principal
         repo = await _get_monitoring_repo()
@@ -333,6 +380,12 @@ async def list_alert_history(
             for row in await repo.list_alert_events(alert_identity=alert_identity, limit=limit)
         ]
         return AdminAlertHistoryListResponse(items=items)
+    except HTTPException:
+        raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to list admin alert history: {exc}")
+        logger.exception(
+            "Failed to list admin alert history alert_identity={} limit={}",
+            alert_identity,
+            limit,
+        )
         raise HTTPException(status_code=500, detail="Failed to list alert history") from exc

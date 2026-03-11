@@ -127,10 +127,16 @@ def get_topic_monitoring_db() -> TopicMonitoringDB:
 
 
 async def _get_monitoring_repo() -> AuthnzAdminMonitoringRepo:
+    """Return the shared admin monitoring repository for overlay state reads/writes."""
     pool = await get_db_pool()
-    repo = AuthnzAdminMonitoringRepo(pool)
-    await repo.ensure_schema()
-    return repo
+    return AuthnzAdminMonitoringRepo(pool)
+
+
+@router.on_event("startup")
+async def _monitoring_startup() -> None:
+    """Ensure admin monitoring tables exist before monitoring routes serve requests."""
+    repo = await _get_monitoring_repo()
+    await repo.ensure_schema_ready_once()
 
 
 def _principal_actor_id(principal: AuthPrincipal) -> int | None:

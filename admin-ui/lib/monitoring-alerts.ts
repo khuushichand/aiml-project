@@ -283,6 +283,8 @@ const formatAdminAlertHistoryDetails = (
       const assignee = toFiniteNumber(details?.assigned_to_user_id);
       return assignee !== null ? `Assigned to user ${assignee}` : 'Alert assigned';
     }
+    case 'unassigned':
+      return 'Alert unassigned';
     case 'snoozed': {
       const snoozedUntil = coerceString(details?.snoozed_until);
       return snoozedUntil ? `Snoozed until ${snoozedUntil}` : 'Alert snoozed';
@@ -511,6 +513,8 @@ export const formatAlertHistoryActionLabel = (action: AlertHistoryAction): strin
       return 'Dismissed';
     case 'assigned':
       return 'Assigned';
+    case 'unassigned':
+      return 'Unassigned';
     case 'snoozed':
       return 'Snoozed';
     case 'escalated':

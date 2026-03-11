@@ -74,6 +74,13 @@ async def test_admin_monitoring_rules_and_actions(tmp_path) -> None:
         assert assign_resp.status_code == 200, assign_resp.text
         assert assign_resp.json()["item"]["assigned_to_user_id"] == assignee_id
 
+        unassign_resp = client.post(
+            "/api/v1/admin/monitoring/alerts/alert:7/assign",
+            json={"assigned_to_user_id": None},
+        )
+        assert unassign_resp.status_code == 200, unassign_resp.text
+        assert unassign_resp.json()["item"]["assigned_to_user_id"] is None
+
         snooze_resp = client.post(
             "/api/v1/admin/monitoring/alerts/alert:7/snooze",
             json={"snoozed_until": "2026-03-10T11:00:00Z"},
@@ -91,7 +98,7 @@ async def test_admin_monitoring_rules_and_actions(tmp_path) -> None:
         history_resp = client.get("/api/v1/admin/monitoring/alerts/history", params={"alert_identity": "alert:7"})
         assert history_resp.status_code == 200, history_resp.text
         actions = [item["action"] for item in history_resp.json()["items"]]
-        assert actions[:3] == ["escalated", "snoozed", "assigned"]
+        assert actions[:4] == ["escalated", "snoozed", "unassigned", "assigned"]
 
         delete_resp = client.delete(f"/api/v1/admin/monitoring/alert-rules/{rule_id}")
         assert delete_resp.status_code == 200, delete_resp.text

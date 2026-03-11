@@ -600,7 +600,7 @@ class AdminAlertStateMutationResponse(BaseModel):
 class AdminAlertAssignRequest(BaseModel):
     """Assign request for a monitoring alert."""
 
-    assigned_to_user_id: int = Field(..., ge=1)
+    assigned_to_user_id: int | None = Field(default=None, ge=1)
 
     model_config = ConfigDict(from_attributes=True)
 
