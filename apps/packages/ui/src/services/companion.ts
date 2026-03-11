@@ -184,6 +184,12 @@ type NotificationsListResponse = {
   total: number
 }
 
+export type CompanionConversationPromptsResponse = {
+  prompt_source_kind: string
+  prompt_source_id?: string | null
+  prompts: CompanionFollowUpPrompt[]
+}
+
 export type CompanionWorkspaceSnapshot = {
   activity: CompanionActivityItem[]
   activityTotal: number
@@ -395,6 +401,16 @@ export const fetchCompanionReflectionDetail = async (
 ): Promise<CompanionReflectionDetail> => {
   return bgRequest<CompanionReflectionDetail>({
     path: `/api/v1/companion/reflections/${reflectionId}` as any,
+    method: "GET"
+  })
+}
+
+export const fetchCompanionConversationPrompts = async (
+  query: string
+): Promise<CompanionConversationPromptsResponse> => {
+  const qs = buildQuery({ query })
+  return bgRequest<CompanionConversationPromptsResponse>({
+    path: `/api/v1/companion/conversation-prompts${qs}` as any,
     method: "GET"
   })
 }

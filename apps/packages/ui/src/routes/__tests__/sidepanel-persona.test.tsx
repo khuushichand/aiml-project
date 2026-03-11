@@ -29,7 +29,8 @@ const mocks = vi.hoisted(() => ({
   },
   getConfig: vi.fn(),
   fetchWithAuth: vi.fn(),
-  buildPersonaWebSocketUrl: vi.fn(() => "ws://persona.test/api/v1/persona/stream")
+  buildPersonaWebSocketUrl: vi.fn(() => "ws://persona.test/api/v1/persona/stream"),
+  fetchCompanionConversationPrompts: vi.fn()
 }))
 
 vi.mock("@/hooks/useServerOnline", () => ({
@@ -46,6 +47,7 @@ vi.mock("react-router-dom", async () => {
   )
   return {
     ...actual,
+    UNSAFE_DataRouterContext: React.createContext({ router: {} }),
     useNavigate: () => mocks.navigate,
     useLocation: () => mocks.location,
     useBlocker: (...args: unknown[]) =>
@@ -65,6 +67,26 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 vi.mock("@/services/persona-stream", () => ({
   buildPersonaWebSocketUrl: (...args: unknown[]) =>
     (mocks.buildPersonaWebSocketUrl as (...args: unknown[]) => unknown)(...args)
+}))
+
+vi.mock("@/services/companion", () => ({
+  isCompanionConsentRequiredResponse: (
+    response:
+      | {
+          status?: number
+          error?: string | null
+        }
+      | null
+      | undefined
+  ) =>
+    response?.status === 409 &&
+    String(response?.error || "").includes(
+      "Enable personalization before using companion."
+    ),
+  fetchCompanionConversationPrompts: (...args: unknown[]) =>
+    (mocks.fetchCompanionConversationPrompts as (...args: unknown[]) => unknown)(
+      ...args
+    )
 }))
 
 vi.mock("@/components/Common/FeatureEmptyState", () => ({
@@ -233,9 +255,24 @@ describe("SidepanelPersona", () => {
     mocks.getConfig.mockReset()
     mocks.fetchWithAuth.mockReset()
     mocks.buildPersonaWebSocketUrl.mockReset()
+    mocks.fetchCompanionConversationPrompts.mockReset()
     mocks.buildPersonaWebSocketUrl.mockReturnValue(
       "ws://persona.test/api/v1/persona/stream"
     )
+    mocks.fetchCompanionConversationPrompts.mockResolvedValue({
+      prompt_source_kind: "reflection",
+      prompt_source_id: "reflection-1",
+      prompts: [
+        {
+          prompt_id: "prompt-1",
+          label: "Next concrete step",
+          prompt_text: "What is the next concrete step for project alpha?",
+          prompt_type: "clarify_priority",
+          source_reflection_id: "reflection-1",
+          source_evidence_ids: ["activity-1"]
+        }
+      ]
+    })
   })
 
   it("shows connect empty state while offline and navigates to settings", () => {
@@ -476,6 +513,78 @@ describe("SidepanelPersona", () => {
       )
     })
     expect(screen.getByText("Saved draft to companion")).toBeInTheDocument()
+  })
+
+  it("renders companion conversation prompt chips and inserts text into the draft", async () => {
+    render(<SidepanelPersona mode="companion" />)
+
+    const chip = await screen.findByRole("button", { name: "Next concrete step" })
+    fireEvent.click(chip)
+
+    expect(screen.getByPlaceholderText("Ask Companion...")).toHaveValue(
+      "What is the next concrete step for project alpha?"
+    )
+  })
+
+  it("does not auto-send when a companion prompt chip is clicked", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions?")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path === "/api/v1/persona/session") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-companion",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions/sess-companion")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ preferences: {} })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona mode="companion" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(await screen.findByRole("button", { name: "Next concrete step" }))
+
+    expect(getSentPayloads(ws).some((payload) => payload.type === "user_message")).toBe(
+      false
+    )
+    expect(screen.getByPlaceholderText("Ask Companion...")).toHaveValue(
+      "What is the next concrete step for project alpha?"
+    )
   })
 
   it("shows a consent-required error when saving a companion check-in without opt-in", async () => {

@@ -10,6 +10,7 @@ vi.mock("@/services/background-proxy", () => ({
 
 import {
   createCompanionGoal,
+  fetchCompanionConversationPrompts,
   fetchCompanionReflectionDetail,
   fetchCompanionWorkspaceSnapshot,
   queueCompanionRebuild,
@@ -261,6 +262,33 @@ describe("companion service", () => {
     expect(detail.follow_up_prompts[0].prompt_text).toBe(
       "What is the next concrete step for project alpha?"
     )
+  })
+
+  it("loads companion conversation prompts through the dedicated endpoint", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      prompt_source_kind: "reflection",
+      prompt_source_id: "reflection-1",
+      prompts: [
+        {
+          prompt_id: "prompt-1",
+          label: "Next concrete step",
+          prompt_text: "What is the next concrete step for project alpha?",
+          prompt_type: "clarify_priority",
+          source_reflection_id: "reflection-1",
+          source_evidence_ids: ["activity-1"]
+        }
+      ]
+    })
+
+    const payload = await fetchCompanionConversationPrompts("resume backlog review")
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/companion/conversation-prompts?query=resume+backlog+review",
+        method: "GET"
+      })
+    )
+    expect(payload.prompts[0].label).toBe("Next concrete step")
   })
 
   it("records explicit companion capture through the activity endpoint", async () => {
