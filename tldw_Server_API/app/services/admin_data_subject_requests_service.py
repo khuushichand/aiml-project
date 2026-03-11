@@ -114,6 +114,28 @@ async def _resolve_requester_user(requester_identifier: str) -> dict[str, Any]:
     return row
 
 
+async def _enforce_requester_visibility(
+    *,
+    principal: AuthPrincipal | None,
+    target_user_id: int,
+) -> None:
+    if principal is None or admin_scope_service.is_platform_admin(principal):
+        return
+    try:
+        await admin_scope_service.enforce_admin_user_scope(
+            principal,
+            target_user_id,
+            require_hierarchy=False,
+        )
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="requester_not_found",
+            ) from exc
+        raise
+
+
 def _sqlite_count(path: Path, query: str, params: tuple[Any, ...] = ()) -> int:
     if not path.exists():
         return 0
@@ -209,8 +231,13 @@ async def preview_data_subject_request(
     requester_identifier: str,
     request_type: str | None = None,
     categories: list[str] | None = None,
+    principal: AuthPrincipal | None = None,
 ) -> dict[str, Any]:
     user = await _resolve_requester_user(requester_identifier)
+    await _enforce_requester_visibility(
+        principal=principal,
+        target_user_id=int(user["id"]),
+    )
     selected_categories = _normalize_requested_categories(
         request_type=request_type,
         categories=categories,
@@ -260,6 +287,7 @@ async def record_data_subject_request(
             requester_identifier=requester_identifier,
             request_type=request_type,
             categories=categories,
+            principal=principal,
         )
 
     db_pool = await get_db_pool()
@@ -280,6 +308,55 @@ async def record_data_subject_request(
     )
 
 
+async def _load_scoped_user_ids(principal: AuthPrincipal) -> list[int] | None:
+    if admin_scope_service.is_platform_admin(principal):
+        return None
+
+    org_ids = await admin_scope_service.get_admin_org_ids(principal)
+    if org_ids is None:
+        return None
+
+    from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
+
+    users_repo = await AuthnzUsersRepo.from_pool()
+    scoped_user_ids: list[int] = []
+    seen_user_ids: set[int] = set()
+    offset = 0
+    page_size = 1000
+    total = 0
+
+    while True:
+        scoped_users, total = await users_repo.list_users(
+            offset=offset,
+            limit=page_size,
+            org_ids=org_ids,
+        )
+        if not scoped_users:
+            break
+        for row in scoped_users:
+            user_id = row.get("id")
+            if user_id is None:
+                continue
+            normalized_user_id = int(user_id)
+            if normalized_user_id in seen_user_ids:
+                continue
+            seen_user_ids.add(normalized_user_id)
+            scoped_user_ids.append(normalized_user_id)
+        offset += len(scoped_users)
+        if offset >= total:
+            break
+
+    if getattr(principal, "user_id", None) is not None:
+        try:
+            principal_user_id = int(principal.user_id)
+        except (TypeError, ValueError):
+            principal_user_id = None
+        if principal_user_id is not None and principal_user_id not in seen_user_ids:
+            scoped_user_ids.append(principal_user_id)
+
+    return scoped_user_ids
+
+
 async def list_data_subject_requests(
     principal: AuthPrincipal,
     *,
@@ -290,29 +367,9 @@ async def list_data_subject_requests(
     repo = AuthnzDataSubjectRequestsRepo(db_pool=db_pool)
     await repo.ensure_schema()
 
-    if admin_scope_service.is_platform_admin(principal):
+    scoped_user_ids = await _load_scoped_user_ids(principal)
+    if scoped_user_ids is None:
         return await repo.list_requests(limit=limit, offset=offset)
-
-    org_ids = await admin_scope_service.get_admin_org_ids(principal)
-    if org_ids is None:
-        return await repo.list_requests(limit=limit, offset=offset)
-
-    from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
-
-    users_repo = await AuthnzUsersRepo.from_pool()
-    scoped_users, _ = await users_repo.list_users(
-        offset=0,
-        limit=1000,
-        org_ids=org_ids,
-    )
-    scoped_user_ids = [int(row["id"]) for row in scoped_users if row.get("id") is not None]
-    if getattr(principal, "user_id", None) is not None:
-        try:
-            principal_user_id = int(principal.user_id)
-        except (TypeError, ValueError):
-            principal_user_id = None
-        if principal_user_id is not None and principal_user_id not in scoped_user_ids:
-            scoped_user_ids.append(principal_user_id)
 
     return await repo.list_requests(
         limit=limit,

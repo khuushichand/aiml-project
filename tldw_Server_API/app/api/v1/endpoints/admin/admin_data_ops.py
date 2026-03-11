@@ -277,11 +277,9 @@ async def preview_data_subject_request(
     try:
         preview = await svc_preview_data_subject_request(
             requester_identifier=payload.requester_identifier,
-        )
-        await _enforce_admin_user_scope(
-            principal,
-            int(preview["resolved_user_id"]),
-            require_hierarchy=False,
+            request_type=payload.request_type,
+            categories=payload.categories,
+            principal=principal,
         )
         await _emit_admin_audit_event(
             request,
@@ -316,11 +314,7 @@ async def create_data_subject_request(
             requester_identifier=payload.requester_identifier,
             request_type=payload.request_type,
             categories=payload.categories,
-        )
-        await _enforce_admin_user_scope(
-            principal,
-            int(preview["resolved_user_id"]),
-            require_hierarchy=False,
+            principal=principal,
         )
         record = await svc_record_data_subject_request(
             principal=principal,

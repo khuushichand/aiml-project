@@ -528,6 +528,8 @@ class DataSubjectRequestPreviewRequest(BaseModel):
     """Request payload for authoritative DSR preview."""
 
     requester_identifier: str = Field(..., min_length=1, max_length=255)
+    request_type: Literal["access", "export", "erasure"] | None = None
+    categories: list[str] | None = None
 
     @field_validator("requester_identifier")
     @classmethod
@@ -535,6 +537,25 @@ class DataSubjectRequestPreviewRequest(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("requester_identifier is required")
+        return normalized
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def normalize_categories(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("categories must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("categories must contain strings")
+            item = entry.strip().lower()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
         return normalized
 
     model_config = ConfigDict(from_attributes=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -298,12 +299,13 @@ async def test_preview_enforces_admin_scope(monkeypatch, tmp_path):
         audit_count=1,
     )
 
-    from tldw_Server_API.app.api.v1.endpoints.admin import admin_data_ops
+    from tldw_Server_API.app.services import admin_data_subject_requests_service as dsr_service
 
     async def _deny_scope(*args, **kwargs):
         raise HTTPException(status_code=403, detail="scoped_out")
 
-    monkeypatch.setattr(admin_data_ops, "_enforce_admin_user_scope", _deny_scope)
+    monkeypatch.setattr(dsr_service.admin_scope_service, "is_platform_admin", lambda principal: False)
+    monkeypatch.setattr(dsr_service.admin_scope_service, "enforce_admin_user_scope", _deny_scope)
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
 
@@ -313,5 +315,91 @@ async def test_preview_enforces_admin_scope(monkeypatch, tmp_path):
             json={"requester_identifier": "subject@example.com"},
         )
 
-    assert response.status_code == 403, response.text
-    assert response.json()["detail"] == "scoped_out"
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "requester_not_found"
+
+
+@pytest.mark.asyncio
+async def test_preview_hides_out_of_scope_requesters_before_counting(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    await _reset_auth_state()
+    await _seed_user(user_id=7, username="subject_user", email="subject@example.com")
+    _seed_subject_store_data(
+        tmp_path=tmp_path,
+        user_id=7,
+        media_count=1,
+        note_count=1,
+        message_count=1,
+        audit_count=1,
+    )
+
+    from tldw_Server_API.app.services import admin_data_subject_requests_service as dsr_service
+
+    monkeypatch.setattr(dsr_service.admin_scope_service, "is_platform_admin", lambda principal: False)
+
+    async def _deny_scope(principal, target_user_id: int, *, require_hierarchy: bool) -> None:
+        del principal, target_user_id, require_hierarchy
+        raise HTTPException(status_code=403, detail="scoped_out")
+
+    monkeypatch.setattr(dsr_service.admin_scope_service, "enforce_admin_user_scope", _deny_scope)
+
+    def _unexpected_summary_build(*args, **kwargs):
+        raise AssertionError("summary should not be built for out-of-scope requester")
+
+    monkeypatch.setattr(dsr_service, "_build_summary_for_user", _unexpected_summary_build)
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+
+    with TestClient(app, headers=headers) as client:
+        response = client.post(
+            "/api/v1/admin/data-subject-requests/preview",
+            json={"requester_identifier": "subject@example.com"},
+        )
+
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "requester_not_found"
+
+
+@pytest.mark.asyncio
+async def test_create_hides_out_of_scope_requesters_before_counting(monkeypatch, tmp_path):
+    _setup_env(tmp_path)
+    await _reset_auth_state()
+    await _seed_user(user_id=7, username="subject_user", email="subject@example.com")
+    _seed_subject_store_data(
+        tmp_path=tmp_path,
+        user_id=7,
+        media_count=1,
+        note_count=1,
+        message_count=1,
+        audit_count=1,
+    )
+
+    from tldw_Server_API.app.services import admin_data_subject_requests_service as dsr_service
+
+    monkeypatch.setattr(dsr_service.admin_scope_service, "is_platform_admin", lambda principal: False)
+
+    async def _deny_scope(principal, target_user_id: int, *, require_hierarchy: bool) -> None:
+        del principal, target_user_id, require_hierarchy
+        raise HTTPException(status_code=403, detail="scoped_out")
+
+    monkeypatch.setattr(dsr_service.admin_scope_service, "enforce_admin_user_scope", _deny_scope)
+
+    def _unexpected_summary_build(*args, **kwargs):
+        raise AssertionError("summary should not be built for out-of-scope requester")
+
+    monkeypatch.setattr(dsr_service, "_build_summary_for_user", _unexpected_summary_build)
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+
+    with TestClient(app, headers=headers) as client:
+        response = client.post(
+            "/api/v1/admin/data-subject-requests",
+            json={
+                "request_id": "out-of-scope-dsr",
+                "requester_identifier": "subject@example.com",
+                "request_type": "access",
+            },
+        )
+
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "requester_not_found"
