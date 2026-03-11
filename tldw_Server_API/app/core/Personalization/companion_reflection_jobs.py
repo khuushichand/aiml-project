@@ -110,6 +110,92 @@ def _collect_focus_tags(activity_rows: list[dict[str, Any]]) -> list[str]:
     return [tag for tag, _count in counts.most_common(5)]
 
 
+def _build_follow_up_prompts(
+    *,
+    lead_card: dict[str, Any] | None,
+    lead_goal: dict[str, Any] | None,
+    stale_card: dict[str, Any] | None,
+    focus_tags: list[str],
+    source_evidence_ids: list[str],
+) -> list[dict[str, Any]]:
+    prompts: list[dict[str, Any]] = []
+    evidence_ids = list(dict.fromkeys(source_evidence_ids))
+
+    if lead_goal is not None:
+        prompts.append(
+            {
+                "prompt_id": "goal-next-step",
+                "label": "Next concrete step",
+                "prompt_text": f"What is the next concrete step for {lead_goal['title']}?",
+                "prompt_type": "clarify_priority",
+                "source_reflection_id": None,
+                "source_evidence_ids": evidence_ids,
+            }
+        )
+        prompts.append(
+            {
+                "prompt_id": "goal-blocker",
+                "label": "What is blocked?",
+                "prompt_text": f"What is blocking progress on {lead_goal['title']}?",
+                "prompt_type": "unblock",
+                "source_reflection_id": None,
+                "source_evidence_ids": evidence_ids,
+            }
+        )
+
+    if stale_card is not None:
+        prompts.append(
+            {
+                "prompt_id": "stale-recap",
+                "label": "Summarize what changed",
+                "prompt_text": "Summarize what changed since the last reflection for this stale follow-up.",
+                "prompt_type": "recap",
+                "source_reflection_id": None,
+                "source_evidence_ids": evidence_ids,
+            }
+        )
+    elif lead_card is not None:
+        prompts.append(
+            {
+                "prompt_id": "focus-narrow",
+                "label": "Narrow the focus",
+                "prompt_text": f"Should we narrow the focus to {lead_card['title']} this week?",
+                "prompt_type": "narrow_focus",
+                "source_reflection_id": None,
+                "source_evidence_ids": evidence_ids,
+            }
+        )
+    elif focus_tags:
+        prompts.append(
+            {
+                "prompt_id": "tag-next-step",
+                "label": "Next step",
+                "prompt_text": f"What is the next concrete step for {focus_tags[0]}?",
+                "prompt_type": "clarify_priority",
+                "source_reflection_id": None,
+                "source_evidence_ids": evidence_ids,
+            }
+        )
+
+    return prompts[:3]
+
+
+def _derive_theme_key(
+    *,
+    focus_tags: list[str],
+    lead_goal: dict[str, Any] | None,
+    lead_card: dict[str, Any] | None,
+    cadence: str,
+) -> str:
+    if focus_tags:
+        return str(focus_tags[0])
+    if lead_goal is not None:
+        return str(lead_goal.get("title") or cadence)
+    if lead_card is not None:
+        return str(lead_card.get("title") or cadence)
+    return cadence
+
+
 def _build_reflection_payload(
     *,
     cadence: str,
@@ -183,6 +269,25 @@ def _build_reflection_payload(
             }
         )
 
+    source_evidence_ids = [
+        *[row["id"] for row in activity_rows[:5]],
+        *knowledge_card_ids,
+        *goal_ids,
+    ]
+    signal_strength = float(len(source_evidence_ids))
+    theme_key = _derive_theme_key(
+        focus_tags=focus_tags,
+        lead_goal=lead_goal,
+        lead_card=lead_card,
+        cadence=cadence,
+    )
+    follow_up_prompts = _build_follow_up_prompts(
+        lead_card=lead_card,
+        lead_goal=lead_goal,
+        stale_card=stale_card,
+        focus_tags=focus_tags,
+        source_evidence_ids=source_evidence_ids,
+    )
     provenance = {
         "source_event_ids": [row["id"] for row in activity_rows[:5]],
         "knowledge_card_ids": knowledge_card_ids,
@@ -195,6 +300,11 @@ def _build_reflection_payload(
         "summary": summary,
         "cadence": cadence,
         "evidence": evidence,
+        "delivery_decision": "delivered",
+        "delivery_reason": "meaningful_signal",
+        "theme_key": theme_key,
+        "signal_strength": signal_strength,
+        "follow_up_prompts": follow_up_prompts,
         "generated_at": now.replace(microsecond=0).isoformat(),
         "knowledge_card_ids": knowledge_card_ids,
         "goal_ids": goal_ids,
@@ -299,6 +409,7 @@ def run_companion_reflection_job(
         "status": "completed",
         "reflection_id": reflection_id,
         "notification_id": notification.id,
+        "delivery_decision": metadata.get("delivery_decision"),
     }
 
 

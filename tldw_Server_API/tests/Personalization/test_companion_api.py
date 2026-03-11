@@ -295,6 +295,20 @@ def test_companion_reflection_detail_returns_provenance_and_evidence(client_with
             "title": "Daily reflection",
             "summary": "Existing reflection",
             "cadence": "daily",
+            "delivery_decision": "delivered",
+            "delivery_reason": "meaningful_signal",
+            "theme_key": "project-alpha",
+            "signal_strength": 3.0,
+            "follow_up_prompts": [
+                {
+                    "prompt_id": "prompt-1",
+                    "label": "Next concrete step",
+                    "prompt_text": "What is the next concrete step for project alpha?",
+                    "prompt_type": "clarify_priority",
+                    "source_reflection_id": "reflection-1",
+                    "source_evidence_ids": [source_event_id, card_id, goal_id],
+                }
+            ],
             "evidence": [
                 {"kind": "knowledge_card", "card_id": card_id},
                 {"kind": "goal", "goal_id": goal_id},
@@ -312,6 +326,11 @@ def test_companion_reflection_detail_returns_provenance_and_evidence(client_with
     assert payload["knowledge_cards"][0]["id"] == card_id
     assert payload["goals"][0]["id"] == goal_id
     assert payload["activity_events"][0]["id"] == source_event_id
+    assert payload["delivery_decision"] == "delivered"
+    assert payload["delivery_reason"] == "meaningful_signal"
+    assert payload["theme_key"] == "project-alpha"
+    assert payload["signal_strength"] == 3.0
+    assert payload["follow_up_prompts"][0]["prompt_text"] == "What is the next concrete step for project alpha?"
 
 
 def test_companion_goals_create_and_list(client_with_companion_db) -> None:

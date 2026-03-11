@@ -152,6 +152,29 @@ def test_companion_reflection_job_includes_goal_and_stale_signals(companion_refl
     assert goal_id in reflection["provenance"]["goal_ids"]
 
 
+def test_companion_reflection_job_persists_delivery_metadata_and_prompts(
+    companion_reflection_env,
+) -> None:
+    personalization_db, collections_db = _seed_companion_context("1")
+
+    result = run_companion_reflection_job(
+        user_id="1",
+        cadence="daily",
+        now=datetime(2026, 3, 10, 15, 0, tzinfo=timezone.utc),
+        personalization_db=personalization_db,
+        collections_db=collections_db,
+    )
+
+    assert result["status"] == "completed"
+
+    rows, _total = personalization_db.list_companion_activity_events("1", limit=20, offset=0)
+    reflection = next(row for row in rows if row["id"] == result["reflection_id"])
+    assert reflection["metadata"]["delivery_decision"] == "delivered"
+    assert reflection["metadata"]["theme_key"]
+    assert reflection["metadata"]["signal_strength"] >= 1
+    assert reflection["metadata"]["follow_up_prompts"]
+
+
 def test_companion_reflection_job_skips_when_quiet_hours_active(companion_reflection_env) -> None:
     personalization_db, collections_db = _seed_companion_context("1")
     personalization_db.update_profile(

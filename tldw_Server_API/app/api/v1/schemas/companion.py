@@ -173,6 +173,11 @@ class CompanionReflectionItem(BaseModel):
     cadence: str | None = None
     summary: str
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    delivery_decision: str | None = None
+    delivery_reason: str | None = None
+    theme_key: str | None = None
+    signal_strength: float | None = None
+    follow_up_prompts: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -184,6 +189,11 @@ class CompanionReflectionDetail(BaseModel):
     cadence: str | None = None
     summary: str
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    delivery_decision: str | None = None
+    delivery_reason: str | None = None
+    theme_key: str | None = None
+    signal_strength: float | None = None
+    follow_up_prompts: list[dict[str, Any]] = Field(default_factory=list)
     provenance: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     activity_events: list[CompanionActivityItem] = Field(default_factory=list)
