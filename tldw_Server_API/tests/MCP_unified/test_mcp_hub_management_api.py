@@ -79,6 +79,9 @@ class _FakeService:
                 "superseded_by_server_id": None,
                 "binding_count": 2,
                 "runtime_executable": True,
+                "auth_template_present": True,
+                "auth_template_valid": True,
+                "auth_template_blocked_reason": None,
                 "credential_slots": [
                     {
                         "server_id": "docs",
@@ -96,6 +99,33 @@ class _FakeService:
                 "updated_at": None,
             }
         ]
+
+    async def get_external_server_auth_template(self, *, server_id: str) -> dict[str, Any]:
+        assert server_id == "docs"
+        return {
+            "mode": "template",
+            "mappings": [
+                {
+                    "slot_name": "token_readonly",
+                    "target_type": "header",
+                    "target_name": "Authorization",
+                    "prefix": "Bearer ",
+                    "suffix": "",
+                    "required": True,
+                }
+            ],
+        }
+
+    async def update_external_server_auth_template(
+        self,
+        *,
+        server_id: str,
+        auth_template: dict[str, Any],
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        assert server_id == "docs"
+        assert actor_id == 1
+        return auth_template
 
     async def import_legacy_external_server(self, *, server_id: str, actor_id: int | None):
         assert actor_id == 1
@@ -511,6 +541,9 @@ async def test_list_external_servers_includes_source_state_fields() -> None:
     assert payload[0]["server_source"] == "managed"
     assert payload[0]["binding_count"] == 2
     assert payload[0]["runtime_executable"] is True
+    assert payload[0]["auth_template_present"] is True
+    assert payload[0]["auth_template_valid"] is True
+    assert payload[0]["auth_template_blocked_reason"] is None
 
 
 @pytest.mark.asyncio
@@ -615,6 +648,37 @@ async def test_external_server_credential_slot_endpoints_round_trip() -> None:
     assert clear_secret_resp.json()["ok"] is True
     assert delete_resp.status_code == 200
     assert delete_resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_external_server_auth_template_endpoints_round_trip() -> None:
+    app = _build_app(
+        principal=_make_principal(roles=["admin"], permissions=[]),
+        fail_with_401=False,
+    )
+    with TestClient(app) as client:
+        get_resp = client.get("/api/v1/mcp/hub/external-servers/docs/auth-template")
+        put_resp = client.put(
+            "/api/v1/mcp/hub/external-servers/docs/auth-template",
+            json={
+                "mode": "template",
+                "mappings": [
+                    {
+                        "slot_name": "token_readonly",
+                        "target_type": "header",
+                        "target_name": "Authorization",
+                        "prefix": "Bearer ",
+                        "suffix": "",
+                        "required": True,
+                    }
+                ],
+            },
+        )
+
+    assert get_resp.status_code == 200
+    assert get_resp.json()["mappings"][0]["target_type"] == "header"
+    assert put_resp.status_code == 200
+    assert put_resp.json()["mappings"][0]["slot_name"] == "token_readonly"
 
 
 @pytest.mark.asyncio
