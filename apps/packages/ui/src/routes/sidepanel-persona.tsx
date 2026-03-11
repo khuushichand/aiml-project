@@ -71,6 +71,18 @@ type PersonaSessionSummary = {
   pending_plan_count?: number
 }
 
+type PersonaSessionPreferences = {
+  use_memory_context?: boolean
+  use_companion_context?: boolean
+  use_persona_state_context?: boolean
+  memory_top_k?: number
+}
+
+type PersonaSessionDetailResponse = {
+  preferences?: PersonaSessionPreferences
+  turns?: Array<Record<string, unknown>>
+}
+
 type PersonaProfileResponse = {
   id?: string
   use_persona_state_context_default?: boolean
@@ -111,6 +123,16 @@ type UnsavedStateDiscardReason =
   | "before_unload"
 
 const formatMemoryResultsLabel = (count: number) => `Memory results: ${count}`
+const MAX_MEMORY_TOP_K = 10
+const MEMORY_TOP_K_OPTIONS = Array.from(
+  { length: MAX_MEMORY_TOP_K },
+  (_, index) => index + 1
+)
+const _normalizeMemoryTopK = (value: unknown, fallback: number): number => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(1, Math.min(MAX_MEMORY_TOP_K, Math.trunc(parsed)))
+}
 const _historyEntrySortEpoch = (entry: PersonaStateHistoryEntry): number => {
   const candidate = String(entry.created_at || entry.last_modified || "").trim()
   if (!candidate) return 0
@@ -248,6 +270,30 @@ const SidepanelPersona = ({
     setPersonaStateContextEnabled(false)
     setPersonaStateContextProfileDefault(false)
   }, [isCompanionMode])
+
+  const applySessionPreferences = React.useCallback(
+    (preferences?: PersonaSessionPreferences | null) => {
+      if (!preferences || typeof preferences !== "object") return
+      if (typeof preferences.use_memory_context === "boolean") {
+        setMemoryEnabled(preferences.use_memory_context)
+      }
+      if (typeof preferences.memory_top_k !== "undefined") {
+        setMemoryTopK((current) =>
+          _normalizeMemoryTopK(preferences.memory_top_k, current)
+        )
+      }
+      if (!isCompanionMode && typeof preferences.use_companion_context === "boolean") {
+        setCompanionContextEnabled(preferences.use_companion_context)
+      }
+      if (
+        !isCompanionMode &&
+        typeof preferences.use_persona_state_context === "boolean"
+      ) {
+        setPersonaStateContextEnabled(preferences.use_persona_state_context)
+      }
+    },
+    [isCompanionMode]
+  )
 
   const getUnsavedStateDiscardPrompt = React.useCallback(
     (reason: UnsavedStateDiscardReason): string => {
@@ -748,6 +794,19 @@ const SidepanelPersona = ({
       }
       setSessionId(nextSessionId)
       setResumeSessionId(nextSessionId)
+      try {
+        const sessionDetailResp = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/sessions/${encodeURIComponent(nextSessionId)}?limit_turns=0` as any,
+          { method: "GET" }
+        )
+        if (sessionDetailResp.ok) {
+          const sessionDetailPayload =
+            (await sessionDetailResp.json()) as PersonaSessionDetailResponse
+          applySessionPreferences(sessionDetailPayload?.preferences)
+        }
+      } catch {
+        // session detail hydration is best-effort during connect
+      }
       if (!sessionsPayload.some((item) => item.session_id === nextSessionId)) {
         setSessionHistory((prev) => [{ session_id: nextSessionId }, ...prev])
       }
@@ -804,6 +863,7 @@ const SidepanelPersona = ({
     handleIncomingPayload,
     isCompanionMode,
     loadPersonaStateDocs,
+    applySessionPreferences,
     resumeSessionId,
     selectedPersonaId
   ])
@@ -1261,7 +1321,7 @@ const SidepanelPersona = ({
             aria-label={t("sidepanel:persona.memoryTopK", "Memory results")}
             disabled={!memoryEnabled}
             onChange={(value) => setMemoryTopK(Number(value))}
-            options={[1, 2, 3, 4, 5].map((k) => ({
+            options={MEMORY_TOP_K_OPTIONS.map((k) => ({
               label: formatMemoryResultsLabel(k),
               value: k
             }))}

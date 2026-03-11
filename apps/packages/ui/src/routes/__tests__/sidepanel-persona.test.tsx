@@ -507,6 +507,99 @@ describe("SidepanelPersona", () => {
     })
   })
 
+  it("hydrates persisted session preferences when connecting to a resumed session", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: null,
+            identity_md: null,
+            heartbeat_md: null
+          })
+        })
+      }
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions/sess-pref-hydrated")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-pref-hydrated",
+            preferences: {
+              use_memory_context: false,
+              use_companion_context: false,
+              use_persona_state_context: false,
+              memory_top_k: 7
+            },
+            turns: []
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ session_id: "sess-pref-hydrated" }]
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-pref-hydrated" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    await screen.findByText("Persona stream connected")
+    await screen.findByText("Memory results: 7")
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("persona-memory-toggle") as HTMLInputElement
+      ).not.toBeChecked()
+      expect(
+        screen.getByTestId("persona-companion-context-toggle") as HTMLInputElement
+      ).not.toBeChecked()
+      expect(
+        screen.getByTestId("persona-state-context-toggle") as HTMLInputElement
+      ).not.toBeChecked()
+    })
+  })
+
   it("creates companion-mode persona sessions with the companion conversation surface", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
