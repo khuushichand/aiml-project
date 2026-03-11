@@ -61,6 +61,70 @@ const PROVENANCE_LABELS = {
   assignment_override: "assignment override"
 } as const
 
+type AssignmentValidationDetail = {
+  message?: string
+  conflicting_workspace_ids?: string[]
+  conflicting_workspace_roots?: string[]
+  unresolved_workspace_ids?: string[]
+}
+
+const _coerceAssignmentValidationDetail = (value: unknown): AssignmentValidationDetail | null => {
+  if (!value || typeof value !== "object") return null
+  const candidate = value as Record<string, unknown>
+  const detail =
+    candidate.detail && typeof candidate.detail === "object"
+      ? (candidate.detail as Record<string, unknown>)
+      : candidate
+  const message = typeof detail.message === "string" ? detail.message : null
+  const conflictingWorkspaceIds = Array.isArray(detail.conflicting_workspace_ids)
+    ? detail.conflicting_workspace_ids
+        .map((entry) => String(entry ?? "").trim())
+        .filter((entry) => entry.length > 0)
+    : []
+  const conflictingWorkspaceRoots = Array.isArray(detail.conflicting_workspace_roots)
+    ? detail.conflicting_workspace_roots
+        .map((entry) => String(entry ?? "").trim())
+        .filter((entry) => entry.length > 0)
+    : []
+  const unresolvedWorkspaceIds = Array.isArray(detail.unresolved_workspace_ids)
+    ? detail.unresolved_workspace_ids
+        .map((entry) => String(entry ?? "").trim())
+        .filter((entry) => entry.length > 0)
+    : []
+  if (
+    !message &&
+    conflictingWorkspaceIds.length === 0 &&
+    conflictingWorkspaceRoots.length === 0 &&
+    unresolvedWorkspaceIds.length === 0
+  ) {
+    return null
+  }
+  return {
+    message: message ?? undefined,
+    conflicting_workspace_ids: conflictingWorkspaceIds,
+    conflicting_workspace_roots: conflictingWorkspaceRoots,
+    unresolved_workspace_ids: unresolvedWorkspaceIds
+  }
+}
+
+const _formatAssignmentValidationError = (error: unknown, fallback: string): string => {
+  const detail = _coerceAssignmentValidationDetail(
+    (error as { details?: unknown } | null | undefined)?.details
+  )
+  if (!detail) return fallback
+  const parts = [detail.message || fallback]
+  if (detail.conflicting_workspace_ids && detail.conflicting_workspace_ids.length > 0) {
+    parts.push(`Workspaces: ${detail.conflicting_workspace_ids.join(", ")}`)
+  }
+  if (detail.conflicting_workspace_roots && detail.conflicting_workspace_roots.length > 0) {
+    parts.push(`Roots: ${detail.conflicting_workspace_roots.join(", ")}`)
+  }
+  if (detail.unresolved_workspace_ids && detail.unresolved_workspace_ids.length > 0) {
+    parts.push(`Unresolved workspaces: ${detail.unresolved_workspace_ids.join(", ")}`)
+  }
+  return parts.join(" ")
+}
+
 export const PolicyAssignmentsTab = () => {
   const [assignments, setAssignments] = useState<McpHubPolicyAssignment[]>([])
   const [profiles, setProfiles] = useState<McpHubPermissionProfile[]>([])
@@ -346,9 +410,12 @@ export const PolicyAssignmentsTab = () => {
       }
       resetForm()
       await loadAll()
-    } catch {
+    } catch (error) {
       setErrorMessage(
-        editingId ? "Failed to update policy assignment." : "Failed to create policy assignment."
+        _formatAssignmentValidationError(
+          error,
+          editingId ? "Failed to update policy assignment." : "Failed to create policy assignment."
+        )
       )
     } finally {
       setSaving(false)

@@ -86,6 +86,14 @@ class McpHubConflictError(BadRequestError):
     """Raised when creating an MCP Hub resource would overwrite an existing one."""
 
 
+class McpHubValidationError(BadRequestError):
+    """Structured MCP Hub validation error with machine-readable detail payload."""
+
+    def __init__(self, detail: dict[str, Any]) -> None:
+        self.detail = dict(detail)
+        super().__init__(str(self.detail.get("message") or self.detail.get("code") or "Invalid MCP Hub request"))
+
+
 _SCOPE_RANK = {"global": 0, "org": 1, "team": 2, "user": 3}
 _CREDENTIAL_SLOT_PRIVILEGE_CLASSES = {"read", "write", "admin"}
 _CREDENTIAL_SLOT_PRIVILEGE_RANK = {"read": 0, "write": 1, "admin": 2}
@@ -95,6 +103,61 @@ _CREDENTIAL_SLOT_REQUIRED_PERMISSIONS = {
     "admin": "grant.credentials.admin",
 }
 _SHARED_WORKSPACE_SCOPE_TYPES = {"global", "org", "team"}
+_UNION_POLICY_KEYS = {"allowed_tools", "denied_tools", "tool_names", "tool_patterns", "capabilities"}
+_PATH_SCOPE_MULTI_ROOT_MODE = "workspace_root"
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return [cleaned] if cleaned else []
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    out: list[str] = []
+    for entry in value:
+        cleaned = str(entry or "").strip()
+        if cleaned:
+            out.append(cleaned)
+    return out
+
+
+def _unique(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in dict(overlay or {}).items():
+        if key in _UNION_POLICY_KEYS:
+            merged[key] = _unique(_as_str_list(merged.get(key)) + _as_str_list(value))
+            continue
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = _merge_policy_documents(_as_dict(merged.get(key)), value)
+            continue
+        merged[key] = value
+    return merged
+
+
+def _normalize_path_scope_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"workspace_root", "cwd_descendants"}:
+        return normalized
+    return "none"
+
+
+def _roots_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
 
 
 class McpHubService:
@@ -226,6 +289,184 @@ class McpHubService:
             resource_name="workspace set object",
         )
         return row
+
+    @staticmethod
+    def _multi_root_validation_error(
+        *,
+        code: str,
+        message: str,
+        **detail: Any,
+    ) -> McpHubValidationError:
+        payload = {"code": code, "message": message}
+        payload.update({key: value for key, value in detail.items() if value is not None})
+        return McpHubValidationError(payload)
+
+    async def _resolve_effective_assignment_path_policy(
+        self,
+        *,
+        assignment_id: int | None,
+        profile_id: int | None,
+        path_scope_object_id: int | None,
+        inline_policy_document: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        if profile_id is not None:
+            profile_row = await self.repo.get_permission_profile(int(profile_id))
+            if profile_row and bool(profile_row.get("is_active", True)):
+                profile_path_scope_object_id = profile_row.get("path_scope_object_id")
+                if profile_path_scope_object_id is not None:
+                    path_scope_row = await self.repo.get_path_scope_object(int(profile_path_scope_object_id))
+                    if path_scope_row and bool(path_scope_row.get("is_active", True)):
+                        merged = _merge_policy_documents(
+                            merged,
+                            _as_dict(path_scope_row.get("path_scope_document")),
+                        )
+                merged = _merge_policy_documents(
+                    merged,
+                    _as_dict(profile_row.get("policy_document")),
+                )
+
+        if path_scope_object_id is not None:
+            path_scope_row = await self.repo.get_path_scope_object(int(path_scope_object_id))
+            if path_scope_row and bool(path_scope_row.get("is_active", True)):
+                merged = _merge_policy_documents(
+                    merged,
+                    _as_dict(path_scope_row.get("path_scope_document")),
+                )
+
+        merged = _merge_policy_documents(merged, _as_dict(inline_policy_document))
+
+        if assignment_id is not None:
+            override_row = await self.repo.get_policy_override_by_assignment(int(assignment_id))
+            if override_row and bool(override_row.get("is_active", True)):
+                merged = _merge_policy_documents(
+                    merged,
+                    _as_dict(override_row.get("override_policy_document")),
+                )
+
+        return merged
+
+    async def _resolve_assignment_workspace_source(
+        self,
+        *,
+        assignment_id: int | None,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        workspace_source_mode: str | None,
+        workspace_set_object_id: int | None,
+        inline_workspace_ids: list[str] | None,
+    ) -> tuple[str, str, list[str]]:
+        source_mode = str(workspace_source_mode or "").strip().lower() or "inline"
+        if source_mode == "named" and workspace_set_object_id is not None:
+            workspace_set_row = await self.repo.get_workspace_set_object(int(workspace_set_object_id))
+            if workspace_set_row and bool(workspace_set_row.get("is_active", True)):
+                workspace_ids = _unique(
+                    _as_str_list(
+                        [
+                            row.get("workspace_id")
+                            for row in await self.repo.list_workspace_set_members(int(workspace_set_object_id))
+                        ]
+                    )
+                )
+                trust_source = (
+                    "shared_registry"
+                    if str(workspace_set_row.get("owner_scope_type") or "").strip().lower() != "user"
+                    else "user_local"
+                )
+                return source_mode, trust_source, workspace_ids
+            return source_mode, "user_local", []
+
+        if inline_workspace_ids is None and assignment_id is not None:
+            inline_workspace_ids = [
+                row.get("workspace_id")
+                for row in await self.repo.list_policy_assignment_workspaces(int(assignment_id))
+            ]
+        workspace_ids = _unique(_as_str_list(inline_workspace_ids or []))
+        # Inline membership still uses the acting user's trusted local workspaces in v1.
+        _ = owner_scope_type
+        _ = owner_scope_id
+        return source_mode, "user_local", workspace_ids
+
+    async def validate_multi_root_assignment_readiness(
+        self,
+        *,
+        actor_id: int | None,
+        assignment_id: int | None,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        profile_id: int | None,
+        path_scope_object_id: int | None,
+        inline_policy_document: dict[str, Any] | None,
+        workspace_source_mode: str | None,
+        workspace_set_object_id: int | None,
+        inline_workspace_ids: list[str] | None,
+    ) -> None:
+        effective_policy_document = await self._resolve_effective_assignment_path_policy(
+            assignment_id=assignment_id,
+            profile_id=profile_id,
+            path_scope_object_id=path_scope_object_id,
+            inline_policy_document=inline_policy_document,
+        )
+        effective_path_scope_mode = _normalize_path_scope_mode(
+            effective_policy_document.get("path_scope_mode")
+        )
+        if effective_path_scope_mode != _PATH_SCOPE_MULTI_ROOT_MODE:
+            return
+
+        source_mode, trust_source, workspace_ids = await self._resolve_assignment_workspace_source(
+            assignment_id=assignment_id,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            workspace_source_mode=workspace_source_mode,
+            workspace_set_object_id=workspace_set_object_id,
+            inline_workspace_ids=inline_workspace_ids,
+        )
+        if len(workspace_ids) <= 1:
+            return
+
+        user_id = str(actor_id if actor_id is not None else owner_scope_id) if trust_source == "user_local" else None
+        resolved_roots: list[tuple[str, Path]] = []
+        unresolved_workspace_ids: list[str] = []
+        for workspace_id in workspace_ids:
+            resolved = await self.workspace_root_resolver.resolve_for_context(
+                session_id=None,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                workspace_trust_source=trust_source,
+                owner_scope_type=owner_scope_type,
+                owner_scope_id=owner_scope_id,
+            )
+            workspace_root = str(resolved.get("workspace_root") or "").strip()
+            if not workspace_root:
+                unresolved_workspace_ids.append(workspace_id)
+                continue
+            resolved_roots.append((workspace_id, Path(workspace_root).expanduser().resolve(strict=False)))
+
+        if unresolved_workspace_ids:
+            raise self._multi_root_validation_error(
+                code="assignment_workspace_unresolvable",
+                message="Workspace source cannot resolve every workspace for multi-root execution.",
+                unresolved_workspace_ids=sorted(unresolved_workspace_ids),
+                workspace_source_mode=source_mode,
+                workspace_trust_source=trust_source,
+            )
+
+        for index, (left_workspace_id, left_root) in enumerate(resolved_roots):
+            for right_workspace_id, right_root in resolved_roots[index + 1 :]:
+                if not _roots_overlap(left_root, right_root):
+                    continue
+                raise self._multi_root_validation_error(
+                    code="assignment_multi_root_overlap",
+                    message=(
+                        "Named workspace source contains overlapping roots for multi-root execution."
+                        if source_mode == "named"
+                        else "Inline workspace source contains overlapping roots for multi-root execution."
+                    ),
+                    conflicting_workspace_ids=[left_workspace_id, right_workspace_id],
+                    conflicting_workspace_roots=[str(left_root), str(right_root)],
+                    workspace_source_mode=source_mode,
+                    workspace_trust_source=trust_source,
+                )
 
     async def _validate_workspace_id_for_user(self, *, owner_scope_id: int | None, workspace_id: str) -> None:
         if owner_scope_id is None:
@@ -1018,6 +1259,18 @@ class McpHubService:
         actor_id: int | None,
         is_active: bool = True,
     ) -> dict[str, Any]:
+        await self.validate_multi_root_assignment_readiness(
+            actor_id=actor_id,
+            assignment_id=None,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            profile_id=profile_id,
+            path_scope_object_id=path_scope_object_id,
+            inline_policy_document=inline_policy_document,
+            workspace_source_mode=workspace_source_mode,
+            workspace_set_object_id=workspace_set_object_id,
+            inline_workspace_ids=None,
+        )
         row = await self.repo.create_policy_assignment(
             target_type=target_type,
             target_id=target_id,
@@ -1069,6 +1322,30 @@ class McpHubService:
         actor_id: int | None = None,
         **update_fields: Any,
     ) -> dict[str, Any] | None:
+        existing = await self.repo.get_policy_assignment(assignment_id)
+        if existing is None:
+            return None
+        await self.validate_multi_root_assignment_readiness(
+            actor_id=actor_id,
+            assignment_id=assignment_id,
+            owner_scope_type=str(update_fields.get("owner_scope_type") or existing.get("owner_scope_type") or "global"),
+            owner_scope_id=update_fields.get("owner_scope_id", existing.get("owner_scope_id")),
+            profile_id=update_fields.get("profile_id", existing.get("profile_id")),
+            path_scope_object_id=update_fields.get("path_scope_object_id", existing.get("path_scope_object_id")),
+            inline_policy_document=update_fields.get(
+                "inline_policy_document",
+                existing.get("inline_policy_document") or {},
+            ),
+            workspace_source_mode=update_fields.get(
+                "workspace_source_mode",
+                existing.get("workspace_source_mode"),
+            ),
+            workspace_set_object_id=update_fields.get(
+                "workspace_set_object_id",
+                existing.get("workspace_set_object_id"),
+            ),
+            inline_workspace_ids=None,
+        )
         row = await self.repo.update_policy_assignment(
             assignment_id,
             actor_id=actor_id,
@@ -1123,6 +1400,9 @@ class McpHubService:
         actor_id: int | None,
     ) -> dict[str, Any]:
         workspace_value = str(workspace_id or "").strip()
+        assignment = await self.repo.get_policy_assignment(assignment_id)
+        if not assignment:
+            raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
         existing = await self.repo.list_policy_assignment_workspaces(assignment_id)
         if any(str(row.get("workspace_id") or "").strip() == workspace_value for row in existing):
             raise McpHubConflictError("Workspace already attached to assignment")
@@ -1131,6 +1411,26 @@ class McpHubService:
             workspace_id=workspace_value,
             actor_id=actor_id,
         )
+        try:
+            await self.validate_multi_root_assignment_readiness(
+                actor_id=actor_id,
+                assignment_id=assignment_id,
+                owner_scope_type=str(assignment.get("owner_scope_type") or "global"),
+                owner_scope_id=assignment.get("owner_scope_id"),
+                profile_id=assignment.get("profile_id"),
+                path_scope_object_id=assignment.get("path_scope_object_id"),
+                inline_policy_document=assignment.get("inline_policy_document") or {},
+                workspace_source_mode=assignment.get("workspace_source_mode"),
+                workspace_set_object_id=assignment.get("workspace_set_object_id"),
+                inline_workspace_ids=[
+                    str(existing_row.get("workspace_id") or "").strip()
+                    for existing_row in existing
+                ]
+                + [workspace_value],
+            )
+        except BadRequestError:
+            await self.repo.delete_policy_assignment_workspace(assignment_id, workspace_value)
+            raise
         await _await_if_needed(
             emit_mcp_hub_audit(
                 action="mcp_hub.policy_assignment_workspace.create",
@@ -1149,6 +1449,27 @@ class McpHubService:
         workspace_id: str,
         actor_id: int | None,
     ) -> bool:
+        assignment = await self.repo.get_policy_assignment(assignment_id)
+        if not assignment:
+            raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+        existing = await self.repo.list_policy_assignment_workspaces(assignment_id)
+        next_workspace_ids = [
+            str(row.get("workspace_id") or "").strip()
+            for row in existing
+            if str(row.get("workspace_id") or "").strip() != str(workspace_id or "").strip()
+        ]
+        await self.validate_multi_root_assignment_readiness(
+            actor_id=actor_id,
+            assignment_id=assignment_id,
+            owner_scope_type=str(assignment.get("owner_scope_type") or "global"),
+            owner_scope_id=assignment.get("owner_scope_id"),
+            profile_id=assignment.get("profile_id"),
+            path_scope_object_id=assignment.get("path_scope_object_id"),
+            inline_policy_document=assignment.get("inline_policy_document") or {},
+            workspace_source_mode=assignment.get("workspace_source_mode"),
+            workspace_set_object_id=assignment.get("workspace_set_object_id"),
+            inline_workspace_ids=next_workspace_ids,
+        )
         deleted = await self.repo.delete_policy_assignment_workspace(assignment_id, workspace_id)
         if deleted:
             await _await_if_needed(

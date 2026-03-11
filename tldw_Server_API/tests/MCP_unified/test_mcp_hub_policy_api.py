@@ -11,6 +11,7 @@ from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.endpoints import mcp_hub_management
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.exceptions import BadRequestError
 from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError
 
 
@@ -36,6 +37,9 @@ def _make_principal(
 
 class _FakePolicyService:
     def __init__(self) -> None:
+        self.create_policy_assignment_error: Exception | None = None
+        self.update_policy_assignment_error: Exception | None = None
+        self.add_policy_assignment_workspace_error: Exception | None = None
         self.permission_profiles = [
             {
                 "id": 5,
@@ -236,6 +240,8 @@ class _FakePolicyService:
         return None
 
     async def create_policy_assignment(self, **kwargs):
+        if self.create_policy_assignment_error is not None:
+            raise self.create_policy_assignment_error
         assignment = {
             "id": 11,
             "target_type": kwargs["target_type"],
@@ -262,6 +268,8 @@ class _FakePolicyService:
         return assignment
 
     async def update_policy_assignment(self, assignment_id: int, **kwargs):
+        if self.update_policy_assignment_error is not None:
+            raise self.update_policy_assignment_error
         if assignment_id != 11:
             return None
         assignment = dict(self.policy_assignments[0])
@@ -608,6 +616,8 @@ class _FakePolicyService:
         return [dict(row) for row in self.assignment_workspaces.get(assignment_id, [])]
 
     async def add_policy_assignment_workspace(self, assignment_id: int, *, workspace_id: str, actor_id: int | None):
+        if self.add_policy_assignment_workspace_error is not None:
+            raise self.add_policy_assignment_workspace_error
         rows = self.assignment_workspaces.setdefault(assignment_id, [])
         if any(str(row.get("workspace_id")) == workspace_id for row in rows):
             raise McpHubConflictError("Workspace already attached to assignment")
@@ -677,6 +687,12 @@ class _FakePolicyResolver:
                 }
             ]
         }
+
+
+class _StructuredBadRequestError(BadRequestError):
+    def __init__(self, detail: dict[str, object]) -> None:
+        super().__init__(str(detail.get("message") or detail.get("code") or "invalid request"))
+        self.detail = detail
 
 
 class _FakeToolRegistryService:
@@ -1096,6 +1112,52 @@ def test_create_policy_assignment_accepts_named_workspace_source_reference() -> 
     payload = resp.json()
     assert payload["workspace_source_mode"] == "named"
     assert payload["workspace_set_object_id"] == 51
+
+
+def test_create_policy_assignment_returns_structured_overlap_detail() -> None:
+    service = _FakePolicyService()
+    service.create_policy_assignment_error = _StructuredBadRequestError(
+        {
+            "code": "assignment_multi_root_overlap",
+            "message": "Named workspace source contains overlapping roots for multi-root execution.",
+            "conflicting_workspace_ids": ["workspace-alpha", "workspace-beta"],
+            "conflicting_workspace_roots": ["/repo", "/repo/docs"],
+            "workspace_source_mode": "named",
+        }
+    )
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        ),
+        service=service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/policy-assignments",
+            json={
+                "target_type": "persona",
+                "target_id": "researcher",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "profile_id": None,
+                "workspace_source_mode": "named",
+                "workspace_set_object_id": 51,
+                "inline_policy_document": {},
+                "approval_policy_id": None,
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == {
+        "code": "assignment_multi_root_overlap",
+        "message": "Named workspace source contains overlapping roots for multi-root execution.",
+        "conflicting_workspace_ids": ["workspace-alpha", "workspace-beta"],
+        "conflicting_workspace_roots": ["/repo", "/repo/docs"],
+        "workspace_source_mode": "named",
+    }
 
 
 def test_create_policy_assignment_accepts_parent_scope_path_scope_object_reference() -> None:
@@ -1665,6 +1727,40 @@ def test_update_policy_assignment_returns_updated_payload() -> None:
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["inline_policy_document"]["capabilities"] == ["network.external"]
+
+
+def test_add_policy_assignment_workspace_returns_structured_unresolvable_detail() -> None:
+    service = _FakePolicyService()
+    service.add_policy_assignment_workspace_error = _StructuredBadRequestError(
+        {
+            "code": "assignment_workspace_unresolvable",
+            "message": "Workspace source cannot resolve every workspace for multi-root execution.",
+            "unresolved_workspace_ids": ["workspace-missing"],
+            "workspace_source_mode": "inline",
+            "workspace_trust_source": "user_local",
+        }
+    )
+    app = _build_app(
+        _make_principal(
+            permissions=[SYSTEM_CONFIGURE, "grant.process.execute"],
+        ),
+        service=service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/policy-assignments/11/workspaces",
+            json={"workspace_id": "workspace-missing"},
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == {
+        "code": "assignment_workspace_unresolvable",
+        "message": "Workspace source cannot resolve every workspace for multi-root execution.",
+        "unresolved_workspace_ids": ["workspace-missing"],
+        "workspace_source_mode": "inline",
+        "workspace_trust_source": "user_local",
+    }
 
 
 def test_delete_policy_assignment_returns_ok() -> None:

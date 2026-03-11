@@ -1009,10 +1009,17 @@ async def _validate_assignment_workspace_source(
         except ResourceNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except BadRequestError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
         return
     if workspace_set_object_id is not None:
         raise HTTPException(status_code=422, detail="workspace_set_object_id may only be set when workspace_source_mode is named")
+
+
+def _bad_request_detail(exc: BadRequestError) -> Any:
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        return detail
+    return str(exc)
 
 
 async def _assignment_base_policy_document(
@@ -1609,24 +1616,24 @@ async def create_policy_assignment(
             owner_scope_type=payload.owner_scope_type,
             owner_scope_id=payload.owner_scope_id,
         )
+        row = await svc.create_policy_assignment(
+            target_type=payload.target_type,
+            target_id=payload.target_id,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id,
+            profile_id=payload.profile_id,
+            path_scope_object_id=payload.path_scope_object_id,
+            workspace_source_mode=payload.workspace_source_mode,
+            workspace_set_object_id=payload.workspace_set_object_id,
+            inline_policy_document=inline_policy_document,
+            approval_policy_id=payload.approval_policy_id,
+            is_active=payload.is_active,
+            actor_id=principal.user_id,
+        )
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except BadRequestError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    row = await svc.create_policy_assignment(
-        target_type=payload.target_type,
-        target_id=payload.target_id,
-        owner_scope_type=payload.owner_scope_type,
-        owner_scope_id=payload.owner_scope_id,
-        profile_id=payload.profile_id,
-        path_scope_object_id=payload.path_scope_object_id,
-        workspace_source_mode=payload.workspace_source_mode,
-        workspace_set_object_id=payload.workspace_set_object_id,
-        inline_policy_document=inline_policy_document,
-        approval_policy_id=payload.approval_policy_id,
-        is_active=payload.is_active,
-        actor_id=principal.user_id,
-    )
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
     return _policy_assignment_row_to_response(row)
 
 
@@ -1715,7 +1722,7 @@ async def update_policy_assignment(
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except BadRequestError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
     return _policy_assignment_row_to_response(row)
 
 
@@ -1773,6 +1780,8 @@ async def add_policy_assignment_workspace(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except McpHubConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
     return _policy_assignment_workspace_row_to_response(row)
 
 

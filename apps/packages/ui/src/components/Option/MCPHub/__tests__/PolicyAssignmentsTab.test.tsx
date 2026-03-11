@@ -471,4 +471,38 @@ describe("PolicyAssignmentsTab", () => {
     expect(mocks.addPolicyAssignmentWorkspace).not.toHaveBeenCalled()
     expect(mocks.deletePolicyAssignmentWorkspace).not.toHaveBeenCalled()
   })
+
+  it("surfaces structured multi-root overlap validation details from assignment saves", async () => {
+    const user = userEvent.setup()
+    const error = Object.assign(
+      new Error("Named workspace source contains overlapping roots for multi-root execution."),
+      {
+        details: {
+          detail: {
+            code: "assignment_multi_root_overlap",
+            message: "Named workspace source contains overlapping roots for multi-root execution.",
+            conflicting_workspace_ids: ["workspace-alpha", "workspace-beta"],
+            conflicting_workspace_roots: ["/repo", "/repo/docs"],
+            workspace_source_mode: "named"
+          }
+        }
+      }
+    )
+    mocks.createPolicyAssignment.mockRejectedValueOnce(error)
+
+    render(<PolicyAssignmentsTab />)
+
+    await screen.findByText("researcher")
+    await user.click(screen.getByRole("button", { name: /new assignment/i }))
+    await user.selectOptions(screen.getByLabelText(/target type/i), "persona")
+    await user.type(screen.getByLabelText(/target id/i), "overlap-case")
+    await user.click(screen.getByRole("radio", { name: /use named workspace set/i }))
+    await user.selectOptions(screen.getByLabelText(/assignment named workspace set/i), "51")
+    await user.click(screen.getByRole("button", { name: /save assignment/i }))
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toMatch(/named workspace source contains overlapping roots for multi-root execution/i)
+    expect(alert.textContent).toMatch(/workspace-alpha, workspace-beta/i)
+    expect(alert.textContent).toMatch(/\/repo, \/repo\/docs/i)
+  })
 })
