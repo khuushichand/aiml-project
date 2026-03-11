@@ -159,7 +159,7 @@ const ResultDetails: React.FC<{ result: ModerationTestResponse; text: string; ph
 // ---------------------------------------------------------------------------
 
 const TestSandboxPanel: React.FC<TestSandboxPanelProps> = ({ tester, messageApi }) => {
-  const { phase, setPhase, text, setText, userId, setUserId, result, running, runTest, history, clearHistory, loadFromHistory } = tester
+  const { phase, setPhase, text, setText, userId, setUserId, result, running, runTest, runTestWith, history, clearHistory, loadFromHistory } = tester
 
   const handleRunTest = async () => {
     try {
@@ -170,16 +170,11 @@ const TestSandboxPanel: React.FC<TestSandboxPanelProps> = ({ tester, messageApi 
   }
 
   const handleRerun = async (entry: TestHistoryEntry) => {
-    loadFromHistory(entry)
-    // Need to wait for state to settle, then run
-    // Since loadFromHistory sets state synchronously, we schedule runTest on next tick
-    setTimeout(async () => {
-      try {
-        await runTest()
-      } catch (err: any) {
-        messageApi.error(err?.message || "Test failed")
-      }
-    }, 0)
+    try {
+      await runTestWith({ text: entry.text, phase: entry.phase, userId: entry.userId })
+    } catch (err: any) {
+      messageApi.error(err?.message || "Test failed")
+    }
   }
 
   return (

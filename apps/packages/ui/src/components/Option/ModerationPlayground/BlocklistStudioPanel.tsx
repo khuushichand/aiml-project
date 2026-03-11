@@ -131,7 +131,10 @@ const BlocklistStudioPanel: React.FC<BlocklistStudioPanelProps> = ({ blocklist, 
 
   // Auto-load managed rules on mount
   React.useEffect(() => {
-    void blocklist.loadManaged().catch(() => {})
+    void blocklist.loadManaged().catch((err) => {
+      console.error("[ModerationPlayground] Failed to load managed blocklist:", err)
+      messageApi.error("Failed to load managed blocklist")
+    })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const composed = composeLine(pattern, action, replacement, categories, phase)

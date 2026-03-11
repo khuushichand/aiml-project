@@ -97,10 +97,10 @@ export const ModerationPlaygroundShell: React.FC = () => {
     return () => window.removeEventListener("beforeunload", handler)
   }, [hasUnsavedChanges])
 
-  // Sync test userId from context
+  // Sync test userId from context — always track active user
   React.useEffect(() => {
-    if (ctx.activeUserId && !tester.userId) tester.setUserId(ctx.activeUserId)
-  }, [ctx.activeUserId, tester])
+    tester.setUserId(ctx.activeUserId ?? "")
+  }, [ctx.activeUserId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleReload = async () => {
     try {

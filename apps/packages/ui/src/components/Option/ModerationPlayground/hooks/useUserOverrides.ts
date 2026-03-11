@@ -110,7 +110,8 @@ export function useUserOverrides(activeUserId: string | null): UserOverridesStat
           setUserIdError(`No override found for "${activeUserId}". You can create a new one.`)
           setBaseline({})
         } else {
-          throw err
+          console.error("[useUserOverrides] Failed to load override:", err)
+          setUserIdError(`Failed to load override for "${activeUserId}". Please try again.`)
         }
       } finally {
         if (!cancelled) setLoading(false)

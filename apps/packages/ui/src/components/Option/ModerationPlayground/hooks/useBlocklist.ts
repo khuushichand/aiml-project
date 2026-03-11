@@ -23,6 +23,7 @@ export interface BlocklistState {
   loading: boolean
   loadRaw: () => Promise<void>
   saveRaw: () => Promise<void>
+  saveRawText: (text: string) => Promise<void>
   lintRaw: () => Promise<void>
   loadManaged: () => Promise<void>
   appendManaged: () => Promise<void>
@@ -59,6 +60,18 @@ export function useBlocklist(): BlocklistState {
       setLoading(false)
     }
   }, [rawText])
+
+  const saveRawText = React.useCallback(async (text: string) => {
+    setLoading(true)
+    try {
+      const lines = text.split(/\r?\n/).map((line) => line.trimEnd())
+      await updateBlocklist(lines)
+      setRawText(text)
+      setRawLint(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   const lintRaw = React.useCallback(async () => {
     setLoading(true)
@@ -136,6 +149,7 @@ export function useBlocklist(): BlocklistState {
     loading,
     loadRaw,
     saveRaw,
+    saveRawText,
     lintRaw,
     loadManaged,
     appendManaged,

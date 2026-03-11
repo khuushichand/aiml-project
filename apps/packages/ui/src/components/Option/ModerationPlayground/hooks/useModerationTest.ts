@@ -23,6 +23,7 @@ export interface ModerationTestState {
   history: TestHistoryEntry[]
   running: boolean
   runTest: () => Promise<void>
+  runTestWith: (payload: { text: string; phase: "input" | "output"; userId?: string }) => Promise<void>
   clearHistory: () => void
   loadFromHistory: (entry: TestHistoryEntry) => void
 }
@@ -59,6 +60,33 @@ export function useModerationTest(): ModerationTestState {
     }
   }, [text, userId, phase])
 
+  const runTestWith = React.useCallback(async (payload: { text: string; phase: "input" | "output"; userId?: string }) => {
+    if (!payload.text.trim()) throw new Error("Enter sample text to test")
+    setRunning(true)
+    try {
+      const apiPayload = {
+        user_id: payload.userId?.trim() || undefined,
+        phase: payload.phase,
+        text: payload.text
+      }
+      const res = await testModeration(apiPayload)
+      setResult(res)
+      setText(payload.text)
+      setPhase(payload.phase)
+      setUserId(payload.userId ?? "")
+      const entry: TestHistoryEntry = {
+        phase: payload.phase,
+        text: payload.text,
+        userId: payload.userId ?? "",
+        result: res,
+        timestamp: Date.now()
+      }
+      setHistory((prev) => [entry, ...prev].slice(0, MAX_HISTORY))
+    } finally {
+      setRunning(false)
+    }
+  }, [])
+
   const clearHistory = React.useCallback(() => {
     setHistory([])
   }, [])
@@ -81,6 +109,7 @@ export function useModerationTest(): ModerationTestState {
     history,
     running,
     runTest,
+    runTestWith,
     clearHistory,
     loadFromHistory
   }

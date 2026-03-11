@@ -120,8 +120,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({ settings, blocklist, over
       reader.onload = async () => {
         try {
           const content = reader.result as string
-          blocklist.setRawText(content)
-          await blocklist.saveRaw()
+          await blocklist.saveRawText(content)
           messageApi.success("Blocklist replaced successfully")
         } catch {
           messageApi.error("Failed to import blocklist")
