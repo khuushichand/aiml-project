@@ -199,6 +199,10 @@ class Qwen3TTSAdapter(TTSAdapter):
             from .qwen3_runtime_mlx import Qwen3MlxRuntime
 
             return Qwen3MlxRuntime(self)
+        if runtime_name == "remote":
+            from .qwen3_runtime_remote import RemoteQwenRuntime
+
+            return RemoteQwenRuntime(self)
         if runtime_name != "upstream":
             logger.warning(
                 f"{self.provider_name}: runtime '{runtime_name}' is not implemented yet; "
