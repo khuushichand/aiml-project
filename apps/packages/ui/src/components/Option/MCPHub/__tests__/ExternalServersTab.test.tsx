@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   setExternalServerSecret: vi.fn(),
   setExternalServerSlotSecret: vi.fn(),
   clearExternalServerSlotSecret: vi.fn(),
+  getExternalServerAuthTemplate: vi.fn(),
+  updateExternalServerAuthTemplate: vi.fn(),
   importExternalServer: vi.fn(),
   createExternalServer: vi.fn(),
   updateExternalServer: vi.fn(),
@@ -22,6 +24,8 @@ vi.mock("@/services/tldw/mcp-hub", () => ({
   setExternalServerSecret: (...args: unknown[]) => mocks.setExternalServerSecret(...args),
   setExternalServerSlotSecret: (...args: unknown[]) => mocks.setExternalServerSlotSecret(...args),
   clearExternalServerSlotSecret: (...args: unknown[]) => mocks.clearExternalServerSlotSecret(...args),
+  getExternalServerAuthTemplate: (...args: unknown[]) => mocks.getExternalServerAuthTemplate(...args),
+  updateExternalServerAuthTemplate: (...args: unknown[]) => mocks.updateExternalServerAuthTemplate(...args),
   importExternalServer: (...args: unknown[]) => mocks.importExternalServer(...args),
   createExternalServer: (...args: unknown[]) => mocks.createExternalServer(...args),
   updateExternalServer: (...args: unknown[]) => mocks.updateExternalServer(...args),
@@ -48,6 +52,9 @@ describe("ExternalServersTab", () => {
         server_source: "managed",
         binding_count: 2,
         runtime_executable: true,
+        auth_template_present: false,
+        auth_template_valid: false,
+        auth_template_blocked_reason: "no_auth_template",
         credential_slots: [
           {
             server_id: "docs-managed",
@@ -70,7 +77,10 @@ describe("ExternalServersTab", () => {
         secret_configured: false,
         server_source: "legacy",
         binding_count: 0,
-        runtime_executable: false
+        runtime_executable: false,
+        auth_template_present: false,
+        auth_template_valid: false,
+        auth_template_blocked_reason: "no_auth_template"
       },
       {
         id: "docs-legacy",
@@ -83,9 +93,25 @@ describe("ExternalServersTab", () => {
         server_source: "legacy",
         superseded_by_server_id: "docs-managed",
         binding_count: 0,
-        runtime_executable: false
+        runtime_executable: false,
+        auth_template_present: false,
+        auth_template_valid: false,
+        auth_template_blocked_reason: "no_auth_template"
       }
     ])
+    mocks.getExternalServerAuthTemplate.mockImplementation(async (serverId: string) => {
+      if (serverId === "docs-managed") {
+        return {
+          mode: "template",
+          mappings: []
+        }
+      }
+      return {
+        mode: "template",
+        mappings: []
+      }
+    })
+    mocks.updateExternalServerAuthTemplate.mockImplementation(async (_serverId: string, payload: unknown) => payload)
     mocks.setExternalServerSecret.mockResolvedValue({
       server_id: "docs-managed",
       secret_configured: true
@@ -107,6 +133,9 @@ describe("ExternalServersTab", () => {
       server_source: "managed",
       binding_count: 0,
       runtime_executable: true,
+      auth_template_present: false,
+      auth_template_valid: false,
+      auth_template_blocked_reason: "no_auth_template",
       credential_slots: []
     })
     mocks.createExternalServer.mockResolvedValue({
@@ -120,6 +149,9 @@ describe("ExternalServersTab", () => {
       server_source: "managed",
       binding_count: 0,
       runtime_executable: true,
+      auth_template_present: false,
+      auth_template_valid: false,
+      auth_template_blocked_reason: "no_auth_template",
       credential_slots: []
     })
     mocks.updateExternalServer.mockResolvedValue({
@@ -133,6 +165,9 @@ describe("ExternalServersTab", () => {
       server_source: "managed",
       binding_count: 2,
       runtime_executable: true,
+      auth_template_present: true,
+      auth_template_valid: true,
+      auth_template_blocked_reason: null,
       credential_slots: [
         {
           server_id: "docs-managed",
@@ -195,6 +230,33 @@ describe("ExternalServersTab", () => {
 
     await user.click(screen.getByRole("button", { name: /import to mcp hub/i }))
     expect(mocks.importExternalServer).toHaveBeenCalledWith("search-legacy")
+  })
+
+  it("renders auth template readiness and saves transport-aware mappings", async () => {
+    const user = userEvent.setup()
+    render(<ExternalServersTab />)
+
+    expect((await screen.findAllByText(/no auth template/i)).length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole("button", { name: /add mapping/i }))
+    await user.type(screen.getByLabelText(/target name 1/i), "DOCS_TOKEN")
+    await user.type(screen.getByLabelText(/prefix 1/i), "Bearer ")
+    await user.click(screen.getByRole("button", { name: /save auth template/i }))
+
+    expect(mocks.updateExternalServerAuthTemplate).toHaveBeenCalledWith("docs-managed", {
+      mode: "template",
+      mappings: [
+        {
+          slot_name: "token_readonly",
+          target_type: "env",
+          target_name: "DOCS_TOKEN",
+          prefix: "Bearer ",
+          suffix: "",
+          required: true
+        }
+      ]
+    })
+    expect(await screen.findByText(/auth template updated/i)).toBeTruthy()
   })
 
   it("creates, edits, and deletes managed servers and credential slots", async () => {

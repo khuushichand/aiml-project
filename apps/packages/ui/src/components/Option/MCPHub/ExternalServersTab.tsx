@@ -7,20 +7,43 @@ import {
   createExternalServerCredentialSlot,
   deleteExternalServer,
   deleteExternalServerCredentialSlot,
+  getExternalServerAuthTemplate,
   importExternalServer,
   listExternalServers,
   setExternalServerSecret,
   setExternalServerSlotSecret,
   updateExternalServer,
+  updateExternalServerAuthTemplate,
   updateExternalServerCredentialSlot,
   type McpHubExternalServer,
+  type McpHubExternalServerAuthTemplateMapping,
   type McpHubExternalServerCredentialSlot
 } from "@/services/tldw/mcp-hub"
 
-import { getManagedExternalServers, getManagedExternalServerSlots } from "./policyHelpers"
+import {
+  getExternalAuthTemplateBlockedReasonLabel,
+  getManagedExternalServers,
+  getManagedExternalServerSlots
+} from "./policyHelpers"
 
 const DEFAULT_SLOT_SECRET_KIND = "bearer_token"
 const DEFAULT_SLOT_PRIVILEGE_CLASS = "read"
+const AUTH_TEMPLATE_TARGET_BY_TRANSPORT: Record<string, "header" | "env"> = {
+  websocket: "header",
+  stdio: "env"
+}
+
+const normalizeAuthTemplateMapping = (
+  mapping: Partial<McpHubExternalServerAuthTemplateMapping>,
+  fallbackTargetType: "header" | "env"
+): McpHubExternalServerAuthTemplateMapping => ({
+  slot_name: String(mapping.slot_name || "").trim(),
+  target_type: mapping.target_type === "env" ? "env" : mapping.target_type === "header" ? "header" : fallbackTargetType,
+  target_name: String(mapping.target_name || ""),
+  prefix: String(mapping.prefix || ""),
+  suffix: String(mapping.suffix || ""),
+  required: mapping.required !== false
+})
 
 export const ExternalServersTab = () => {
   const [servers, setServers] = useState<McpHubExternalServer[]>([])
@@ -53,6 +76,9 @@ export const ExternalServersTab = () => {
   const [slotSecretValue, setSlotSecretValue] = useState("")
   const [slotSecretSaving, setSlotSecretSaving] = useState(false)
   const [slotSecretClearing, setSlotSecretClearing] = useState(false)
+  const [authTemplateMappings, setAuthTemplateMappings] = useState<McpHubExternalServerAuthTemplateMapping[]>([])
+  const [authTemplateLoading, setAuthTemplateLoading] = useState(false)
+  const [authTemplateSaving, setAuthTemplateSaving] = useState(false)
   const managedServers = useMemo(() => getManagedExternalServers(servers), [servers])
   const activeManagedServer = useMemo(
     () => managedServers.find((server) => server.id === activeServerId) || null,
@@ -62,6 +88,16 @@ export const ExternalServersTab = () => {
     () => getManagedExternalServerSlots(activeManagedServer),
     [activeManagedServer]
   )
+  const activeAuthTemplateTarget = useMemo(
+    () =>
+      activeManagedServer
+        ? AUTH_TEMPLATE_TARGET_BY_TRANSPORT[String(activeManagedServer.transport || "").trim().toLowerCase()] || null
+        : null,
+    [activeManagedServer]
+  )
+  const activeAuthTemplateBlockedReason = getExternalAuthTemplateBlockedReasonLabel(
+    activeManagedServer?.auth_template_blocked_reason
+  )
 
   const canSave = useMemo(
     () => activeServerId.trim().length > 0 && secretValue.trim().length > 0 && !saving,
@@ -70,6 +106,17 @@ export const ExternalServersTab = () => {
   const canSaveSlotSecret = useMemo(
     () => activeServerId.trim().length > 0 && activeSlotName.trim().length > 0 && slotSecretValue.trim().length > 0 && !slotSecretSaving,
     [activeServerId, activeSlotName, slotSecretValue, slotSecretSaving]
+  )
+  const canSaveAuthTemplate = useMemo(
+    () =>
+      Boolean(activeManagedServer) &&
+      Boolean(activeAuthTemplateTarget) &&
+      authTemplateMappings.length > 0 &&
+      authTemplateMappings.every(
+        (mapping) => mapping.slot_name.trim().length > 0 && mapping.target_name.trim().length > 0
+      ) &&
+      !authTemplateSaving,
+    [activeAuthTemplateTarget, activeManagedServer, authTemplateMappings, authTemplateSaving]
   )
 
   const loadServers = async () => {
@@ -106,6 +153,44 @@ export const ExternalServersTab = () => {
       setActiveSlotName(activeSlots[0]?.slot_name || "")
     }
   }, [activeSlotName, activeSlots])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadAuthTemplate = async () => {
+      if (!activeManagedServer || !activeAuthTemplateTarget) {
+        setAuthTemplateMappings([])
+        setAuthTemplateLoading(false)
+        return
+      }
+
+      setAuthTemplateLoading(true)
+      try {
+        const template = await getExternalServerAuthTemplate(activeManagedServer.id)
+        if (cancelled) return
+        const nextMappings = Array.isArray(template.mappings)
+          ? template.mappings.map((mapping) =>
+              normalizeAuthTemplateMapping(mapping, activeAuthTemplateTarget)
+            )
+          : []
+        setAuthTemplateMappings(nextMappings)
+      } catch {
+        if (cancelled) return
+        setAuthTemplateMappings([])
+        setErrorMessage("Failed to load external server auth template.")
+      } finally {
+        if (!cancelled) {
+          setAuthTemplateLoading(false)
+        }
+      }
+    }
+
+    void loadAuthTemplate()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeManagedServer?.id, activeAuthTemplateTarget])
 
   const resetSlotForm = () => {
     setSlotFormOpen(false)
@@ -353,6 +438,82 @@ export const ExternalServersTab = () => {
     }
   }
 
+  const handleAddAuthTemplateMapping = () => {
+    if (!activeAuthTemplateTarget || activeSlots.length === 0) return
+    setAuthTemplateMappings((current) => [
+      ...current,
+      {
+        slot_name: activeSlots[0]?.slot_name || "",
+        target_type: activeAuthTemplateTarget,
+        target_name: "",
+        prefix: "",
+        suffix: "",
+        required: true
+      }
+    ])
+  }
+
+  const handleAuthTemplateMappingChange = (
+    index: number,
+    field: keyof McpHubExternalServerAuthTemplateMapping,
+    value: string | boolean
+  ) => {
+    setAuthTemplateMappings((current) =>
+      current.map((mapping, currentIndex) =>
+        currentIndex === index
+          ? {
+              ...mapping,
+              [field]: value
+            }
+          : mapping
+      )
+    )
+  }
+
+  const handleRemoveAuthTemplateMapping = (index: number) => {
+    setAuthTemplateMappings((current) => current.filter((_, currentIndex) => currentIndex !== index))
+  }
+
+  const handleSaveAuthTemplate = async () => {
+    if (!activeManagedServer || !activeAuthTemplateTarget) return
+    if (!authTemplateMappings.length) {
+      setErrorMessage("Auth template requires at least one mapping.")
+      return
+    }
+    if (
+      authTemplateMappings.some(
+        (mapping) => !mapping.slot_name.trim() || !mapping.target_name.trim()
+      )
+    ) {
+      setErrorMessage("Each auth template mapping requires a slot and target name.")
+      return
+    }
+
+    const serverId = activeManagedServer.id
+    setAuthTemplateSaving(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      const template = await updateExternalServerAuthTemplate(serverId, {
+        mode: "template",
+        mappings: authTemplateMappings.map((mapping) =>
+          normalizeAuthTemplateMapping(mapping, activeAuthTemplateTarget)
+        )
+      })
+      setAuthTemplateMappings(
+        (template.mappings || []).map((mapping) =>
+          normalizeAuthTemplateMapping(mapping, activeAuthTemplateTarget)
+        )
+      )
+      await loadServers()
+      setSuccessMessage("Auth template updated")
+    } catch {
+      setErrorMessage("Failed to update external server auth template.")
+    } finally {
+      setAuthTemplateSaving(false)
+    }
+  }
+
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <Typography.Text type="secondary">
@@ -474,7 +635,7 @@ export const ExternalServersTab = () => {
         />
       )}
 
-      {activeManagedServer && activeSlots.length > 0 ? (
+      {activeManagedServer ? (
         <>
           <Card size="small" title="Credential Slots" extra={<Button onClick={openCreateSlotForm}>Add Slot</Button>}>
             <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
@@ -585,61 +746,201 @@ export const ExternalServersTab = () => {
             </Space>
           </Card>
 
-          <Card size="small" title="Slot Secret">
+          <Card
+            size="small"
+            title="Auth Template"
+            extra={
+              <Button onClick={handleAddAuthTemplateMapping} disabled={!activeAuthTemplateTarget || activeSlots.length === 0}>
+                Add Mapping
+              </Button>
+            }
+          >
             <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-              <Space>
-                <label htmlFor="mcp-external-slot">Slot</label>
-                <select
-                  id="mcp-external-slot"
-                  aria-label="Credential Slot"
-                  value={activeSlotName}
-                  onChange={(event) => setActiveSlotName(event.target.value)}
-                >
-                  {activeSlots.map((slot) => (
-                    <option key={slot.slot_name} value={slot.slot_name}>
-                      {slot.display_name}
-                    </option>
-                  ))}
-                </select>
-              </Space>
-              <Space orientation="vertical" style={{ width: "100%" }}>
-                <label htmlFor="mcp-external-slot-secret">Slot Secret</label>
-                <input
-                  id="mcp-external-slot-secret"
-                  aria-label="Slot Secret"
-                  type="password"
-                  value={slotSecretValue}
-                  onChange={(event) => setSlotSecretValue(event.target.value)}
-                  placeholder="Paste slot secret"
+              {activeManagedServer.auth_template_valid ? (
+                <Alert type="success" showIcon title="Template valid" />
+              ) : (
+                <Alert
+                  type={activeManagedServer.auth_template_present ? "warning" : "info"}
+                  showIcon
+                  title={activeAuthTemplateBlockedReason || "No auth template"}
+                  description={
+                    activeSlots.length === 0
+                      ? "Add credential slots before defining how this server hydrates runtime auth."
+                      : activeManagedServer.auth_template_present
+                        ? "Fix the template or missing slot secrets before this managed server becomes fully ready."
+                        : "Create a transport-specific auth template to map granted credential slots into runtime auth."
+                  }
                 />
+              )}
+              <Space wrap size="small">
+                <Tag>{`Transport: ${activeManagedServer.transport}`}</Tag>
+                {activeAuthTemplateTarget ? (
+                  <Tag color="blue">{`Template target: ${activeAuthTemplateTarget === "header" ? "header" : "env"}`}</Tag>
+                ) : (
+                  <Tag color="red">Unsupported transport</Tag>
+                )}
               </Space>
-              <Space>
-                <Button type="primary" onClick={handleSaveSlotSecret} disabled={!canSaveSlotSecret} loading={slotSecretSaving}>
-                  Save Slot Secret
-                </Button>
-                <Button onClick={handleClearSlotSecret} disabled={!activeSlotName} loading={slotSecretClearing}>
-                  Clear Slot Secret
-                </Button>
-              </Space>
+              {activeSlots.length === 0 ? (
+                <Empty description="Add at least one credential slot before creating an auth template." />
+              ) : authTemplateMappings.length === 0 && !authTemplateLoading ? (
+                <Empty description="No auth template mappings configured." />
+              ) : null}
+              {authTemplateMappings.map((mapping, index) => (
+                <Card key={`${mapping.slot_name || "slot"}-${index}`} size="small" title={`Mapping ${index + 1}`}>
+                  <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                    <Space wrap>
+                      <Space orientation="vertical">
+                        <label htmlFor={`mcp-auth-template-slot-${index}`}>Credential Slot</label>
+                        <select
+                          id={`mcp-auth-template-slot-${index}`}
+                          aria-label={`Credential Slot ${index + 1}`}
+                          value={mapping.slot_name}
+                          onChange={(event) =>
+                            handleAuthTemplateMappingChange(index, "slot_name", event.target.value)
+                          }
+                        >
+                          {activeSlots.map((slot) => (
+                            <option key={slot.slot_name} value={slot.slot_name}>
+                              {slot.display_name}
+                            </option>
+                          ))}
+                        </select>
+                      </Space>
+                      <Space orientation="vertical">
+                        <label htmlFor={`mcp-auth-template-target-${index}`}>Target</label>
+                        <input
+                          id={`mcp-auth-template-target-${index}`}
+                          aria-label={`Target Name ${index + 1}`}
+                          value={mapping.target_name}
+                          onChange={(event) =>
+                            handleAuthTemplateMappingChange(index, "target_name", event.target.value)
+                          }
+                          placeholder={activeAuthTemplateTarget === "header" ? "Authorization" : "API_KEY"}
+                        />
+                      </Space>
+                    </Space>
+                    <Space wrap>
+                      <Space orientation="vertical">
+                        <label htmlFor={`mcp-auth-template-prefix-${index}`}>Prefix</label>
+                        <input
+                          id={`mcp-auth-template-prefix-${index}`}
+                          aria-label={`Prefix ${index + 1}`}
+                          value={mapping.prefix || ""}
+                          onChange={(event) =>
+                            handleAuthTemplateMappingChange(index, "prefix", event.target.value)
+                          }
+                          placeholder={activeAuthTemplateTarget === "header" ? "Bearer " : ""}
+                        />
+                      </Space>
+                      <Space orientation="vertical">
+                        <label htmlFor={`mcp-auth-template-suffix-${index}`}>Suffix</label>
+                        <input
+                          id={`mcp-auth-template-suffix-${index}`}
+                          aria-label={`Suffix ${index + 1}`}
+                          value={mapping.suffix || ""}
+                          onChange={(event) =>
+                            handleAuthTemplateMappingChange(index, "suffix", event.target.value)
+                          }
+                        />
+                      </Space>
+                    </Space>
+                    <Space wrap size="small" style={{ justifyContent: "space-between", width: "100%" }}>
+                      <Checkbox
+                        checked={mapping.required !== false}
+                        onChange={(event) =>
+                          handleAuthTemplateMappingChange(index, "required", event.target.checked)
+                        }
+                      >
+                        Required
+                      </Checkbox>
+                      <Space wrap size="small">
+                        <Tag>{mapping.target_type}</Tag>
+                        <Button
+                          size="small"
+                          danger
+                          aria-label={`Remove auth mapping ${index + 1}`}
+                          onClick={() => handleRemoveAuthTemplateMapping(index)}
+                        >
+                          Remove
+                        </Button>
+                      </Space>
+                    </Space>
+                  </Space>
+                </Card>
+              ))}
+              <Button
+                type="primary"
+                onClick={handleSaveAuthTemplate}
+                disabled={!canSaveAuthTemplate}
+                loading={authTemplateSaving || authTemplateLoading}
+              >
+                Save Auth Template
+              </Button>
             </Space>
           </Card>
+
+          {activeSlots.length > 0 ? (
+            <Card size="small" title="Slot Secret">
+              <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                <Space>
+                  <label htmlFor="mcp-external-slot">Slot</label>
+                  <select
+                    id="mcp-external-slot"
+                    aria-label="Credential Slot"
+                    value={activeSlotName}
+                    onChange={(event) => setActiveSlotName(event.target.value)}
+                  >
+                    {activeSlots.map((slot) => (
+                      <option key={slot.slot_name} value={slot.slot_name}>
+                        {slot.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </Space>
+                <Space orientation="vertical" style={{ width: "100%" }}>
+                  <label htmlFor="mcp-external-slot-secret">Slot Secret</label>
+                  <input
+                    id="mcp-external-slot-secret"
+                    aria-label="Slot Secret"
+                    type="password"
+                    value={slotSecretValue}
+                    onChange={(event) => setSlotSecretValue(event.target.value)}
+                    placeholder="Paste slot secret"
+                  />
+                </Space>
+                <Space>
+                  <Button type="primary" onClick={handleSaveSlotSecret} disabled={!canSaveSlotSecret} loading={slotSecretSaving}>
+                    Save Slot Secret
+                  </Button>
+                  <Button onClick={handleClearSlotSecret} disabled={!activeSlotName} loading={slotSecretClearing}>
+                    Clear Slot Secret
+                  </Button>
+                </Space>
+              </Space>
+            </Card>
+          ) : (
+            <Card size="small" title="Legacy Secret Fallback">
+              <Space orientation="vertical" style={{ width: "100%" }}>
+                <Typography.Text type="secondary">
+                  This managed server still uses the transitional server-level secret flow until credential slots are defined.
+                </Typography.Text>
+                <label htmlFor="mcp-external-secret">Secret</label>
+                <input
+                  id="mcp-external-secret"
+                  aria-label="Secret"
+                  type="password"
+                  value={secretValue}
+                  onChange={(event) => setSecretValue(event.target.value)}
+                  placeholder="Paste secret token"
+                />
+                <Button type="primary" onClick={handleSaveSecret} disabled={!canSave} loading={saving}>
+                  Save Secret
+                </Button>
+              </Space>
+            </Card>
+          )}
         </>
-      ) : (
-        <Space orientation="vertical" style={{ width: "100%" }}>
-          <label htmlFor="mcp-external-secret">Secret</label>
-          <input
-            id="mcp-external-secret"
-            aria-label="Secret"
-            type="password"
-            value={secretValue}
-            onChange={(event) => setSecretValue(event.target.value)}
-            placeholder="Paste secret token"
-          />
-          <Button type="primary" onClick={handleSaveSecret} disabled={!canSave} loading={saving}>
-            Save Secret
-          </Button>
-        </Space>
-      )}
+      ) : null}
 
       <List
         bordered
@@ -655,6 +956,13 @@ export const ExternalServersTab = () => {
                   <Tag>legacy read only</Tag>
                 ) : (
                   <Tag color="green">managed</Tag>
+                )}
+                {server.auth_template_valid ? (
+                  <Tag color="green">template valid</Tag>
+                ) : (
+                  <Tag color={server.auth_template_present ? "orange" : "default"}>
+                    {getExternalAuthTemplateBlockedReasonLabel(server.auth_template_blocked_reason) || "No auth template"}
+                  </Tag>
                 )}
                 {server.secret_configured ? <Tag color="green">secret configured</Tag> : <Tag>no secret</Tag>}
                 {server.runtime_executable ? <Tag color="green">runtime executable</Tag> : <Tag>inventory only</Tag>}

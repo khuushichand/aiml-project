@@ -246,3 +246,25 @@ export const getExternalBlockedReasonLabel = (
   }
   return normalized.replaceAll("_", " ")
 }
+
+export const getExternalAuthTemplateBlockedReasonLabel = (
+  value: string | null | undefined
+): string | null => {
+  const normalized = String(value || "").trim()
+  if (!normalized) {
+    return null
+  }
+  if (normalized === "no_auth_template") {
+    return "No auth template"
+  }
+  if (normalized === "auth_template_invalid") {
+    return "Auth template invalid"
+  }
+  if (normalized === "required_slot_secret_missing") {
+    return "Required slot secret missing"
+  }
+  if (normalized === "unsupported_template_transport_target") {
+    return "Template target mismatches transport"
+  }
+  return normalized.replaceAll("_", " ")
+}

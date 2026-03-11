@@ -296,11 +296,30 @@ export type McpHubExternalServer = {
   superseded_by_server_id?: string | null
   binding_count?: number
   runtime_executable?: boolean
+  auth_template_present?: boolean
+  auth_template_valid?: boolean
+  auth_template_blocked_reason?: string | null
   credential_slots?: McpHubExternalServerCredentialSlot[]
   created_by?: number | null
   updated_by?: number | null
   created_at?: string | null
   updated_at?: string | null
+}
+
+export type McpHubExternalServerAuthTemplateTargetType = "header" | "env"
+
+export type McpHubExternalServerAuthTemplateMapping = {
+  slot_name: string
+  target_type: McpHubExternalServerAuthTemplateTargetType
+  target_name: string
+  prefix?: string
+  suffix?: string
+  required?: boolean
+}
+
+export type McpHubExternalServerAuthTemplate = {
+  mode: "template"
+  mappings: McpHubExternalServerAuthTemplateMapping[]
 }
 
 export type McpHubExternalServerCredentialSlot = {
@@ -588,6 +607,26 @@ export const clearExternalServerSlotSecret = async (
   return await bgRequestClient<{ ok: boolean }>({
     path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/credential-slots/${encodeURIComponent(slotName)}/secret`,
     method: "DELETE"
+  })
+}
+
+export const getExternalServerAuthTemplate = async (
+  serverId: string
+): Promise<McpHubExternalServerAuthTemplate> => {
+  return await bgRequestClient<McpHubExternalServerAuthTemplate>({
+    path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/auth-template`,
+    method: "GET"
+  })
+}
+
+export const updateExternalServerAuthTemplate = async (
+  serverId: string,
+  payload: McpHubExternalServerAuthTemplate
+): Promise<McpHubExternalServerAuthTemplate> => {
+  return await bgRequestClient<McpHubExternalServerAuthTemplate>({
+    path: `/api/v1/mcp/hub/external-servers/${encodeURIComponent(serverId)}/auth-template`,
+    method: "PUT",
+    body: payload
   })
 }
 
