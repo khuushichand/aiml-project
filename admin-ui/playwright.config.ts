@@ -28,9 +28,12 @@ export default defineConfig({
         timeout: 120_000,
         env: {
           ...process.env,
+          AUTH_MODE: process.env.AUTH_MODE || 'single_user',
+          ADMIN_UI_ALLOW_API_KEY_LOGIN: process.env.ADMIN_UI_ALLOW_API_KEY_LOGIN || 'true',
           JWT_ALGORITHM: process.env.JWT_ALGORITHM || 'HS256',
           JWT_SECRET_KEY: process.env.JWT_SECRET_KEY || 'playwright-test-secret',
           NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:5999',
+          NEXT_PUBLIC_ALLOW_ADMIN_API_KEY_LOGIN: process.env.NEXT_PUBLIC_ALLOW_ADMIN_API_KEY_LOGIN || 'true',
           NEXT_TELEMETRY_DISABLED: '1',
         },
       }

@@ -104,5 +104,9 @@ describe("policyHelpers", () => {
     expect(toggleStringValue(["session", "conversation"], "session", false)).toEqual([
       "conversation"
     ])
+  it("toggles string selections without duplicating enabled entries", () => {
+    expect(toggleStringValue(["session"], "once", true)).toEqual(["session", "once"])
+    expect(toggleStringValue(["session", "once"], "once", true)).toEqual(["session", "once"])
+    expect(toggleStringValue(["session", "once"], "once", false)).toEqual(["session"])
   })
 })

@@ -61,13 +61,14 @@ export const joinList = (values: string[] | undefined | null, separator = "\n"):
 
 export const toggleStringValue = (
   values: string[],
-  value: string,
+  nextValue: string,
   enabled: boolean
 ): string[] => {
   if (enabled) {
-    return values.includes(value) ? values : [...values, value]
+    return Array.from(new Set([...values, nextValue]))
   }
-  return values.filter((entry) => entry !== value)
+
+  return values.filter((value) => value !== nextValue)
 }
 
 const SIMPLE_POLICY_KEYS = new Set(["allowed_tools", "denied_tools", "capabilities"])

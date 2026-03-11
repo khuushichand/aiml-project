@@ -5,9 +5,14 @@ import userEvent from '@testing-library/user-event';
 import { BackupsSection } from './BackupsSection';
 import { api } from '@/lib/api-client';
 
+const unsafeLocalToolsEnabledMock = vi.hoisted(() => vi.fn(() => false));
 const confirmMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/admin-ui-flags', () => ({
+  isUnsafeLocalToolsEnabled: unsafeLocalToolsEnabledMock,
+}));
 
 vi.mock('@/components/ui/toast', () => ({
   useToast: () => ({
@@ -90,6 +95,7 @@ const backupsPayload = {
 };
 
 beforeEach(() => {
+  unsafeLocalToolsEnabledMock.mockReturnValue(false);
   confirmMock.mockResolvedValue(true);
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
@@ -108,7 +114,35 @@ afterEach(() => {
 });
 
 describe('BackupsSection', () => {
+  it('disables local-only backup scheduling in safe mode', async () => {
+    const user = userEvent.setup();
+    localStorage.setItem('data_ops_backup_schedules_v1', JSON.stringify([
+      {
+        id: 'sched-local',
+        dataset: 'media',
+        frequency: 'daily',
+        time_of_day: '09:30',
+        retention_count: 30,
+        is_paused: false,
+        created_at: '2026-03-01T12:00:00.000Z',
+        updated_at: '2026-03-01T12:00:00.000Z',
+      },
+    ]));
+
+    render(<BackupsSection refreshSignal={0} />);
+
+    await user.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    expect(
+      screen.getByText('Backup scheduling is unavailable until backend schedule APIs are available.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create schedule' })).toBeDisabled();
+    expect(screen.queryByTestId('backup-schedule-row-sched-local')).not.toBeInTheDocument();
+    expect(screen.getByText('Scheduling controls are disabled in production-safe mode.')).toBeInTheDocument();
+  });
+
   it('validates schedule form frequency and time before creation', async () => {
+    unsafeLocalToolsEnabledMock.mockReturnValue(true);
     const user = userEvent.setup();
     render(<BackupsSection refreshSignal={0} />);
 
@@ -137,6 +171,7 @@ describe('BackupsSection', () => {
   });
 
   it('supports schedule pause and resume toggle', async () => {
+    unsafeLocalToolsEnabledMock.mockReturnValue(true);
     const user = userEvent.setup();
     render(<BackupsSection refreshSignal={0} />);
 

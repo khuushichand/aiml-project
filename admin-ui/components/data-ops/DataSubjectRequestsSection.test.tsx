@@ -5,8 +5,13 @@ import userEvent from '@testing-library/user-event';
 import { DataSubjectRequestsSection } from './DataSubjectRequestsSection';
 import { api } from '@/lib/api-client';
 
+const unsafeLocalToolsEnabledMock = vi.hoisted(() => vi.fn(() => false));
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/admin-ui-flags', () => ({
+  isUnsafeLocalToolsEnabled: unsafeLocalToolsEnabledMock,
+}));
 
 vi.mock('@/components/ui/toast', () => ({
   useToast: () => ({
@@ -30,6 +35,7 @@ type ApiMock = {
 const apiMock = api as unknown as ApiMock;
 
 beforeEach(() => {
+  unsafeLocalToolsEnabledMock.mockReturnValue(false);
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
 
@@ -54,7 +60,30 @@ afterEach(() => {
 });
 
 describe('DataSubjectRequestsSection', () => {
+  it('disables request actions and ignores local-only request history in safe mode', async () => {
+    localStorage.setItem('data_ops_data_subject_requests_log_v1', JSON.stringify([
+      {
+        id: 'local-entry',
+        requester: 'seeded@example.com',
+        request_type: 'access',
+        status: 'completed',
+        requested_at: '2026-03-01T12:00:00.000Z',
+      },
+    ]));
+
+    render(<DataSubjectRequestsSection refreshSignal={0} />);
+
+    expect(
+      screen.getByText('Data subject request workflows are unavailable until server-backed APIs are available.')
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('User identifier (email or user ID)')).toBeDisabled();
+    expect(screen.getByLabelText('Request type')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Submit request' })).toBeDisabled();
+    expect(screen.queryByText('seeded@example.com')).not.toBeInTheDocument();
+  });
+
   it('validates requester identifier before submission', async () => {
+    unsafeLocalToolsEnabledMock.mockReturnValue(true);
     const user = userEvent.setup();
     render(<DataSubjectRequestsSection refreshSignal={0} />);
 
@@ -64,6 +93,7 @@ describe('DataSubjectRequestsSection', () => {
   });
 
   it('enforces erasure category selection and irreversible-action confirmation', async () => {
+    unsafeLocalToolsEnabledMock.mockReturnValue(true);
     const user = userEvent.setup();
     render(<DataSubjectRequestsSection refreshSignal={0} />);
 
@@ -100,6 +130,7 @@ describe('DataSubjectRequestsSection', () => {
   });
 
   it('renders request log row after an access request', async () => {
+    unsafeLocalToolsEnabledMock.mockReturnValue(true);
     const user = userEvent.setup();
     render(<DataSubjectRequestsSection refreshSignal={0} />);
 

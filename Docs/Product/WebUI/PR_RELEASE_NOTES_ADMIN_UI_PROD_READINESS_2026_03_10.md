@@ -1,6 +1,6 @@
 # PR / Release Notes: Admin UI Production Readiness Remediation
 
-Date: 2026-03-10  
+Date: 2026-03-10
 Scope: `admin-ui` production-readiness remediation handoff and release-note summary
 
 ## PR Summary

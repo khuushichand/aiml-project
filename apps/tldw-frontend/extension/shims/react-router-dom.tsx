@@ -128,18 +128,17 @@ export const useLocation = () => {
   )
 }
 
-export const useParams = <TParams extends RouteParams = RouteParams>(): Readonly<TParams> => {
+export const useParams = <
+  TParams extends Record<string, string | undefined> = Record<string, string | undefined>
+>() => {
   const router = useRouter()
+
   return React.useMemo(() => {
-    const params: RouteParams = {}
-    for (const [key, value] of Object.entries(router.query)) {
-      if (typeof value === "string") {
-        params[key] = value
-      } else if (Array.isArray(value) && value.length > 0) {
-        params[key] = value[0]
-      }
+    const params: Record<string, string | undefined> = {}
+    for (const [key, value] of Object.entries(router.query || {})) {
+      params[key] = Array.isArray(value) ? value[0] : value
     }
-    return params as TParams
+    return params as Readonly<TParams>
   }, [router.query])
 }
 
