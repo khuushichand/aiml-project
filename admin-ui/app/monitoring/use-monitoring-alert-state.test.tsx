@@ -1,11 +1,7 @@
 /* @vitest-environment jsdom */
 import * as React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  readStoredAlertHistory,
-  writeStoredAlertHistory,
-} from '@/lib/monitoring-alerts';
+import { afterEach, describe, expect, it } from 'vitest';
 import type {
   AlertHistoryEntry,
   SystemAlert,
@@ -70,33 +66,18 @@ function Harness() {
 }
 
 describe('useMonitoringAlertState', () => {
-  beforeEach(() => {
-    localStorage.clear();
-  });
-
   afterEach(() => {
     cleanup();
-    localStorage.clear();
   });
 
-  it('hydrates alert history from storage on mount', async () => {
-    writeStoredAlertHistory([seedHistoryEntry], localStorage);
+  it('starts with empty alert history until backend data is loaded', async () => {
     render(<Harness />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('history-count').textContent).toBe('1');
+      expect(screen.getByTestId('history-count').textContent).toBe('0');
     });
     fireEvent.click(screen.getByRole('button', { name: 'Snapshot Refs' }));
-    expect(screen.getByTestId('history-ref-count').textContent).toBe('1');
-  });
-
-  it('persists history updates after hydration', async () => {
-    render(<Harness />);
-    fireEvent.click(screen.getByRole('button', { name: 'Set History' }));
-
-    await waitFor(() => {
-      expect(readStoredAlertHistory(localStorage)).toHaveLength(1);
-    });
+    expect(screen.getByTestId('history-ref-count').textContent).toBe('0');
   });
 
   it('keeps alert/history refs synced and manages additional alert state', async () => {

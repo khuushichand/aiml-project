@@ -88,7 +88,6 @@ export const useMonitoringDataLoader = ({
       const resolvedState = resolveMonitoringLoadState({
         settledResults,
         previousAlerts: alertsRef.current,
-        previousAlertHistory: alertHistoryRef.current,
         metricWarningThreshold,
         metricCriticalThreshold,
       });

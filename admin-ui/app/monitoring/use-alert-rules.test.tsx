@@ -1,19 +1,17 @@
 /* @vitest-environment jsdom */
 import * as React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  readStoredAlertRules,
-  writeStoredAlertRules,
-} from '@/lib/monitoring-alerts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AlertRule } from './types';
-import { useAlertRules } from './use-alert-rules';
+import { type AlertRulesApiClient, useAlertRules } from './use-alert-rules';
 
 type HarnessProps = {
+  apiClient: AlertRulesApiClient;
+  setError: (message: string) => void;
   setSuccess: (message: string) => void;
 };
 
-function Harness({ setSuccess }: HarnessProps) {
+function Harness({ apiClient, setError, setSuccess }: HarnessProps) {
   const {
     alertRules,
     alertRuleDraft,
@@ -22,7 +20,7 @@ function Harness({ setSuccess }: HarnessProps) {
     handleAlertRuleDraftChange,
     handleCreateAlertRule,
     handleDeleteAlertRule,
-  } = useAlertRules({ setSuccess });
+  } = useAlertRules({ apiClient, setError, setSuccess });
 
   return (
     <div>
@@ -63,7 +61,7 @@ function Harness({ setSuccess }: HarnessProps) {
 }
 
 const storedRule: AlertRule = {
-  id: 'rule-seeded',
+  id: '1',
   metric: 'cpu',
   operator: '>',
   threshold: 90,
@@ -72,31 +70,44 @@ const storedRule: AlertRule = {
   createdAt: '2026-02-28T12:00:00.000Z',
 };
 
-describe('useAlertRules', () => {
-  beforeEach(() => {
-    localStorage.clear();
-  });
+type AlertRulesApiClientMock = AlertRulesApiClient & {
+  getAdminAlertRules: ReturnType<typeof vi.fn>;
+  createAdminAlertRule: ReturnType<typeof vi.fn>;
+  deleteAdminAlertRule: ReturnType<typeof vi.fn>;
+};
 
+const buildApiClient = (): AlertRulesApiClientMock => ({
+  getAdminAlertRules: vi.fn().mockResolvedValue({ items: [] }),
+  createAdminAlertRule: vi.fn().mockResolvedValue({ item: storedRule }),
+  deleteAdminAlertRule: vi.fn().mockResolvedValue({ status: 'deleted', id: Number(storedRule.id) }),
+});
+
+describe('useAlertRules', () => {
   afterEach(() => {
     cleanup();
     vi.resetAllMocks();
-    localStorage.clear();
   });
 
-  it('hydrates alert rules from local storage on mount', async () => {
-    writeStoredAlertRules([storedRule], localStorage);
+  it('hydrates alert rules from the backend on mount', async () => {
+    const apiClient = buildApiClient();
+    apiClient.getAdminAlertRules.mockResolvedValue({ items: [storedRule] });
+    const setError = vi.fn();
     const setSuccess = vi.fn();
 
-    render(<Harness setSuccess={setSuccess} />);
+    render(<Harness apiClient={apiClient} setError={setError} setSuccess={setSuccess} />);
 
     await waitFor(() => {
       expect(screen.getByTestId('rules-count').textContent).toBe('1');
     });
+    expect(apiClient.getAdminAlertRules).toHaveBeenCalledTimes(1);
+    expect(setError).not.toHaveBeenCalledWith('Failed to load alert rules');
   });
 
   it('surfaces validation errors for invalid drafts', async () => {
+    const apiClient = buildApiClient();
+    const setError = vi.fn();
     const setSuccess = vi.fn();
-    render(<Harness setSuccess={setSuccess} />);
+    render(<Harness apiClient={apiClient} setError={setError} setSuccess={setSuccess} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Set Invalid Draft' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create Rule' }));
@@ -108,9 +119,11 @@ describe('useAlertRules', () => {
     expect(setSuccess).not.toHaveBeenCalledWith('Alert rule added');
   });
 
-  it('creates a valid rule, resets draft, persists, and reports success', async () => {
+  it('creates a valid rule through the backend and reports success', async () => {
+    const apiClient = buildApiClient();
+    const setError = vi.fn();
     const setSuccess = vi.fn();
-    render(<Harness setSuccess={setSuccess} />);
+    render(<Harness apiClient={apiClient} setError={setError} setSuccess={setSuccess} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Set Valid Draft' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create Rule' }));
@@ -118,16 +131,26 @@ describe('useAlertRules', () => {
     await waitFor(() => {
       expect(screen.getByTestId('rules-count').textContent).toBe('1');
     });
+    expect(apiClient.createAdminAlertRule).toHaveBeenCalledWith({
+      metric: 'cpu',
+      operator: '>',
+      threshold: 85,
+      duration_minutes: 5,
+      severity: 'warning',
+      enabled: true,
+    });
     expect(screen.getByTestId('draft-threshold').textContent).toBe('85');
     expect(screen.getByTestId('saving').textContent).toBe('false');
     expect(setSuccess).toHaveBeenCalledWith('Alert rule added');
-    expect(readStoredAlertRules(localStorage)).toHaveLength(1);
+    expect(setError).not.toHaveBeenCalledWith(expect.stringContaining('Failed to create'));
   });
 
-  it('deletes rules and persists removal', async () => {
-    writeStoredAlertRules([storedRule], localStorage);
+  it('deletes rules through the backend', async () => {
+    const apiClient = buildApiClient();
+    apiClient.getAdminAlertRules.mockResolvedValue({ items: [storedRule] });
+    const setError = vi.fn();
     const setSuccess = vi.fn();
-    render(<Harness setSuccess={setSuccess} />);
+    render(<Harness apiClient={apiClient} setError={setError} setSuccess={setSuccess} />);
 
     await waitFor(() => {
       expect(screen.getByTestId('rules-count').textContent).toBe('1');
@@ -137,7 +160,8 @@ describe('useAlertRules', () => {
     await waitFor(() => {
       expect(screen.getByTestId('rules-count').textContent).toBe('0');
     });
+    expect(apiClient.deleteAdminAlertRule).toHaveBeenCalledWith('1');
     expect(setSuccess).toHaveBeenCalledWith('Alert rule deleted');
-    expect(readStoredAlertRules(localStorage)).toHaveLength(0);
+    expect(setError).not.toHaveBeenCalledWith(expect.stringContaining('Failed to delete'));
   });
 });

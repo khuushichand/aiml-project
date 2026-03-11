@@ -83,15 +83,18 @@ export interface Watchlist {
 
 export interface SystemAlert {
   id: string;
+  alert_identity?: string;
   severity: AlertSeverity;
   message: string;
   source?: string;
   timestamp: string;
   acknowledged: boolean;
   acknowledged_at?: string;
+  dismissed_at?: string;
   acknowledged_by?: string;
   assigned_to?: string;
   snoozed_until?: string;
+  escalated_severity?: AlertSeverity;
   metadata?: Record<string, unknown>;
 }
 

@@ -48,7 +48,7 @@ vi.mock('./SystemStatusPanel', () => ({
 }));
 
 describe('MonitoringManagementPanels', () => {
-  it('renders all management panels and supporting copy', () => {
+  it('renders all management panels without the local-only rules disclaimer', () => {
     render(
       <MonitoringManagementPanels
         alertRulesPanelProps={{
@@ -117,7 +117,7 @@ describe('MonitoringManagementPanels', () => {
     expect(screen.getByTestId('notifications-panel').textContent).toBe('notifications:1');
     expect(screen.getByTestId('system-status-panel').textContent).toBe('status:1');
     expect(
-      screen.getByText('Alert rules are stored locally until a backend alert-rules endpoint is available.')
-    ).toBeInTheDocument();
+      screen.queryByText('Alert rules are stored locally until a backend alert-rules endpoint is available.')
+    ).not.toBeInTheDocument();
   });
 });

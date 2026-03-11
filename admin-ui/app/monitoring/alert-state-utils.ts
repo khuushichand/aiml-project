@@ -9,9 +9,9 @@ export const mergeAlertsWithLocalState = (
     const prev = existingById.get(alert.id);
     return {
       ...alert,
-      assigned_to: prev?.assigned_to ?? alert.assigned_to,
-      snoozed_until: prev?.snoozed_until ?? alert.snoozed_until,
-      metadata: prev?.metadata ?? alert.metadata,
+      assigned_to: alert.assigned_to ?? prev?.assigned_to,
+      snoozed_until: alert.snoozed_until ?? prev?.snoozed_until,
+      metadata: alert.metadata ?? prev?.metadata,
     };
   });
 };

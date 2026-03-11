@@ -9,12 +9,13 @@ Permission-gated endpoints requiring SYSTEM_LOGS to manage watchlists, alerts, a
 import asyncio
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, require_permissions
 from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
     AlertItem,
     AlertsListResponse,
@@ -30,11 +31,20 @@ from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
     WatchlistsReloadResponse,
     WatchlistUpsertResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.admin_monitoring_repo import (
+    AuthnzAdminMonitoringRepo,
+)
 from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert, TopicMonitoringDB
 from tldw_Server_API.app.core.Monitoring.notification_service import get_notification_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+from tldw_Server_API.app.services.admin_monitoring_alerts_service import (
+    build_alert_identity,
+    merge_runtime_alert_with_overlay,
+)
 
 # Cached TopicMonitoringDB instance (initialized on first use).
 _TOPIC_MONITORING_DB: TopicMonitoringDB | None = None
@@ -114,6 +124,46 @@ def get_topic_monitoring_db() -> TopicMonitoringDB:
     if not test_mode:
         _TOPIC_MONITORING_DB = db
     return db
+
+
+async def _get_monitoring_repo() -> AuthnzAdminMonitoringRepo:
+    pool = await get_db_pool()
+    repo = AuthnzAdminMonitoringRepo(pool)
+    await repo.ensure_schema()
+    return repo
+
+
+def _principal_actor_id(principal: AuthPrincipal) -> int | None:
+    try:
+        return int(principal.user_id) if principal.user_id is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+async def _emit_admin_audit_event(
+    request: Request,
+    principal: AuthPrincipal,
+    *,
+    action: str,
+    resource_id: str,
+    metadata: dict[str, object],
+) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
+
+    await admin_mod._emit_admin_audit_event(
+        request,
+        principal,
+        event_type="data.update",
+        category="system",
+        resource_type="monitoring_alert",
+        resource_id=resource_id,
+        action=action,
+        metadata=metadata,
+    )
 
 
 @router.get(
@@ -223,6 +273,7 @@ async def list_alerts(
 ) -> AlertsListResponse:
     """List monitoring alerts with optional filters and pagination."""
 
+    repo = await _get_monitoring_repo()
     rows = await asyncio.to_thread(
         db.list_alerts,
         user_id=user_id,
@@ -236,6 +287,11 @@ async def list_alerts(
         limit=limit,
         offset=offset,
     )
+    alert_identities = [build_alert_identity(row) for row in rows]
+    overlay_rows = await repo.list_alert_states(alert_identities)
+    overlay_by_identity = {
+        str(row["alert_identity"]): row for row in overlay_rows if row.get("alert_identity")
+    }
     items: list[AlertItem] = []
     for r in rows:
         # metadata column may be JSON string
@@ -249,7 +305,12 @@ async def list_alerts(
                     e,
                 )
                 r["metadata"] = {"raw": meta}
-        items.append(AlertItem(**r))
+        alert_identity = build_alert_identity(r)
+        merged_row = merge_runtime_alert_with_overlay(
+            r,
+            overlay_by_identity.get(alert_identity),
+        )
+        items.append(AlertItem(**merged_row))
     return AlertsListResponse(items=items)
 
 
@@ -261,6 +322,8 @@ async def list_alerts(
 )
 async def mark_alert_read(
     alert_id: int,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db: TopicMonitoringDB = Depends(get_topic_monitoring_db),  # noqa: B008
 ) -> MarkReadResponse:
     """Mark a single alert as read by ID."""
@@ -268,6 +331,96 @@ async def mark_alert_read(
     ok = await asyncio.to_thread(db.mark_read, alert_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
+
+    alert_identity = f"alert:{alert_id}"
+    actor_id = _principal_actor_id(principal)
+    acknowledged_at = _utcnow_iso()
+    repo = await _get_monitoring_repo()
+    await repo.upsert_alert_state(
+        alert_identity=alert_identity,
+        acknowledged_at=acknowledged_at,
+        updated_by_user_id=actor_id,
+    )
+    await repo.append_alert_event(
+        alert_identity=alert_identity,
+        action="acknowledged",
+        actor_user_id=actor_id,
+        details_json=json.dumps({"alert_id": alert_id}),
+        created_at=acknowledged_at,
+    )
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        action="monitoring.alert.acknowledge",
+        resource_id=alert_identity,
+        metadata={"alert_id": alert_id},
+    )
+    return MarkReadResponse(status="ok", id=alert_id)
+
+
+@router.post(
+    "/monitoring/alerts/{alert_id}/acknowledge",
+    response_model=MarkReadResponse,
+    tags=["monitoring"],
+    summary="Acknowledge an alert",
+)
+async def acknowledge_alert(
+    alert_id: int,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: TopicMonitoringDB = Depends(get_topic_monitoring_db),  # noqa: B008
+) -> MarkReadResponse:
+    """Acknowledge a monitoring alert using the authoritative overlay state."""
+
+    return await mark_alert_read(
+        alert_id=alert_id,
+        request=request,
+        principal=principal,
+        db=db,
+    )
+
+
+@router.delete(
+    "/monitoring/alerts/{alert_id}",
+    response_model=MarkReadResponse,
+    tags=["monitoring"],
+    summary="Dismiss an alert",
+)
+async def dismiss_alert(
+    alert_id: int,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: TopicMonitoringDB = Depends(get_topic_monitoring_db),  # noqa: B008
+) -> MarkReadResponse:
+    """Dismiss a monitoring alert using the authoritative overlay state."""
+
+    ok = await asyncio.to_thread(db.mark_read, alert_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
+
+    alert_identity = f"alert:{alert_id}"
+    actor_id = _principal_actor_id(principal)
+    dismissed_at = _utcnow_iso()
+    repo = await _get_monitoring_repo()
+    await repo.upsert_alert_state(
+        alert_identity=alert_identity,
+        dismissed_at=dismissed_at,
+        updated_by_user_id=actor_id,
+    )
+    await repo.append_alert_event(
+        alert_identity=alert_identity,
+        action="dismissed",
+        actor_user_id=actor_id,
+        details_json=json.dumps({"alert_id": alert_id}),
+        created_at=dismissed_at,
+    )
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        action="monitoring.alert.dismiss",
+        resource_id=alert_identity,
+        metadata={"alert_id": alert_id},
+    )
     return MarkReadResponse(status="ok", id=alert_id)
 
 
