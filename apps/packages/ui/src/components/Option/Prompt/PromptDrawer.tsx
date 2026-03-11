@@ -24,7 +24,8 @@ import { StructuredPromptEditor } from "./Structured/StructuredPromptEditor"
 import {
   convertLegacyPromptToStructuredDefinition,
   createDefaultStructuredPromptDefinition,
-  renderStructuredPromptLegacySnapshot
+  renderStructuredPromptLegacySnapshot,
+  stableSerializePromptSnapshot
 } from "./structured-prompt-utils"
 import { VersionHistoryDrawer } from "./Studio/Prompts/VersionHistoryDrawer"
 
@@ -430,7 +431,8 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
     )
     const hasDirtyValues =
       form.isFieldsTouched(true) ||
-      JSON.stringify(currentSnapshot) !== JSON.stringify(initialSnapshot)
+      stableSerializePromptSnapshot(currentSnapshot) !==
+        stableSerializePromptSnapshot(initialSnapshot)
 
     if (hasDirtyValues) {
       setCloseConfirmOpen(true)
@@ -1117,7 +1119,7 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
               <StructuredPromptEditor
                 value={structuredPromptDefinition}
                 onChange={setStructuredPromptDefinition}
-                previewResult={structuredPreviewResult as any}
+                previewResult={structuredPreviewResult}
                 previewLoading={structuredPreviewLoading}
                 onPreview={handleStructuredPreview}
               />

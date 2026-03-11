@@ -428,6 +428,30 @@ class TestPromptEndpoints:
         assert data["assembled_messages"][4]["content"].startswith("Evaluate SQLite FTS")
         assert "Please format your response as JSON" in data["assembled_messages"][4]["content"]
 
+    def test_preview_prompt_rejects_missing_required_variable_with_client_error(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts/preview",
+            json={
+                "project_id": project_id,
+                "prompt_format": "structured",
+                "prompt_schema_version": 1,
+                "prompt_definition": _make_structured_prompt_definition_payload(),
+                "variables": {},
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400, response.text
+        assert "Missing required variable: input" in response.json()["detail"]
+
     def test_preview_prompt_rejects_oversized_assistant_block(
         self,
         client,

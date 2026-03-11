@@ -55,6 +55,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
 )
 from tldw_Server_API.app.core.Prompt_Management.structured_prompts import (
     PromptDefinition,
+    StructuredPromptAssemblyError,
     assemble_prompt_definition,
     convert_legacy_prompt_to_definition,
     extract_legacy_prompt_variables,
@@ -663,6 +664,11 @@ async def preview_prompt(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid prompt_definition: {e}",
+        ) from e
+    except StructuredPromptAssemblyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
         ) from e
 
 

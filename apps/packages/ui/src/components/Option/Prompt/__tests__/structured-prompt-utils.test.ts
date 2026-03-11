@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
   convertLegacyPromptToStructuredDefinition,
-  renderStructuredPromptLegacySnapshot
+  renderStructuredPromptLegacySnapshot,
+  stableSerializePromptSnapshot
 } from "../structured-prompt-utils"
 
 describe("structured-prompt-utils", () => {
@@ -104,5 +105,58 @@ describe("structured-prompt-utils", () => {
       userPrompt: "Worked example",
       content: "Worked example"
     })
+  })
+
+  it("serializes equivalent prompt snapshots stably regardless of object key order", () => {
+    const first = {
+      promptFormat: "structured",
+      structuredPromptDefinition: {
+        format: "structured",
+        schema_version: 1,
+        blocks: [
+          {
+            role: "user",
+            id: "task",
+            content: "Summarize {{topic}}",
+            order: 10,
+            enabled: true,
+            is_template: true,
+            name: "Task"
+          }
+        ],
+        assembly_config: {
+          block_separator: "\n\n",
+          legacy_user_roles: ["user"],
+          legacy_system_roles: ["system", "developer"]
+        }
+      }
+    }
+    const second = {
+      structuredPromptDefinition: {
+        schema_version: 1,
+        format: "structured",
+        assembly_config: {
+          legacy_system_roles: ["system", "developer"],
+          legacy_user_roles: ["user"],
+          block_separator: "\n\n"
+        },
+        blocks: [
+          {
+            name: "Task",
+            is_template: true,
+            enabled: true,
+            order: 10,
+            content: "Summarize {{topic}}",
+            id: "task",
+            role: "user"
+          }
+        ]
+      },
+      promptFormat: "structured"
+    }
+
+    expect(stableSerializePromptSnapshot(first)).toBe(
+      stableSerializePromptSnapshot(second)
+    )
   })
 })

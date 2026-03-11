@@ -941,7 +941,7 @@ class PromptsDatabase:
             logging.error(f"Failed FTS update Prompt ID {prompt_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed FTS update Prompt ID {prompt_id}: {e}") from e  # noqa: TRY003
 
-    def _rebuild_prompts_fts(self, conn: sqlite3.Connection):
+    def _rebuild_prompts_fts(self, conn: sqlite3.Connection) -> None:
         try:
             conn.executescript(self._FTS_TABLES_SQL)
             conn.execute("DELETE FROM prompts_fts")

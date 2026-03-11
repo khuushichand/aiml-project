@@ -237,3 +237,23 @@ export const renderStructuredPromptLegacySnapshot = (
     content: userPrompt || systemPrompt || ""
   }
 }
+
+const normalizeForStableComparison = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeForStableComparison(item))
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, normalizeForStableComparison(item)])
+    )
+  }
+
+  return value
+}
+
+export const stableSerializePromptSnapshot = (value: unknown): string =>
+  JSON.stringify(normalizeForStableComparison(value)) ?? ""

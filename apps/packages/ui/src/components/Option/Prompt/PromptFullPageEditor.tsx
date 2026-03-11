@@ -18,7 +18,8 @@ import { validateTemplateVariableSyntax } from "./prompt-template-variable-utils
 import {
   convertLegacyPromptToStructuredDefinition,
   createDefaultStructuredPromptDefinition,
-  renderStructuredPromptLegacySnapshot
+  renderStructuredPromptLegacySnapshot,
+  stableSerializePromptSnapshot
 } from "./structured-prompt-utils"
 
 const { TextArea } = Input
@@ -190,7 +191,8 @@ export const PromptFullPageEditor: React.FC<PromptFullPageEditorProps> = ({
     const hasDirtyValues =
       dirty ||
       form.isFieldsTouched(true) ||
-      JSON.stringify(currentSnapshot) !== JSON.stringify(initialSnapshot)
+      stableSerializePromptSnapshot(currentSnapshot) !==
+        stableSerializePromptSnapshot(initialSnapshot)
 
     if (hasDirtyValues) {
       const ok = window.confirm(
