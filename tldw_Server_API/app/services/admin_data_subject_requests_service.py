@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -7,11 +8,11 @@ from typing import Any
 from fastapi import HTTPException, status
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.data_subject_requests_repo import (
     AuthnzDataSubjectRequestsRepo,
 )
+from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.services import admin_scope_service
 
@@ -23,6 +24,10 @@ _CATEGORY_DEFS: tuple[dict[str, str], ...] = (
 )
 _SUPPORTED_CATEGORY_KEYS = {entry["key"] for entry in _CATEGORY_DEFS}
 _UNSUPPORTED_CATEGORY_KEYS = {"embeddings"}
+
+
+class DataSubjectRequestCoverageUnavailableError(RuntimeError):
+    """Raised when a DSR preview cannot query an authoritative subject store."""
 
 
 def _normalize_identifier(value: str) -> str:
@@ -77,25 +82,22 @@ def _normalize_requested_categories(
     return normalized
 
 
-async def _resolve_requester_user(requester_identifier: str) -> dict[str, Any]:
+async def _resolve_requester_user(
+    requester_identifier: str,
+    *,
+    users_repo: AuthnzUsersRepo,
+) -> dict[str, Any]:
     normalized = _normalize_identifier(requester_identifier)
-    db_pool = await get_db_pool()
 
     row: dict[str, Any] | None = None
     if normalized.isdigit():
-        row = await db_pool.fetchrow("SELECT * FROM users WHERE id = ?", int(normalized))
+        row = await users_repo.get_user_by_id(int(normalized))
     if row is None and "@" in normalized:
-        row = await db_pool.fetchrow(
-            "SELECT * FROM users WHERE LOWER(email) = LOWER(?)",
-            normalized,
-        )
+        row = await users_repo.get_user_by_email(normalized)
     if row is None:
-        row = await db_pool.fetchrow(
-            "SELECT * FROM users WHERE LOWER(username) = LOWER(?)",
-            normalized,
-        )
+        row = await users_repo.get_user_by_username(normalized)
     if row is None and "-" in normalized:
-        row = await db_pool.fetchrow("SELECT * FROM users WHERE uuid = ?", normalized)
+        row = await users_repo.get_user_by_uuid(normalized)
 
     if row is None:
         raise HTTPException(
@@ -136,34 +138,39 @@ async def _enforce_requester_visibility(
         raise
 
 
-def _sqlite_count(path: Path, query: str, params: tuple[Any, ...] = ()) -> int:
+def _sqlite_count_sync(path: Path, query: str, params: tuple[Any, ...] = ()) -> int:
     if not path.exists():
         return 0
     try:
         with sqlite3.connect(path) as conn:
             row = conn.execute(query, params).fetchone()
     except sqlite3.Error as exc:
-        logger.debug("DSR count query failed for {}: {}", path, exc)
-        return 0
+        raise DataSubjectRequestCoverageUnavailableError(
+            f"DSR count query failed for {path}: {exc}"
+        ) from exc
     return int(row[0] if row else 0)
 
 
-def _count_media_records(user_id: int) -> int:
-    return _sqlite_count(
+async def _sqlite_count(path: Path, query: str, params: tuple[Any, ...] = ()) -> int:
+    return await asyncio.to_thread(_sqlite_count_sync, path, query, params)
+
+
+async def _count_media_records(user_id: int) -> int:
+    return await _sqlite_count(
         DatabasePaths.get_media_db_path(user_id),
         "SELECT COUNT(*) FROM Media WHERE deleted = 0 AND is_trash = 0",
     )
 
 
-def _count_notes(user_id: int) -> int:
-    return _sqlite_count(
+async def _count_notes(user_id: int) -> int:
+    return await _sqlite_count(
         DatabasePaths.get_chacha_db_path(user_id),
         "SELECT COUNT(*) FROM notes WHERE deleted = 0",
     )
 
 
-def _count_chat_messages(user_id: int) -> int:
-    return _sqlite_count(
+async def _count_chat_messages(user_id: int) -> int:
+    return await _sqlite_count(
         DatabasePaths.get_chacha_db_path(user_id),
         """
         SELECT COUNT(1)
@@ -175,7 +182,7 @@ def _count_chat_messages(user_id: int) -> int:
     )
 
 
-def _count_audit_events(user_id: int) -> int:
+async def _count_audit_events(user_id: int) -> int:
     from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import _resolve_audit_storage_mode
 
     shared_mode = _resolve_audit_storage_mode() == "shared"
@@ -185,24 +192,30 @@ def _count_audit_events(user_id: int) -> int:
         else DatabasePaths.get_audit_db_path(user_id)
     )
     if shared_mode:
-        return _sqlite_count(
+        return await _sqlite_count(
             path,
             "SELECT COUNT(*) FROM audit_events WHERE tenant_user_id = ?",
             (str(user_id),),
         )
-    return _sqlite_count(path, "SELECT COUNT(*) FROM audit_events")
+    return await _sqlite_count(path, "SELECT COUNT(*) FROM audit_events")
 
 
-def _build_summary_for_user(
+async def _build_summary_for_user(
     *,
     user_id: int,
     selected_categories: list[str],
 ) -> list[dict[str, Any]]:
+    media_records, chat_messages, notes, audit_events = await asyncio.gather(
+        _count_media_records(user_id),
+        _count_chat_messages(user_id),
+        _count_notes(user_id),
+        _count_audit_events(user_id),
+    )
     count_map = {
-        "media_records": _count_media_records(user_id),
-        "chat_messages": _count_chat_messages(user_id),
-        "notes": _count_notes(user_id),
-        "audit_events": _count_audit_events(user_id),
+        "media_records": media_records,
+        "chat_messages": chat_messages,
+        "notes": notes,
+        "audit_events": audit_events,
     }
     return [
         {
@@ -232,8 +245,12 @@ async def preview_data_subject_request(
     request_type: str | None = None,
     categories: list[str] | None = None,
     principal: AuthPrincipal | None = None,
+    users_repo: AuthnzUsersRepo,
 ) -> dict[str, Any]:
-    user = await _resolve_requester_user(requester_identifier)
+    user = await _resolve_requester_user(
+        requester_identifier,
+        users_repo=users_repo,
+    )
     await _enforce_requester_visibility(
         principal=principal,
         target_user_id=int(user["id"]),
@@ -242,10 +259,17 @@ async def preview_data_subject_request(
         request_type=request_type,
         categories=categories,
     )
-    summary = _build_summary_for_user(
-        user_id=int(user["id"]),
-        selected_categories=selected_categories,
-    )
+    try:
+        summary = await _build_summary_for_user(
+            user_id=int(user["id"]),
+            selected_categories=selected_categories,
+        )
+    except DataSubjectRequestCoverageUnavailableError as exc:
+        logger.warning("DSR preview unavailable for user {}: {}", user["id"], exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="requester_data_unavailable",
+        ) from exc
     return {
         "requester_identifier": user.get("email") or user.get("username") or requester_identifier,
         "resolved_user_id": int(user["id"]),
@@ -257,7 +281,11 @@ async def preview_data_subject_request(
     }
 
 
-async def _normalize_requested_by_user_id(principal: AuthPrincipal) -> int | None:
+async def _normalize_requested_by_user_id(
+    principal: AuthPrincipal,
+    *,
+    users_repo: AuthnzUsersRepo,
+) -> int | None:
     if getattr(principal, "user_id", None) is None:
         return None
     try:
@@ -265,8 +293,7 @@ async def _normalize_requested_by_user_id(principal: AuthPrincipal) -> int | Non
     except (TypeError, ValueError):
         return None
 
-    db_pool = await get_db_pool()
-    row = await db_pool.fetchrow("SELECT id FROM users WHERE id = ?", candidate)
+    row = await users_repo.get_user_by_id(candidate)
     if row is None:
         return None
     return candidate
@@ -279,6 +306,8 @@ async def record_data_subject_request(
     requester_identifier: str,
     request_type: str,
     categories: list[str] | None,
+    users_repo: AuthnzUsersRepo,
+    requests_repo: AuthnzDataSubjectRequestsRepo,
     preview: dict[str, Any] | None = None,
     notes: str | None = None,
 ) -> dict[str, Any]:
@@ -288,13 +317,12 @@ async def record_data_subject_request(
             request_type=request_type,
             categories=categories,
             principal=principal,
+            users_repo=users_repo,
         )
 
-    db_pool = await get_db_pool()
-    repo = AuthnzDataSubjectRequestsRepo(db_pool=db_pool)
-    await repo.ensure_schema()
+    await requests_repo.ensure_schema()
 
-    return await repo.create_or_get_request(
+    return await requests_repo.create_or_get_request(
         client_request_id=str(client_request_id).strip(),
         requester_identifier=str(preview["requester_identifier"]),
         resolved_user_id=int(preview["resolved_user_id"]),
@@ -303,58 +331,12 @@ async def record_data_subject_request(
         selected_categories=list(preview["selected_categories"]),
         preview_summary=list(preview["summary"]),
         coverage_metadata=dict(preview["coverage_metadata"]),
-        requested_by_user_id=await _normalize_requested_by_user_id(principal),
+        requested_by_user_id=await _normalize_requested_by_user_id(
+            principal,
+            users_repo=users_repo,
+        ),
         notes=notes,
     )
-
-
-async def _load_scoped_user_ids(principal: AuthPrincipal) -> list[int] | None:
-    if admin_scope_service.is_platform_admin(principal):
-        return None
-
-    org_ids = await admin_scope_service.get_admin_org_ids(principal)
-    if org_ids is None:
-        return None
-
-    from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
-
-    users_repo = await AuthnzUsersRepo.from_pool()
-    scoped_user_ids: list[int] = []
-    seen_user_ids: set[int] = set()
-    offset = 0
-    page_size = 1000
-    total = 0
-
-    while True:
-        scoped_users, total = await users_repo.list_users(
-            offset=offset,
-            limit=page_size,
-            org_ids=org_ids,
-        )
-        if not scoped_users:
-            break
-        for row in scoped_users:
-            user_id = row.get("id")
-            if user_id is None:
-                continue
-            normalized_user_id = int(user_id)
-            if normalized_user_id in seen_user_ids:
-                continue
-            seen_user_ids.add(normalized_user_id)
-            scoped_user_ids.append(normalized_user_id)
-        offset += len(scoped_users)
-        if offset >= total:
-            break
-
-    if getattr(principal, "user_id", None) is not None:
-        try:
-            principal_user_id = int(principal.user_id)
-        except (TypeError, ValueError):
-            principal_user_id = None
-        if principal_user_id is not None and principal_user_id not in seen_user_ids:
-            scoped_user_ids.append(principal_user_id)
-
-    return scoped_user_ids
 
 
 async def list_data_subject_requests(
@@ -362,17 +344,12 @@ async def list_data_subject_requests(
     *,
     limit: int,
     offset: int,
+    requests_repo: AuthnzDataSubjectRequestsRepo,
 ) -> tuple[list[dict[str, Any]], int]:
-    db_pool = await get_db_pool()
-    repo = AuthnzDataSubjectRequestsRepo(db_pool=db_pool)
-    await repo.ensure_schema()
-
-    scoped_user_ids = await _load_scoped_user_ids(principal)
-    if scoped_user_ids is None:
-        return await repo.list_requests(limit=limit, offset=offset)
-
-    return await repo.list_requests(
+    await requests_repo.ensure_schema()
+    org_ids = await admin_scope_service.get_admin_org_ids(principal)
+    return await requests_repo.list_requests(
         limit=limit,
         offset=offset,
-        resolved_user_ids=scoped_user_ids,
+        org_ids=org_ids,
     )

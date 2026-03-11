@@ -578,13 +578,13 @@ class DataSubjectRequestPreviewResponse(BaseModel):
 class DataSubjectRequestCreateRequest(BaseModel):
     """Request payload to record a DSR for review."""
 
-    request_id: str = Field(..., min_length=3, max_length=128)
+    client_request_id: str = Field(..., min_length=3, max_length=128)
     requester_identifier: str = Field(..., min_length=1, max_length=255)
     request_type: Literal["access", "export", "erasure"]
     categories: list[str] | None = None
     notes: str | None = Field(default=None, max_length=1000)
 
-    @field_validator("request_id", "requester_identifier")
+    @field_validator("client_request_id", "requester_identifier")
     @classmethod
     def normalize_nonempty_string(cls, value: str) -> str:
         normalized = value.strip()

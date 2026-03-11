@@ -24,7 +24,12 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     RetentionPolicy,
     RetentionPolicyUpdateRequest,
 )
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.data_subject_requests_repo import (
+    AuthnzDataSubjectRequestsRepo,
+)
+from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.services.admin_data_ops_service import (
     create_backup_snapshot as svc_create_backup_snapshot,
 )
@@ -72,6 +77,14 @@ _DATA_OPS_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     HTTPException,
 )
+
+
+async def _build_dsr_repos() -> tuple[AuthnzUsersRepo, AuthnzDataSubjectRequestsRepo]:
+    db_pool = await get_db_pool()
+    return (
+        AuthnzUsersRepo(db_pool=db_pool),
+        AuthnzDataSubjectRequestsRepo(db_pool=db_pool),
+    )
 
 
 async def _enforce_admin_user_scope(
@@ -275,11 +288,13 @@ async def preview_data_subject_request(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> DataSubjectRequestPreviewResponse:
     try:
+        users_repo, _ = await _build_dsr_repos()
         preview = await svc_preview_data_subject_request(
             requester_identifier=payload.requester_identifier,
             request_type=payload.request_type,
             categories=payload.categories,
             principal=principal,
+            users_repo=users_repo,
         )
         await _emit_admin_audit_event(
             request,
@@ -310,18 +325,22 @@ async def create_data_subject_request(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> DataSubjectRequestCreateResponse:
     try:
+        users_repo, requests_repo = await _build_dsr_repos()
         preview = await svc_preview_data_subject_request(
             requester_identifier=payload.requester_identifier,
             request_type=payload.request_type,
             categories=payload.categories,
             principal=principal,
+            users_repo=users_repo,
         )
         record = await svc_record_data_subject_request(
             principal=principal,
-            client_request_id=payload.request_id,
+            client_request_id=payload.client_request_id,
             requester_identifier=payload.requester_identifier,
             request_type=payload.request_type,
             categories=payload.categories,
+            users_repo=users_repo,
+            requests_repo=requests_repo,
             preview=preview,
             notes=payload.notes,
         )
@@ -331,7 +350,7 @@ async def create_data_subject_request(
             event_type="data.write",
             category="compliance",
             resource_type="data_subject_request",
-            resource_id=str(record.get("id") or payload.request_id),
+            resource_id=str(record.get("id") or payload.client_request_id),
             action="data_subject_request.record",
             metadata={
                 "requester_identifier": record.get("requester_identifier"),
@@ -355,10 +374,12 @@ async def list_data_subject_requests(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> DataSubjectRequestListResponse:
     try:
+        _, requests_repo = await _build_dsr_repos()
         items, total = await svc_list_data_subject_requests(
             principal,
             limit=limit,
             offset=offset,
+            requests_repo=requests_repo,
         )
         return DataSubjectRequestListResponse(
             items=[_dsr_item_from_record(item) for item in items],

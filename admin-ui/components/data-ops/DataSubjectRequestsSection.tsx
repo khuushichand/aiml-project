@@ -315,7 +315,7 @@ export const DataSubjectRequestsSection = ({ refreshSignal }: DataSubjectRequest
 
     try {
       const response = await api.createDataSubjectRequest({
-        request_id: requestId,
+        client_request_id: requestId,
         requester_identifier: normalizedRequester,
         request_type: requestType,
         categories: requestType === 'erasure' ? selectedErasureKeys : undefined,

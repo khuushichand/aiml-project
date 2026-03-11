@@ -166,6 +166,32 @@ async def test_preview_returns_404_for_unknown_requester(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_preview_returns_500_when_subject_store_query_fails(tmp_path):
+    _setup_env(tmp_path)
+    await _reset_auth_state()
+    await _seed_user(user_id=7, username="subject_user", email="subject@example.com")
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    media_db_path = DatabasePaths.get_media_db_path(7)
+    media_db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(media_db_path) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS unrelated_table (id INTEGER PRIMARY KEY)")
+        conn.commit()
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+
+    with TestClient(app, headers=headers) as client:
+        response = client.post(
+            "/api/v1/admin/data-subject-requests/preview",
+            json={"requester_identifier": "subject@example.com"},
+        )
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"] == "requester_data_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_create_records_request_and_reuses_client_request_id(monkeypatch, tmp_path):
     _setup_env(tmp_path)
     await _reset_auth_state()
@@ -190,7 +216,7 @@ async def test_create_records_request_and_reuses_client_request_id(monkeypatch, 
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
     payload = {
-        "request_id": "dsr-client-1",
+        "client_request_id": "dsr-client-1",
         "requester_identifier": "subject@example.com",
         "request_type": "export",
     }
@@ -264,7 +290,7 @@ async def test_list_returns_newest_first_with_limit_offset(monkeypatch, tmp_path
             response = client.post(
                 "/api/v1/admin/data-subject-requests",
                 json={
-                    "request_id": f"dsr-client-{index}",
+                    "client_request_id": f"dsr-client-{index}",
                     "requester_identifier": email,
                     "request_type": "access",
                 },
@@ -395,7 +421,7 @@ async def test_create_hides_out_of_scope_requesters_before_counting(monkeypatch,
         response = client.post(
             "/api/v1/admin/data-subject-requests",
             json={
-                "request_id": "out-of-scope-dsr",
+                "client_request_id": "out-of-scope-dsr",
                 "requester_identifier": "subject@example.com",
                 "request_type": "access",
             },

@@ -192,6 +192,7 @@ describe('DataSubjectRequestsSection', () => {
     await waitFor(() => {
       expect(apiMock.createDataSubjectRequest).toHaveBeenCalledWith(
         expect.objectContaining({
+          client_request_id: expect.stringMatching(/^dsr-/),
           requester_identifier: 'erasure@example.com',
           request_type: 'erasure',
           categories: ['media_records'],
@@ -262,6 +263,13 @@ describe('DataSubjectRequestsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     expect(await screen.findByTestId('dsr-access-summary')).toBeInTheDocument();
+    expect(apiMock.createDataSubjectRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        client_request_id: expect.stringMatching(/^dsr-/),
+        requester_identifier: 'access@example.com',
+        request_type: 'access',
+      }),
+    );
 
     const requestLog = screen.getByTestId('dsr-request-log');
     await waitFor(() => {

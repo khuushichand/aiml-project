@@ -23,26 +23,23 @@ class AuthnzDataSubjectRequestsRepo:
 
     async def ensure_schema(self) -> None:
         """Ensure the DSR table exists for the current backend."""
-        try:
-            if self._is_postgres_backend():
-                from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
-                    ensure_data_subject_requests_table_pg,
-                )
-
-                await ensure_data_subject_requests_table_pg(self.db_pool)
-                return
-
-            from pathlib import Path
-
-            from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-
-            db_fs_path = getattr(self.db_pool, "_sqlite_fs_path", None) or getattr(
-                self.db_pool, "db_path", None
+        if self._is_postgres_backend():
+            from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+                ensure_data_subject_requests_table_pg,
             )
-            if db_fs_path:
-                ensure_authnz_tables(Path(str(db_fs_path)))
-        except Exception as exc:  # pragma: no cover - surfaced via callers
-            logger.debug(f"AuthnzDataSubjectRequestsRepo.ensure_schema skipped/failed: {exc}")
+
+            await ensure_data_subject_requests_table_pg(self.db_pool)
+            return
+
+        from pathlib import Path
+
+        from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+
+        db_fs_path = getattr(self.db_pool, "_sqlite_fs_path", None) or getattr(
+            self.db_pool, "db_path", None
+        )
+        if db_fs_path:
+            ensure_authnz_tables(Path(str(db_fs_path)))
 
     @staticmethod
     def _parse_json_field(value: Any, *, fallback: Any) -> Any:
@@ -203,77 +200,70 @@ class AuthnzDataSubjectRequestsRepo:
         limit: int,
         offset: int,
         resolved_user_ids: list[int] | None = None,
+        org_ids: list[int] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Return paged request rows ordered newest-first."""
         try:
             if resolved_user_ids is not None and not resolved_user_ids:
                 return [], 0
-            allowed_user_ids = {int(value) for value in resolved_user_ids or []}
+            if org_ids is not None and not org_ids:
+                return [], 0
 
             async with self.db_pool.acquire() as conn:
                 if self._is_postgres_backend():
-                    if resolved_user_ids is None:
-                        rows = await conn.fetch(
-                            """
-                            SELECT *
-                            FROM data_subject_requests
-                            ORDER BY requested_at DESC, id DESC
-                            LIMIT $1 OFFSET $2
-                            """,
-                            limit,
-                            offset,
-                        )
-                        total = await conn.fetchval("SELECT COUNT(*) FROM data_subject_requests")
-                        return [self._normalize_record(row) for row in rows], int(total or 0)
+                    where_clauses: list[str] = []
+                    params: list[Any] = []
 
-                    rows = await conn.fetch(
-                        """
-                        SELECT *
-                        FROM data_subject_requests
-                        ORDER BY requested_at DESC, id DESC
-                        """,
-                    )
-                    filtered = [
-                        self._normalize_record(row)
-                        for row in rows
-                        if row.get("resolved_user_id") is not None
-                        and int(row.get("resolved_user_id")) in allowed_user_ids
-                    ]
-                    total = len(filtered)
-                    return filtered[offset: offset + limit], total
+                    if resolved_user_ids is not None:
+                        where_clauses.append(f"resolved_user_id = ANY(${len(params) + 1})")
+                        params.append([int(value) for value in resolved_user_ids])
 
-                if resolved_user_ids is None:
-                    cursor = await conn.execute(
-                        """
-                        SELECT *
-                        FROM data_subject_requests
-                        ORDER BY requested_at DESC, id DESC
-                        LIMIT ? OFFSET ?
-                        """,
-                        (limit, offset),
-                    )
-                    rows = await cursor.fetchall()
-                    total_cursor = await conn.execute("SELECT COUNT(*) FROM data_subject_requests")
-                    total_row = await total_cursor.fetchone()
-                    total = int(total_row[0]) if total_row else 0
-                    return [self._normalize_record(row) for row in rows], total
+                    if org_ids is not None:
+                        org_scope_param_index = len(params) + 1
+                        # Placeholder index is int-derived; values remain parameterized.
+                        org_scope_clause = f"EXISTS (SELECT 1 FROM org_members om WHERE om.user_id = data_subject_requests.resolved_user_id AND om.org_id = ANY(${org_scope_param_index}) AND om.status = 'active')"  # nosec
+                        where_clauses.append(org_scope_clause)
+                        params.append([int(value) for value in org_ids])
 
-                all_cursor = await conn.execute(
-                    """
-                    SELECT *
-                    FROM data_subject_requests
-                    ORDER BY requested_at DESC, id DESC
-                    """
+                    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+                    # where_sql is built only from fixed clauses with parameter placeholders.
+                    query = f"SELECT * FROM data_subject_requests {where_sql} ORDER BY requested_at DESC, id DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"  # nosec
+                    count_query = f"SELECT COUNT(*) FROM data_subject_requests {where_sql}"  # nosec
+                    rows = await conn.fetch(query, *params, limit, offset)
+                    total = await conn.fetchval(count_query, *params)
+                    return [self._normalize_record(row) for row in rows], int(total or 0)
+
+                where_clauses: list[str] = []
+                params: list[Any] = []
+
+                if resolved_user_ids is not None:
+                    placeholders = ", ".join(["?"] * len(resolved_user_ids))
+                    where_clauses.append(f"resolved_user_id IN ({placeholders})")
+                    params.extend(int(value) for value in resolved_user_ids)
+
+                if org_ids is not None:
+                    placeholders = ", ".join(["?"] * len(org_ids))
+                    # Placeholder count is int-derived; values remain parameterized.
+                    org_scope_clause = f"EXISTS (SELECT 1 FROM org_members om WHERE om.user_id = data_subject_requests.resolved_user_id AND om.org_id IN ({placeholders}) AND om.status = 'active')"  # nosec
+                    where_clauses.append(org_scope_clause)
+                    params.extend(int(value) for value in org_ids)
+
+                where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+                # where_sql is built only from fixed clauses with parameter placeholders.
+                query = f"SELECT * FROM data_subject_requests {where_sql} ORDER BY requested_at DESC, id DESC LIMIT ? OFFSET ?"  # nosec
+                cursor = await conn.execute(
+                    query,
+                    (*params, limit, offset),
                 )
-                all_rows = await all_cursor.fetchall()
-                filtered = [
-                    self._normalize_record(row)
-                    for row in all_rows
-                    if row["resolved_user_id"] is not None
-                    and int(row["resolved_user_id"]) in allowed_user_ids
-                ]
-                total = len(filtered)
-                return filtered[offset: offset + limit], total
+                rows = await cursor.fetchall()
+                count_query = f"SELECT COUNT(*) FROM data_subject_requests {where_sql}"  # nosec
+                total_cursor = await conn.execute(
+                    count_query,
+                    tuple(params),
+                )
+                total_row = await total_cursor.fetchone()
+                total = int(total_row[0]) if total_row else 0
+                return [self._normalize_record(row) for row in rows], total
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzDataSubjectRequestsRepo.list_requests failed: {exc}")
             raise
