@@ -2154,7 +2154,7 @@ class MCPProtocol:
         path_scope_block_reason = str(path_scope_result.get("reason") or "").strip()
         if path_scope_block_reason and not bool(path_scope_result.get("within_scope", True)):
             requires_approval = bool(path_scope_result.get("force_approval", False))
-            if not requires_approval or path_scope_block_reason == "workspace_not_allowed_for_assignment":
+            if not requires_approval or path_scope_block_reason == "workspace_unresolvable_for_trust_source":
                 raise GovernanceDeniedError(
                     "Blocked path-scoped tool use",
                     governance={

@@ -110,6 +110,8 @@ def _scope_fingerprint_payload(
             "workspace_id",
             "workspace_root",
             "scope_root",
+            "selected_workspace_trust_source",
+            "workspace_source_mode",
             "server_id",
             "server_name",
             "reason",
@@ -117,6 +119,9 @@ def _scope_fingerprint_payload(
             value = str(scope_payload.get(key) or "").strip()
             if value:
                 scope_context[key] = value
+        assignment_id = scope_payload.get("selected_assignment_id")
+        if assignment_id not in (None, ""):
+            scope_context["selected_assignment_id"] = str(assignment_id).strip()
         blocked_reason = str(scope_payload.get("blocked_reason") or "").strip()
         if blocked_reason:
             scope_context["blocked_reason"] = blocked_reason
@@ -130,6 +135,11 @@ def _scope_fingerprint_payload(
             values = [str(entry).strip() for entry in path_allowlist_prefixes if str(entry).strip()]
             if values:
                 scope_context["path_allowlist_prefixes"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
+        allowed_workspace_ids = scope_payload.get("allowed_workspace_ids")
+        if isinstance(allowed_workspace_ids, list):
+            values = [str(entry).strip() for entry in allowed_workspace_ids if str(entry).strip()]
+            if values:
+                scope_context["allowed_workspace_ids"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
         for key in ("requested_slots", "bound_slots", "missing_bound_slots", "missing_secret_slots"):
             raw = scope_payload.get(key)
             if isinstance(raw, list):

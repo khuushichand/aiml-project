@@ -647,6 +647,83 @@ describe("SidepanelPersona", () => {
     await screen.findByText("token_readonly")
   })
 
+  it("renders workspace runtime approval context with workspace and trust source", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-workspace-approval" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-workspace-approval",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "files.read",
+        args: { path: "src/README.md" },
+        ok: false,
+        error: "Runtime approval required",
+        reason_code: "APPROVAL_REQUIRED",
+        approval: {
+          approval_policy_id: 17,
+          mode: "ask_outside_profile",
+          tool_name: "files.read",
+          context_key: "user:1|group:|persona:research_assistant",
+          conversation_id: "sess-workspace-approval",
+          scope_key: "tool:files.read|args:123",
+          reason: "workspace_not_allowed_but_trusted",
+          duration_options: ["once", "session"],
+          arguments_summary: { path: "src/README.md" },
+          scope_context: {
+            workspace_id: "workspace-beta",
+            selected_workspace_trust_source: "shared_registry",
+            selected_assignment_id: 11
+          }
+        }
+      })
+    )
+
+    await screen.findByText("Runtime approval required")
+    await screen.findByText("workspace-beta")
+    await screen.findByText("shared_registry")
+  })
+
   it("records deny as current-request-only and does not retry the tool", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
@@ -842,6 +919,71 @@ describe("SidepanelPersona", () => {
       expect(screen.queryByRole("button", { name: "Approve and retry" })).not.toBeInTheDocument()
     }
   )
+
+  it("renders explicit hard-deny workspace trust-source messaging without approval controls", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-workspace-deny" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-workspace-deny",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "files.read",
+        args: { path: "src/README.md" },
+        ok: false,
+        error: "Blocked path-scoped tool use",
+        reason_code: "workspace_unresolvable_for_trust_source",
+        path_scope: {
+          workspace_id: "workspace-missing",
+          selected_workspace_trust_source: "shared_registry",
+          reason: "workspace_unresolvable_for_trust_source"
+        }
+      })
+    )
+
+    await screen.findByText("Blocked: workspace is not resolvable through the required trust source.")
+    expect(screen.queryByRole("button", { name: "Approve and retry" })).not.toBeInTheDocument()
+  })
 
   it("renders policy metadata and keeps blocked steps out of approvals", async () => {
     mocks.getConfig.mockResolvedValue({

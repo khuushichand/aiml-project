@@ -465,6 +465,7 @@ def _build_tool_result(
     policy: dict[str, Any] | None = None,
     approval: dict[str, Any] | None = None,
     external_access: dict[str, Any] | None = None,
+    path_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "ok": bool(ok),
@@ -482,6 +483,8 @@ def _build_tool_result(
         payload["approval"] = dict(approval)
     if isinstance(external_access, dict):
         payload["external_access"] = dict(external_access)
+    if isinstance(path_scope, dict):
+        payload["path_scope"] = dict(path_scope)
     return payload
 
 
@@ -2639,6 +2642,12 @@ async def persona_stream(
                     and isinstance(governance_payload.get("external_access"), dict)
                     else None
                 )
+                path_scope_payload = (
+                    dict(governance_payload.get("path_scope") or {})
+                    if isinstance(governance_payload, dict)
+                    and isinstance(governance_payload.get("path_scope"), dict)
+                    else None
+                )
                 reason_code = (
                     str(governance_payload.get("reason_code") or "").strip()
                     if isinstance(governance_payload, dict)
@@ -2660,6 +2669,7 @@ async def persona_stream(
                     policy=policy,
                     approval=approval_payload,
                     external_access=external_access_payload,
+                    path_scope=path_scope_payload,
                 )
             _increment_persona_metric(
                 "persona_ws_tool_calls_total",

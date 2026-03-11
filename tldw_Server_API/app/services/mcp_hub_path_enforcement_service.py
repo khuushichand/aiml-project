@@ -200,6 +200,21 @@ class McpHubPathEnforcementService:
         if not result["enabled"]:
             return result
 
+        reason = str(scope.get("reason") or "").strip() or None
+        if reason:
+            if (
+                reason == "workspace_root_unavailable"
+                and str(scope.get("workspace_id") or "").strip()
+                and scope.get("selected_assignment_id") not in (None, "")
+                and str(scope.get("selected_workspace_source_mode") or "").strip()
+            ):
+                return self._blocked_result(
+                    scope=scope,
+                    reason="workspace_unresolvable_for_trust_source",
+                    force_approval=False,
+                )
+            return self._blocked_result(scope=scope, reason=reason)
+
         allowed_workspace_ids = _unique(
             _as_str_list((effective_policy or {}).get("selected_assignment_workspace_ids"))
         )
@@ -207,14 +222,10 @@ class McpHubPathEnforcementService:
         if allowed_workspace_ids and active_workspace_id not in allowed_workspace_ids:
             return self._blocked_result(
                 scope=scope,
-                reason="workspace_not_allowed_for_assignment",
-                force_approval=False,
+                reason="workspace_not_allowed_but_trusted",
+                force_approval=True,
                 allowed_workspace_ids=allowed_workspace_ids,
             )
-
-        reason = str(scope.get("reason") or "").strip() or None
-        if reason:
-            return self._blocked_result(scope=scope, reason=reason)
 
         metadata = _tool_metadata(tool_def)
         if not _tool_uses_filesystem(metadata):
@@ -288,6 +299,8 @@ class McpHubPathEnforcementService:
             "workspace_root": str(scope.get("workspace_root") or "").strip() or None,
             "workspace_id": str(scope.get("workspace_id") or "").strip() or None,
             "selected_workspace_trust_source": str(scope.get("selected_workspace_trust_source") or "").strip() or None,
+            "selected_assignment_id": scope.get("selected_assignment_id"),
+            "workspace_source_mode": str(scope.get("selected_workspace_source_mode") or "").strip() or None,
             "scope_root": str(scope_root) if scope_root is not None else None,
         }
         if normalized_paths:

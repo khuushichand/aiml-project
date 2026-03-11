@@ -80,6 +80,8 @@ class McpHubPathScopeService:
             "path_scope_enforcement": path_scope_enforcement,
             "session_id": session_id,
             "workspace_id": workspace_id,
+            "selected_assignment_id": policy.get("selected_assignment_id"),
+            "selected_workspace_source_mode": _first_nonempty(policy.get("selected_workspace_source_mode")),
             "selected_workspace_trust_source": workspace_trust_source,
             "selected_workspace_scope_type": _first_nonempty(policy.get("selected_workspace_scope_type")),
             "selected_workspace_scope_id": policy.get("selected_workspace_scope_id"),

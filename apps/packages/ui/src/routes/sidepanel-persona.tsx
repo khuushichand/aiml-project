@@ -65,7 +65,7 @@ type PersonaRuntimeApprovalPayload = {
   reason?: string | null
   duration_options?: string[]
   arguments_summary?: Record<string, unknown>
-  scope_context?: PersonaExternalAccessContext | null
+  scope_context?: PersonaGovernanceScopeContext | null
 }
 
 type PersonaRuntimeApprovalDuration = "once" | "session" | "conversation"
@@ -81,7 +81,7 @@ type PersonaRuntimeApprovalRequest = {
   reason?: string | null
   duration_options: PersonaRuntimeApprovalDuration[]
   arguments_summary: Record<string, unknown>
-  scope_context?: PersonaExternalAccessContext | null
+  scope_context?: PersonaGovernanceScopeContext | null
   selected_duration: PersonaRuntimeApprovalDuration
   session_id?: string | null
   plan_id?: string | null
@@ -93,14 +93,18 @@ type PersonaRuntimeApprovalRequest = {
   description?: string | null
 }
 
-type PersonaExternalAccessContext = {
+type PersonaGovernanceScopeContext = {
   server_id?: string | null
   server_name?: string | null
   requested_slots?: string[]
   bound_slots?: string[]
   missing_bound_slots?: string[]
   missing_secret_slots?: string[]
+  workspace_id?: string | null
+  selected_workspace_trust_source?: string | null
+  selected_assignment_id?: number | null
   blocked_reason?: string | null
+  reason?: string | null
 }
 
 type PersonaSessionSummary = {
@@ -198,20 +202,38 @@ const _normalizeStringList = (value: unknown): string[] => {
     .filter((entry) => entry.length > 0)
 }
 
-const _coerceExternalAccessContext = (value: unknown): PersonaExternalAccessContext | null => {
+const _coerceGovernanceContext = (value: unknown): PersonaGovernanceScopeContext | null => {
   if (!value || typeof value !== "object") return null
   const raw = value as Record<string, unknown>
-  const context: PersonaExternalAccessContext = {
+  const context: PersonaGovernanceScopeContext = {
     server_id: raw.server_id ? String(raw.server_id) : null,
     server_name: raw.server_name ? String(raw.server_name) : null,
     requested_slots: _normalizeStringList(raw.requested_slots),
     bound_slots: _normalizeStringList(raw.bound_slots),
     missing_bound_slots: _normalizeStringList(raw.missing_bound_slots),
     missing_secret_slots: _normalizeStringList(raw.missing_secret_slots),
-    blocked_reason: raw.blocked_reason ? String(raw.blocked_reason) : null
+    workspace_id: raw.workspace_id ? String(raw.workspace_id) : null,
+    selected_workspace_trust_source: raw.selected_workspace_trust_source
+      ? String(raw.selected_workspace_trust_source)
+      : null,
+    selected_assignment_id:
+      typeof raw.selected_assignment_id === "number"
+        ? raw.selected_assignment_id
+        : Number.isFinite(Number(raw.selected_assignment_id))
+          ? Number(raw.selected_assignment_id)
+          : null,
+    blocked_reason: raw.blocked_reason ? String(raw.blocked_reason) : null,
+    reason: raw.reason ? String(raw.reason) : null
   }
   const hasContent =
-    Boolean(context.server_id || context.server_name || context.blocked_reason) ||
+    Boolean(
+      context.server_id ||
+      context.server_name ||
+      context.workspace_id ||
+      context.selected_workspace_trust_source ||
+      context.blocked_reason ||
+      context.reason
+    ) ||
     Boolean(context.requested_slots?.length) ||
     Boolean(context.bound_slots?.length) ||
     Boolean(context.missing_bound_slots?.length) ||
@@ -219,8 +241,8 @@ const _coerceExternalAccessContext = (value: unknown): PersonaExternalAccessCont
   return hasContent ? context : null
 }
 
-const _formatExternalAccessDenyMessage = (
-  context: PersonaExternalAccessContext | null,
+const _formatGovernanceDenyMessage = (
+  context: PersonaGovernanceScopeContext | null,
   reasonCode: string | null
 ): string | null => {
   const normalizedReason = String(reasonCode || context?.blocked_reason || "")
@@ -237,6 +259,9 @@ const _formatExternalAccessDenyMessage = (
       ? context.missing_secret_slots
       : context?.requested_slots || []
     return slots.length ? `Credential secrets missing: ${slots.join(", ")}` : null
+  }
+  if (normalizedReason === "workspace_unresolvable_for_trust_source") {
+    return "Blocked: workspace is not resolvable through the required trust source."
   }
   return null
 }
@@ -521,7 +546,7 @@ const SidepanelPersona = () => {
             ? (payload.approval as PersonaRuntimeApprovalPayload)
             : null
         if (approvalPayload) {
-          const scopeContext = _coerceExternalAccessContext(approvalPayload.scope_context)
+          const scopeContext = _coerceGovernanceContext(approvalPayload.scope_context)
           const durationOptions = Array.isArray(approvalPayload.duration_options)
             ? approvalPayload.duration_options
                 .map((entry) => String(entry || "").trim())
@@ -579,9 +604,11 @@ const SidepanelPersona = () => {
           appendLog("notice", `Runtime approval required for ${request.tool_name}`)
           return
         }
-        const externalAccess = _coerceExternalAccessContext(payload?.external_access)
-        const externalDenyMessage = _formatExternalAccessDenyMessage(
-          externalAccess,
+        const governanceContext = _coerceGovernanceContext(
+          payload?.external_access ?? payload?.path_scope
+        )
+        const externalDenyMessage = _formatGovernanceDenyMessage(
+          governanceContext,
           payload?.reason_code ? String(payload.reason_code) : null
         )
         if (externalDenyMessage) {
@@ -1464,11 +1491,23 @@ const SidepanelPersona = () => {
                       {approval.mode ? <Tag color="blue">{approval.mode}</Tag> : null}
                       {approval.reason ? <Tag color="red">{approval.reason}</Tag> : null}
                     </div>
-                    {approval.scope_context?.server_name || approval.scope_context?.server_id ? (
+                    {approval.scope_context?.server_name ||
+                    approval.scope_context?.server_id ||
+                    approval.scope_context?.workspace_id ? (
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted">
-                        <Tag color="cyan">
-                          {approval.scope_context.server_name || approval.scope_context.server_id}
-                        </Tag>
+                        {approval.scope_context?.server_name || approval.scope_context?.server_id ? (
+                          <Tag color="cyan">
+                            {approval.scope_context.server_name || approval.scope_context.server_id}
+                          </Tag>
+                        ) : null}
+                        {approval.scope_context?.workspace_id ? (
+                          <Tag color="cyan">{approval.scope_context.workspace_id}</Tag>
+                        ) : null}
+                        {approval.scope_context?.selected_workspace_trust_source ? (
+                          <Tag color="blue">
+                            {approval.scope_context.selected_workspace_trust_source}
+                          </Tag>
+                        ) : null}
                         {(approval.scope_context.requested_slots || []).map((slotName) => (
                           <Tag key={`${approval.key}-${slotName}`} color="geekblue">
                             {slotName}

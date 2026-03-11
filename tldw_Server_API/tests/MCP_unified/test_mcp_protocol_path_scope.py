@@ -723,6 +723,189 @@ async def test_handle_tools_call_hard_denies_shared_registry_workspace_without_a
 
 
 @pytest.mark.asyncio
+async def test_handle_tools_call_requires_approval_for_trusted_workspace_not_allowed_by_assignment(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.protocol import ApprovalRequiredError
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_approval_service as approval_service_mod
+
+    tool_def = {
+        "name": "files.read",
+        "description": "Read a file",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "retrieval",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+        },
+    }
+    fake_module = _FakeModule(tool_def)
+    fake_approval_service = _FakeApprovalService()
+
+    async def _fake_get_approval_service():
+        return fake_approval_service
+
+    monkeypatch.setattr(approval_service_mod, "get_mcp_hub_approval_service", _fake_get_approval_service)
+
+    protocol = MCPProtocol()
+    protocol.module_registry = _FakeRegistry(fake_module)
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["files.read"],
+            "approval_policy_id": 1,
+            "approval_mode": "ask_outside_profile",
+            "selected_assignment_id": 11,
+            "selected_workspace_trust_source": "shared_registry",
+            "selected_workspace_source_mode": "named",
+            "sources": [{"assignment_id": 11, "profile_id": 7}],
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    async def _path_scope(*_args, **_kwargs):
+        return {
+            "enabled": True,
+            "within_scope": False,
+            "reason": "workspace_not_allowed_but_trusted",
+            "force_approval": True,
+            "scope_payload": {
+                "workspace_id": "workspace-beta",
+                "allowed_workspace_ids": ["workspace-alpha"],
+                "selected_workspace_trust_source": "shared_registry",
+                "selected_assignment_id": 11,
+                "workspace_source_mode": "named",
+                "reason": "workspace_not_allowed_but_trusted",
+            },
+        }
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+    protocol._evaluate_path_scope = _path_scope  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id="req-workspace-set-approval",
+        user_id="7",
+        client_id="test-client",
+        session_id="sess-1",
+        metadata={"workspace_id": "workspace-beta"},
+    )
+
+    with pytest.raises(ApprovalRequiredError) as exc:
+        await protocol._handle_tools_call(
+            {"name": "files.read", "arguments": {"path": "notes.txt"}},
+            context,
+        )
+
+    assert exc.value.approval["reason"] == "workspace_not_allowed_but_trusted"
+    assert exc.value.approval["scope_context"]["workspace_id"] == "workspace-beta"
+    assert exc.value.approval["scope_context"]["selected_assignment_id"] == 11
+
+
+@pytest.mark.asyncio
+async def test_handle_tools_call_hard_denies_unresolvable_workspace_for_trust_source_without_approval(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.protocol import GovernanceDeniedError
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_approval_service as approval_service_mod
+
+    tool_def = {
+        "name": "files.read",
+        "description": "Read a file",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "retrieval",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+        },
+    }
+    fake_module = _FakeModule(tool_def)
+    fake_approval_service = _NoopApprovalService()
+
+    async def _fake_get_approval_service():
+        return fake_approval_service
+
+    monkeypatch.setattr(approval_service_mod, "get_mcp_hub_approval_service", _fake_get_approval_service)
+
+    protocol = MCPProtocol()
+    protocol.module_registry = _FakeRegistry(fake_module)
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["files.read"],
+            "approval_policy_id": 1,
+            "approval_mode": "ask_outside_profile",
+            "selected_assignment_id": 12,
+            "selected_workspace_trust_source": "shared_registry",
+            "selected_workspace_source_mode": "named",
+            "sources": [{"assignment_id": 12, "profile_id": None}],
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    async def _path_scope(*_args, **_kwargs):
+        return {
+            "enabled": True,
+            "within_scope": False,
+            "reason": "workspace_unresolvable_for_trust_source",
+            "force_approval": False,
+            "scope_payload": {
+                "workspace_id": "workspace-missing",
+                "selected_workspace_trust_source": "shared_registry",
+                "selected_assignment_id": 12,
+                "workspace_source_mode": "named",
+                "reason": "workspace_unresolvable_for_trust_source",
+            },
+        }
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+    protocol._evaluate_path_scope = _path_scope  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id="req-workspace-unresolvable-deny",
+        user_id="7",
+        client_id="test-client",
+        session_id="sess-1",
+        metadata={"workspace_id": "workspace-missing"},
+    )
+
+    with pytest.raises(GovernanceDeniedError) as exc:
+        await protocol._handle_tools_call(
+            {"name": "files.read", "arguments": {"path": "notes.txt"}},
+            context,
+        )
+
+    assert fake_approval_service.calls == []
+    assert exc.value.governance["reason_code"] == "workspace_unresolvable_for_trust_source"
+    assert exc.value.governance["path_scope"]["workspace_id"] == "workspace-missing"
+
+
+@pytest.mark.asyncio
 async def test_handle_tools_call_requires_approval_when_direct_workspace_root_missing(
     monkeypatch,
 ) -> None:
