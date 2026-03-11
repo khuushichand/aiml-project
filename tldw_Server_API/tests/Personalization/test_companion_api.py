@@ -333,6 +333,125 @@ def test_companion_reflection_detail_returns_provenance_and_evidence(client_with
     assert payload["follow_up_prompts"][0]["prompt_text"] == "What is the next concrete step for project alpha?"
 
 
+def test_companion_conversation_prompts_endpoint_returns_at_most_three_prompts(
+    client_with_companion_db,
+) -> None:
+    client, db = client_with_companion_db
+    source_event_id = db.insert_companion_activity_event(
+        user_id="1",
+        event_type="note_updated",
+        source_type="note",
+        source_id="42",
+        surface="api.notes",
+        dedupe_key="note_updated:42",
+        tags=["backlog", "review"],
+        provenance={"capture_mode": "explicit", "route": "/api/v1/notes/42"},
+        metadata={"title": "Backlog review notes"},
+    )
+    reflection_id = db.insert_companion_activity_event(
+        user_id="1",
+        event_type="companion_reflection_generated",
+        source_type="companion_reflection",
+        source_id="2026-03-10",
+        surface="jobs.companion",
+        dedupe_key="companion.reflection:daily:2026-03-10",
+        tags=["backlog-review"],
+        provenance={"capture_mode": "explicit", "source_event_ids": [source_event_id]},
+        metadata={
+            "title": "Daily reflection",
+            "summary": "You returned to backlog review and still need a concrete next step.",
+            "cadence": "daily",
+            "delivery_decision": "delivered",
+            "delivery_reason": "meaningful_signal",
+            "theme_key": "backlog-review",
+            "signal_strength": 4.0,
+            "follow_up_prompts": [
+                {
+                    "prompt_id": "prompt-1",
+                    "label": "Choose next step",
+                    "prompt_text": "What is the next concrete step for backlog review?",
+                    "prompt_type": "clarify_priority",
+                    "source_reflection_id": "reflection-1",
+                    "source_evidence_ids": [source_event_id],
+                },
+                {
+                    "prompt_id": "prompt-2",
+                    "label": "Check blockers",
+                    "prompt_text": "What is blocking backlog review right now?",
+                    "prompt_type": "identify_blocker",
+                    "source_reflection_id": "reflection-1",
+                    "source_evidence_ids": [source_event_id],
+                },
+                {
+                    "prompt_id": "prompt-3",
+                    "label": "Define done",
+                    "prompt_text": "What would make backlog review feel complete today?",
+                    "prompt_type": "define_outcome",
+                    "source_reflection_id": "reflection-1",
+                    "source_evidence_ids": [source_event_id],
+                },
+                {
+                    "prompt_id": "prompt-4",
+                    "label": "Trim scope",
+                    "prompt_text": "What can you defer to make backlog review smaller?",
+                    "prompt_type": "trim_scope",
+                    "source_reflection_id": "reflection-1",
+                    "source_evidence_ids": [source_event_id],
+                },
+            ],
+            "evidence": [{"kind": "activity_event", "source_event_id": source_event_id}],
+        },
+    )
+
+    response = client.get(
+        "/api/v1/companion/conversation-prompts",
+        params={"query": "resume backlog review"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["prompt_source_kind"] == "reflection"
+    assert payload["prompt_source_id"] == reflection_id
+    assert len(payload["prompts"]) <= 3
+
+
+def test_companion_conversation_prompts_endpoint_falls_back_to_ranked_context(
+    client_with_companion_db,
+) -> None:
+    client, db = client_with_companion_db
+    event_id = db.insert_companion_activity_event(
+        user_id="1",
+        event_type="note_updated",
+        source_type="note",
+        source_id="42",
+        surface="api.notes",
+        dedupe_key="note_updated:42",
+        tags=["backlog", "review"],
+        provenance={"capture_mode": "explicit", "route": "/api/v1/notes/42"},
+        metadata={"title": "Backlog review notes"},
+    )
+    card_id = db.upsert_companion_knowledge_card(
+        user_id="1",
+        card_type="project_focus",
+        title="Backlog review",
+        summary="Recent explicit activity clusters around backlog review.",
+        evidence=[{"source_event_id": event_id}],
+        score=0.9,
+        status="active",
+    )
+
+    response = client.get(
+        "/api/v1/companion/conversation-prompts",
+        params={"query": "resume backlog review"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["prompt_source_kind"] == "knowledge_card"
+    assert payload["prompt_source_id"] == card_id
+    assert payload["prompts"][0]["prompt_text"]
+
+
 def test_companion_goals_create_and_list(client_with_companion_db) -> None:
     client, _db = client_with_companion_db
 

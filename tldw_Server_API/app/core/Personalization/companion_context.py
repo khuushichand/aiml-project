@@ -129,6 +129,54 @@ def _append_bounded_line(lines: list[str], candidate: str, *, total_used: int) -
     return [*lines, normalized], projected
 
 
+def _load_ranked_companion_candidates(
+    *,
+    user_id: str,
+    query: str | None,
+    max_cards: int,
+    max_goals: int,
+    max_activities: int,
+    db: PersonalizationDB | None = None,
+) -> dict[str, Any]:
+    personalization_db = db
+    if personalization_db is None:
+        db_path = DatabasePaths.get_personalization_db_path(user_id)
+        personalization_db = PersonalizationDB(str(db_path))
+    profile = personalization_db.get_or_create_profile(user_id)
+    if not bool(profile.get("enabled", 0)):
+        return {
+            "cards": [],
+            "goals": [],
+            "activity_rows": [],
+            "card_ids": [],
+            "goal_ids": [],
+            "activity_ids": [],
+            "mode": "recent_fallback",
+        }
+
+    cards = personalization_db.list_companion_knowledge_cards(user_id, status="active")
+    activity_rows, _ = personalization_db.list_companion_activity_events(
+        user_id,
+        limit=max(20, max_activities * 4),
+        offset=0,
+    )
+    explicit_activity_rows = [event for event in activity_rows if _is_explicit_activity(event)]
+    goals = [
+        goal
+        for goal in personalization_db.list_companion_goals(user_id)
+        if str(goal.get("status") or "").strip().lower() in {"active", "paused"}
+    ]
+    return rank_companion_candidates(
+        query=query,
+        cards=cards,
+        goals=goals,
+        activity_rows=explicit_activity_rows,
+        max_cards=max_cards,
+        max_goals=max_goals,
+        max_activities=max_activities,
+    )
+
+
 def load_companion_context(
     *,
     user_id: str | int | None,
@@ -136,6 +184,8 @@ def load_companion_context(
     max_cards: int = _MAX_COMPANION_CARD_COUNT,
     max_goals: int = _MAX_COMPANION_GOAL_COUNT,
     max_activities: int = _MAX_COMPANION_ACTIVITY_COUNT,
+    include_candidates: bool = False,
+    db: PersonalizationDB | None = None,
 ) -> dict[str, Any]:
     """Load a compact companion context payload for a user."""
     include_ranking_metadata = bool(str(query or "").strip())
@@ -155,6 +205,13 @@ def load_companion_context(
             "activity_ids": [],
             "mode": "recent_fallback",
         }
+        if include_candidates:
+            empty_payload = {
+                **empty_payload,
+                "cards": [],
+                "goals": [],
+                "activity_rows": [],
+            }
     if user_id is None or not is_personalization_enabled():
         return empty_payload
 
@@ -167,40 +224,27 @@ def load_companion_context(
     safe_max_activities = max(0, int(max_activities))
 
     try:
-        db_path = DatabasePaths.get_personalization_db_path(normalized_user_id)
-        db = PersonalizationDB(str(db_path))
-        profile = db.get_or_create_profile(normalized_user_id)
-        if not bool(profile.get("enabled", 0)):
-            return empty_payload
-
         knowledge_lines: list[str] = []
         goal_lines: list[str] = []
         activity_lines: list[str] = []
         total_used = 0
 
-        cards = db.list_companion_knowledge_cards(normalized_user_id, status="active")
-        activity_rows, _ = db.list_companion_activity_events(
-            normalized_user_id,
-            limit=max(20, safe_max_activities * 4),
-            offset=0,
+        ranked = _load_ranked_companion_candidates(
+            user_id=normalized_user_id,
+            query=query,
+            max_cards=safe_max_cards,
+            max_goals=safe_max_goals,
+            max_activities=safe_max_activities,
+            db=db,
         )
-        explicit_activity_rows = [event for event in activity_rows if _is_explicit_activity(event)]
+        cards = list(ranked["cards"])
+        goals = list(ranked["goals"])
+        explicit_activity_rows = list(ranked["activity_rows"])
+        if not include_ranking_metadata and str(ranked.get("mode") or "") == "recent_fallback":
+            # Preserve the prior non-query behavior by loading the already-bounded recent rows.
+            pass
 
         if include_ranking_metadata:
-            goals = [
-                goal
-                for goal in db.list_companion_goals(normalized_user_id)
-                if str(goal.get("status") or "").strip().lower() in {"active", "paused"}
-            ]
-            ranked = rank_companion_candidates(
-                query=query,
-                cards=cards,
-                goals=goals,
-                activity_rows=explicit_activity_rows,
-                max_cards=safe_max_cards,
-                max_goals=safe_max_goals,
-                max_activities=safe_max_activities,
-            )
             for card in ranked["cards"]:
                 line = _format_card_line(card)
                 knowledge_lines, total_used = _append_bounded_line(
@@ -223,7 +267,7 @@ def load_companion_context(
                     total_used=total_used,
                 )
 
-            return {
+            payload = {
                 "knowledge_lines": knowledge_lines,
                 "goal_lines": goal_lines,
                 "activity_lines": activity_lines,
@@ -235,6 +279,15 @@ def load_companion_context(
                 "activity_ids": list(ranked["activity_ids"]),
                 "mode": str(ranked["mode"]),
             }
+            if include_candidates:
+                payload.update(
+                    {
+                        "cards": list(ranked["cards"]),
+                        "goals": list(ranked["goals"]),
+                        "activity_rows": list(ranked["activity_rows"]),
+                    }
+                )
+            return payload
 
         for card in cards:
             if len(knowledge_lines) >= safe_max_cards:

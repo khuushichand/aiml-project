@@ -23,6 +23,7 @@ from tldw_Server_API.app.api.v1.schemas.companion import (
     CompanionActivityListResponse,
     CompanionActivityItem,
     CompanionCheckInCreate,
+    CompanionConversationPromptsResponse,
     CompanionGoal,
     CompanionGoalCreate,
     CompanionGoalListResponse,
@@ -39,6 +40,10 @@ from tldw_Server_API.app.core.DB_Management.Personalization_DB import Personaliz
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.feature_flags import is_personalization_enabled
 from tldw_Server_API.app.core.Personalization.companion_activity import build_manual_check_in_activity
+from tldw_Server_API.app.core.Personalization.companion_context import load_companion_context
+from tldw_Server_API.app.core.Personalization.companion_followups import (
+    build_companion_conversation_prompts,
+)
 from tldw_Server_API.app.core.Personalization.companion_lifecycle import purge_companion_scope
 from tldw_Server_API.app.core.Personalization.companion_reflection_jobs import (
     COMPANION_REBUILD_JOB_TYPE,
@@ -93,6 +98,17 @@ def _extract_evidence_ids(
             continue
         values.append(str(raw))
     return _dedupe_ids(values)
+
+
+def _reflection_prompt_payload(event: dict[str, object]) -> dict[str, object]:
+    metadata = dict(event.get("metadata") or {})
+    return {
+        "id": str(event.get("id") or ""),
+        "summary": str(metadata.get("summary") or ""),
+        "theme_key": metadata.get("theme_key"),
+        "signal_strength": metadata.get("signal_strength"),
+        "follow_up_prompts": list(metadata.get("follow_up_prompts") or []),
+    }
 
 
 async def _load_activity_details(
@@ -399,6 +415,59 @@ async def get_companion_reflection_detail(
         knowledge_cards=knowledge_rows,
         goals=goal_rows,
     )
+
+
+@router.get(
+    "/conversation-prompts",
+    response_model=CompanionConversationPromptsResponse,
+    tags=["companion"],
+    dependencies=[Depends(rbac_rate_limit("companion.conversation.read"))],
+)
+async def get_companion_conversation_prompts(
+    query: str = Query(..., min_length=1),
+    db: PersonalizationDB = Depends(get_personalization_db_for_user),
+    log: UsageEventLogger = Depends(get_usage_event_logger),
+) -> CompanionConversationPromptsResponse:
+    """Return deterministic follow-up prompts for the companion conversation surface."""
+    _ensure_personalization_enabled()
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
+    ranked_context = await asyncio.to_thread(
+        load_companion_context,
+        user_id=log.user_id,
+        query=query,
+        include_candidates=True,
+        db=db,
+    )
+    activity_rows, _total = await asyncio.to_thread(db.list_companion_activity_events, log.user_id, 50, 0)
+    delivered_reflections: list[dict[str, object]] = []
+    suppressed_reflections: list[dict[str, object]] = []
+    for row in activity_rows:
+        if str(row.get("source_type") or "").strip() != "companion_reflection":
+            continue
+        metadata = dict(row.get("metadata") or {})
+        decision = str(metadata.get("delivery_decision") or "").strip().lower()
+        payload = _reflection_prompt_payload(row)
+        if decision == "suppressed":
+            suppressed_reflections.append(payload)
+        else:
+            delivered_reflections.append(payload)
+    prompt_payload = build_companion_conversation_prompts(
+        query=query,
+        delivered_reflections=delivered_reflections,
+        suppressed_reflections=suppressed_reflections,
+        context_cards=list(ranked_context.get("cards") or []),
+        context_goals=list(ranked_context.get("goals") or []),
+        context_activity=list(ranked_context.get("activity_rows") or []),
+    )
+    await asyncio.to_thread(
+        log.log_event,
+        "companion.conversation.prompts",
+        metadata={
+            "prompt_source_kind": prompt_payload.get("prompt_source_kind"),
+            "prompt_count": len(prompt_payload.get("prompts") or []),
+        },
+    )
+    return CompanionConversationPromptsResponse.model_validate(prompt_payload)
 
 
 @router.get(

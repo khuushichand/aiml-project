@@ -201,6 +201,25 @@ class CompanionReflectionDetail(BaseModel):
     goals: list[CompanionGoal] = Field(default_factory=list)
 
 
+class CompanionFollowUpPrompt(BaseModel):
+    """One deterministic follow-up prompt suggestion."""
+
+    prompt_id: str
+    label: str
+    prompt_text: str
+    prompt_type: str
+    source_reflection_id: str | None = None
+    source_evidence_ids: list[str] = Field(default_factory=list)
+
+
+class CompanionConversationPromptsResponse(BaseModel):
+    """Prompt suggestions for the companion conversation surface."""
+
+    prompt_source_kind: str
+    prompt_source_id: str | None = None
+    prompts: list[CompanionFollowUpPrompt] = Field(default_factory=list)
+
+
 CompanionLifecycleScope = Literal["knowledge", "reflections", "derived_goals", "goal_progress"]
 
 
