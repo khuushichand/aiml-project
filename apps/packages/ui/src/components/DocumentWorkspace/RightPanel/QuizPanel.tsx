@@ -39,26 +39,31 @@ import {
 const QuestionCard: React.FC<{
   question: QuizQuestion
   index: number
-  savedAnswer?: string
-  onAnswer?: (index: number, answer: string) => void
-}> = ({ question, index, savedAnswer, onAnswer }) => {
+  selectedAnswer: string | null
+  showAnswer: boolean
+  onAnswerChange: (index: number, answer: string) => void
+  onCheckAnswer: (index: number) => void
+  onReset: (index: number) => void
+}> = ({
+  question,
+  index,
+  selectedAnswer,
+  showAnswer,
+  onAnswerChange,
+  onCheckAnswer,
+  onReset
+}) => {
   const { t } = useTranslation(["option", "common"])
-  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(savedAnswer ?? null)
-  const [showAnswer, setShowAnswer] = useState(savedAnswer != null)
 
   const isCorrect = selectedAnswer === question.correctAnswer
   const hasAnswered = selectedAnswer !== null
 
   const handleCheckAnswer = () => {
-    setShowAnswer(true)
-    if (selectedAnswer && onAnswer) {
-      onAnswer(index, selectedAnswer)
-    }
+    onCheckAnswer(index)
   }
 
   const handleReset = () => {
-    setSelectedAnswer(null)
-    setShowAnswer(false)
+    onReset(index)
   }
 
   return (
@@ -76,7 +81,7 @@ const QuestionCard: React.FC<{
         <div className="mb-3 space-y-2 pl-8">
           <Radio.Group
             value={selectedAnswer}
-            onChange={(e) => setSelectedAnswer(e.target.value)}
+            onChange={(e) => onAnswerChange(index, e.target.value)}
             disabled={showAnswer}
             className="w-full"
           >
@@ -225,25 +230,56 @@ export const QuizPanel: React.FC = () => {
   const { quiz, isGenerating, error, generateQuiz, clearQuiz, loadQuiz, persistAnswer } = useDocumentQuiz(activeDocumentId)
   const { history: quizHistory, refresh: refreshHistory } = useQuizHistory(activeDocumentId)
   const [answers, setAnswers] = useState<Record<number, string>>({})
+  const [revealedAnswers, setRevealedAnswers] = useState<Record<number, boolean>>({})
 
-  const handleAnswer = useCallback((questionIndex: number, answer: string) => {
+  const persistProgress = useCallback((nextAnswers: Record<number, string>) => {
+    if (!quiz) {
+      persistAnswer(nextAnswers)
+      return
+    }
+
+    const totalQuestions = quiz.questions.length
+    const correctAnswers = Object.entries(nextAnswers).reduce((count, [idx, answer]) => (
+      quiz.questions[Number(idx)]?.correctAnswer === answer ? count + 1 : count
+    ), 0)
+    const score = totalQuestions > 0
+      ? Math.round((correctAnswers / totalQuestions) * 100)
+      : undefined
+    const completedAt = Object.keys(nextAnswers).length >= totalQuestions
+      ? Date.now()
+      : undefined
+
+    persistAnswer(nextAnswers, score, completedAt)
+  }, [quiz, persistAnswer])
+
+  const handleAnswerChange = useCallback((questionIndex: number, answer: string) => {
     setAnswers((prev) => {
       const next = { ...prev, [questionIndex]: answer }
-      if (quiz) {
-        const totalQ = quiz.questions.length
-        let correct = 0
-        for (const [idx, ans] of Object.entries(next)) {
-          if (quiz.questions[Number(idx)]?.correctAnswer === ans) correct++
-        }
-        const score = Math.round((correct / totalQ) * 100)
-        const completedAt = Object.keys(next).length >= totalQ ? Date.now() : undefined
-        persistAnswer(next, score, completedAt)
-      } else {
-        persistAnswer(next)
-      }
+      persistProgress(next)
       return next
     })
-  }, [quiz, persistAnswer])
+  }, [persistProgress])
+
+  const handleCheckAnswer = useCallback((questionIndex: number) => {
+    setRevealedAnswers((prev) => ({
+      ...prev,
+      [questionIndex]: true
+    }))
+  }, [])
+
+  const handleResetAnswer = useCallback((questionIndex: number) => {
+    setAnswers((prev) => {
+      const next = { ...prev }
+      delete next[questionIndex]
+      persistProgress(next)
+      return next
+    })
+    setRevealedAnswers((prev) => {
+      const next = { ...prev }
+      delete next[questionIndex]
+      return next
+    })
+  }, [persistProgress])
 
   const handleGenerate = useCallback(() => {
     generateQuiz({
@@ -253,12 +289,14 @@ export const QuizPanel: React.FC = () => {
     })
     setShowConfig(false)
     setAnswers({})
+    setRevealedAnswers({})
   }, [generateQuiz, numQuestions, questionType, difficulty])
 
   const handleNewQuiz = () => {
     clearQuiz()
     setShowConfig(true)
     setAnswers({})
+    setRevealedAnswers({})
   }
 
   const handleExport = () => {
@@ -403,6 +441,11 @@ export const QuizPanel: React.FC = () => {
                       onClick={() => {
                         loadQuiz(entry.quiz, entry.id)
                         setAnswers(entry.answers || {})
+                        setRevealedAnswers(
+                          Object.fromEntries(
+                            Object.keys(entry.answers || {}).map((key) => [Number(key), true])
+                          )
+                        )
                         setShowConfig(false)
                       }}
                     >
@@ -481,7 +524,16 @@ export const QuizPanel: React.FC = () => {
           <div className="flex-1 overflow-y-auto p-3">
             <div className="space-y-4">
               {quiz.questions.map((q, i) => (
-                <QuestionCard key={i} question={q} index={i} savedAnswer={answers[i]} onAnswer={handleAnswer} />
+                <QuestionCard
+                  key={i}
+                  question={q}
+                  index={i}
+                  selectedAnswer={answers[i] ?? null}
+                  showAnswer={Boolean(revealedAnswers[i])}
+                  onAnswerChange={handleAnswerChange}
+                  onCheckAnswer={handleCheckAnswer}
+                  onReset={handleResetAnswer}
+                />
               ))}
             </div>
           </div>

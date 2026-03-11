@@ -63,7 +63,7 @@ export function useResizablePanel({
       document.removeEventListener("mousemove", handleMouseMove)
       document.removeEventListener("mouseup", handleMouseUp)
     }
-  }, [min, max])
+  }, [min, max, edge])
 
   // Persist to localStorage
   useEffect(() => {
