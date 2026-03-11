@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react"
 import { useDocumentMetadata } from "./useDocumentMetadata"
+import { referenceToBibTeX } from "@/components/DocumentWorkspace/utils/bibtexExport"
 
 /**
  * Citation format options
@@ -300,61 +301,35 @@ export function formatIEEE(metadata: CitationMetadata): string {
 }
 
 /**
- * Format citation in BibTeX style
+ * Format citation in BibTeX style.
+ * Delegates to the shared referenceToBibTeX utility.
  */
 export function formatBibTeX(metadata: CitationMetadata): string {
   const date = formatDate(metadata.date)
+  const year = date.year !== "n.d." ? date.year : undefined
 
-  // Generate a cite key from first author's last name + year
-  let citeKey = "document"
-  if (metadata.authors && metadata.authors.length > 0) {
-    const firstAuthor = metadata.authors[0].trim().split(" ")
-    citeKey = (firstAuthor[firstAuthor.length - 1] || "unknown").toLowerCase()
-  }
-  citeKey += date.year !== "n.d." ? date.year : ""
+  // Build base entry via shared utility
+  const base = referenceToBibTeX(
+    {
+      title: metadata.title,
+      authors: metadata.authors,
+      year,
+      venue: metadata.publisher,
+      doi: metadata.doi,
+      url: metadata.url,
+    },
+    0
+  )
 
-  const lines: string[] = []
-  lines.push(`@article{${citeKey},`)
+  // Append extra fields the shared utility doesn't handle (volume, issue)
+  if (!metadata.volume && !metadata.issue) return base
 
-  // Title
-  lines.push(`  title = {${metadata.title}},`)
+  const closingBrace = base.lastIndexOf("}")
+  const extra: string[] = []
+  if (metadata.volume) extra.push(`  volume = {${metadata.volume}},`)
+  if (metadata.issue) extra.push(`  number = {${metadata.issue}},`)
 
-  // Authors
-  if (metadata.authors && metadata.authors.length > 0) {
-    lines.push(`  author = {${metadata.authors.join(" and ")}},`)
-  }
-
-  // Year
-  if (date.year !== "n.d.") {
-    lines.push(`  year = {${date.year}},`)
-  }
-
-  // DOI
-  if (metadata.doi) {
-    lines.push(`  doi = {${metadata.doi}},`)
-  }
-
-  // URL
-  if (metadata.url) {
-    lines.push(`  url = {${metadata.url}},`)
-  }
-
-  // Publisher
-  if (metadata.publisher) {
-    lines.push(`  publisher = {${metadata.publisher}},`)
-  }
-
-  // Volume and issue
-  if (metadata.volume) {
-    lines.push(`  volume = {${metadata.volume}},`)
-  }
-  if (metadata.issue) {
-    lines.push(`  number = {${metadata.issue}},`)
-  }
-
-  lines.push("}")
-
-  return lines.join("\n")
+  return base.slice(0, closingBrace) + extra.join("\n") + "\n}"
 }
 
 /**

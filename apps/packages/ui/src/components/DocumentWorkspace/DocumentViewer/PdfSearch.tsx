@@ -37,13 +37,14 @@ export const PdfSearch: React.FC<PdfSearchProps> = ({ pdfDocumentRef }) => {
   const setActiveRightTab = useDocumentWorkspaceStore((s) => s.setActiveRightTab)
 
   const annotationMatches = useMemo(() => {
-    if (!searchQuery.trim()) return 0
-    const q = searchMatchCase ? searchQuery : searchQuery.toLowerCase()
-    return annotations.filter((ann) => {
+    const trimmedQuery = searchQuery.trim()
+    if (!trimmedQuery) return 0
+    const q = searchMatchCase ? trimmedQuery : trimmedQuery.toLowerCase()
+    return annotations.reduce((count, ann) => {
       const text = searchMatchCase ? ann.text : ann.text.toLowerCase()
-      const note = ann.note ? (searchMatchCase ? ann.note : ann.note.toLowerCase()) : ""
-      return text.includes(q) || note.includes(q)
-    }).length
+      const note = ann.note ? (searchMatchCase ? ann.note : ann.note.toLowerCase()) : null
+      return (text.includes(q) || (note && note.includes(q))) ? count + 1 : count
+    }, 0)
   }, [searchQuery, searchMatchCase, annotations])
 
   // Auto-focus input when search opens

@@ -341,7 +341,7 @@ export const DocumentWorkspacePage: React.FC = () => {
 
   // Resizable panel widths
   const leftPanel = useResizablePanel({ key: "left", defaultWidth: 288, min: 200, max: 400 })
-  const rightPanel = useResizablePanel({ key: "right", defaultWidth: 320, min: 240, max: 480 })
+  const rightPanel = useResizablePanel({ key: "right", defaultWidth: 320, min: 240, max: 480, edge: "left" })
 
   // Pane state with persistence
   const [leftPaneOpen, setLeftPaneOpen] = useStorage(STORAGE_KEY_LEFT_PANE, true)

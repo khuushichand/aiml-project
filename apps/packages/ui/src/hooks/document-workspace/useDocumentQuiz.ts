@@ -107,17 +107,18 @@ export function useDocumentQuiz(documentId: number | null) {
         generatedAt: data.generated_at || new Date().toISOString()
       }
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       // Cache the generated quiz
       queryClient.setQueryData(["document-quiz", documentId], data)
-      // Persist to IndexedDB
+      // Persist to IndexedDB and store the history entry ID
       if (documentId) {
-        saveQuizToHistory({
+        const historyId = await saveQuizToHistory({
           documentId,
           quiz: data,
           answers: {},
           createdAt: Date.now()
         })
+        queryClient.setQueryData(["document-quiz-history-id", documentId], historyId)
       }
     }
   })
@@ -130,19 +131,38 @@ export function useDocumentQuiz(documentId: number | null) {
     staleTime: Infinity
   })
 
+  const historyId = queryClient.getQueryData<number>(["document-quiz-history-id", documentId])
+
+  const persistAnswer = useCallback(
+    (answers: Record<number, string>, score?: number, completedAt?: number) => {
+      if (historyId && historyId > 0) {
+        updateQuizAnswers(historyId, answers, score, completedAt)
+      }
+    },
+    [historyId]
+  )
+
   return {
     // State
     quiz: generateMutation.data || cachedQuiz,
     isGenerating: generateMutation.isPending,
     error: generateMutation.error,
+    historyId: historyId ?? null,
 
     // Actions
     generateQuiz: (options?: QuizGenerationOptions) => generateMutation.mutate(options),
-    clearQuiz: () => queryClient.removeQueries({ queryKey: ["document-quiz", documentId] }),
-    loadQuiz: (quiz: QuizResponse) => {
+    clearQuiz: () => {
+      queryClient.removeQueries({ queryKey: ["document-quiz", documentId] })
+      queryClient.removeQueries({ queryKey: ["document-quiz-history-id", documentId] })
+    },
+    loadQuiz: (quiz: QuizResponse, entryId?: number) => {
       generateMutation.reset()
       queryClient.setQueryData(["document-quiz", documentId], quiz)
+      if (entryId) {
+        queryClient.setQueryData(["document-quiz-history-id", documentId], entryId)
+      }
     },
+    persistAnswer,
 
     // Reset mutation state
     reset: generateMutation.reset

@@ -31,6 +31,18 @@ function escapeRegex(str: string): string {
 }
 
 /**
+ * Build a regex for the given query, respecting case sensitivity and word boundary options.
+ */
+function buildSearchRegex(query: string, matchCase: boolean, wordBoundary: boolean): RegExp {
+  let pattern = escapeRegex(query)
+  if (wordBoundary) {
+    pattern = `\\b${pattern}\\b`
+  }
+  const flags = matchCase ? "g" : "gi"
+  return new RegExp(pattern, flags)
+}
+
+/**
  * Find all matches of a query in text, respecting case sensitivity and word boundary options.
  */
 function findMatches(
@@ -41,13 +53,7 @@ function findMatches(
 ): number[] {
   if (!query) return []
 
-  let pattern = escapeRegex(query)
-  if (wordBoundary) {
-    pattern = `\\b${pattern}\\b`
-  }
-
-  const flags = matchCase ? "g" : "gi"
-  const regex = new RegExp(pattern, flags)
+  const regex = buildSearchRegex(query, matchCase, wordBoundary)
   const positions: number[] = []
 
   let match: RegExpExecArray | null
@@ -234,6 +240,8 @@ export function usePdfSearch(
 
       if (!query.trim()) return
 
+      const regex = buildSearchRegex(query, searchMatchCase, searchWordBoundary)
+
       // Find all text spans in the PDF text layer
       const textLayers = document.querySelectorAll(".react-pdf__Page__textContent")
 
@@ -242,10 +250,9 @@ export function usePdfSearch(
 
         spans.forEach((span) => {
           const text = span.textContent || ""
-          const normalizedText = text.toLowerCase()
-          const normalizedQuery = query.toLowerCase()
-
-          if (normalizedText.includes(normalizedQuery)) {
+          // Reset lastIndex for each span since we reuse the regex
+          regex.lastIndex = 0
+          if (regex.test(text)) {
             span.classList.add("pdf-search-match")
             highlightedElementsRef.current.push(span as HTMLElement)
           }
@@ -273,7 +280,7 @@ export function usePdfSearch(
         }
       }
     },
-    [searchResults]
+    [searchResults, searchMatchCase, searchWordBoundary]
   )
 
   /**

@@ -5,6 +5,8 @@ interface UseResizablePanelOptions {
   defaultWidth: number
   min: number
   max: number
+  /** Which edge the drag handle sits on. "right" (default) means handle is on the right edge of the panel, "left" means handle is on the left edge (drag direction is inverted). */
+  edge?: "left" | "right"
 }
 
 interface UseResizablePanelReturn {
@@ -16,7 +18,8 @@ export function useResizablePanel({
   key,
   defaultWidth,
   min,
-  max
+  max,
+  edge = "right"
 }: UseResizablePanelOptions): UseResizablePanelReturn {
   const storageKey = `document-workspace-panel-${key}`
 
@@ -46,7 +49,8 @@ export function useResizablePanel({
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!draggingRef.current) return
-      const delta = e.clientX - startXRef.current
+      const rawDelta = e.clientX - startXRef.current
+      const delta = edge === "left" ? -rawDelta : rawDelta
       const newWidth = Math.max(min, Math.min(max, startWidthRef.current + delta))
       setWidth(newWidth)
     }

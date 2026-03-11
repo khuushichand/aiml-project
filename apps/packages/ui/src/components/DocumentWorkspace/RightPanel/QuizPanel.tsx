@@ -39,16 +39,21 @@ import {
 const QuestionCard: React.FC<{
   question: QuizQuestion
   index: number
-}> = ({ question, index }) => {
+  savedAnswer?: string
+  onAnswer?: (index: number, answer: string) => void
+}> = ({ question, index, savedAnswer, onAnswer }) => {
   const { t } = useTranslation(["option", "common"])
-  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null)
-  const [showAnswer, setShowAnswer] = useState(false)
+  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(savedAnswer ?? null)
+  const [showAnswer, setShowAnswer] = useState(savedAnswer != null)
 
   const isCorrect = selectedAnswer === question.correctAnswer
   const hasAnswered = selectedAnswer !== null
 
   const handleCheckAnswer = () => {
     setShowAnswer(true)
+    if (selectedAnswer && onAnswer) {
+      onAnswer(index, selectedAnswer)
+    }
   }
 
   const handleReset = () => {
@@ -217,8 +222,28 @@ export const QuizPanel: React.FC = () => {
     } catch { /* noop */ }
   }, [numQuestions, questionType, difficulty])
 
-  const { quiz, isGenerating, error, generateQuiz, clearQuiz, loadQuiz } = useDocumentQuiz(activeDocumentId)
+  const { quiz, isGenerating, error, generateQuiz, clearQuiz, loadQuiz, persistAnswer } = useDocumentQuiz(activeDocumentId)
   const { history: quizHistory, refresh: refreshHistory } = useQuizHistory(activeDocumentId)
+  const [answers, setAnswers] = useState<Record<number, string>>({})
+
+  const handleAnswer = useCallback((questionIndex: number, answer: string) => {
+    setAnswers((prev) => {
+      const next = { ...prev, [questionIndex]: answer }
+      if (quiz) {
+        const totalQ = quiz.questions.length
+        let correct = 0
+        for (const [idx, ans] of Object.entries(next)) {
+          if (quiz.questions[Number(idx)]?.correctAnswer === ans) correct++
+        }
+        const score = Math.round((correct / totalQ) * 100)
+        const completedAt = Object.keys(next).length >= totalQ ? Date.now() : undefined
+        persistAnswer(next, score, completedAt)
+      } else {
+        persistAnswer(next)
+      }
+      return next
+    })
+  }, [quiz, persistAnswer])
 
   const handleGenerate = useCallback(() => {
     generateQuiz({
@@ -227,11 +252,13 @@ export const QuizPanel: React.FC = () => {
       difficulty
     })
     setShowConfig(false)
+    setAnswers({})
   }, [generateQuiz, numQuestions, questionType, difficulty])
 
   const handleNewQuiz = () => {
     clearQuiz()
     setShowConfig(true)
+    setAnswers({})
   }
 
   const handleExport = () => {
@@ -374,7 +401,8 @@ export const QuizPanel: React.FC = () => {
                       type="button"
                       className="w-full text-left rounded-lg border border-border p-2 hover:border-primary/50 transition-colors"
                       onClick={() => {
-                        loadQuiz(entry.quiz)
+                        loadQuiz(entry.quiz, entry.id)
+                        setAnswers(entry.answers || {})
                         setShowConfig(false)
                       }}
                     >
@@ -453,7 +481,7 @@ export const QuizPanel: React.FC = () => {
           <div className="flex-1 overflow-y-auto p-3">
             <div className="space-y-4">
               {quiz.questions.map((q, i) => (
-                <QuestionCard key={i} question={q} index={i} />
+                <QuestionCard key={i} question={q} index={i} savedAnswer={answers[i]} onAnswer={handleAnswer} />
               ))}
             </div>
           </div>

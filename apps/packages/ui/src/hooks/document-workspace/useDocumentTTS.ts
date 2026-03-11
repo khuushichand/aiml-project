@@ -78,19 +78,25 @@ const DEFAULT_SPEED = 1.0
 export function useDocumentTTS(): UseDocumentTTSReturn {
   const [voice, setVoice] = useState(() => {
     if (typeof window === "undefined") return DEFAULT_VOICE
-    return localStorage.getItem("tts-voice") || DEFAULT_VOICE
+    try {
+      return localStorage.getItem("tts-voice") || DEFAULT_VOICE
+    } catch { return DEFAULT_VOICE }
   })
 
   const [speed, setSpeedState] = useState(() => {
     if (typeof window === "undefined") return DEFAULT_SPEED
-    const saved = localStorage.getItem("tts-speed")
-    return saved ? parseFloat(saved) : DEFAULT_SPEED
+    try {
+      const saved = localStorage.getItem("tts-speed")
+      return saved ? parseFloat(saved) : DEFAULT_SPEED
+    } catch { return DEFAULT_SPEED }
   })
 
   const [volume, setVolumeState] = useState(() => {
     if (typeof window === "undefined") return 1
-    const saved = localStorage.getItem("tts-volume")
-    return saved ? parseFloat(saved) : 1
+    try {
+      const saved = localStorage.getItem("tts-volume")
+      return saved ? parseFloat(saved) : 1
+    } catch { return 1 }
   })
 
   const [progress, setProgress] = useState(0)

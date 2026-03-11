@@ -465,6 +465,26 @@ export const ReferencesTab: React.FC = () => {
       })),
     [offset, references]
   )
+  const handleExportBibTeX = React.useCallback(() => {
+    const openDocs = useDocumentWorkspaceStore.getState().openDocuments
+    const activeDoc = openDocs.find((d) => d.id === activeDocumentId)
+    const docTitle = activeDoc?.title || "Document"
+    const bibRefs = references.map((ref) => ({
+      title: ref.title || ref.raw_text.slice(0, 150),
+      authors: ref.authors
+        ? ref.authors.split(",").map((a) => a.trim())
+        : undefined,
+      year: ref.year,
+      venue: ref.venue,
+      doi: ref.doi,
+      url:
+        ref.url ||
+        (ref.open_access_pdf ? ref.open_access_pdf : undefined),
+      arxivId: ref.arxiv_id,
+    }))
+    exportReferencesBibTeX(bibRefs, docTitle)
+  }, [activeDocumentId, references])
+
   const normalizedSearchQuery = searchQuery.trim()
 
   // No document selected
@@ -677,30 +697,7 @@ export const ReferencesTab: React.FC = () => {
                 size="small"
                 type="text"
                 icon={<Download className="h-3.5 w-3.5" />}
-                onClick={() => {
-                  const openDocs =
-                    useDocumentWorkspaceStore.getState().openDocuments
-                  const activeDoc = openDocs.find(
-                    (d) => d.id === activeDocumentId
-                  )
-                  const docTitle = activeDoc?.title || "Document"
-                  const bibRefs = references.map((ref) => ({
-                    title: ref.title || ref.raw_text.slice(0, 150),
-                    authors: ref.authors
-                      ? ref.authors.split(",").map((a) => a.trim())
-                      : undefined,
-                    year: ref.year,
-                    venue: ref.venue,
-                    doi: ref.doi,
-                    url:
-                      ref.url ||
-                      (ref.open_access_pdf
-                        ? ref.open_access_pdf
-                        : undefined),
-                    arxivId: ref.arxiv_id,
-                  }))
-                  exportReferencesBibTeX(bibRefs, docTitle)
-                }}
+                onClick={handleExportBibTeX}
                 disabled={references.length === 0}
               >
                 BibTeX
