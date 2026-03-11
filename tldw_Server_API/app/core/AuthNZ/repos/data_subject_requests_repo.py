@@ -202,38 +202,78 @@ class AuthnzDataSubjectRequestsRepo:
         *,
         limit: int,
         offset: int,
+        resolved_user_ids: list[int] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Return paged request rows ordered newest-first."""
         try:
+            if resolved_user_ids is not None and not resolved_user_ids:
+                return [], 0
+            allowed_user_ids = {int(value) for value in resolved_user_ids or []}
+
             async with self.db_pool.acquire() as conn:
                 if self._is_postgres_backend():
+                    if resolved_user_ids is None:
+                        rows = await conn.fetch(
+                            """
+                            SELECT *
+                            FROM data_subject_requests
+                            ORDER BY requested_at DESC, id DESC
+                            LIMIT $1 OFFSET $2
+                            """,
+                            limit,
+                            offset,
+                        )
+                        total = await conn.fetchval("SELECT COUNT(*) FROM data_subject_requests")
+                        return [self._normalize_record(row) for row in rows], int(total or 0)
+
                     rows = await conn.fetch(
                         """
                         SELECT *
                         FROM data_subject_requests
                         ORDER BY requested_at DESC, id DESC
-                        LIMIT $1 OFFSET $2
                         """,
-                        limit,
-                        offset,
                     )
-                    total = await conn.fetchval("SELECT COUNT(*) FROM data_subject_requests")
-                    return [self._normalize_record(row) for row in rows], int(total or 0)
+                    filtered = [
+                        self._normalize_record(row)
+                        for row in rows
+                        if row.get("resolved_user_id") is not None
+                        and int(row.get("resolved_user_id")) in allowed_user_ids
+                    ]
+                    total = len(filtered)
+                    return filtered[offset: offset + limit], total
 
-                cursor = await conn.execute(
+                if resolved_user_ids is None:
+                    cursor = await conn.execute(
+                        """
+                        SELECT *
+                        FROM data_subject_requests
+                        ORDER BY requested_at DESC, id DESC
+                        LIMIT ? OFFSET ?
+                        """,
+                        (limit, offset),
+                    )
+                    rows = await cursor.fetchall()
+                    total_cursor = await conn.execute("SELECT COUNT(*) FROM data_subject_requests")
+                    total_row = await total_cursor.fetchone()
+                    total = int(total_row[0]) if total_row else 0
+                    return [self._normalize_record(row) for row in rows], total
+
+                all_cursor = await conn.execute(
                     """
                     SELECT *
                     FROM data_subject_requests
                     ORDER BY requested_at DESC, id DESC
-                    LIMIT ? OFFSET ?
-                    """,
-                    (limit, offset),
+                    """
                 )
-                rows = await cursor.fetchall()
-                total_cursor = await conn.execute("SELECT COUNT(*) FROM data_subject_requests")
-                total_row = await total_cursor.fetchone()
-                total = int(total_row[0]) if total_row else 0
-                return [self._normalize_record(row) for row in rows], total
+                all_rows = await all_cursor.fetchall()
+                filtered = [
+                    self._normalize_record(row)
+                    for row in all_rows
+                    if row["resolved_user_id"] is not None
+                    and int(row["resolved_user_id"]) in allowed_user_ids
+                ]
+                total = len(filtered)
+                return filtered[offset: offset + limit], total
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzDataSubjectRequestsRepo.list_requests failed: {exc}")
             raise

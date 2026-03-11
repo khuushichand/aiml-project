@@ -514,6 +514,123 @@ class RetentionPolicyUpdateRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DataSubjectRequestSummaryItem(BaseModel):
+    """Authoritative per-category summary entry for a DSR preview/request."""
+
+    key: str
+    label: str
+    count: NonNegativeInt
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestPreviewRequest(BaseModel):
+    """Request payload for authoritative DSR preview."""
+
+    requester_identifier: str = Field(..., min_length=1, max_length=255)
+
+    @field_validator("requester_identifier")
+    @classmethod
+    def normalize_requester_identifier(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("requester_identifier is required")
+        return normalized
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestPreviewResponse(BaseModel):
+    """Response payload for authoritative DSR preview."""
+
+    requester_identifier: str
+    resolved_user_id: int
+    request_type: Literal["access", "export", "erasure"] | None = None
+    selected_categories: list[str]
+    summary: list[DataSubjectRequestSummaryItem]
+    counts: dict[str, NonNegativeInt]
+    coverage_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestCreateRequest(BaseModel):
+    """Request payload to record a DSR for review."""
+
+    request_id: str = Field(..., min_length=3, max_length=128)
+    requester_identifier: str = Field(..., min_length=1, max_length=255)
+    request_type: Literal["access", "export", "erasure"]
+    categories: list[str] | None = None
+    notes: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("request_id", "requester_identifier")
+    @classmethod
+    def normalize_nonempty_string(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def normalize_categories(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("categories must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("categories must contain strings")
+            item = entry.strip().lower()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        return normalized
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestItem(BaseModel):
+    """Persisted DSR record returned by admin endpoints."""
+
+    id: int
+    client_request_id: str
+    requester_identifier: str
+    resolved_user_id: int | None = None
+    request_type: Literal["access", "export", "erasure"]
+    status: str
+    selected_categories: list[str]
+    preview_summary: list[DataSubjectRequestSummaryItem]
+    coverage_metadata: dict[str, Any] = Field(default_factory=dict)
+    requested_by_user_id: int | None = None
+    requested_at: datetime
+    notes: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestCreateResponse(BaseModel):
+    """Response payload for DSR record creation."""
+
+    item: DataSubjectRequestItem
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestListResponse(BaseModel):
+    """Response payload for DSR request log listing."""
+
+    items: list[DataSubjectRequestItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #######################################################################################################################
 #
 # System Ops Schemas (Logs, Incidents, Maintenance, Feature Flags)
