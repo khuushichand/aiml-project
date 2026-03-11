@@ -13,9 +13,15 @@ import {
 } from "@/hooks/useServerChatHistory"
 import type { ServerChatSummary } from "@/services/tldw/TldwApiClient"
 
-const { initializeMock, listChatsWithMetaMock, checkOnceMock } = vi.hoisted(() => ({
+const {
+  initializeMock,
+  listChatsWithMetaMock,
+  searchConversationsWithMetaMock,
+  checkOnceMock
+} = vi.hoisted(() => ({
   initializeMock: vi.fn(async () => undefined),
   listChatsWithMetaMock: vi.fn(),
+  searchConversationsWithMetaMock: vi.fn(),
   checkOnceMock: vi.fn(async () => undefined)
 }))
 
@@ -31,7 +37,9 @@ vi.mock("@/store/connection", () => ({
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     initialize: (...args: unknown[]) => initializeMock(...args),
-    listChatsWithMeta: (...args: unknown[]) => listChatsWithMetaMock(...args)
+    listChatsWithMeta: (...args: unknown[]) => listChatsWithMetaMock(...args),
+    searchConversationsWithMeta: (...args: unknown[]) =>
+      searchConversationsWithMetaMock(...args)
   }
 }))
 
@@ -155,6 +163,94 @@ describe("deriveServerChatHistoryViewState", () => {
 })
 
 describe("useServerChatHistory", () => {
+  it("does not fetch server chat history when overview mode is disabled", async () => {
+    const { queryClient, wrapper } = createWrapper()
+
+    renderHook(
+      () =>
+        useServerChatHistory("", {
+          enabled: false,
+          mode: "overview"
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() => {
+      expect(initializeMock).not.toHaveBeenCalled()
+      expect(listChatsWithMetaMock).not.toHaveBeenCalled()
+      expect(searchConversationsWithMetaMock).not.toHaveBeenCalled()
+    })
+
+    queryClient.clear()
+  })
+
+  it("uses a search-specific fetch path instead of overview pagination when search is active", async () => {
+    searchConversationsWithMetaMock.mockResolvedValueOnce({
+      chats: [createChat(7, { title: "Quota review" })],
+      total: 1
+    })
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(
+      () =>
+        useServerChatHistory("quota", {
+          enabled: true,
+          mode: "search"
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() =>
+      expect(result.current.data.map((chat) => chat.id)).toEqual(["chat-7"])
+    )
+
+    expect(searchConversationsWithMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "quota",
+        limit: 50,
+        offset: 0,
+        order_by: "recency"
+      }),
+      expect.anything()
+    )
+    expect(listChatsWithMetaMock).not.toHaveBeenCalled()
+
+    queryClient.clear()
+  })
+
+  it("falls back to deleted-chat overview filtering when search mode targets trash chats", async () => {
+    listChatsWithMetaMock.mockResolvedValueOnce({
+      chats: [createChat(9, { title: "Quota cleanup" })],
+      total: 1
+    })
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(
+      () =>
+        useServerChatHistory("quota", {
+          enabled: true,
+          mode: "search",
+          deletedOnly: true
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() =>
+      expect(result.current.data.map((chat) => chat.id)).toEqual(["chat-9"])
+    )
+
+    expect(listChatsWithMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deleted_only: true,
+        ordering: "-updated_at"
+      }),
+      expect.anything()
+    )
+    expect(searchConversationsWithMetaMock).not.toHaveBeenCalled()
+
+    queryClient.clear()
+  })
+
   it("keeps previously rendered chat rows visible after a recoverable refresh failure", async () => {
     listChatsWithMetaMock
       .mockResolvedValueOnce({

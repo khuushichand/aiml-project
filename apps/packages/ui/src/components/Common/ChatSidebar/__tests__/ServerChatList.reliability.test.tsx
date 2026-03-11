@@ -2,6 +2,7 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
 
 const historyState = vi.hoisted(() => ({
   value: {
@@ -201,6 +202,22 @@ describe("ServerChatList reliability states", () => {
     mocks.deleteChat.mockResolvedValue(undefined)
     mocks.restoreChat.mockResolvedValue(undefined)
     mocks.confirmDanger.mockResolvedValue(true)
+    useChatSurfaceCoordinatorStore.setState({
+      routeId: "chat",
+      surface: "webui",
+      visiblePanels: {
+        "server-history": true,
+        "mcp-tools": false,
+        "audio-health": false,
+        "model-catalog": false
+      },
+      engagedPanels: {
+        "server-history": true,
+        "mcp-tools": false,
+        "audio-health": false,
+        "model-catalog": false
+      }
+    })
   })
 
   it("shows a recoverable refresh warning when old chat data is still usable", () => {

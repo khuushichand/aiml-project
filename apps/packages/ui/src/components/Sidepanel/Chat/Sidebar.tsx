@@ -326,10 +326,15 @@ export const SidepanelChatSidebar = ({
   const [folderPickerTabId, setFolderPickerTabId] = React.useState<string | null>(null)
 
   const debouncedSearchQuery = useDebounce(searchQuery, 250)
+  const hasDebouncedSearchQuery = debouncedSearchQuery.trim().length > 0
   const dbRef = React.useRef<PageAssistDatabase | null>(null)
   const [localSearchResults, setLocalSearchResults] = React.useState<HistoryInfo[]>([])
   const { data: serverSearchResults = [] } = useServerChatHistory(
-    debouncedSearchQuery
+    debouncedSearchQuery,
+    {
+      enabled: hasDebouncedSearchQuery,
+      mode: "search"
+    }
   )
 
   React.useEffect(() => {

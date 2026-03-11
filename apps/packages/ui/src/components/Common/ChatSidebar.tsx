@@ -24,7 +24,10 @@ import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
 import { useFolderStore } from "@/store/folder"
 import { useRouteTransitionStore } from "@/store/route-transition"
-import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
+import {
+  shouldEnableOptionalResource,
+  useChatSurfaceCoordinatorStore
+} from "@/store/chat-surface-coordinator"
 import { cn } from "@/libs/utils"
 import { ServerChatList } from "./ChatSidebar/ServerChatList"
 import { FolderChatList } from "./ChatSidebar/FolderChatList"
@@ -74,6 +77,12 @@ export function ChatSidebar({
   const setPanelVisible = useChatSurfaceCoordinatorStore(
     (state) => state.setPanelVisible
   )
+  const markPanelEngaged = useChatSurfaceCoordinatorStore(
+    (state) => state.markPanelEngaged
+  )
+  const serverHistoryOverviewEnabled = useChatSurfaceCoordinatorStore(
+    (state) => shouldEnableOptionalResource(state, "server-history")
+  )
 
   const clearChat = useClearChat()
   const temporaryChat = useStoreMessageOption((state) => state.temporaryChat)
@@ -87,7 +96,10 @@ export function ChatSidebar({
   )
 
   // Server chat count for tab badge
-  const { data: serverChatData } = useServerChatHistory(debouncedSearchQuery)
+  const { data: serverChatData } = useServerChatHistory("", {
+    enabled: serverHistoryOverviewEnabled,
+    mode: "overview"
+  })
   const serverChatCount = serverChatData?.length ?? 0
 
   const sidebarShortcuts = useMemo(
@@ -162,7 +174,11 @@ export function ChatSidebar({
   }
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchQuery(e.target.value)
+    const nextValue = e.target.value
+    if (currentTab === "server" && nextValue.trim().length > 0) {
+      markPanelEngaged("server-history")
+    }
+    setSearchQuery(nextValue)
   }
 
   const handleNewChat = () => {

@@ -15,6 +15,10 @@ import { useSelectServerChat } from "@/hooks/chat/useSelectServerChat"
 import { useBulkChatOperations } from "@/hooks/useBulkChatOperations"
 import { useStoreMessageOption } from "@/store/option"
 import { useFolderStore } from "@/store/folder"
+import {
+  shouldEnableOptionalResource,
+  useChatSurfaceCoordinatorStore
+} from "@/store/chat-surface-coordinator"
 import { shallow } from "zustand/shallow"
 import {
   tldwClient,
@@ -132,6 +136,13 @@ export function ServerChatList({
     React.useState<BulkConfirmAction>("trash")
   const [isBulkDeleting, setIsBulkDeleting] = React.useState(false)
   const openSettingsTimeoutRef = React.useRef<number | null>(null)
+  const markPanelEngaged = useChatSurfaceCoordinatorStore(
+    (state) => state.markPanelEngaged
+  )
+  const serverHistoryOverviewEnabled = useChatSurfaceCoordinatorStore(
+    (state) => shouldEnableOptionalResource(state, "server-history")
+  )
+  const hasSearchQuery = searchQuery.trim().length > 0
 
   const openExtensionUrl = React.useCallback(
     (path: `/options.html${string}` | `/sidepanel.html${string}`) => {
@@ -240,9 +251,17 @@ export function ServerChatList({
     isShowingStaleData,
     isLoading
   } = useServerChatHistory(searchQuery, {
-    deletedOnly: isTrashView
+    deletedOnly: isTrashView,
+    enabled: hasSearchQuery || serverHistoryOverviewEnabled,
+    mode: hasSearchQuery ? "search" : "overview"
   })
   const serverChats = serverChatData || []
+
+  React.useEffect(() => {
+    if (hasSearchQuery) {
+      markPanelEngaged("server-history")
+    }
+  }, [hasSearchQuery, markPanelEngaged])
   const getChatVersionConflictMessage = React.useCallback(
     () =>
       t("common:chatChangedRetryFailed", {
@@ -1002,6 +1021,31 @@ export function ServerChatList({
               "Server chats are available once you connect to your tldw server."
           })}
         />
+      </div>
+    )
+  }
+
+  if (!hasSearchQuery && !serverHistoryOverviewEnabled) {
+    return (
+      <div className={cn("flex justify-center items-center py-8 px-4", className)}>
+        <div className="flex flex-col items-center gap-3 text-center">
+          <span className="text-xs text-text-subtle">
+            {t("common:chatSidebar.loadServerChatsHint", {
+              defaultValue:
+                "Load server conversations on demand to keep the chat page lighter."
+            })}
+          </span>
+          <button
+            type="button"
+            data-testid="server-history-engage-button"
+            onClick={() => markPanelEngaged("server-history")}
+            className="rounded-md border border-border px-3 py-2 text-sm text-text hover:bg-surface"
+          >
+            {t("common:chatSidebar.loadServerChats", {
+              defaultValue: "Load conversations"
+            })}
+          </button>
+        </div>
       </div>
     )
   }

@@ -12,6 +12,7 @@ export type ServerChatHistoryItem = ServerChatSummary & {
 
 const SERVER_CHAT_FETCH_LIMIT = 200
 const SERVER_CHAT_FETCH_MAX_PAGES = 50
+const SERVER_CHAT_SEARCH_LIMIT = 50
 
 type FetchServerChatsPage = (params: {
   limit: number
@@ -168,6 +169,7 @@ type UseServerChatHistoryOptions = {
   enabled?: boolean
   includeDeleted?: boolean
   deletedOnly?: boolean
+  mode?: "overview" | "search"
 }
 
 export const useServerChatHistory = (
@@ -177,16 +179,53 @@ export const useServerChatHistory = (
   const { isConnected } = useConnectionState()
   const checkConnection = useConnectionStore((state) => state.checkOnce)
   const normalizedQuery = searchQuery.trim().toLowerCase()
-  const isEnabled = isConnected && (options?.enabled ?? true)
+  const mode = options?.mode ?? "overview"
   const includeDeleted = options?.includeDeleted ?? false
   const deletedOnly = options?.deletedOnly ?? false
+  const canUseConversationSearch =
+    mode === "search" &&
+    normalizedQuery.length > 0 &&
+    !includeDeleted &&
+    !deletedOnly
+  const queryStrategy = canUseConversationSearch
+    ? "search-server"
+    : mode === "search"
+      ? "search-client"
+      : "overview"
+  const isEnabled =
+    isConnected &&
+    (options?.enabled ?? true) &&
+    (mode !== "search" || normalizedQuery.length > 0)
 
   const query = useQuery({
-    queryKey: ["serverChatHistory", { includeDeleted, deletedOnly }],
+    queryKey: [
+      "serverChatHistory",
+      {
+        includeDeleted,
+        deletedOnly,
+        mode,
+        q: mode === "search" ? normalizedQuery : "",
+        strategy: queryStrategy
+      }
+    ],
     enabled: isEnabled,
     queryFn: async ({ signal }): Promise<ServerChatHistoryItem[]> => {
       await tldwClient.initialize().catch(() => null)
       try {
+        if (canUseConversationSearch) {
+          const response = await tldwClient.searchConversationsWithMeta(
+            {
+              query: normalizedQuery,
+              limit: SERVER_CHAT_SEARCH_LIMIT,
+              offset: 0,
+              order_by: "recency"
+            },
+            { signal }
+          )
+
+          return mapServerChatHistoryItems(response.chats)
+        }
+
         const chats = await fetchAllServerChatPages(
           ({ limit, offset, signal: pageSignal }) =>
             tldwClient.listChatsWithMeta(
@@ -227,8 +266,11 @@ export const useServerChatHistory = (
   })
 
   const filteredData = useMemo(
-    () => filterServerChatHistoryItems(query.data || [], normalizedQuery),
-    [query.data, normalizedQuery]
+    () =>
+      canUseConversationSearch
+        ? query.data || []
+        : filterServerChatHistoryItems(query.data || [], normalizedQuery),
+    [canUseConversationSearch, query.data, normalizedQuery]
   )
 
   const sidebarState = useMemo(() => {
