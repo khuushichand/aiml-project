@@ -9,7 +9,7 @@ import { useModerationSettings } from "./hooks/useModerationSettings"
 import { useBlocklist } from "./hooks/useBlocklist"
 import { useUserOverrides } from "./hooks/useUserOverrides"
 import { useModerationTest } from "./hooks/useModerationTest"
-import { ONBOARDING_KEY } from "./moderation-utils"
+import { ONBOARDING_KEY, getErrorStatus } from "./moderation-utils"
 
 // Lazy panel imports — replace with real components in Tasks 5-9
 const PolicySettingsPanel = React.lazy(() => import("./PolicySettingsPanel"))
@@ -55,6 +55,11 @@ export const ModerationPlaygroundShell: React.FC = () => {
 
   const policy = settings.policyQuery.data || {}
   const hasUnsavedChanges = settings.isDirty || overrides.isDirty
+
+  // Authorization check — show error if backend returns 401/403
+  const hasPermissionError = [settings.settingsQuery?.error, settings.policyQuery?.error, overrides.overridesQuery?.error]
+    .map(getErrorStatus)
+    .some((status) => status === 401 || status === 403)
 
   const [showOnboarding, setShowOnboarding] = React.useState(() => {
     if (typeof window === "undefined") return false
@@ -168,6 +173,17 @@ export const ModerationPlaygroundShell: React.FC = () => {
     <div className="space-y-0">
       {contextHolder}
 
+      {/* Authorization gate — block UI if 401/403 */}
+      {hasPermissionError && (
+        <div className="mx-4 sm:mx-6 lg:mx-8 mt-4 p-4 border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 rounded-lg">
+          <p className="text-sm font-semibold text-red-800 dark:text-red-300">Admin moderation access required</p>
+          <p className="text-sm text-red-700 dark:text-red-400 mt-1">
+            Moderation controls require an admin account with SYSTEM_CONFIGURE permission.
+          </p>
+        </div>
+      )}
+
+      {!hasPermissionError && <>
       {/* Onboarding */}
       {showOnboarding && (
         <div className="mx-4 sm:mx-6 lg:mx-8 mb-4 p-4 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
@@ -267,6 +283,7 @@ export const ModerationPlaygroundShell: React.FC = () => {
 
       {/* Tab content */}
       <div className="mx-4 sm:mx-6 lg:mx-8 py-6">{renderPanel()}</div>
+      </>}
     </div>
   )
 }

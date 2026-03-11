@@ -27,8 +27,10 @@ export interface BlocklistState {
   lintRaw: () => Promise<void>
   loadManaged: () => Promise<void>
   appendManaged: () => Promise<void>
+  appendLine: (line: string) => Promise<void>
   deleteManaged: (itemId: number) => Promise<void>
   lintManagedLine: () => Promise<void>
+  lintLine: (line: string) => Promise<BlocklistLintResponse>
 }
 
 export function useBlocklist(): BlocklistState {
@@ -112,6 +114,22 @@ export function useBlocklist(): BlocklistState {
     }
   }, [managedVersion, managedLine])
 
+  const appendLine = React.useCallback(async (line: string) => {
+    if (!managedVersion) throw new Error("Load the managed blocklist first")
+    const trimmed = line.trim()
+    if (!trimmed) throw new Error("Enter a line to append")
+    setLoading(true)
+    try {
+      await appendManagedBlocklist(managedVersion, trimmed)
+      setManagedLine("")
+      const { data, etag } = await getManagedBlocklist()
+      setManagedItems(data.items || [])
+      setManagedVersion(data.version || etag || "")
+    } finally {
+      setLoading(false)
+    }
+  }, [managedVersion])
+
   const deleteManaged = React.useCallback(async (itemId: number) => {
     if (!managedVersion) return
     setLoading(true)
@@ -137,6 +155,18 @@ export function useBlocklist(): BlocklistState {
     }
   }, [managedLine])
 
+  const lintLine = React.useCallback(async (line: string): Promise<BlocklistLintResponse> => {
+    if (!line.trim()) throw new Error("Enter a line to lint")
+    setLoading(true)
+    try {
+      const lint = await lintBlocklist({ line: line.trim() })
+      setManagedLint(lint)
+      return lint
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
   return {
     rawText,
     setRawText,
@@ -153,7 +183,9 @@ export function useBlocklist(): BlocklistState {
     lintRaw,
     loadManaged,
     appendManaged,
+    appendLine,
     deleteManaged,
-    lintManagedLine
+    lintManagedLine,
+    lintLine
   }
 }

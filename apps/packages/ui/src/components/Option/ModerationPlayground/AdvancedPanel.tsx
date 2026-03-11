@@ -2,6 +2,7 @@ import React from "react"
 import { Tooltip } from "antd"
 import { Download, Upload, RefreshCw } from "lucide-react"
 
+import { setUserOverride } from "@/services/moderation"
 import type { ModerationSettingsState } from "./hooks/useModerationSettings"
 import type { BlocklistState } from "./hooks/useBlocklist"
 import type { UserOverridesState } from "./hooks/useUserOverrides"
@@ -67,19 +68,6 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({ settings, blocklist, over
   const blocklistWriteDebounceMs = policy?.blocklist_write_debounce_ms ?? 0
 
   // ---- Export handlers ----
-  const handleDownloadBlocklist = React.useCallback(async () => {
-    try {
-      await blocklist.loadRaw()
-      // After loadRaw completes, rawText is updated — but since state is async,
-      // we read from the promise result by triggering download in a microtask.
-      // Actually, loadRaw sets rawText via setState, so we need to access it after render.
-      // Workaround: use loadRaw then access rawText on next tick.
-    } catch (err) {
-      messageApi.error("Failed to load blocklist for export")
-    }
-  }, [blocklist, messageApi])
-
-  // Use effect to trigger download after rawText is populated by loadRaw
   const [pendingBlocklistDownload, setPendingBlocklistDownload] = React.useState(false)
 
   const onDownloadBlocklist = React.useCallback(async () => {
@@ -144,9 +132,9 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({ settings, blocklist, over
           const parsed = JSON.parse(content)
           const items = Array.isArray(parsed) ? parsed : parsed.overrides ?? []
           for (const item of items) {
-            if (item.user_id) {
+            if (item.user_id && typeof item.user_id === "string" && item.user_id.trim()) {
               const { user_id, ...payload } = item
-              await (await import("@/services/moderation")).setUserOverride(user_id, payload)
+              await setUserOverride(user_id, payload)
             }
           }
           await overrides.overridesQuery.refetch()

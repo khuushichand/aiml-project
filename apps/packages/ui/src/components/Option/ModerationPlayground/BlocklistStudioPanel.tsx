@@ -135,7 +135,7 @@ const BlocklistStudioPanel: React.FC<BlocklistStudioPanelProps> = ({ blocklist, 
       console.error("[ModerationPlayground] Failed to load managed blocklist:", err)
       messageApi.error("Failed to load managed blocklist")
     })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [blocklist.loadManaged]) // stable callback from useCallback([], [])
 
   const composed = composeLine(pattern, action, replacement, categories, phase)
 
@@ -145,17 +145,8 @@ const BlocklistStudioPanel: React.FC<BlocklistStudioPanelProps> = ({ blocklist, 
       return
     }
     try {
-      // Temporarily set the managed line to run lint
-      blocklist.setManagedLine(composed)
-      // Small delay to let state settle, then call lint
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0)
-      })
-      // Use direct lint approach — set line then call lint
-      await blocklist.lintManagedLine()
-      if (blocklist.managedLint) {
-        setInlineLint(blocklist.managedLint.items)
-      }
+      const lint = await blocklist.lintLine(composed)
+      setInlineLint(lint.items)
     } catch (err: any) {
       messageApi.error(err?.message || "Validation failed")
     }
@@ -174,10 +165,7 @@ const BlocklistStudioPanel: React.FC<BlocklistStudioPanelProps> = ({ blocklist, 
       return
     }
     try {
-      blocklist.setManagedLine(composed)
-      // Wait for state to propagate
-      await new Promise<void>((resolve) => setTimeout(resolve, 0))
-      await blocklist.appendManaged()
+      await blocklist.appendLine(composed)
       messageApi.success("Rule added")
       // Reset form
       setPattern("")
