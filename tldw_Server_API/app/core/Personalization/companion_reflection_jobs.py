@@ -16,6 +16,9 @@ from tldw_Server_API.app.core.Personalization.companion_lifecycle import rebuild
 from tldw_Server_API.app.core.Personalization.companion_proactive import (
     classify_companion_reflection_delivery,
 )
+from tldw_Server_API.app.core.Personalization.companion_user_ids import (
+    resolve_companion_storage_user_id,
+)
 
 
 COMPANION_REFLECTION_DOMAIN = "companion"
@@ -41,11 +44,11 @@ def _parse_payload(payload: Any) -> dict[str, Any]:
     return {}
 
 
-def _resolve_user_id(job: dict[str, Any], payload: dict[str, Any]) -> int:
+def _resolve_user_id(job: dict[str, Any], payload: dict[str, Any]) -> str:
     owner = job.get("owner_user_id") or payload.get("user_id")
     if owner is None or str(owner).strip() == "":
-        return int(DatabasePaths.get_single_user_id())
-    return int(owner)
+        return str(DatabasePaths.get_single_user_id())
+    return str(owner)
 
 
 def _coerce_now(value: datetime | None) -> datetime:
@@ -94,6 +97,25 @@ def _quiet_hours_active(profile: dict[str, Any], now: datetime) -> bool:
     if start_minutes < end_minutes:
         return start_minutes <= current_minutes < end_minutes
     return current_minutes >= start_minutes or current_minutes < end_minutes
+
+
+def companion_reflection_enabled_for_profile(
+    profile: dict[str, Any],
+    cadence: str,
+) -> tuple[bool, str | None]:
+    """Return whether the profile permits this reflection cadence."""
+    if not bool(profile.get("enabled", 1)):
+        return False, "disabled"
+    if not bool(profile.get("proactive_enabled", 1)):
+        return False, "proactive_disabled"
+    if not bool(profile.get("companion_reflections_enabled", 1)):
+        return False, "companion_reflections_disabled"
+    normalized_cadence = str(cadence or "").strip().lower()
+    if normalized_cadence == "daily" and not bool(profile.get("companion_daily_reflections_enabled", 1)):
+        return False, "daily_reflections_disabled"
+    if normalized_cadence == "weekly" and not bool(profile.get("companion_weekly_reflections_enabled", 1)):
+        return False, "weekly_reflections_disabled"
+    return True, None
 
 
 def _reflection_slot_key(cadence: str, when: datetime) -> str:
@@ -367,14 +389,16 @@ def run_companion_reflection_job(
     """Generate one companion reflection for the given cadence slot."""
     normalized_user_id = str(user_id)
     current_time = _coerce_now(_parse_iso_datetime(scheduled_for) or now)
-    db = personalization_db or PersonalizationDB(str(DatabasePaths.get_personalization_db_path(normalized_user_id)))
-    cdb = collections_db or CollectionsDatabase.for_user(user_id=int(normalized_user_id))
+    storage_user_id = resolve_companion_storage_user_id(normalized_user_id)
+    db = personalization_db or PersonalizationDB(
+        str(DatabasePaths.get_personalization_db_path(storage_user_id))
+    )
+    cdb = collections_db or CollectionsDatabase.for_user(user_id=normalized_user_id)
     profile = db.get_or_create_profile(normalized_user_id)
 
-    if not bool(profile.get("enabled", 1)):
-        return {"status": "skipped", "reason": "disabled"}
-    if not bool(profile.get("proactive_enabled", 1)):
-        return {"status": "skipped", "reason": "proactive_disabled"}
+    enabled, reason = companion_reflection_enabled_for_profile(profile, cadence)
+    if not enabled:
+        return {"status": "skipped", "reason": reason}
     if _quiet_hours_active(profile, current_time):
         return {"status": "skipped", "reason": "quiet_hours"}
 
@@ -478,6 +502,7 @@ __all__ = [
     "COMPANION_REFLECTION_DOMAIN",
     "COMPANION_REFLECTION_JOB_TYPE",
     "COMPANION_REBUILD_JOB_TYPE",
+    "companion_reflection_enabled_for_profile",
     "companion_reflection_queue",
     "handle_companion_reflection_job",
     "run_companion_reflection_job",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pytest
@@ -19,7 +20,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def companion_lifecycle_env(monkeypatch, tmp_path):
+def companion_lifecycle_env(monkeypatch, tmp_path) -> Iterator[SimpleNamespace]:
     base_dir = tmp_path / "test_companion_lifecycle"
     base_dir.mkdir(parents=True, exist_ok=True)
     prev_base_dir = settings.get("USER_DB_BASE_DIR")

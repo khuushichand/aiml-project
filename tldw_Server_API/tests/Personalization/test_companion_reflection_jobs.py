@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Iterator
 
 import pytest
 
@@ -20,7 +22,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def companion_reflection_env(monkeypatch, tmp_path):
+def companion_reflection_env(monkeypatch, tmp_path) -> Iterator[Path]:
     base_dir = tmp_path / "test_companion_reflection_jobs"
     base_dir.mkdir(parents=True, exist_ok=True)
     prev_base_dir = settings.get("USER_DB_BASE_DIR")
@@ -36,6 +38,14 @@ def companion_reflection_env(monkeypatch, tmp_path):
                 del settings.USER_DB_BASE_DIR
             except AttributeError:
                 pass
+
+
+def _legacy_storage_user_id(user_id: str) -> str:
+    try:
+        return str(int(user_id))
+    except (TypeError, ValueError):
+        digest = hashlib.sha1(str(user_id).encode("utf-8"), usedforsecurity=False).digest()
+        return str(int.from_bytes(digest[:4], byteorder="big", signed=False))
 
 
 def _seed_companion_context(user_id: str) -> tuple[PersonalizationDB, CollectionsDatabase]:
@@ -199,6 +209,36 @@ def test_companion_reflection_job_skips_when_quiet_hours_active(companion_reflec
     assert collections_db.list_user_notifications(limit=10, offset=0) == []
 
 
+@pytest.mark.parametrize(
+    ("cadence", "profile_fields", "reason"),
+    [
+        ("daily", {"companion_reflections_enabled": 0}, "companion_reflections_disabled"),
+        ("daily", {"companion_daily_reflections_enabled": 0}, "daily_reflections_disabled"),
+        ("weekly", {"companion_weekly_reflections_enabled": 0}, "weekly_reflections_disabled"),
+    ],
+)
+def test_companion_reflection_job_honors_reflection_preferences(
+    companion_reflection_env,
+    cadence: str,
+    profile_fields: dict[str, int],
+    reason: str,
+) -> None:
+    personalization_db, collections_db = _seed_companion_context("1")
+    personalization_db.update_profile("1", **profile_fields)
+
+    result = run_companion_reflection_job(
+        user_id="1",
+        cadence=cadence,
+        now=datetime(2026, 3, 10, 15, 0, tzinfo=timezone.utc),
+        personalization_db=personalization_db,
+        collections_db=collections_db,
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == reason
+    assert collections_db.list_user_notifications(limit=10, offset=0) == []
+
+
 def test_companion_reflection_job_reuses_existing_reflection_outside_recent_window(
     companion_reflection_env,
 ) -> None:
@@ -282,4 +322,51 @@ async def test_handle_companion_job_dispatches_rebuild_scope(companion_reflectio
     assert result["status"] == "completed"
     assert result["scope"] == "knowledge"
     cards = personalization_db.list_companion_knowledge_cards("1", status="active")
+    assert cards
+
+
+@pytest.mark.asyncio
+async def test_handle_companion_rebuild_job_uses_legacy_storage_for_string_user_ids(
+    companion_reflection_env,
+) -> None:
+    user_id = "user-alpha"
+    storage_user_id = _legacy_storage_user_id(user_id)
+    personalization_db = PersonalizationDB(
+        str(DatabasePaths.get_personalization_db_path(storage_user_id))
+    )
+    personalization_db.update_profile(user_id, enabled=1)
+    personalization_db.insert_companion_activity_event(
+        user_id=user_id,
+        event_type="reading_item_saved",
+        source_type="reading_item",
+        source_id="101",
+        surface="api.reading",
+        dedupe_key="reading_item_saved:101",
+        tags=["project-alpha", "research"],
+        provenance={"capture_mode": "explicit"},
+        metadata={"title": "Alpha kickoff"},
+    )
+    personalization_db.insert_companion_activity_event(
+        user_id=user_id,
+        event_type="note_updated",
+        source_type="note",
+        source_id="202",
+        surface="api.notes",
+        dedupe_key="note_updated:202",
+        tags=["project-alpha", "research"],
+        provenance={"capture_mode": "explicit"},
+        metadata={"title": "Alpha notes"},
+    )
+
+    result = await handle_companion_reflection_job(
+        {
+            "owner_user_id": user_id,
+            "job_type": COMPANION_REBUILD_JOB_TYPE,
+            "payload": {"user_id": user_id, "scope": "knowledge"},
+        }
+    )
+
+    assert result["status"] == "completed"
+    assert result["scope"] == "knowledge"
+    cards = personalization_db.list_companion_knowledge_cards(user_id, status="active")
     assert cards

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def companion_relevance_env(monkeypatch, tmp_path):
+def companion_relevance_env(monkeypatch, tmp_path) -> Iterator[Path]:
     base_dir = tmp_path / "user_dbs"
     base_dir.mkdir(parents=True, exist_ok=True)
     prev_base_dir = settings.get("USER_DB_BASE_DIR")

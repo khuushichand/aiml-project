@@ -9,6 +9,9 @@ from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDat
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Personalization.companion_derivations import derive_companion_knowledge_cards
+from tldw_Server_API.app.core.Personalization.companion_user_ids import (
+    resolve_companion_storage_user_id,
+)
 
 
 COMPANION_LIFECYCLE_SCOPES = frozenset(
@@ -34,7 +37,8 @@ def _resolve_personalization_db(
 ) -> PersonalizationDB:
     if personalization_db is not None:
         return personalization_db
-    return PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    storage_user_id = resolve_companion_storage_user_id(user_id)
+    return PersonalizationDB(str(DatabasePaths.get_personalization_db_path(storage_user_id)))
 
 
 def _resolve_collections_db(
@@ -43,7 +47,7 @@ def _resolve_collections_db(
 ) -> CollectionsDatabase:
     if collections_db is not None:
         return collections_db
-    return CollectionsDatabase.for_user(user_id=int(user_id))
+    return CollectionsDatabase.for_user(user_id=user_id)
 
 
 def _empty_counts() -> dict[str, int]:

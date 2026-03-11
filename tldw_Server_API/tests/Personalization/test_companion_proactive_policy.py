@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,7 +21,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def companion_proactive_env(monkeypatch, tmp_path):
+def companion_proactive_env(monkeypatch, tmp_path) -> Iterator[Path]:
     base_dir = tmp_path / "test_companion_proactive_policy"
     base_dir.mkdir(parents=True, exist_ok=True)
     prev_base_dir = settings.get("USER_DB_BASE_DIR")

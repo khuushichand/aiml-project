@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -13,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def client_with_companion_profile_db(tmp_path):
+def client_with_companion_profile_db(tmp_path) -> Iterator[tuple[TestClient, PersonalizationDB]]:
     db = PersonalizationDB(str(tmp_path / "personalization.db"))
 
     async def override_user():

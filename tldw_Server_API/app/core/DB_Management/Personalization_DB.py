@@ -238,6 +238,15 @@ class PersonalizationDB:
                 conn.close()
 
     # Profiles
+    def list_profile_user_ids(self) -> list[str]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute("SELECT user_id FROM profiles ORDER BY updated_at DESC, user_id ASC")
+                return [str(row["user_id"]) for row in cur.fetchall() if str(row["user_id"]).strip()]
+            finally:
+                conn.close()
+
     def get_or_create_profile(self, user_id: str) -> dict[str, Any]:
         with self._lock:
             conn = self._connect()
