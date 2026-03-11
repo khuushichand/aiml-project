@@ -1369,6 +1369,53 @@ _CREATE_GENERATED_FILES_TABLES = [
     ),
 ]
 
+_CREATE_DATA_SUBJECT_REQUESTS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS data_subject_requests (
+            id SERIAL PRIMARY KEY,
+            client_request_id TEXT NOT NULL UNIQUE,
+            requester_identifier TEXT NOT NULL,
+            resolved_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            request_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            selected_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+            preview_summary JSONB NOT NULL DEFAULT '[]'::jsonb,
+            coverage_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            requested_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT NULL
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requester "
+        "ON data_subject_requests(requester_identifier)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_resolved_user "
+        "ON data_subject_requests(resolved_user_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_type "
+        "ON data_subject_requests(request_type)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_status "
+        "ON data_subject_requests(status)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requested_at "
+        "ON data_subject_requests(requested_at)",
+        (),
+    ),
+]
+
 
 async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
@@ -2083,6 +2130,28 @@ async def ensure_generated_files_table_pg(pool: DatabasePool | None = None) -> b
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL generated_files table: {exc}")
+        return False
+
+
+async def ensure_data_subject_requests_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure data_subject_requests table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before data_subject_requests failed: {exc}")
+        for sql, params in _CREATE_DATA_SUBJECT_REQUESTS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure data_subject_requests DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL data_subject_requests table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL data_subject_requests table: {exc}")
         return False
 
 
