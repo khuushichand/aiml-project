@@ -192,6 +192,24 @@ async def test_preview_returns_500_when_subject_store_query_fails(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_preview_returns_500_when_subject_store_is_missing(tmp_path):
+    _setup_env(tmp_path)
+    await _reset_auth_state()
+    await _seed_user(user_id=7, username="subject_user", email="subject@example.com")
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+
+    with TestClient(app, headers=headers) as client:
+        response = client.post(
+            "/api/v1/admin/data-subject-requests/preview",
+            json={"requester_identifier": "subject@example.com"},
+        )
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"] == "requester_data_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_create_records_request_and_reuses_client_request_id(monkeypatch, tmp_path):
     _setup_env(tmp_path)
     await _reset_auth_state()

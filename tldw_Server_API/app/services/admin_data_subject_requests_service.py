@@ -140,7 +140,9 @@ async def _enforce_requester_visibility(
 
 def _sqlite_count_sync(path: Path, query: str, params: tuple[Any, ...] = ()) -> int:
     if not path.exists():
-        return 0
+        raise DataSubjectRequestCoverageUnavailableError(
+            f"DSR subject store missing for {path}"
+        )
     try:
         with sqlite3.connect(path) as conn:
             row = conn.execute(query, params).fetchone()
