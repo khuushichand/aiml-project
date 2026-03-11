@@ -228,7 +228,7 @@ export const mapServerChatMessagesToPlaygroundMessages = ({
   characterId
 }: MapServerMessagesArgs): Message[] => {
   let encounteredUserMessage = false
-  return serverMessages.map((m) => {
+  return serverMessages.map((m, index) => {
     const meta = m as unknown as Record<string, unknown>
     const createdAt = Date.parse(m.created_at)
     const metadataExtraCandidate =
@@ -265,7 +265,8 @@ export const mapServerChatMessagesToPlaygroundMessages = ({
       !explicitMessageType &&
       characterId != null &&
       m.role === "assistant" &&
-      !encounteredUserMessage
+      !encounteredUserMessage &&
+      index === 0
         ? "character:greeting"
         : undefined
 
@@ -421,6 +422,10 @@ export const useServerChatLoader = ({
     shallow
   )
 
+  const serverChatTitleRef = React.useRef(serverChatTitle)
+  const serverChatCharacterIdRef = React.useRef(serverChatCharacterId)
+  const serverChatMetaLoadedRef = React.useRef(serverChatMetaLoaded)
+
   const serverChatLoadRef = React.useRef<{
     chatId: string | null
     controller: AbortController | null
@@ -435,6 +440,9 @@ export const useServerChatLoader = ({
   messagesRef.current = messages
   streamingRef.current = streaming
   processingRef.current = isProcessing
+  serverChatTitleRef.current = serverChatTitle
+  serverChatCharacterIdRef.current = serverChatCharacterId
+  serverChatMetaLoadedRef.current = serverChatMetaLoaded
 
   React.useEffect(() => {
     return () => {
@@ -499,10 +507,10 @@ export const useServerChatLoader = ({
           await tldwClient.initialize().catch(() => null)
 
           let assistantName = "Assistant"
-          let chatTitle = serverChatTitle || ""
-          let characterId = serverChatCharacterId ?? null
+          let chatTitle = serverChatTitleRef.current || ""
+          let characterId = serverChatCharacterIdRef.current ?? null
 
-          if (!serverChatMetaLoaded) {
+          if (!serverChatMetaLoadedRef.current) {
             try {
               const chat = await tldwClient.getChat(serverChatId)
               if (!canCommitCurrentLoad()) {
@@ -600,18 +608,11 @@ export const useServerChatLoader = ({
             isProcessing: processingRef.current
           })
 
-          const shouldPreserveAtCommit = shouldPreserveLocalMessagesForServerLoad({
-            currentMessages: messagesRef.current,
-            serverMessages: mappedMessages,
-            isStreaming: streamingRef.current,
-            isProcessing: processingRef.current
-          })
-
-          if (!shouldPreserveLocal && !shouldPreserveAtCommit) {
+          if (!shouldPreserveLocal) {
             setHistory(history)
             setMessages(mappedMessages)
           }
-          if (!temporaryChat && !shouldPreserveLocal && !shouldPreserveAtCommit) {
+          if (!temporaryChat && !shouldPreserveLocal) {
             try {
               const localHistoryId = await ensureServerChatHistoryId(
                 serverChatId,
@@ -651,6 +652,7 @@ export const useServerChatLoader = ({
                         content: m.message,
                         images: Array.isArray(m.images) ? m.images : [],
                         source: [],
+                        serverMessageId: m.serverMessageId ?? String(m.id || ""),
                         generationInfo:
                           m.generationInfo &&
                           typeof m.generationInfo === "object" &&
@@ -725,10 +727,7 @@ export const useServerChatLoader = ({
   }, [
     ensureServerChatHistoryId,
     notification,
-    serverChatCharacterId,
     serverChatId,
-    serverChatMetaLoaded,
-    serverChatTitle,
     setHistory,
     setIsLoading,
     setMessages,

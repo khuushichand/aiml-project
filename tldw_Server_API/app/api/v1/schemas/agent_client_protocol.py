@@ -309,6 +309,7 @@ class ACPSessionDetailResponse(ACPSessionInfo):
     """Detailed information about an ACP session, including message history."""
     messages: list[dict[str, Any]] = Field(default_factory=list, description="Message history (if available)")
     cwd: str | None = Field(default=None, description="Working directory for this session")
+    fork_lineage: list[str] = Field(default_factory=list, description="Ancestor session IDs from oldest to most recent parent")
 
 
 class ACPSessionForkRequest(BaseModel):

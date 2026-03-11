@@ -167,6 +167,18 @@ def _acp_record_audit_event(
     }
     with _ACP_AUDIT_LOCK:
         _ACP_AUDIT_EVENTS.append(event)
+    # Persist to SQLite audit DB (best-effort)
+    try:
+        from tldw_Server_API.app.core.DB_Management.ACP_Audit_DB import get_acp_audit_db
+        audit_db = get_acp_audit_db()
+        audit_db.record_event(
+            action=action,
+            user_id=user_id,
+            session_id=session_id,
+            metadata=metadata,
+        )
+    except Exception:
+        pass  # Audit persistence failure should not block operations
     logger.info(
         "ACP audit event action={} user_id={} session_id={}",
         event["action"],
@@ -1104,6 +1116,262 @@ async def _handle_client_message(
         })
 
 
+# ---------------------------------------------------------------------------
+# Health check & setup-guide helpers
+# ---------------------------------------------------------------------------
+
+_AGENT_SETUP_GUIDES: dict[str, dict[str, Any]] = {
+    "claude_code": {
+        "name": "Claude Code",
+        "binary": "claude",
+        "install_instructions": [
+            "Install Claude Code CLI: npm install -g @anthropic-ai/claude-code",
+            "Or via pip: pip install claude-code",
+        ],
+        "required_env_vars": ["ANTHROPIC_API_KEY"],
+        "docs_url": "https://docs.anthropic.com/en/docs/claude-code",
+    },
+    "codex": {
+        "name": "OpenAI Codex CLI",
+        "binary": "codex",
+        "install_instructions": [
+            "Install Codex CLI: npm install -g @openai/codex",
+        ],
+        "required_env_vars": ["OPENAI_API_KEY"],
+        "docs_url": "https://github.com/openai/codex",
+    },
+    "opencode": {
+        "name": "OpenCode",
+        "binary": "opencode",
+        "install_instructions": [
+            "Install OpenCode: go install github.com/sst/opencode@latest",
+            "Or download from: https://github.com/sst/opencode/releases",
+        ],
+        "required_env_vars": [],
+        "docs_url": "https://github.com/sst/opencode",
+    },
+}
+
+
+def _check_runner_binary() -> dict[str, Any]:
+    """Check if the ACP runner binary is available."""
+    import shutil
+
+    from tldw_Server_API.app.core.Agent_Client_Protocol.config import load_acp_runner_config
+
+    try:
+        cfg = load_acp_runner_config()
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        return {"status": "error", "detail": f"Config load failed: {exc}"}
+
+    # Check binary_path shortcut first
+    if cfg.binary_path:
+        path = os.path.expanduser(cfg.binary_path)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return {"status": "ok", "path": path, "source": "binary_path"}
+        return {
+            "status": "missing",
+            "detail": f"Binary not found at configured path: {cfg.binary_path}",
+            "configured_path": cfg.binary_path,
+        }
+
+    # Check command-based config
+    if not cfg.command:
+        return {
+            "status": "missing",
+            "detail": "No runner_command or runner_binary_path configured in [ACP] section",
+        }
+
+    # If command is an absolute/relative path, check it directly
+    if os.sep in cfg.command or cfg.command.startswith("."):
+        resolved = cfg.command
+        if cfg.cwd:
+            resolved = os.path.join(cfg.cwd, cfg.command)
+        if os.path.isfile(resolved) and os.access(resolved, os.X_OK):
+            return {"status": "ok", "path": resolved, "source": "runner_command"}
+        return {
+            "status": "missing",
+            "detail": f"Runner command not found: {cfg.command}",
+            "configured_command": cfg.command,
+            "configured_cwd": cfg.cwd,
+        }
+
+    # Check if command is on PATH (e.g., "go", "node", or a binary name)
+    which_result = shutil.which(cfg.command)
+    if which_result:
+        return {"status": "ok", "path": which_result, "source": "PATH"}
+
+    return {
+        "status": "missing",
+        "detail": f"Runner command '{cfg.command}' not found on PATH",
+        "configured_command": cfg.command,
+    }
+
+
+def _check_agent_availability(agent_type: str) -> dict[str, Any]:
+    """Check if a downstream agent binary and API keys are available."""
+    import shutil
+
+    guide = _AGENT_SETUP_GUIDES.get(agent_type)
+    if not guide:
+        return {"status": "unknown", "detail": f"No setup guide for agent type: {agent_type}"}
+
+    result: dict[str, Any] = {"agent_type": agent_type, "name": guide["name"]}
+
+    # Check binary
+    binary_name = guide.get("binary", "")
+    if binary_name:
+        which_result = shutil.which(binary_name)
+        result["binary_status"] = "ok" if which_result else "missing"
+        if which_result:
+            result["binary_path"] = which_result
+    else:
+        result["binary_status"] = "not_applicable"
+
+    # Check env vars
+    missing_keys = []
+    for var in guide.get("required_env_vars", []):
+        if not os.getenv(var):
+            missing_keys.append(var)
+    result["api_keys_status"] = "ok" if not missing_keys else "missing"
+    if missing_keys:
+        result["missing_api_keys"] = missing_keys
+
+    # Overall status
+    if result.get("binary_status") == "missing":
+        result["status"] = "unavailable"
+    elif missing_keys:
+        result["status"] = "requires_setup"
+    else:
+        result["status"] = "available"
+
+    return result
+
+
+@router.get(
+    "/health",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.health"))],
+)
+async def acp_health(
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """
+    ACP dependency chain health check.
+
+    Validates the full stack: runner binary → downstream agent availability → API keys.
+    Returns structured diagnostics for debugging ACP setup issues.
+    """
+    result: dict[str, Any] = {"timestamp": _now_iso()}
+
+    # 1. Check runner binary
+    runner_status = _check_runner_binary()
+    result["runner"] = runner_status
+
+    # 2. Check downstream agents
+    agents_status: list[dict[str, Any]] = []
+    for agent_type in _AGENT_SETUP_GUIDES:
+        agents_status.append(_check_agent_availability(agent_type))
+    result["agents"] = agents_status
+
+    # 3. Try to probe the runner (if binary is available)
+    runner_probe: dict[str, Any] = {"status": "skipped"}
+    if runner_status.get("status") == "ok":
+        try:
+            client = await get_runner_client()
+            if hasattr(client, "is_running") and client.is_running:
+                runner_probe = {"status": "ok", "detail": "Runner process is alive"}
+                caps = getattr(client, "agent_capabilities", None)
+                if caps:
+                    runner_probe["agent_capabilities"] = caps
+            else:
+                runner_probe = {"status": "not_running", "detail": "Runner process is not started"}
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+            runner_probe = {"status": "error", "detail": str(exc)}
+    result["runner_probe"] = runner_probe
+
+    # 4. Overall status
+    any_agent_available = any(a.get("status") == "available" for a in agents_status)
+    runner_ok = runner_status.get("status") == "ok"
+
+    if runner_ok and any_agent_available:
+        result["overall"] = "ok"
+    elif runner_ok and not any_agent_available:
+        result["overall"] = "degraded"
+        result["message"] = "Runner binary found but no agents are fully configured"
+    elif not runner_ok:
+        result["overall"] = "unavailable"
+        result["message"] = "ACP runner binary not found or not configured"
+    else:
+        result["overall"] = "degraded"
+
+    return result
+
+
+@router.get(
+    "/setup-guide",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.setup_guide"))],
+)
+async def acp_setup_guide(
+    agent_type: str | None = Query(default=None, description="Filter to a specific agent type"),
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """
+    Return agent-specific setup instructions.
+
+    Checks current system state and returns actionable steps to get ACP working.
+    """
+    result: dict[str, Any] = {"timestamp": _now_iso(), "guides": []}
+
+    # Runner setup
+    runner_status = _check_runner_binary()
+    runner_guide: dict[str, Any] = {
+        "component": "runner",
+        "status": runner_status.get("status", "unknown"),
+        "steps": [],
+    }
+    if runner_status.get("status") != "ok":
+        runner_guide["steps"] = [
+            "Download the ACP runner binary: run Helper_Scripts/setup_acp.sh",
+            "Or build from source: cd ../tldw-agent && go build -o bin/tldw-agent-acp ./cmd/tldw-agent-acp",
+            "Set runner_binary_path in config.txt [ACP] section, or set ACP_RUNNER_BINARY_PATH env var",
+        ]
+    else:
+        runner_guide["steps"] = ["Runner binary is available - no action needed"]
+    result["runner"] = runner_guide
+
+    # Agent guides
+    guides: list[dict[str, Any]] = []
+    target_agents = [agent_type] if agent_type and agent_type in _AGENT_SETUP_GUIDES else list(_AGENT_SETUP_GUIDES)
+
+    for at in target_agents:
+        agent_status = _check_agent_availability(at)
+        guide_info = _AGENT_SETUP_GUIDES.get(at, {})
+        entry: dict[str, Any] = {
+            "agent_type": at,
+            "name": guide_info.get("name", at),
+            "status": agent_status.get("status", "unknown"),
+            "steps": [],
+        }
+
+        if agent_status.get("binary_status") == "missing":
+            entry["steps"].extend(guide_info.get("install_instructions", []))
+
+        if agent_status.get("api_keys_status") == "missing":
+            for key in agent_status.get("missing_api_keys", []):
+                entry["steps"].append(f"Set {key} environment variable or add to .env file")
+
+        if not entry["steps"]:
+            entry["steps"] = [f"{guide_info.get('name', at)} is fully configured"]
+
+        if guide_info.get("docs_url"):
+            entry["docs_url"] = guide_info["docs_url"]
+
+        guides.append(entry)
+
+    result["guides"] = guides
+    return result
+
+
 def _get_static_agents() -> tuple[list[ACPAgentInfo], str]:
     """Fallback list of built-in agents when runner registry is unavailable."""
     import os
@@ -1155,8 +1423,38 @@ def _get_static_agents() -> tuple[list[ACPAgentInfo], str]:
     return agents, "claude_code"
 
 
+def _get_registry_agents() -> tuple[list[ACPAgentInfo], str] | None:
+    """Try to get agents from YAML registry. Returns None if registry is unavailable."""
+    try:
+        from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+        registry = get_agent_registry()
+        available = registry.get_available_agents()
+        if not available:
+            return None
+        agents: list[ACPAgentInfo] = []
+        for item in available:
+            agents.append(
+                ACPAgentInfo(
+                    type=str(item["type"]),
+                    name=str(item["name"]),
+                    description=str(item.get("description", "")),
+                    is_configured=bool(item.get("is_configured", False)),
+                    requires_api_key=item.get("missing_api_key"),
+                )
+            )
+        return agents, registry.default_type
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
 async def _get_available_agents() -> tuple[list[ACPAgentInfo], str]:
-    """Get list of available agents and their configuration status."""
+    """Get list of available agents: registry → runner → static fallback."""
+    # 1. Try YAML registry first
+    registry_result = _get_registry_agents()
+    if registry_result:
+        return registry_result
+
+    # 2. Try runner's agent/list RPC
     try:
         client = await get_runner_client()
         raw = await client.list_agents()
@@ -1245,6 +1543,20 @@ async def acp_session_new(
 
     Optionally specify a session name, agent type, tags, and MCP server configs.
     """
+    # Quota check: max concurrent sessions per user
+    try:
+        store = await get_acp_session_store()
+        quota_error = await store.check_session_quota(user.id)
+        if quota_error:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=quota_error,
+            )
+    except HTTPException:
+        raise
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass  # Quota check failure shouldn't block session creation
+
     # Generate session name if not provided
     session_name = payload.name or _generate_session_name(payload.cwd)
 
@@ -1363,6 +1675,19 @@ async def acp_session_prompt(
     user: User = Depends(get_request_user),
 ) -> ACPSessionPromptResponse:
     _acp_enforce_control_rate_limit(user_id=int(user.id), action="prompt")
+    # Token quota check
+    try:
+        store = await get_acp_session_store()
+        token_error = await store.check_token_quota(payload.session_id)
+        if token_error:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=token_error,
+            )
+    except HTTPException:
+        raise
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
     try:
         client = await get_runner_client()
         result, turn_usage = await _execute_acp_prompt(
@@ -1679,8 +2004,10 @@ async def acp_session_detail(
     rec = await store.get_session(session_id)
     if not rec:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    fork_lineage = await store.get_fork_lineage(session_id)
     return ACPSessionDetailResponse(**rec.to_detail_dict(
         has_websocket=client.has_websocket_connections(session_id),
+        fork_lineage=fork_lineage,
     ))
 
 

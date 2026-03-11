@@ -331,6 +331,22 @@ vi.mock("antd", async (importOriginal) => {
   }
 })
 
+vi.mock("@/components/Common/Markdown", () => ({
+  Markdown: ({ message }: { message: string }) => <div data-testid="mock-markdown">{message}</div>
+}))
+
+vi.mock("@/components/Media/diff-worker-client", () => ({
+  computeDiffSync: () => [],
+  shouldUseWorkerDiff: () => false,
+  shouldRequireSampling: () => false,
+  sampleTextForDiff: (t: string) => t,
+  computeDiffWithWorker: async () => [],
+  createDiffWorker: () => null,
+  DIFF_SYNC_LINE_THRESHOLD: 4000,
+  DIFF_HARD_CHAR_THRESHOLD: 300_000,
+  DIFF_SAMPLED_CHAR_BUDGET: 120_000
+}))
+
 describe("MediaReviewPage stage6 mobile parity", () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -382,18 +398,28 @@ describe("MediaReviewPage stage6 mobile parity", () => {
     return row as HTMLElement
   }
 
+  const selectItemByCheckbox = (title: string, options?: Record<string, unknown>): void => {
+    const row = getResultRowByTitle(title)
+    const checkbox = within(row).getByRole('checkbox')
+    fireEvent.click(checkbox, options)
+  }
+
   it("offers optional stack mode on mobile for multi-selection", async () => {
     render(<MediaReviewPage />)
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Show sidebar" })).toBeInTheDocument()
+      expect(screen.getByTestId('resizable-panels-collapsed')).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByRole("button", { name: "Show sidebar" }))
+    // Default tab is Results (index 1) - select items there
+    fireEvent.click(screen.getByTestId('mobile-tab-1'))
 
-    fireEvent.click(getResultRowByTitle("Item 1"))
-    fireEvent.click(getResultRowByTitle("Item 2"))
-    fireEvent.click(getResultRowByTitle("Item 3"))
+    selectItemByCheckbox("Item 1")
+    selectItemByCheckbox("Item 2")
+    selectItemByCheckbox("Item 3")
+
+    // Switch to Content tab to see the reading pane with Stack option
+    fireEvent.click(screen.getByTestId('mobile-tab-2'))
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /stack/i })).toBeInTheDocument()

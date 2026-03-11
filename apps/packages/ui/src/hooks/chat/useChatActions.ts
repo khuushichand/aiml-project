@@ -195,7 +195,9 @@ type UseChatActionsOptions = {
     messagesOrUpdater: Message[] | ((prev: Message[]) => Message[])
   ) => void
   history: ChatHistory
-  setHistory: (history: ChatHistory) => void
+  setHistory: (
+    historyOrUpdater: ChatHistory | ((prev: ChatHistory) => ChatHistory)
+  ) => void
   historyId: string | null
   setHistoryId: (
     historyId: string | null,
@@ -2019,6 +2021,7 @@ export const useChatActions = ({
     })
     const baseMessages = chatHistory || messages
     const baseHistory = memory || history
+    const capturedReplyTargetId = replyTarget?.id ?? null
     const replyActive =
       Boolean(replyTarget) &&
       !compareModeActive &&
@@ -2300,7 +2303,11 @@ export const useChatActions = ({
           const compareUserParentMessageId = lastMessage?.id || null
           const resolvedImage =
             image.length > 0
-              ? `data:image/jpeg;base64,${image.split(",")[1]}`
+              ? image.startsWith("data:")
+                ? image
+                : image.includes(",")
+                  ? `data:image/jpeg;base64,${image.split(",")[1]}`
+                  : `data:image/jpeg;base64,${image}`
               : ""
           const compareUserMessage: Message = {
             isBot: false,
@@ -2323,6 +2330,15 @@ export const useChatActions = ({
           }
 
           setMessages((prev) => [...prev, compareUserMessage])
+          setHistory((prev) => [
+            ...prev,
+            {
+              role: "user" as const,
+              content: compareUserMessage.message,
+              image: compareUserMessage.images?.[0],
+              messageType: compareUserMessage.messageType
+            }
+          ])
 
           let activeHistoryId = historyId
           if (temporaryChat) {
@@ -2429,8 +2445,11 @@ export const useChatActions = ({
       setIsProcessing(false)
       setStreaming(false)
     } finally {
-      if (replyActive) {
-        clearReplyTarget()
+      if (replyActive && capturedReplyTargetId != null) {
+        const currentReplyTarget = useStoreMessageOption.getState().replyTarget
+        if (currentReplyTarget?.id === capturedReplyTargetId) {
+          clearReplyTarget()
+        }
       }
       if (steeringApplied) {
         clearMessageSteering()
@@ -2579,9 +2598,10 @@ export const useChatActions = ({
         message: t("error"),
         description: errorMessage
       })
-      setIsProcessing(false)
-      setStreaming(false)
     } finally {
+      setStreaming(false)
+      setIsProcessing(false)
+      setAbortController(null)
       if (shouldConsumeSteering) {
         clearMessageSteering()
       }
@@ -2717,39 +2737,58 @@ export const useChatActions = ({
       const target = messages[index]
       if (!target) return
 
+      // Capture values synchronously before any awaits
       const targetId = target.serverMessageId ?? target.id
+      const serverMessageId = target.serverMessageId
+      const serverMessageVersion = target.serverMessageVersion
+      const historyRole = target.role ?? (target.isBot ? "assistant" : "user")
+      const historyContent = target.message ?? ""
+
       if (replyTarget?.id && targetId && replyTarget.id === targetId) {
         clearReplyTarget()
       }
 
-      if (target.serverMessageId) {
-        await tldwClient.initialize().catch(() => null)
-        let expectedVersion = target.serverMessageVersion
-        if (expectedVersion == null) {
-          const serverMessage = await tldwClient.getMessage(target.serverMessageId)
-          expectedVersion = serverMessage?.version
+      try {
+        if (serverMessageId) {
+          await tldwClient.initialize().catch(() => null)
+          let expectedVersion = serverMessageVersion
+          if (expectedVersion == null) {
+            const serverMessage = await tldwClient.getMessage(serverMessageId)
+            expectedVersion = serverMessage?.version
+          }
+          if (expectedVersion == null) {
+            throw new Error("Missing server message version")
+          }
+          await tldwClient.deleteMessage(
+            serverMessageId,
+            Number(expectedVersion),
+            serverChatId ?? undefined
+          )
+          invalidateServerChatHistory()
         }
-        if (expectedVersion == null) {
-          throw new Error("Missing server message version")
+
+        if (historyId) {
+          await removeMessageByIndex(historyId, index)
         }
-        await tldwClient.deleteMessage(
-          target.serverMessageId,
-          Number(expectedVersion),
-          serverChatId ?? undefined
-        )
-        invalidateServerChatHistory()
+      } catch (err) {
+        console.error("[deleteMessage] Failed to delete message", err)
+        return
       }
 
-      if (historyId) {
-        await removeMessageByIndex(historyId, index)
-      }
-
-      setMessages(messages.filter((_, idx) => idx !== index))
-      setHistory(history.filter((_, idx) => idx !== index))
+      setMessages((prev) => prev.filter((m) => m.id !== targetId))
+      setHistory((prev) => {
+        let removed = false
+        return prev.filter((h) => {
+          if (!removed && h.role === historyRole && h.content === historyContent) {
+            removed = true
+            return false
+          }
+          return true
+        })
+      })
     },
     [
       clearReplyTarget,
-      history,
       historyId,
       invalidateServerChatHistory,
       messages,
@@ -2765,31 +2804,41 @@ export const useChatActions = ({
       const target = messages[index]
       if (!target) return
 
+      // Capture values synchronously before any awaits
+      const targetId = target.id
       const nextPinned = !Boolean(target.pinned)
+      const serverMessageId = target.serverMessageId
+      const serverMessageVersion = target.serverMessageVersion
+      const messageText = String(target.message || "")
 
-      if (target.serverMessageId) {
-        await tldwClient.initialize().catch(() => null)
-        let expectedVersion = target.serverMessageVersion
-        if (expectedVersion == null) {
-          const serverMessage = await tldwClient.getMessage(target.serverMessageId)
-          expectedVersion = serverMessage?.version
+      try {
+        if (serverMessageId) {
+          await tldwClient.initialize().catch(() => null)
+          let expectedVersion = serverMessageVersion
+          if (expectedVersion == null) {
+            const serverMessage = await tldwClient.getMessage(serverMessageId)
+            expectedVersion = serverMessage?.version
+          }
+          if (expectedVersion == null) {
+            throw new Error("Missing server message version")
+          }
+          await tldwClient.editMessage(
+            serverMessageId,
+            messageText,
+            Number(expectedVersion),
+            serverChatId ?? undefined,
+            { pinned: nextPinned }
+          )
+          invalidateServerChatHistory()
         }
-        if (expectedVersion == null) {
-          throw new Error("Missing server message version")
-        }
-        await tldwClient.editMessage(
-          target.serverMessageId,
-          String(target.message || ""),
-          Number(expectedVersion),
-          serverChatId ?? undefined,
-          { pinned: nextPinned }
-        )
-        invalidateServerChatHistory()
+      } catch (err) {
+        console.error("[toggleMessagePinned] Failed to toggle pin", err)
+        return
       }
 
-      setMessages(
-        messages.map((message, messageIndex) =>
-          messageIndex === index ? { ...message, pinned: nextPinned } : message
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === targetId ? { ...m, pinned: nextPinned } : m
         )
       )
     },

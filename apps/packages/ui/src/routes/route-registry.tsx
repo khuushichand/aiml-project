@@ -34,7 +34,8 @@ import {
   SlidersHorizontal,
   FileText,
   Zap,
-  Sparkles
+  Sparkles,
+  ListTodo,
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
@@ -196,6 +197,8 @@ const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionChatWorkflows = lazy(() => import("./option-chat-workflows"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
+const OptionAgents = lazy(() => import("./option-agents"))
+const OptionAgentTasks = lazy(() => import("./option-agent-tasks"))
 const OptionMcpHub = lazy(() => import("./option-mcp-hub"))
 const OptionSkills = lazy(() => import("./option-skills"))
 const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
@@ -672,6 +675,30 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 12,
       beta: true
     }
+  },
+  {
+    kind: "options",
+    path: "/agents",
+    element: <OptionAgents />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.agents",
+      icon: Bot,
+      order: 12.2,
+      beta: true,
+    },
+  },
+  {
+    kind: "options",
+    path: "/agent-tasks",
+    element: <OptionAgentTasks />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.agentTasks",
+      icon: ListTodo,
+      order: 12.4,
+      beta: true,
+    },
   },
   {
     kind: "options",
