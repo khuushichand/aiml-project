@@ -5,10 +5,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
 from tldw_Server_API.app.api.v1.endpoints import companion as companion_ep
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_personalization_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.main import app as fastapi_app
 
 
@@ -273,6 +277,71 @@ def test_companion_goal_patch_rejects_null_for_non_nullable_fields(client_with_c
     assert response.status_code == 422, response.text
 
 
+def test_companion_purge_endpoint_removes_linked_reflection_notifications(
+    client_with_companion_db,
+) -> None:
+    client, db = client_with_companion_db
+    collections_db = CollectionsDatabase.for_user(user_id=1)
+
+    def override_collections_db():
+        return collections_db
+
+    reflection_id = db.insert_companion_activity_event(
+        user_id="1",
+        event_type="companion_reflection_generated",
+        source_type="companion_reflection",
+        source_id="2026-03-10",
+        surface="jobs.companion",
+        dedupe_key="companion.reflection:daily:2026-03-10",
+        provenance={"capture_mode": "explicit"},
+        metadata={"title": "Daily reflection", "summary": "Existing reflection"},
+    )
+    collections_db.create_user_notification(
+        kind="companion_reflection",
+        title="Daily reflection",
+        message="Existing reflection",
+        severity="info",
+        source_job_id="501",
+        source_domain="companion",
+        source_job_type="companion_reflection",
+        link_type="companion_reflection",
+        link_id=reflection_id,
+        dedupe_key="companion_reflection:daily:2026-03-10",
+    )
+    fastapi_app.dependency_overrides[get_collections_db_for_user] = override_collections_db
+    try:
+        response = client.post("/api/v1/companion/purge", json={"scope": "reflections"})
+    finally:
+        fastapi_app.dependency_overrides.pop(get_collections_db_for_user, None)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["deleted_counts"]["reflections"] == 1
+    assert payload["deleted_counts"]["notifications"] == 1
+
+
+def test_companion_rebuild_endpoint_queues_job(client_with_companion_db) -> None:
+    client, _db = client_with_companion_db
+    job_manager = JobManager()
+
+    def override_job_manager():
+        return job_manager
+
+    fastapi_app.dependency_overrides[get_job_manager] = override_job_manager
+    try:
+        response = client.post("/api/v1/companion/rebuild", json={"scope": "knowledge"})
+    finally:
+        fastapi_app.dependency_overrides.pop(get_job_manager, None)
+
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload["scope"] == "knowledge"
+    assert payload["status"] == "queued"
+    assert payload["job_id"] is not None
+    assert payload["job_uuid"]
+
+
 def test_companion_routes_include_rbac_rate_limits() -> None:
     route_resources = {
         (route.path, next(iter(sorted(route.methods or [])))): [
@@ -290,6 +359,8 @@ def test_companion_routes_include_rbac_rate_limits() -> None:
     assert "companion.goals.read" in route_resources[("/goals", "GET")]
     assert "companion.goals.create" in route_resources[("/goals", "POST")]
     assert "companion.goals.update" in route_resources[("/goals/{goal_id}", "PATCH")]
+    assert "companion.lifecycle.purge" in route_resources[("/purge", "POST")]
+    assert "companion.lifecycle.rebuild" in route_resources[("/rebuild", "POST")]
 
 
 def test_companion_activity_create_offloads_db_and_usage_logging(

@@ -9,7 +9,9 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_personalization_db_for_user,
@@ -25,10 +27,21 @@ from tldw_Server_API.app.api.v1.schemas.companion import (
     CompanionGoalListResponse,
     CompanionGoalUpdate,
     CompanionKnowledgeListResponse,
+    CompanionLifecycleResponse,
+    CompanionPurgeRequest,
+    CompanionRebuildRequest,
 )
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.feature_flags import is_personalization_enabled
 from tldw_Server_API.app.core.Personalization.companion_activity import build_manual_check_in_activity
+from tldw_Server_API.app.core.Personalization.companion_lifecycle import purge_companion_scope
+from tldw_Server_API.app.core.Personalization.companion_reflection_jobs import (
+    COMPANION_REBUILD_JOB_TYPE,
+    COMPANION_REFLECTION_DOMAIN,
+    companion_reflection_queue,
+)
 
 
 router = APIRouter()
@@ -294,3 +307,76 @@ async def update_companion_goal(
         metadata={"updated_fields": sorted(fields.keys())},
     )
     return CompanionGoal.model_validate(goal)
+
+
+@router.post(
+    "/purge",
+    response_model=CompanionLifecycleResponse,
+    tags=["companion"],
+    dependencies=[Depends(rbac_rate_limit("companion.lifecycle.purge"))],
+)
+async def purge_companion_data(
+    payload: CompanionPurgeRequest = Body(...),
+    db: PersonalizationDB = Depends(get_personalization_db_for_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
+    log: UsageEventLogger = Depends(get_usage_event_logger),
+) -> CompanionLifecycleResponse:
+    """Purge one rebuildable slice of companion state while preserving explicit activity by default."""
+    _ensure_personalization_enabled()
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
+    result = await asyncio.to_thread(
+        purge_companion_scope,
+        user_id=log.user_id,
+        scope=payload.scope,
+        personalization_db=db,
+        collections_db=collections_db,
+    )
+    await asyncio.to_thread(
+        log.log_event,
+        "companion.lifecycle.purge",
+        tags=[payload.scope],
+        metadata={"deleted_counts": result["deleted_counts"]},
+    )
+    return CompanionLifecycleResponse.model_validate(result)
+
+
+@router.post(
+    "/rebuild",
+    response_model=CompanionLifecycleResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["companion"],
+    dependencies=[Depends(rbac_rate_limit("companion.lifecycle.rebuild"))],
+)
+async def rebuild_companion_data(
+    payload: CompanionRebuildRequest = Body(...),
+    db: PersonalizationDB = Depends(get_personalization_db_for_user),
+    jm: JobManager = Depends(get_job_manager),
+    log: UsageEventLogger = Depends(get_usage_event_logger),
+) -> CompanionLifecycleResponse:
+    """Queue a scoped companion rebuild job."""
+    _ensure_personalization_enabled()
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
+    job = await asyncio.to_thread(
+        jm.create_job,
+        domain=COMPANION_REFLECTION_DOMAIN,
+        queue=companion_reflection_queue(),
+        job_type=COMPANION_REBUILD_JOB_TYPE,
+        payload={"scope": payload.scope, "user_id": log.user_id},
+        owner_user_id=str(log.user_id),
+        priority=5,
+        max_retries=1,
+    )
+    job_id = job.get("id")
+    await asyncio.to_thread(
+        log.log_event,
+        "companion.lifecycle.rebuild",
+        resource_id=None if job_id is None else str(job_id),
+        tags=[payload.scope],
+        metadata={"job_uuid": job.get("uuid")},
+    )
+    return CompanionLifecycleResponse(
+        status=str(job.get("status") or "queued"),
+        scope=payload.scope,
+        job_id=None if job_id is None else int(job_id),
+        job_uuid=job.get("uuid"),
+    )

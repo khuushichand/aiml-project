@@ -12,15 +12,17 @@ from typing import Any
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Personalization.companion_lifecycle import rebuild_companion_scope
 
 
 COMPANION_REFLECTION_DOMAIN = "companion"
 COMPANION_REFLECTION_JOB_TYPE = "companion_reflection"
+COMPANION_REBUILD_JOB_TYPE = "companion_rebuild"
 
 
 def companion_reflection_queue() -> str:
     """Return the queue name used for companion reflection jobs."""
-    queue = "companion-reflection"
+    queue = "default"
     return queue
 
 
@@ -266,6 +268,14 @@ def run_companion_reflection_job(
 async def handle_companion_reflection_job(job: dict[str, Any]) -> dict[str, Any]:
     payload = _parse_payload(job.get("payload"))
     user_id = _resolve_user_id(job, payload)
+    job_type = str(job.get("job_type") or "").strip().lower()
+    if job_type == COMPANION_REBUILD_JOB_TYPE:
+        scope = str(payload.get("scope") or "knowledge").strip().lower() or "knowledge"
+        return await asyncio.to_thread(
+            rebuild_companion_scope,
+            user_id=user_id,
+            scope=scope,
+        )
     cadence = str(payload.get("cadence") or "daily").strip().lower() or "daily"
     scheduled_for = payload.get("scheduled_for")
     return await asyncio.to_thread(
@@ -280,6 +290,7 @@ async def handle_companion_reflection_job(job: dict[str, Any]) -> dict[str, Any]
 __all__ = [
     "COMPANION_REFLECTION_DOMAIN",
     "COMPANION_REFLECTION_JOB_TYPE",
+    "COMPANION_REBUILD_JOB_TYPE",
     "companion_reflection_queue",
     "handle_companion_reflection_job",
     "run_companion_reflection_job",

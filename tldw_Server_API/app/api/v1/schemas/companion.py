@@ -3,7 +3,7 @@ from __future__ import annotations
 """Pydantic schemas for the companion personalization API."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -163,3 +163,33 @@ class CompanionReflectionItem(BaseModel):
     summary: str
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
+
+
+CompanionLifecycleScope = Literal["knowledge", "reflections", "derived_goals", "goal_progress"]
+
+
+class CompanionPurgeRequest(BaseModel):
+    """Request payload for purging a scoped slice of companion state."""
+
+    scope: CompanionLifecycleScope
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CompanionRebuildRequest(BaseModel):
+    """Request payload for rebuilding a scoped slice of companion state."""
+
+    scope: CompanionLifecycleScope
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CompanionLifecycleResponse(BaseModel):
+    """Response payload for purge and rebuild lifecycle operations."""
+
+    status: str
+    scope: CompanionLifecycleScope
+    deleted_counts: dict[str, int] = Field(default_factory=dict)
+    rebuilt_counts: dict[str, int] = Field(default_factory=dict)
+    job_id: int | None = None
+    job_uuid: str | None = None

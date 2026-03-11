@@ -817,6 +817,36 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
+    def delete_companion_reflection_activity_events(self, user_id: str) -> tuple[list[str], int]:
+        """Delete persisted reflection activity rows and return their ids."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT id
+                    FROM companion_activity_events
+                    WHERE user_id = ?
+                      AND (event_type = 'companion_reflection_generated' OR source_type = 'companion_reflection')
+                    """,
+                    (str(user_id),),
+                ).fetchall()
+                reflection_ids = [str(row["id"]) for row in rows]
+                if not reflection_ids:
+                    return [], 0
+                cur = conn.execute(
+                    """
+                    DELETE FROM companion_activity_events
+                    WHERE user_id = ?
+                      AND (event_type = 'companion_reflection_generated' OR source_type = 'companion_reflection')
+                    """,
+                    (str(user_id),),
+                )
+                conn.commit()
+                return reflection_ids, int(cur.rowcount or 0)
+            finally:
+                conn.close()
+
     def upsert_companion_knowledge_card(
         self,
         *,
@@ -915,6 +945,20 @@ class PersonalizationDB:
                     }
                     for row in rows
                 ]
+            finally:
+                conn.close()
+
+    def delete_companion_knowledge_cards(self, user_id: str) -> int:
+        """Delete all derived companion knowledge cards for a user."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM companion_knowledge_cards WHERE user_id = ?",
+                    (str(user_id),),
+                )
+                conn.commit()
+                return int(cur.rowcount or 0)
             finally:
                 conn.close()
 
@@ -1106,6 +1150,39 @@ class PersonalizationDB:
                     }
                     for row in rows
                 ]
+            finally:
+                conn.close()
+
+    def delete_companion_goals_by_origin_kind(self, user_id: str, origin_kind: str) -> int:
+        """Delete companion goals matching a specific origin kind."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM companion_goals WHERE user_id = ? AND origin_kind = ?",
+                    (str(user_id), str(origin_kind)),
+                )
+                conn.commit()
+                return int(cur.rowcount or 0)
+            finally:
+                conn.close()
+
+    def reset_companion_goal_progress(self, user_id: str, progress_mode: str = "computed") -> int:
+        """Clear computed goal progress without deleting the underlying goal rows."""
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    UPDATE companion_goals
+                    SET progress_json = ?, evidence_json = ?, updated_at = ?
+                    WHERE user_id = ? AND progress_mode = ?
+                    """,
+                    ("{}", "[]", now, str(user_id), str(progress_mode)),
+                )
+                conn.commit()
+                return int(cur.rowcount or 0)
             finally:
                 conn.close()
 

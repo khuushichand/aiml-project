@@ -84,3 +84,43 @@ def test_notifications_list_returns_companion_reflection_rows(companion_notifica
     assert item["link_type"] == "companion_reflection"
     assert item["link_id"] == "reflection-1"
     assert item["source_job_id"] == "601"
+
+
+def test_delete_companion_reflection_notifications_by_link_id(companion_notifications_app) -> None:
+    cdb = CollectionsDatabase.for_user(user_id=882)
+    deleted_target = cdb.create_user_notification(
+        kind="companion_reflection",
+        title="Daily reflection",
+        message="You have been focusing on project-alpha.",
+        severity="info",
+        source_job_id="601",
+        source_domain="companion",
+        source_job_type="companion_reflection",
+        link_type="companion_reflection",
+        link_id="reflection-1",
+        dedupe_key="companion_reflection:reflection-1",
+    )
+    cdb.create_user_notification(
+        kind="companion_reflection",
+        title="Weekly reflection",
+        message="You returned to the backlog review.",
+        severity="info",
+        source_job_id="602",
+        source_domain="companion",
+        source_job_type="companion_reflection",
+        link_type="companion_reflection",
+        link_id="reflection-2",
+        dedupe_key="companion_reflection:reflection-2",
+    )
+
+    deleted = cdb.delete_user_notifications_by_link(
+        link_type="companion_reflection",
+        link_ids=["reflection-1"],
+    )
+
+    assert deleted == 1
+    rows = cdb.list_user_notifications(limit=10, offset=0)
+    remaining_link_ids = {row.link_id for row in rows}
+    assert "reflection-1" not in remaining_link_ids
+    assert "reflection-2" in remaining_link_ids
+    assert all(row.id != deleted_target.id for row in rows)

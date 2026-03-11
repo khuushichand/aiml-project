@@ -9,7 +9,11 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Personalization.companion_reflection_jobs import run_companion_reflection_job
+from tldw_Server_API.app.core.Personalization.companion_reflection_jobs import (
+    COMPANION_REBUILD_JOB_TYPE,
+    handle_companion_reflection_job,
+    run_companion_reflection_job,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -170,3 +174,43 @@ def test_companion_reflection_job_reuses_existing_reflection_outside_recent_wind
     reflections = [row for row in rows if row["event_type"] == "companion_reflection_generated"]
     assert total == 206
     assert len(reflections) == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_companion_job_dispatches_rebuild_scope(companion_reflection_env) -> None:
+    personalization_db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path("1")))
+    personalization_db.update_profile("1", enabled=1)
+    personalization_db.insert_companion_activity_event(
+        user_id="1",
+        event_type="reading_item_saved",
+        source_type="reading_item",
+        source_id="101",
+        surface="api.reading",
+        dedupe_key="reading_item_saved:101",
+        tags=["project-alpha", "research"],
+        provenance={"capture_mode": "explicit"},
+        metadata={"title": "Alpha kickoff"},
+    )
+    personalization_db.insert_companion_activity_event(
+        user_id="1",
+        event_type="note_updated",
+        source_type="note",
+        source_id="202",
+        surface="api.notes",
+        dedupe_key="note_updated:202",
+        tags=["project-alpha", "research"],
+        provenance={"capture_mode": "explicit"},
+        metadata={"title": "Backlog review notes"},
+    )
+
+    result = await handle_companion_reflection_job(
+        {
+            "job_type": COMPANION_REBUILD_JOB_TYPE,
+            "payload": {"user_id": "1", "scope": "knowledge"},
+        }
+    )
+
+    assert result["status"] == "completed"
+    assert result["scope"] == "knowledge"
+    cards = personalization_db.list_companion_knowledge_cards("1", status="active")
+    assert cards
