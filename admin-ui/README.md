@@ -46,6 +46,11 @@ The server-side API-key login route also requires `AUTH_MODE=single_user`; it is
 multi-user deployments even if the UI toggle is enabled.
 Leave both disabled for enterprise/live-customer admin use.
 
+`NEXT_PUBLIC_ADMIN_UI_ENABLE_UNSAFE_LOCAL_TOOLS=true` re-enables local-only helper flows in the
+admin UI for development and staging only. When unset or `false`, local-only DSR processing,
+backup scheduling, and monitoring mutations stay disabled so the UI remains production-safe by
+default.
+
 Optional JWT local verification (middleware) reads `JWT_SECRET_KEY`, `JWT_SECONDARY_SECRET`,
 and `JWT_ALGORITHM` (HS256/384/512). If missing or invalid, the middleware falls back
 to backend verification.
@@ -57,6 +62,24 @@ bun run dev
 ```
 
 Open `http://localhost:3001`.
+
+## Quality Gate
+
+Run the production gate from `admin-ui/` before cutting a release or merging risky admin changes:
+
+```bash
+bun run lint
+bun run typecheck
+bun run test
+bun run test:a11y
+bun run build
+bun run test:smoke
+```
+
+`test:smoke` starts a local Next server by default, stubs the critical `/api/auth/*` and `/api/proxy/*`
+calls in-browser, and verifies the hardened password+MFA login path plus privileged user actions.
+It does not require a live backend. To point the smoke suite at an already running server, set
+`TLDW_ADMIN_UI_AUTOSTART=false` and `TLDW_ADMIN_UI_URL=http://127.0.0.1:3001`.
 
 ## Authentication
 

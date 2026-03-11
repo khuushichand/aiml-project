@@ -146,6 +146,32 @@ describe("server capabilities docs-info merge", () => {
     expect(capabilities.hasMedia).toBe(true)
   })
 
+  it("detects ingestion source capability from advertised source routes", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "ingestion-sources-version" },
+      paths: {
+        "/api/v1/ingestion-sources": {},
+        "/api/v1/ingestion-sources/{source_id}": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasIngestionSources).toBe(true)
+  })
+
+  it("keeps ingestion source capability available through the bundled fallback spec", async () => {
+    mocks.getOpenAPISpec.mockRejectedValue(new Error("openapi unavailable"))
+    mocks.bgRequest.mockRejectedValue(new Error("docs-info unavailable"))
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasIngestionSources).toBe(true)
+  })
+
   it("derives hasAudio from STT-only support while keeping TTS/voice flags explicit", async () => {
     mocks.getOpenAPISpec.mockResolvedValue({
       info: { version: "audio-split-stt" },

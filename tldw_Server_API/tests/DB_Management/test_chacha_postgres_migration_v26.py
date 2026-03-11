@@ -105,9 +105,9 @@ def test_postgres_statement_conversion_includes_moodboard_tables_migration(
 def test_postgres_statement_conversion_includes_persona_session_surface_migration(
     char_rag_db: CharactersRAGDB,
 ) -> None:
-    """Verify v31 conversion output includes persona session activity surface persistence."""
+    """Verify v34 conversion output includes persona session activity surface persistence."""
 
-    sql = char_rag_db._MIGRATION_SQL_V30_TO_V31
+    sql = char_rag_db._MIGRATION_SQL_V33_TO_V34
     assert isinstance(sql, str) and "persona_sessions" in sql
 
     stmts = char_rag_db._convert_sqlite_schema_to_postgres_statements(sql)
@@ -116,15 +116,15 @@ def test_postgres_statement_conversion_includes_persona_session_surface_migratio
     full = "\n".join(stmts)
     assert "ALTER TABLE persona_sessions" in full
     assert "activity_surface TEXT NOT NULL DEFAULT 'api.persona'" in full
-    assert re.search(r"SET\s+version\s*=\s*31", full, flags=re.IGNORECASE)
+    assert re.search(r"SET\s+version\s*=\s*34", full, flags=re.IGNORECASE)
 
 
 def test_postgres_statement_conversion_includes_persona_session_preferences_migration(
     char_rag_db: CharactersRAGDB,
 ) -> None:
-    """Verify v32 conversion output includes persona session preferences persistence."""
+    """Verify v35 conversion output includes persona session preferences persistence."""
 
-    sql = char_rag_db._MIGRATION_SQL_V31_TO_V32
+    sql = char_rag_db._MIGRATION_SQL_V34_TO_V35
     assert isinstance(sql, str) and "persona_sessions" in sql
 
     stmts = char_rag_db._convert_sqlite_schema_to_postgres_statements(sql)
@@ -133,4 +133,4 @@ def test_postgres_statement_conversion_includes_persona_session_preferences_migr
     full = "\n".join(stmts)
     assert "ALTER TABLE persona_sessions" in full
     assert "preferences_json TEXT NOT NULL DEFAULT '{}'" in full
-    assert re.search(r"SET\s+version\s*=\s*32", full, flags=re.IGNORECASE)
+    assert re.search(r"SET\s+version\s*=\s*35", full, flags=re.IGNORECASE)

@@ -422,7 +422,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
     expect(mockSwitchWorkspace).toHaveBeenCalledWith("workspace-beta")
   })
 
-  it("exports workspace bundle from the workspace menu", async () => {
+  it("exports workspace bundle from the settings menu", async () => {
     render(
       <WorkspaceHeader
         leftPaneOpen={true}
@@ -432,7 +432,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Export Workspace"))
 
     await waitFor(() => {
@@ -462,7 +462,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Export Workspace"))
 
     await waitFor(() => {
@@ -491,7 +491,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Export Citations (BibTeX)"))
 
     expect(createObjectUrlSpy).toHaveBeenCalledTimes(1)
@@ -508,7 +508,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Literature Review"))
 
     expect(mockCreateNewWorkspace).toHaveBeenCalledWith(
@@ -545,7 +545,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
     })
   })
 
-  it("opens Customize banner modal from workspace menu", async () => {
+  it("opens Customize banner modal from settings menu", async () => {
     render(
       <WorkspaceHeader
         leftPaneOpen={true}
@@ -555,7 +555,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Customize banner"))
 
     const modal = await screen.findByRole("dialog", {
@@ -590,7 +590,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Customize banner"))
 
     const modal = await screen.findByRole("dialog", {
@@ -644,7 +644,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Customize banner"))
 
     const modal = await screen.findByRole("dialog", {
@@ -676,7 +676,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Archive Current Workspace"))
 
     expect(confirmSpy).toHaveBeenCalled()
@@ -721,7 +721,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Keyboard Shortcuts"))
 
     const shortcutsModal = await screen.findByRole("dialog", {
@@ -734,7 +734,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
     expect(within(shortcutsModal).getByText("Focus studio")).toBeInTheDocument()
   })
 
-  it("opens telemetry summary modal from workspace menu", async () => {
+  it("opens telemetry summary modal from settings menu", async () => {
     render(
       <WorkspaceHeader
         leftPaneOpen={true}
@@ -744,7 +744,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -774,7 +774,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -805,7 +805,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -855,7 +855,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -886,7 +886,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -911,161 +911,9 @@ describe("WorkspaceHeader workspace browser modal", () => {
     ).toHaveTextContent("10%")
   })
 
-  it("renders proactive storage usage indicator with formatted capacity", () => {
-    render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={2.1 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-      />
-    )
+  // Storage and connection indicators moved to WorkspaceStatusBar component
 
-    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent("Capacity Payload 2.1/5 MB")
-    expect(indicator.className).toContain("text-text-muted")
-  })
-
-  it("includes browser profile storage usage when provided", () => {
-    render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={2.1 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-        storageOriginUsedBytes={120 * 1024 * 1024}
-        storageOriginQuotaBytes={1000 * 1024 * 1024}
-      />
-    )
-
-    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent(
-      "Capacity Payload 2.1/5 MB | Browser 120.0/1000 MB"
-    )
-  })
-
-  it("includes account storage usage when provided", () => {
-    render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={2.1 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-        storageAccountUsedBytes={300 * 1024 * 1024}
-        storageAccountQuotaBytes={1000 * 1024 * 1024}
-      />
-    )
-
-    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent(
-      "Capacity Payload 2.1/5 MB | Account 300.0/1000 MB"
-    )
-  })
-
-  it("shows connection status indicator tone for healthy, degraded, and disconnected states", () => {
-    const { rerender } = render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-      />
-    )
-
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator")
-    ).toHaveTextContent("Connected")
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator").className
-    ).toContain("text-success")
-
-    mockConnectionStoreState.state = {
-      ...mockConnectionStoreState.state,
-      phase: "connected",
-      isConnected: true,
-      errorKind: "partial",
-      knowledgeStatus: "offline"
-    }
-
-    rerender(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-      />
-    )
-
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator")
-    ).toHaveTextContent("Degraded")
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator").className
-    ).toContain("text-warning")
-
-    mockConnectionStoreState.state = {
-      ...mockConnectionStoreState.state,
-      phase: "error",
-      isConnected: false,
-      errorKind: "unreachable",
-      lastError: "Network timeout"
-    }
-
-    rerender(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-      />
-    )
-
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator")
-    ).toHaveTextContent("Disconnected")
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator").className
-    ).toContain("text-error")
-  })
-
-  it("highlights storage usage indicator at warning and critical thresholds", () => {
-    const { rerender } = render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={4.1 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-      />
-    )
-
-    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator.className).toContain("text-warning")
-
-    rerender(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={4.8 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-      />
-    )
-
-    expect(screen.getByTestId("workspace-storage-usage-indicator").className).toContain(
-      "text-error"
-    )
-  })
-
-  it("hides status guardrail indicators and telemetry menu when rollout flags are disabled", async () => {
+  it("hides telemetry menu when rollout flags are disabled", async () => {
     render(
       <WorkspaceHeader
         leftPaneOpen={true}
@@ -1077,14 +925,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    expect(
-      screen.queryByTestId("workspace-connection-status-indicator")
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByTestId("workspace-storage-usage-indicator")
-    ).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     expect(screen.queryByText("Telemetry summary")).not.toBeInTheDocument()
   })
 })

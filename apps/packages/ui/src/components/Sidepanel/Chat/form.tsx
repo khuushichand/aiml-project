@@ -2529,7 +2529,10 @@ export const SidepanelForm = ({
               {/* Inline Model Parameters Panel (Pro mode only) */}
               {wrapComposerProfile(
                 "sidepanel-model-params-panel",
-                <ModelParamsPanel onOpenFullSettings={handleOpenModelSettings} />
+                <ModelParamsPanel
+                  onOpenFullSettings={handleOpenModelSettings}
+                  selectedModel={selectedModel}
+                />
               )}
               <div className="flex">
                 <form

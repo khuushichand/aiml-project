@@ -13,12 +13,96 @@ os.environ["AUTH_MODE"] = "single_user"
 os.environ["CSRF_ENABLED"] = "false"
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_security_config
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import SecurityConfig
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
 
 ########################################################################################################################
 # Test Client Setup
+
+
+def _make_structured_prompt_definition_payload() -> dict:
+    return {
+        "schema_version": 1,
+        "format": "structured",
+        "variables": [
+            {
+                "name": "input",
+                "label": "Input",
+                "required": True,
+                "input_type": "textarea",
+            }
+        ],
+        "blocks": [
+            {
+                "id": "identity",
+                "name": "Identity",
+                "role": "system",
+                "content": "You are a careful evaluator.",
+                "enabled": True,
+                "order": 10,
+                "is_template": False,
+            },
+            {
+                "id": "task",
+                "name": "Task",
+                "role": "user",
+                "content": "Evaluate {{input}}",
+                "enabled": True,
+                "order": 20,
+                "is_template": True,
+            },
+        ],
+        "assembly_config": {
+            "legacy_system_roles": ["system", "developer"],
+            "legacy_user_roles": ["user"],
+            "block_separator": "\n\n",
+        },
+    }
+
+
+def _make_structured_prompt_definition_with_default(*, default_value: str) -> dict:
+    definition = _make_structured_prompt_definition_payload()
+    definition["variables"][0]["default_value"] = default_value
+    return definition
+
+
+def _make_structured_prompt_definition_with_literal_user_content(
+    *,
+    user_content: str,
+) -> dict:
+    definition = _make_structured_prompt_definition_payload()
+    definition["variables"] = []
+    definition["blocks"][1]["content"] = user_content
+    definition["blocks"][1]["is_template"] = False
+    return definition
+
+
+def _make_structured_prompt_definition_exceeding_total_runtime_limit() -> dict:
+    return {
+        "schema_version": 1,
+        "format": "structured",
+        "variables": [],
+        "blocks": [
+            {
+                "id": f"assistant_{index + 1}",
+                "name": f"Assistant Block {index + 1}",
+                "role": "assistant",
+                "content": "x" * 49000,
+                "enabled": True,
+                "order": (index + 1) * 10,
+                "is_template": False,
+            }
+            for index in range(11)
+        ],
+        "assembly_config": {
+            "legacy_system_roles": ["system", "developer"],
+            "legacy_user_roles": ["user"],
+            "block_separator": "\n\n",
+        },
+    }
 
 @pytest.fixture
 def client(mock_user, test_db):
@@ -295,6 +379,490 @@ class TestPromptEndpoints:
                 data = response.json()
                 assert "output" in data
                 assert data["tokens_used"] == 100
+
+    def test_preview_prompt_renders_structured_messages(self, client, test_db, project_id, auth_headers):
+
+        """Test previewing a structured prompt with modules/examples/signature output."""
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        signature = test_db.create_signature(
+            project_id=project_id,
+            name="Preview Signature",
+            input_schema=[{"name": "input", "type": "string"}],
+            output_schema=[{"name": "answer", "type": "string"}],
+        )
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts/preview",
+            json={
+                "project_id": project_id,
+                "signature_id": signature["id"],
+                "prompt_format": "structured",
+                "prompt_schema_version": 1,
+                "prompt_definition": _make_structured_prompt_definition_payload(),
+                "few_shot_examples": [
+                    {
+                        "inputs": {"input": "Indexes"},
+                        "outputs": {"answer": "Use the covering index."},
+                    }
+                ],
+                "modules_config": [
+                    {"type": "style_rules", "enabled": True, "config": {"tone": "concise"}}
+                ],
+                "variables": {"input": "SQLite FTS"},
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert [message["role"] for message in data["assembled_messages"]] == [
+            "system",
+            "developer",
+            "user",
+            "assistant",
+            "user",
+        ]
+        assert data["assembled_messages"][1]["content"] == "Module style_rules: tone=concise"
+        assert data["assembled_messages"][4]["content"].startswith("Evaluate SQLite FTS")
+        assert "Please format your response as JSON" in data["assembled_messages"][4]["content"]
+
+    def test_preview_prompt_rejects_missing_required_variable_with_client_error(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts/preview",
+            json={
+                "project_id": project_id,
+                "prompt_format": "structured",
+                "prompt_schema_version": 1,
+                "prompt_definition": _make_structured_prompt_definition_payload(),
+                "variables": {},
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400, response.text
+        assert "Missing required variable: input" in response.json()["detail"]
+
+    def test_preview_prompt_rejects_oversized_assistant_block(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            definition = {
+                "schema_version": 1,
+                "format": "structured",
+                "variables": [],
+                "blocks": [
+                    {
+                        "id": "assistant_example",
+                        "name": "Assistant Example",
+                        "role": "assistant",
+                        "content": "x" * 140,
+                        "enabled": True,
+                        "order": 10,
+                        "is_template": False,
+                    }
+                ],
+            }
+
+            response = client.post(
+                "/api/v1/prompt-studio/prompts/preview",
+                json={
+                    "project_id": project_id,
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": definition,
+                    "variables": {},
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 400, response.text
+            assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
+    def test_preview_prompt_rejects_structured_payload_exceeding_total_runtime_limit(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts/preview",
+            json={
+                "project_id": project_id,
+                "prompt_format": "structured",
+                "prompt_schema_version": 1,
+                "prompt_definition": _make_structured_prompt_definition_exceeding_total_runtime_limit(),
+                "variables": {},
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400, response.text
+        assert "maximum total length" in response.json()["detail"]
+
+    def test_create_prompt_rejects_signature_augmented_payload_exceeding_security_limit(
+        self,
+        client,
+        test_db,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        signature = test_db.create_signature(
+            project_id=project_id,
+            name="Create Limit Signature",
+            input_schema=[{"name": "input", "type": "string"}],
+            output_schema=[{"name": "x" * 20, "type": "string"}],
+        )
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=120,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "signature_id": signature["id"],
+                    "name": "Signature Length Prompt",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": _make_structured_prompt_definition_with_literal_user_content(
+                        user_content="x" * 40
+                    ),
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 400, response.text
+            assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
+    def test_convert_prompt_returns_structured_definition(self, client, project_id, auth_headers):
+
+        """Test converting a legacy prompt payload into a structured definition."""
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts/convert",
+            json={
+                "project_id": project_id,
+                "system_prompt": "Be precise about {input}.",
+                "user_prompt": "Evaluate $input against <baseline>.",
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["prompt_format"] == "structured"
+        assert data["prompt_schema_version"] == 1
+        assert data["extracted_variables"] == ["input", "baseline"]
+        assert data["prompt_definition"]["blocks"][0]["content"] == "Be precise about {{input}}."
+        assert data["prompt_definition"]["blocks"][1]["content"] == (
+            "Evaluate {{input}} against {{baseline}}."
+        )
+
+    def test_create_prompt_rejects_structured_payload_exceeding_security_limit(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            definition = _make_structured_prompt_definition_payload()
+            definition["blocks"][1]["content"] = "Evaluate " + ("x" * 140)
+
+            response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "name": "Too Long Structured Prompt",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": definition,
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 400, response.text
+            assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
+    def test_create_prompt_rejects_oversized_assistant_block(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            definition = {
+                "schema_version": 1,
+                "format": "structured",
+                "variables": [],
+                "blocks": [
+                    {
+                        "id": "assistant_example",
+                        "name": "Assistant Example",
+                        "role": "assistant",
+                        "content": "x" * 140,
+                        "enabled": True,
+                        "order": 10,
+                        "is_template": False,
+                    }
+                ],
+            }
+
+            response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "name": "Oversized Structured Assistant Prompt",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": definition,
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 400, response.text
+            assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
+    def test_create_prompt_rejects_oversized_variable_default_value(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "name": "Oversized Structured Default Prompt",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": _make_structured_prompt_definition_with_default(
+                        default_value="x" * 140
+                    ),
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert response.status_code == 400, response.text
+            assert "exceeds maximum length" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
+    def test_create_prompt_rejects_structured_payload_exceeding_total_runtime_limit(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        response = client.post(
+            "/api/v1/prompt-studio/prompts",
+            json={
+                "project_id": project_id,
+                "name": "Aggregate Runtime Limit Prompt",
+                "prompt_format": "structured",
+                "prompt_schema_version": 1,
+                "prompt_definition": _make_structured_prompt_definition_exceeding_total_runtime_limit(),
+                "change_description": "Initial version",
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400, response.text
+        assert "maximum total length" in response.json()["detail"]
+
+    def test_update_prompt_rejects_oversized_variable_default_value(
+        self,
+        client,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=100,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            create_response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "name": "Structured Prompt For Update",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": _make_structured_prompt_definition_payload(),
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert create_response.status_code in [200, 201], create_response.text
+            prompt_id = create_response.json()["id"]
+
+            update_response = client.put(
+                f"/api/v1/prompt-studio/prompts/update/{prompt_id}",
+                json={
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": _make_structured_prompt_definition_with_default(
+                        default_value="x" * 140
+                    ),
+                    "change_description": "Introduce oversized default",
+                },
+                headers=auth_headers,
+            )
+
+            assert update_response.status_code == 400, update_response.text
+            assert "exceeds maximum length" in update_response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
+
+    def test_update_prompt_rejects_signature_augmented_payload_exceeding_security_limit(
+        self,
+        client,
+        test_db,
+        project_id,
+        auth_headers,
+    ):
+        if not project_id:
+            pytest.skip("Project creation failed")
+
+        signature = test_db.create_signature(
+            project_id=project_id,
+            name="Update Limit Signature",
+            input_schema=[{"name": "input", "type": "string"}],
+            output_schema=[{"name": "x" * 20, "type": "string"}],
+        )
+
+        app.dependency_overrides[get_security_config] = lambda: SecurityConfig(
+            max_prompt_length=120,
+            allowed_models=[],
+            blocked_patterns=[],
+            rate_limits={},
+        )
+
+        try:
+            create_response = client.post(
+                "/api/v1/prompt-studio/prompts",
+                json={
+                    "project_id": project_id,
+                    "signature_id": signature["id"],
+                    "name": "Structured Prompt With Signature",
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": _make_structured_prompt_definition_with_literal_user_content(
+                        user_content="short"
+                    ),
+                    "change_description": "Initial version",
+                },
+                headers=auth_headers,
+            )
+
+            assert create_response.status_code in [200, 201], create_response.text
+            prompt_id = create_response.json()["id"]
+
+            update_response = client.put(
+                f"/api/v1/prompt-studio/prompts/update/{prompt_id}",
+                json={
+                    "prompt_format": "structured",
+                    "prompt_schema_version": 1,
+                    "prompt_definition": _make_structured_prompt_definition_with_literal_user_content(
+                        user_content="x" * 40
+                    ),
+                    "change_description": "Increase task text",
+                },
+                headers=auth_headers,
+            )
+
+            assert update_response.status_code == 400, update_response.text
+            assert "exceeds maximum length" in update_response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_security_config, None)
 
 ########################################################################################################################
 # Test Case Endpoints Tests

@@ -302,6 +302,7 @@ describe("StudioPane Stage 2 workflows", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     Modal.destroyAll()
+    localStorage.removeItem("tldw:workspace-playground:recent-output-types:v1")
     isMobile = false
     mockUndoWorkspaceAction.mockReturnValue(true)
     mockScheduleWorkspaceUndoAction.mockImplementation(

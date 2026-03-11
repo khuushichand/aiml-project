@@ -11,9 +11,10 @@ import { useAlertRules } from './use-alert-rules';
 
 type HarnessProps = {
   setSuccess: (message: string) => void;
+  unsafeLocalToolsEnabled?: boolean;
 };
 
-function Harness({ setSuccess }: HarnessProps) {
+function Harness({ setSuccess, unsafeLocalToolsEnabled = false }: HarnessProps) {
   const {
     alertRules,
     alertRuleDraft,
@@ -22,7 +23,7 @@ function Harness({ setSuccess }: HarnessProps) {
     handleAlertRuleDraftChange,
     handleCreateAlertRule,
     handleDeleteAlertRule,
-  } = useAlertRules({ setSuccess });
+  } = useAlertRules({ setSuccess, unsafeLocalToolsEnabled });
 
   return (
     <div>
@@ -87,7 +88,7 @@ describe('useAlertRules', () => {
     writeStoredAlertRules([storedRule], localStorage);
     const setSuccess = vi.fn();
 
-    render(<Harness setSuccess={setSuccess} />);
+    render(<Harness setSuccess={setSuccess} unsafeLocalToolsEnabled />);
 
     await waitFor(() => {
       expect(screen.getByTestId('rules-count').textContent).toBe('1');
@@ -96,7 +97,7 @@ describe('useAlertRules', () => {
 
   it('surfaces validation errors for invalid drafts', async () => {
     const setSuccess = vi.fn();
-    render(<Harness setSuccess={setSuccess} />);
+    render(<Harness setSuccess={setSuccess} unsafeLocalToolsEnabled />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Set Invalid Draft' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create Rule' }));
@@ -110,7 +111,7 @@ describe('useAlertRules', () => {
 
   it('creates a valid rule, resets draft, persists, and reports success', async () => {
     const setSuccess = vi.fn();
-    render(<Harness setSuccess={setSuccess} />);
+    render(<Harness setSuccess={setSuccess} unsafeLocalToolsEnabled />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Set Valid Draft' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create Rule' }));
@@ -127,7 +128,7 @@ describe('useAlertRules', () => {
   it('deletes rules and persists removal', async () => {
     writeStoredAlertRules([storedRule], localStorage);
     const setSuccess = vi.fn();
-    render(<Harness setSuccess={setSuccess} />);
+    render(<Harness setSuccess={setSuccess} unsafeLocalToolsEnabled />);
 
     await waitFor(() => {
       expect(screen.getByTestId('rules-count').textContent).toBe('1');
@@ -139,5 +140,25 @@ describe('useAlertRules', () => {
     });
     expect(setSuccess).toHaveBeenCalledWith('Alert rule deleted');
     expect(readStoredAlertRules(localStorage)).toHaveLength(0);
+  });
+
+  it('does not hydrate or mutate locally stored rules in safe mode', async () => {
+    writeStoredAlertRules([storedRule], localStorage);
+    const setSuccess = vi.fn();
+
+    render(<Harness setSuccess={setSuccess} unsafeLocalToolsEnabled={false} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('rules-count').textContent).toBe('0');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set Valid Draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Rule' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('rules-count').textContent).toBe('0');
+    });
+    expect(setSuccess).not.toHaveBeenCalled();
+    expect(readStoredAlertRules(localStorage)).toHaveLength(1);
   });
 });

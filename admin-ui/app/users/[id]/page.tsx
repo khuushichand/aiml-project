@@ -9,18 +9,15 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
-import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Trash2, Clock, ShieldCheck, Plus, X } from 'lucide-react';
+import { ArrowLeft, Key, Building2, Users, Trash2, Clock, ShieldCheck, Plus, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { isSingleUserMode } from '@/lib/auth';
-import { formatDateTime } from '@/lib/format';
 import { parseOptionalInt } from '@/lib/number';
 import {
   deriveLimitPerMinute,
@@ -29,7 +26,14 @@ import {
   validateRateLimitInputs,
 } from '@/lib/rate-limits';
 import { canEditFromMemberships } from '@/lib/permissions';
-import { User, Permission, AuditLog, OrgMembership, TeamMembership } from '@/types';
+import { User, Permission, OrgMembership, TeamMembership } from '@/types';
+import {
+  UserProfileCard,
+  type UserProfileFormData,
+} from './components/UserProfileCard';
+import { UserSecurityCard } from './components/UserSecurityCard';
+import { UserMembershipDialogs } from './components/UserMembershipDialogs';
+import { useUserSecurity } from './hooks/use-user-security';
 import Link from 'next/link';
 
 type UserRateLimits = {
@@ -70,45 +74,7 @@ const roleOptions = [
 
 type UserRole = (typeof roleOptions)[number]['value'];
 
-type UserFormData = {
-  username: string;
-  email: string;
-  role: string;
-  is_active: boolean;
-  storage_quota_mb: number;
-};
-
 const isValidRole = (role: string): role is UserRole => roleOptions.some((option) => option.value === role);
-type MfaStatus = {
-  enabled: boolean;
-  has_secret: boolean;
-  has_backup_codes: boolean;
-  method?: string | null;
-};
-
-type UserSession = {
-  id: number;
-  ip_address?: string | null;
-  user_agent?: string | null;
-  created_at: string;
-  last_activity?: string | null;
-  expires_at?: string | null;
-};
-
-type PasswordResetResponse = {
-  force_password_change?: boolean;
-  message?: string;
-};
-
-type LoginHistoryStatus = 'success' | 'failure';
-
-type LoginHistoryEntry = {
-  id: string;
-  timestamp: string;
-  ipAddress?: string;
-  userAgent?: string;
-  status: LoginHistoryStatus;
-};
 
 type RateLimitRecord = {
   resource?: string;
@@ -168,57 +134,6 @@ const isForbiddenError = (err: unknown): boolean => {
     return /not authorized|forbidden|permission/i.test(err.message);
   }
   return false;
-};
-
-const formatDate = (dateStr?: string) => formatDateTime(dateStr, { fallback: 'Never' });
-
-const getLoginAttemptStatus = (entry: AuditLog): LoginHistoryStatus => {
-  const details = entry.details ?? {};
-  const raw = entry.raw ?? {};
-  const successValue = details.success ?? raw.success;
-  if (typeof successValue === 'boolean') {
-    return successValue ? 'success' : 'failure';
-  }
-
-  const statusText = String(details.status ?? details.result ?? raw.status ?? '').toLowerCase();
-  if (statusText.includes('fail') || statusText.includes('error') || statusText.includes('denied')) {
-    return 'failure';
-  }
-  if (statusText.includes('success') || statusText.includes('ok')) {
-    return 'success';
-  }
-
-  const actionText = String(entry.action ?? raw.action ?? '').toLowerCase();
-  if (actionText.includes('fail') || actionText.includes('denied')) {
-    return 'failure';
-  }
-  return 'success';
-};
-
-const toLoginHistoryEntry = (entry: AuditLog, index: number): LoginHistoryEntry => {
-  const details = entry.details ?? {};
-  const raw = entry.raw ?? {};
-  const ipValue = entry.ip_address
-    ?? (typeof details.ip_address === 'string' ? details.ip_address : undefined)
-    ?? (typeof details.ip === 'string' ? details.ip : undefined)
-    ?? (typeof raw.ip_address === 'string' ? raw.ip_address : undefined)
-    ?? (typeof raw.ip === 'string' ? raw.ip : undefined);
-  const detailsUserAgent = details['user_agent'];
-  const detailsUserAgentAlt = details['userAgent'];
-  const rawUserAgent = raw['user_agent'];
-  const rawUserAgentAlt = raw['userAgent'];
-  const userAgentValue = (typeof detailsUserAgent === 'string' ? detailsUserAgent : undefined)
-    ?? (typeof detailsUserAgentAlt === 'string' ? detailsUserAgentAlt : undefined)
-    ?? (typeof rawUserAgent === 'string' ? rawUserAgent : undefined)
-    ?? (typeof rawUserAgentAlt === 'string' ? rawUserAgentAlt : undefined);
-
-  return {
-    id: entry.id || `${entry.timestamp}-${index}`,
-    timestamp: entry.timestamp,
-    ipAddress: ipValue,
-    userAgent: userAgentValue,
-    status: getLoginAttemptStatus(entry),
-  };
 };
 
 const normalizePermissionOverrideList = (value: unknown): PermissionOverride[] => {
@@ -326,13 +241,6 @@ export default function UserDetailPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [isAuthorized, setIsAuthorized] = useState(true);
-  const [securityLoading, setSecurityLoading] = useState(false);
-  const [securityError, setSecurityError] = useState('');
-  const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
-  const [sessions, setSessions] = useState<UserSession[]>([]);
-  const [loginHistory, setLoginHistory] = useState<LoginHistoryEntry[]>([]);
-  const [loginHistoryLoading, setLoginHistoryLoading] = useState(false);
-  const [loginHistoryError, setLoginHistoryError] = useState('');
   const [showOrgMembershipsDialog, setShowOrgMembershipsDialog] = useState(false);
   const [showTeamMembershipsDialog, setShowTeamMembershipsDialog] = useState(false);
   const [orgMemberships, setOrgMemberships] = useState<OrgMembership[]>([]);
@@ -341,11 +249,8 @@ export default function UserDetailPage() {
   const [teamMembershipsLoading, setTeamMembershipsLoading] = useState(false);
   const [orgMembershipsError, setOrgMembershipsError] = useState('');
   const [teamMembershipsError, setTeamMembershipsError] = useState('');
-  const [forcePasswordChangeOnNextLogin, setForcePasswordChangeOnNextLogin] = useState(true);
-  const [passwordResetLoading, setPasswordResetLoading] = useState(false);
-  const [resetPasswordValue, setResetPasswordValue] = useState('');
 
-  const [formData, setFormData] = useState<UserFormData>({
+  const [formData, setFormData] = useState<UserProfileFormData>({
     username: '',
     email: '',
     role: 'user',
@@ -403,11 +308,6 @@ export default function UserDetailPage() {
       });
       const normalizedRateLimits = normalizeRateLimits(userValue.rate_limits);
       applyRateLimits(normalizedRateLimits);
-      const forceChange =
-        typeof userValue.metadata?.force_password_change === 'boolean'
-          ? userValue.metadata.force_password_change
-          : true;
-      setForcePasswordChangeOnNextLogin(forceChange);
 
       try {
         const currentUser = await api.getCurrentUser();
@@ -446,71 +346,16 @@ export default function UserDetailPage() {
       setLoading(false);
     }
   }, [applyRateLimits, userId]);
-
-  const loadSecurity = useCallback(async () => {
-    if (!userId) return;
-    try {
-      setSecurityLoading(true);
-      setSecurityError('');
-      const [mfaResult, sessionsResult] = await Promise.allSettled([
-        api.getUserMfaStatus(userId),
-        api.getUserSessions(userId),
-      ]);
-
-      if (mfaResult.status === 'fulfilled') {
-        setMfaStatus(mfaResult.value as MfaStatus);
-      } else {
-        setMfaStatus(null);
-      }
-
-      if (sessionsResult.status === 'fulfilled') {
-        setSessions(Array.isArray(sessionsResult.value) ? (sessionsResult.value as UserSession[]) : []);
-      } else {
-        setSessions([]);
-      }
-
-      if (mfaResult.status === 'rejected' || sessionsResult.status === 'rejected') {
-        setSecurityError('Failed to load security controls.');
-      }
-    } catch (err: unknown) {
-      console.error('Failed to load security controls:', err);
-      setSecurityError('Failed to load security controls.');
-      setMfaStatus(null);
-      setSessions([]);
-    } finally {
-      setSecurityLoading(false);
-    }
-  }, [userId]);
-
-  const loadLoginHistory = useCallback(async () => {
-    if (!userId) return;
-    try {
-      setLoginHistoryLoading(true);
-      setLoginHistoryError('');
-      const response = await api.getAuditLogs({
-        user_id: String(userId),
-        action: 'login',
-        limit: '20',
-        offset: '0',
-      });
-      const entries = Array.isArray(response?.entries)
-        ? (response.entries as AuditLog[])
-        : [];
-      const mapped = entries.map((entry, index) => toLoginHistoryEntry(entry, index));
-      mapped.sort((a, b) => {
-        const aTime = Date.parse(a.timestamp || '');
-        const bTime = Date.parse(b.timestamp || '');
-        return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
-      });
-      setLoginHistory(mapped.slice(0, 20));
-    } catch (err: unknown) {
-      console.error('Failed to load login history:', err);
-      setLoginHistory([]);
-      setLoginHistoryError('Failed to load login history.');
-    } finally {
-      setLoginHistoryLoading(false);
-    }
-  }, [userId]);
+  const userSecurity = useUserSecurity({
+    userId,
+    user,
+    requirePasswordReauth,
+    promptPrivilegedAction,
+    onUserRefresh: loadUser,
+    showError,
+    toastSuccess,
+  });
+  const { loadSecurity, loadLoginHistory } = userSecurity;
 
   const loadOrgMemberships = useCallback(async () => {
     if (!userId) return;
@@ -633,7 +478,7 @@ export default function UserDetailPage() {
       void loadPermissions();
       void loadLoginHistory();
     }
-  }, [user, isAuthorized, loadLoginHistory, loadSecurity, loadPermissions]);
+  }, [user, isAuthorized, loadLoginHistory, loadPermissions, loadSecurity]);
 
   const handleSave = async () => {
     if (!isAuthorized) {
@@ -705,110 +550,6 @@ export default function UserDetailPage() {
       }
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleDisableMfa = async () => {
-    if (!mfaStatus?.enabled) return;
-    const approval = await promptPrivilegedAction({
-      title: 'Disable MFA',
-      message: `Disable MFA for ${user?.username || user?.email || 'this user'}?`,
-      confirmText: 'Disable MFA',
-      requirePassword: requirePasswordReauth,
-    });
-    if (!approval) return;
-
-    try {
-      await api.disableUserMfa(userId, {
-        reason: approval.reason,
-        admin_password: approval.adminPassword,
-      });
-      toastSuccess('MFA disabled', 'Multi-factor authentication has been turned off.');
-      void loadSecurity();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to disable MFA';
-      showError('Disable MFA failed', message);
-    }
-  };
-
-  const handleRevokeSession = async (session: UserSession) => {
-    const approval = await promptPrivilegedAction({
-      title: 'Revoke Session',
-      message: 'Revoke this session? The user will be signed out on that device.',
-      confirmText: 'Revoke',
-      requirePassword: requirePasswordReauth,
-    });
-    if (!approval) return;
-
-    try {
-      await api.revokeUserSession(userId, session.id.toString(), {
-        reason: approval.reason,
-        admin_password: approval.adminPassword,
-      });
-      toastSuccess('Session revoked', 'The session has been revoked.');
-      void loadSecurity();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to revoke session';
-      showError('Revoke failed', message);
-    }
-  };
-
-  const handleRevokeAllSessions = async () => {
-    const approval = await promptPrivilegedAction({
-      title: 'Revoke All Sessions',
-      message: 'Revoke all active sessions for this user? They will be signed out everywhere.',
-      confirmText: 'Revoke all',
-      requirePassword: requirePasswordReauth,
-    });
-    if (!approval) return;
-
-    try {
-      await api.revokeAllUserSessions(userId, {
-        reason: approval.reason,
-        admin_password: approval.adminPassword,
-      });
-      toastSuccess('Sessions revoked', 'All sessions have been revoked.');
-      void loadSecurity();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to revoke sessions';
-      showError('Revoke failed', message);
-    }
-  };
-
-  const handleResetPassword = async () => {
-    const normalizedTemporaryPassword = resetPasswordValue.trim();
-    if (normalizedTemporaryPassword.length < 10) {
-      showError('Password reset failed', 'Enter a temporary password with at least 10 characters.');
-      return;
-    }
-
-    const approval = await promptPrivilegedAction({
-      title: 'Reset Password',
-      message: `Reset password for ${user?.username || user?.email || 'this user'}?`,
-      confirmText: 'Reset password',
-      requirePassword: requirePasswordReauth,
-    });
-    if (!approval) return;
-
-    try {
-      setPasswordResetLoading(true);
-      await api.resetUserPassword(userId, {
-        temporary_password: normalizedTemporaryPassword,
-        force_password_change: forcePasswordChangeOnNextLogin,
-        reason: approval.reason,
-        admin_password: approval.adminPassword,
-      }) as PasswordResetResponse;
-      setResetPasswordValue('');
-      toastSuccess(
-        'Password reset',
-        'Temporary password updated. Share it with the user through an approved secure channel.'
-      );
-      void loadUser();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to reset password';
-      showError('Password reset failed', message);
-    } finally {
-      setPasswordResetLoading(false);
     }
   };
 
@@ -967,15 +708,6 @@ export default function UserDetailPage() {
     }
   };
 
-  const formatStorage = (usedMb: number, quotaMb: number) => {
-    const percentage = quotaMb > 0 ? (usedMb / quotaMb) * 100 : 0;
-    return {
-      used: usedMb.toFixed(1),
-      quota: quotaMb,
-      percentage: Math.min(percentage, 100).toFixed(1),
-    };
-  };
-
   let content: ReactNode = null;
 
   if (loading) {
@@ -1011,7 +743,6 @@ export default function UserDetailPage() {
       );
     }
   } else {
-    const storage = formatStorage(user.storage_used_mb || 0, user.storage_quota_mb || 0);
     content = (
       <div className="p-4 lg:p-8">
             {/* Header */}
@@ -1055,402 +786,38 @@ export default function UserDetailPage() {
             )}
 
             <div className="grid gap-6 lg:grid-cols-2">
-              {/* User Info Card */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>User Information</CardTitle>
-                  <CardDescription>View and edit user details</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>User ID</Label>
-                      <Input value={user.id} disabled />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>UUID</Label>
-                      <Input value={user.uuid} disabled className="font-mono text-xs" />
-                    </div>
-                  </div>
+              <UserProfileCard
+                user={user}
+                formData={formData}
+                roleOptions={roleOptions}
+                isAuthorized={isAuthorized}
+                saving={saving}
+                isValidRole={isValidRole}
+                onFormDataChange={setFormData}
+                onSave={handleSave}
+              />
 
-                  <div className="space-y-2">
-                    <Label htmlFor="username">Username</Label>
-                    <Input
-                      id="username"
-                      value={formData.username}
-                      disabled={!isAuthorized}
-                      onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="email">Email</Label>
-                    <Input
-                      id="email"
-                      type="email"
-                      value={formData.email}
-                      disabled={!isAuthorized}
-                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="role">Role</Label>
-                    <Select
-                      id="role"
-                      value={formData.role}
-                      disabled={!isAuthorized}
-                      onChange={(e) => {
-                        const nextRole = e.target.value;
-                        if (isValidRole(nextRole)) {
-                          setFormData({ ...formData, role: nextRole });
-                        }
-                      }}
-                    >
-                      {!isValidRole(formData.role) && formData.role ? (
-                        <option value={formData.role}>
-                          Unsupported ({formData.role})
-                        </option>
-                      ) : null}
-                      {roleOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </Select>
-                    {!isValidRole(formData.role) && formData.role ? (
-                      <p className="text-xs text-muted-foreground">
-                        This account uses an unsupported role value. It will be preserved unless you explicitly choose a supported replacement.
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="is_active"
-                      checked={formData.is_active}
-                      disabled={!isAuthorized}
-                      onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                      className="h-4 w-4 rounded border-primary"
-                    />
-                    <Label htmlFor="is_active">Active</Label>
-                  </div>
-
-                  <Button onClick={handleSave} disabled={saving || !isAuthorized} loading={saving} loadingText="Saving...">
-                    <Save className="mr-2 h-4 w-4" />
-                    Save Changes
-                  </Button>
-                </CardContent>
-              </Card>
-
-              {/* Storage & Activity Card */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Storage & Activity</CardTitle>
-                  <CardDescription>Usage statistics and timestamps</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  {/* Storage Usage */}
-                  <div className="space-y-2">
-                    <Label>Storage Usage</Label>
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span>{storage.used} MB used</span>
-                        <span>{storage.quota} MB quota</span>
-                      </div>
-                      <div
-                        className="w-full bg-gray-200 rounded-full h-3"
-                        role="progressbar"
-                        aria-valuenow={parseFloat(storage.percentage)}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-label={`Storage usage: ${storage.percentage}%${
-                          parseFloat(storage.percentage) > 90 ? ', critical' :
-                          parseFloat(storage.percentage) > 70 ? ', warning' : ''
-                        }`}
-                      >
-                        <div
-                          className={`h-3 rounded-full transition-all ${
-                            parseFloat(storage.percentage) > 90 ? 'bg-red-500' :
-                            parseFloat(storage.percentage) > 70 ? 'bg-yellow-500' :
-                            'bg-green-500'
-                          }`}
-                          style={{ width: `${storage.percentage}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {storage.percentage}% of quota used
-                      </p>
-                    </div>
-
-                    <div className="pt-2">
-                      <Label htmlFor="storage_quota">Storage Quota (MB)</Label>
-                      <Input
-                        id="storage_quota"
-                        type="number"
-                        min="0"
-                        value={formData.storage_quota_mb}
-                        disabled={!isAuthorized}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value, 10);
-                          setFormData({
-                            ...formData,
-                            storage_quota_mb: Number.isNaN(val) ? formData.storage_quota_mb : val,
-                          });
-                        }}
-                        className="mt-1"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Timestamps */}
-                  <div className="space-y-3 pt-4 border-t">
-                    <div className="flex justify-between">
-                      <span className="text-sm text-muted-foreground">Created</span>
-                      <span className="text-sm">{formatDate(user.created_at)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-muted-foreground">Updated</span>
-                      <span className="text-sm">{formatDate(user.updated_at)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-muted-foreground">Last Login</span>
-                      <span className="text-sm">{formatDate(user.last_login)}</span>
-                    </div>
-                  </div>
-
-                  {/* Verification Status */}
-                  <div className="pt-4 border-t">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">Email Verified</span>
-                      <Badge variant={user.is_verified ? 'default' : 'secondary'}>
-                        {user.is_verified ? 'Verified' : 'Not Verified'}
-                      </Badge>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Security Controls */}
-              <Card className="lg:col-span-2">
-                <CardHeader>
-                  <CardTitle>Security Controls</CardTitle>
-                  <CardDescription>MFA status and active sessions</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  {securityError && (
-                    <Alert variant="destructive">
-                      <AlertDescription>{securityError}</AlertDescription>
-                    </Alert>
-                  )}
-
-                  <div className="rounded-lg border p-4 space-y-3">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="font-medium">Password reset</div>
-                        <p className="text-sm text-muted-foreground">
-                          Generate a temporary password for this user.
-                        </p>
-                      </div>
-                      <Button
-                        onClick={handleResetPassword}
-                        disabled={!isAuthorized || passwordResetLoading}
-                        loading={passwordResetLoading}
-                        loadingText="Resetting..."
-                      >
-                        Reset Password
-                      </Button>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="temporary-password">Temporary Password to Set</Label>
-                      <Input
-                        id="temporary-password"
-                        type="password"
-                        autoComplete="new-password"
-                        value={resetPasswordValue}
-                        onChange={(event) => setResetPasswordValue(event.target.value)}
-                        disabled={!isAuthorized || passwordResetLoading}
-                        minLength={10}
-                        placeholder="Enter a temporary password to share securely"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Set the temporary password yourself so it never needs to be returned to the browser.
-                      </p>
-                    </div>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={forcePasswordChangeOnNextLogin}
-                        onChange={(event) => setForcePasswordChangeOnNextLogin(event.target.checked)}
-                        disabled={!isAuthorized || passwordResetLoading}
-                        className="h-4 w-4 rounded border-primary"
-                      />
-                      Force Password Change on Next Login
-                    </label>
-                  </div>
-
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Shield className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">Multi-factor authentication</span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                        <Badge variant={mfaStatus?.enabled ? 'default' : 'secondary'}>
-                          {mfaStatus?.enabled ? 'Enabled' : 'Disabled'}
-                        </Badge>
-                        {mfaStatus?.method && <span className="text-xs">Method: {mfaStatus.method}</span>}
-                        <span className="text-xs">
-                          Backup codes: {mfaStatus?.has_backup_codes ? 'Set' : 'Not set'}
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        MFA enrollment is managed by the user from their profile.
-                      </p>
-                    </div>
-                    <Button
-                      variant="outline"
-                      onClick={handleDisableMfa}
-                      disabled={!mfaStatus?.enabled || !isAuthorized}
-                    >
-                      Disable MFA
-                    </Button>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <Monitor className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">Active sessions</span>
-                        <Badge variant="outline">{sessions.length}</Badge>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={loadSecurity} disabled={securityLoading}>
-                          <RefreshCw className={`mr-2 h-4 w-4 ${securityLoading ? 'animate-spin' : ''}`} />
-                          Refresh
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleRevokeAllSessions}
-                          disabled={!sessions.length || !isAuthorized}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Revoke all
-                        </Button>
-                      </div>
-                    </div>
-
-                    {securityLoading ? (
-                      <div className="text-sm text-muted-foreground">Loading sessions...</div>
-                    ) : sessions.length === 0 ? (
-                      <div className="text-sm text-muted-foreground">No active sessions found.</div>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Session</TableHead>
-                              <TableHead>IP Address</TableHead>
-                              <TableHead>Last Activity</TableHead>
-                              <TableHead>Expires</TableHead>
-                              <TableHead className="text-right">Actions</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {sessions.map((session) => (
-                              <TableRow key={session.id}>
-                                <TableCell>
-                                  <div className="text-sm font-mono">{session.id}</div>
-                                  <div className="text-xs text-muted-foreground truncate max-w-[240px]">
-                                    {session.user_agent || 'Unknown device'}
-                                  </div>
-                                </TableCell>
-                                <TableCell className="text-sm font-mono">
-                                  {session.ip_address || '—'}
-                                </TableCell>
-                                <TableCell className="text-sm">{formatDate(session.last_activity || session.created_at)}</TableCell>
-                                <TableCell className="text-sm">{formatDate(session.expires_at || '')}</TableCell>
-                                <TableCell className="text-right">
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => handleRevokeSession(session)}
-                                    disabled={!isAuthorized}
-                                  >
-                                    Revoke
-                                  </Button>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-3 border-t pt-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">Login History</span>
-                        <Badge variant="outline">{loginHistory.length}</Badge>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={loadLoginHistory}
-                        disabled={loginHistoryLoading}
-                      >
-                        <RefreshCw className={`mr-2 h-4 w-4 ${loginHistoryLoading ? 'animate-spin' : ''}`} />
-                        Refresh
-                      </Button>
-                    </div>
-
-                    {loginHistoryError && (
-                      <Alert variant="destructive">
-                        <AlertDescription>{loginHistoryError}</AlertDescription>
-                      </Alert>
-                    )}
-
-                    {loginHistoryLoading ? (
-                      <div className="text-sm text-muted-foreground">Loading login history...</div>
-                    ) : loginHistory.length === 0 ? (
-                      <div className="text-sm text-muted-foreground">No recent login attempts found.</div>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Timestamp</TableHead>
-                              <TableHead>Status</TableHead>
-                              <TableHead>IP Address</TableHead>
-                              <TableHead>User Agent</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {loginHistory.map((entry) => (
-                              <TableRow key={entry.id}>
-                                <TableCell className="text-sm">{formatDate(entry.timestamp)}</TableCell>
-                                <TableCell>
-                                  <Badge variant={entry.status === 'success' ? 'default' : 'destructive'}>
-                                    {entry.status === 'success' ? 'Success' : 'Failure'}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell className="text-sm font-mono">{entry.ipAddress || '—'}</TableCell>
-                                <TableCell className="text-xs text-muted-foreground">
-                                  {entry.userAgent || 'Unknown client'}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
+              <UserSecurityCard
+                isAuthorized={isAuthorized}
+                securityLoading={userSecurity.securityLoading}
+                securityError={userSecurity.securityError}
+                mfaStatus={userSecurity.mfaStatus}
+                sessions={userSecurity.sessions}
+                loginHistory={userSecurity.loginHistory}
+                loginHistoryLoading={userSecurity.loginHistoryLoading}
+                loginHistoryError={userSecurity.loginHistoryError}
+                forcePasswordChangeOnNextLogin={userSecurity.forcePasswordChangeOnNextLogin}
+                passwordResetLoading={userSecurity.passwordResetLoading}
+                resetPasswordValue={userSecurity.resetPasswordValue}
+                onForcePasswordChangeOnNextLogin={userSecurity.setForcePasswordChangeOnNextLogin}
+                onResetPasswordValueChange={userSecurity.setResetPasswordValue}
+                onResetPassword={userSecurity.handleResetPassword}
+                onDisableMfa={userSecurity.handleDisableMfa}
+                onRefreshSecurity={loadSecurity}
+                onRevokeAllSessions={userSecurity.handleRevokeAllSessions}
+                onRevokeSession={userSecurity.handleRevokeSession}
+                onRefreshLoginHistory={loadLoginHistory}
+              />
 
               {/* Rate Limits */}
               <Card>
@@ -1703,107 +1070,18 @@ export default function UserDetailPage() {
                 </CardContent>
               </Card>
 
-              <Dialog open={showOrgMembershipsDialog} onOpenChange={setShowOrgMembershipsDialog}>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>User Organizations</DialogTitle>
-                    <DialogDescription>
-                      Organizations this user belongs to and their role in each organization.
-                    </DialogDescription>
-                  </DialogHeader>
-                  {orgMembershipsError && (
-                    <Alert variant="destructive">
-                      <AlertDescription>{orgMembershipsError}</AlertDescription>
-                    </Alert>
-                  )}
-                  {orgMembershipsLoading ? (
-                    <div className="text-sm text-muted-foreground">Loading organizations...</div>
-                  ) : orgMemberships.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">No organization memberships found.</div>
-                  ) : (
-                    <div className="max-h-80 overflow-y-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Organization</TableHead>
-                            <TableHead>Role</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {orgMemberships.map((membership) => (
-                            <TableRow key={membership.org_id}>
-                              <TableCell className="text-sm">
-                                {membership.org_name || `Organization ${membership.org_id}`}
-                              </TableCell>
-                              <TableCell>
-                                <Badge variant="outline">{membership.role}</Badge>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setShowOrgMembershipsDialog(false)}>
-                      Close
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-
-              <Dialog open={showTeamMembershipsDialog} onOpenChange={setShowTeamMembershipsDialog}>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>User Teams</DialogTitle>
-                    <DialogDescription>
-                      Team memberships with organization context and assigned role.
-                    </DialogDescription>
-                  </DialogHeader>
-                  {teamMembershipsError && (
-                    <Alert variant="destructive">
-                      <AlertDescription>{teamMembershipsError}</AlertDescription>
-                    </Alert>
-                  )}
-                  {teamMembershipsLoading ? (
-                    <div className="text-sm text-muted-foreground">Loading teams...</div>
-                  ) : teamMemberships.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">No team memberships found.</div>
-                  ) : (
-                    <div className="max-h-80 overflow-y-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Team</TableHead>
-                            <TableHead>Organization</TableHead>
-                            <TableHead>Role</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {teamMemberships.map((membership) => (
-                            <TableRow key={`${membership.org_id}-${membership.team_id}`}>
-                              <TableCell className="text-sm">
-                                {membership.team_name || `Team ${membership.team_id}`}
-                              </TableCell>
-                              <TableCell className="text-sm text-muted-foreground">
-                                {membership.org_name || `Organization ${membership.org_id}`}
-                              </TableCell>
-                              <TableCell>
-                                <Badge variant="outline">{membership.role}</Badge>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setShowTeamMembershipsDialog(false)}>
-                      Close
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
+              <UserMembershipDialogs
+                showOrgMembershipsDialog={showOrgMembershipsDialog}
+                showTeamMembershipsDialog={showTeamMembershipsDialog}
+                orgMemberships={orgMemberships}
+                teamMemberships={teamMemberships}
+                orgMembershipsLoading={orgMembershipsLoading}
+                teamMembershipsLoading={teamMembershipsLoading}
+                orgMembershipsError={orgMembershipsError}
+                teamMembershipsError={teamMembershipsError}
+                onOpenOrgMembershipsChange={setShowOrgMembershipsDialog}
+                onOpenTeamMembershipsChange={setShowTeamMembershipsDialog}
+              />
             </div>
           </div>
     );

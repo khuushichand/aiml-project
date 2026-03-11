@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WorkspacePlayground } from "../index"
 
@@ -92,6 +92,10 @@ vi.mock("../StudioPane", () => ({
   StudioPane: () => <div data-testid="workspace-studio-pane">Studio</div>
 }))
 
+vi.mock("../WorkspaceStatusBar", () => ({
+  WorkspaceStatusBar: () => <div data-testid="workspace-status-bar" />
+}))
+
 const suppressExpectedWindowError = (expectedMessage: string): (() => void) => {
   const handler = (event: ErrorEvent) => {
     const message =
@@ -131,6 +135,38 @@ describe("WorkspacePlayground error boundary", () => {
 
       expect(screen.getByText("Something went wrong")).toBeInTheDocument()
       expect(screen.getByTestId("workspace-reload-button")).toBeInTheDocument()
+      expect(
+        screen.getByTestId("workspace-export-recovery-button")
+      ).toBeInTheDocument()
+      expect(
+        screen.getByTestId("workspace-clear-cache-button")
+      ).toBeInTheDocument()
+      expect(
+        screen.getByTestId("workspace-switch-from-error-button")
+      ).toBeInTheDocument()
+    } finally {
+      restoreWindowError()
+    }
+  })
+
+  it("shows error details when toggled", () => {
+    const restoreWindowError = suppressExpectedWindowError("chat pane crash")
+
+    try {
+      render(<WorkspacePlayground />)
+
+      expect(
+        screen.queryByTestId("workspace-error-details")
+      ).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByTestId("workspace-error-details-toggle"))
+
+      expect(
+        screen.getByTestId("workspace-error-details")
+      ).toBeInTheDocument()
+      expect(screen.getByTestId("workspace-error-details")).toHaveTextContent(
+        "chat pane crash"
+      )
     } finally {
       restoreWindowError()
     }

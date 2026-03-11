@@ -9,6 +9,12 @@ export const createServerChatSlice: StoreSlice<
     | "setServerChatTitle"
     | "serverChatCharacterId"
     | "setServerChatCharacterId"
+    | "serverChatAssistantKind"
+    | "setServerChatAssistantKind"
+    | "serverChatAssistantId"
+    | "setServerChatAssistantId"
+    | "serverChatPersonaMemoryMode"
+    | "setServerChatPersonaMemoryMode"
     | "serverChatMetaLoaded"
     | "setServerChatMetaLoaded"
     | "serverChatLoadState"
@@ -37,6 +43,9 @@ export const createServerChatSlice: StoreSlice<
       serverChatVersion: null,
       serverChatTitle: null,
       serverChatCharacterId: null,
+      serverChatAssistantKind: null,
+      serverChatAssistantId: null,
+      serverChatPersonaMemoryMode: null,
       serverChatMetaLoaded: false,
       serverChatLoadState: id ? "loading" : "idle",
       serverChatLoadError: null,
@@ -53,6 +62,22 @@ export const createServerChatSlice: StoreSlice<
     set({
       serverChatCharacterId:
         serverChatCharacterId != null ? serverChatCharacterId : null
+    }),
+  serverChatAssistantKind: null,
+  setServerChatAssistantKind: (serverChatAssistantKind) =>
+    set({
+      serverChatAssistantKind: serverChatAssistantKind ?? null
+    }),
+  serverChatAssistantId: null,
+  setServerChatAssistantId: (serverChatAssistantId) =>
+    set({
+      serverChatAssistantId:
+        serverChatAssistantId != null ? serverChatAssistantId : null
+    }),
+  serverChatPersonaMemoryMode: null,
+  setServerChatPersonaMemoryMode: (serverChatPersonaMemoryMode) =>
+    set({
+      serverChatPersonaMemoryMode: serverChatPersonaMemoryMode ?? null
     }),
   serverChatMetaLoaded: false,
   setServerChatMetaLoaded: (serverChatMetaLoaded) =>

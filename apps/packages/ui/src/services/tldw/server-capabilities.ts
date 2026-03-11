@@ -7,6 +7,7 @@ export type ServerCapabilities = {
   hasRag: boolean
   hasMedia: boolean
   hasNotes: boolean
+  hasIngestionSources: boolean
   hasPrompts: boolean
   hasFlashcards: boolean
   hasQuizzes: boolean
@@ -43,6 +44,7 @@ const defaultCapabilities: ServerCapabilities = {
   hasRag: false,
   hasMedia: false,
   hasNotes: false,
+  hasIngestionSources: false,
   hasPrompts: false,
   hasFlashcards: false,
   hasQuizzes: false,
@@ -93,6 +95,7 @@ const fallbackSpec = {
       "/api/v1/media/process-ebooks",
       "/api/v1/media/process-audios",
       "/api/v1/notes/",
+      "/api/v1/ingestion-sources",
       "/api/v1/prompts",
       "/api/v1/flashcards",
       "/api/v1/flashcards/decks",
@@ -361,6 +364,10 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
       has("/api/v1/media/process-videos") ||
       has("/api/v1/media/process-documents"),
     hasNotes: has("/api/v1/notes/"),
+    hasIngestionSources:
+      has("/api/v1/ingestion-sources") ||
+      has("/api/v1/ingestion-sources/{source_id}") ||
+      has("/api/v1/ingestion-sources/{source_id}/items"),
     hasPrompts: has("/api/v1/prompts") || has("/api/v1/prompts/"),
     hasFlashcards:
       has("/api/v1/flashcards") ||

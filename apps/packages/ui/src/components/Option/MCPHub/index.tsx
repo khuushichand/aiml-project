@@ -1,4 +1,8 @@
 export { McpHubPage } from "./McpHubPage"
 export { AcpProfilesTab } from "./AcpProfilesTab"
+export { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
 export { ToolCatalogsTab } from "./ToolCatalogsTab"
 export { ExternalServersTab } from "./ExternalServersTab"
+export { PermissionProfilesTab } from "./PermissionProfilesTab"
+export { PolicyAssignmentsTab } from "./PolicyAssignmentsTab"
+export { PersonaPolicySummary } from "./PersonaPolicySummary"

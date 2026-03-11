@@ -30,8 +30,6 @@ import {
   UserX,
   BookmarkPlus,
   BookmarkX,
-  ShieldCheck,
-  ShieldOff,
 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
@@ -40,22 +38,20 @@ import { Organization, User } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportUsers, ExportFormat } from '@/lib/export';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
-import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
+import { useUrlPagination } from '@/lib/use-url-state';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useResourceState } from '@/lib/use-resource-state';
+import { UserBulkActions } from './components/UserBulkActions';
+import {
+  useUserFilters,
+  type UserMfaFilter,
+  type UserStatusFilter,
+  type UserVerifiedFilter,
+} from './hooks/use-user-filters';
 
-type SavedUserView = {
-  id: string;
-  name: string;
-  query: string;
-};
-
-type UserStatusFilter = 'all' | 'active' | 'inactive';
-type UserVerifiedFilter = 'all' | 'verified' | 'unverified';
-type UserMfaFilter = 'all' | 'enabled' | 'disabled';
 type BulkActionType =
   | 'activate'
   | 'deactivate'
@@ -64,8 +60,6 @@ type BulkActionType =
   | 'mfa-require'
   | 'mfa-clear'
   | null;
-
-const SAVED_VIEWS_STORAGE_KEY = 'admin_users_saved_views';
 
 const createUserSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -177,10 +171,6 @@ function UsersPageContent() {
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
   const [deletingUserIds, setDeletingUserIds] = useState<Set<number>>(new Set());
-  const [savedViews, setSavedViews] = useState<SavedUserView[]>([]);
-  const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
-  const [saveViewName, setSaveViewName] = useState('');
-  const [saveViewError, setSaveViewError] = useState('');
   const [mfaByUserId, setMfaByUserId] = useState<Record<number, boolean>>({});
   const [mfaLoading, setMfaLoading] = useState(false);
   const [orgInvites, setOrgInvites] = useState<OrgInviteRecord[]>([]);
@@ -199,31 +189,31 @@ function UsersPageContent() {
   });
 
   // URL state for search + filters
-  const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
-  const [statusFilter, setStatusFilter] = useUrlState<UserStatusFilter>('status', { defaultValue: 'all' });
-  const [verifiedFilter, setVerifiedFilter] = useUrlState<UserVerifiedFilter>('verified', { defaultValue: 'all' });
-  const [mfaFilter, setMfaFilter] = useUrlState<UserMfaFilter>('mfa', { defaultValue: 'all' });
-  const activeViewId = useMemo(() => {
-    const match = savedViews.find((view) => view.query === (searchQuery || ''));
-    return match ? match.id : '';
-  }, [savedViews, searchQuery]);
-
   // URL state for pagination
   const { page: currentPage, pageSize, setPage: setCurrentPage, setPageSize, resetPagination } = useUrlPagination();
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const stored = window.localStorage.getItem(SAVED_VIEWS_STORAGE_KEY);
-      if (!stored) return;
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        setSavedViews(parsed as SavedUserView[]);
-      }
-    } catch (err) {
-      console.warn('Failed to load saved user views:', err);
-    }
-  }, []);
+  const {
+    savedViews,
+    showSaveViewDialog,
+    saveViewName,
+    saveViewError,
+    searchQuery,
+    statusFilter,
+    verifiedFilter,
+    mfaFilter,
+    activeViewId,
+    hasActiveFilters,
+    setShowSaveViewDialog,
+    setSaveViewName,
+    clearSaveViewForm,
+    handleSearchChange,
+    handleStatusFilterChange,
+    handleVerifiedFilterChange,
+    handleMfaFilterChange,
+    handleClearFilters,
+    handleApplySavedView,
+    saveCurrentView,
+    removeSavedView,
+  } = useUserFilters({ resetPagination });
 
   useEffect(() => {
     if (!showCreateUserDialog) {
@@ -231,16 +221,6 @@ function UsersPageContent() {
       setCreateUserError('');
     }
   }, [createUserForm, showCreateUserDialog]);
-
-  const persistSavedViews = useCallback((views: SavedUserView[]) => {
-    setSavedViews(views);
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(SAVED_VIEWS_STORAGE_KEY, JSON.stringify(views));
-    } catch (err) {
-      console.warn('Failed to persist saved user views:', err);
-    }
-  }, []);
 
   const loadUsersResource = useCallback(async () => {
     const params: Record<string, string> = { limit: '200' };
@@ -488,9 +468,6 @@ function UsersPageContent() {
     && selectableUsers.every((user) => selectedUserIds.has(user.id));
   const selectedCount = selectedUserIds.size;
   const bulkBusy = bulkAction !== null;
-  const hasActiveFilters = (statusFilter || 'all') !== 'all'
-    || (verifiedFilter || 'all') !== 'all'
-    || (mfaFilter || 'all') !== 'all';
   const bulkRoleOptions = useMemo(() => {
     const roleSet = new Set<string>(['user', 'admin', 'service']);
     users.forEach((user) => {
@@ -514,33 +491,6 @@ function UsersPageContent() {
 
   const handlePageSizeChange = (size: number) => {
     setPageSize(size);
-    resetPagination();
-  };
-
-  const handleSearchChange = (value: string) => {
-    setSearchQuery(value || undefined);
-    resetPagination();
-  };
-
-  const handleStatusFilterChange = (value: UserStatusFilter) => {
-    setStatusFilter(value === 'all' ? undefined : value);
-    resetPagination();
-  };
-
-  const handleVerifiedFilterChange = (value: UserVerifiedFilter) => {
-    setVerifiedFilter(value === 'all' ? undefined : value);
-    resetPagination();
-  };
-
-  const handleMfaFilterChange = (value: UserMfaFilter) => {
-    setMfaFilter(value === 'all' ? undefined : value);
-    resetPagination();
-  };
-
-  const handleClearFilters = () => {
-    setStatusFilter(undefined);
-    setVerifiedFilter(undefined);
-    setMfaFilter(undefined);
     resetPagination();
   };
 
@@ -788,35 +738,10 @@ function UsersPageContent() {
     exportUsers(filteredUsers, format);
   };
 
-  const handleApplySavedView = (viewId: string) => {
-    if (!viewId) {
-      setSearchQuery(undefined);
-      resetPagination();
-      return;
-    }
-    const view = savedViews.find((item) => item.id === viewId);
-    if (!view) return;
-    setSearchQuery(view.query || undefined);
-    resetPagination();
-  };
-
   const handleSaveView = () => {
-    const name = saveViewName.trim();
-    if (!name) {
-      setSaveViewError('Provide a name for this view.');
-      return;
-    }
-    const query = searchQuery || '';
-    const newView: SavedUserView = {
-      id: `${Date.now()}`,
-      name,
-      query,
-    };
-    persistSavedViews([newView, ...savedViews]);
-    setSaveViewName('');
-    setSaveViewError('');
-    setShowSaveViewDialog(false);
-    success('Saved view', `${name} has been added.`);
+    const result = saveCurrentView();
+    if (!result.ok) return;
+    success('Saved view', `${result.view.name} has been added.`);
   };
 
   const handleDeleteView = async () => {
@@ -831,9 +756,9 @@ function UsersPageContent() {
       icon: 'delete',
     });
     if (!confirmed) return;
-    const next = savedViews.filter((item) => item.id !== activeViewId);
-    persistSavedViews(next);
-    success('Saved view removed', `"${view.name}" deleted.`);
+    const removedView = removeSavedView(activeViewId);
+    if (!removedView) return;
+    success('Saved view removed', `"${removedView.name}" deleted.`);
   };
 
   const handleCreateUserSubmit = createUserForm.handleSubmit(async (data) => {
@@ -1064,8 +989,7 @@ function UsersPageContent() {
                       <Dialog open={showSaveViewDialog} onOpenChange={(open) => {
                         setShowSaveViewDialog(open);
                         if (!open) {
-                          setSaveViewError('');
-                          setSaveViewName('');
+                          clearSaveViewForm();
                         }
                       }}>
                         <DialogTrigger asChild>
@@ -1257,104 +1181,21 @@ function UsersPageContent() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {selectedCount > 0 && (
-                  <div className="mb-4 flex flex-col gap-3 rounded-md border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline">{selectedCount} selected</Badge>
-                      <span className="text-sm text-muted-foreground">
-                        Bulk actions apply to selected users.
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Select
-                        value={bulkRole}
-                        onChange={(event) => setBulkRole(event.target.value)}
-                        className="min-w-[160px]"
-                        aria-label="Bulk role selection"
-                        disabled={bulkBusy}
-                      >
-                        {bulkRoleOptions.map((role) => (
-                          <option key={role} value={role}>
-                            {role}
-                          </option>
-                        ))}
-                      </Select>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBulkAssignRole}
-                        loading={bulkAction === 'assign-role'}
-                        loadingText="Assigning..."
-                        disabled={bulkBusy && bulkAction !== 'assign-role'}
-                      >
-                        Assign Role
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleBulkToggleActive(true)}
-                        loading={bulkAction === 'activate'}
-                        loadingText="Activating..."
-                        disabled={bulkBusy && bulkAction !== 'activate'}
-                      >
-                        <UserCheck className="mr-2 h-4 w-4" />
-                        Activate
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleBulkToggleActive(false)}
-                        loading={bulkAction === 'deactivate'}
-                        loadingText="Deactivating..."
-                        disabled={bulkBusy && bulkAction !== 'deactivate'}
-                      >
-                        <UserX className="mr-2 h-4 w-4" />
-                        Deactivate
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleBulkSetMfaRequirement(true)}
-                        loading={bulkAction === 'mfa-require'}
-                        loadingText="Applying..."
-                        disabled={bulkBusy && bulkAction !== 'mfa-require'}
-                      >
-                        <ShieldCheck className="mr-2 h-4 w-4" />
-                        Require MFA
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleBulkSetMfaRequirement(false)}
-                        loading={bulkAction === 'mfa-clear'}
-                        loadingText="Clearing..."
-                        disabled={bulkBusy && bulkAction !== 'mfa-clear'}
-                      >
-                        <ShieldOff className="mr-2 h-4 w-4" />
-                        Clear MFA
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBulkDelete}
-                        loading={bulkAction === 'delete'}
-                        loadingText="Deleting..."
-                        disabled={bulkBusy && bulkAction !== 'delete'}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4 text-destructive" />
-                        Delete
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleClearSelection}
-                        disabled={bulkBusy}
-                      >
-                        Clear selection
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                <UserBulkActions
+                  selectedCount={selectedCount}
+                  bulkRole={bulkRole}
+                  bulkRoleOptions={bulkRoleOptions}
+                  bulkBusy={bulkBusy}
+                  bulkAction={bulkAction}
+                  onBulkRoleChange={setBulkRole}
+                  onAssignRole={handleBulkAssignRole}
+                  onActivate={() => handleBulkToggleActive(true)}
+                  onDeactivate={() => handleBulkToggleActive(false)}
+                  onRequireMfa={() => handleBulkSetMfaRequirement(true)}
+                  onClearMfa={() => handleBulkSetMfaRequirement(false)}
+                  onDelete={handleBulkDelete}
+                  onClearSelection={handleClearSelection}
+                />
                 {loading ? (
                   <div className="py-4">
                     <TableSkeleton rows={5} columns={9} />
@@ -1373,7 +1214,7 @@ function UsersPageContent() {
                         ? {
                             label: 'Clear filters',
                             onClick: () => {
-                              setSearchQuery(undefined);
+                              handleSearchChange('');
                               handleClearFilters();
                             },
                           }

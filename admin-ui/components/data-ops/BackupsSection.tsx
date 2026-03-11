@@ -12,6 +12,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
+import { isUnsafeLocalToolsEnabled } from '@/lib/admin-ui-flags';
 import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
 import { useUrlPagination } from '@/lib/use-url-state';
 import { usePagedResource, type LoadOptions } from '@/lib/use-paged-resource';
@@ -272,6 +273,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
   const { success, error: showError } = useToast();
   const confirm = useConfirm();
+  const unsafeLocalToolsEnabled = isUnsafeLocalToolsEnabled();
 
   const [activeTab, setActiveTab] = useState<BackupsTab>('backups');
 
@@ -350,6 +352,10 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   }, [loadHistory, refreshSignal]);
 
   useEffect(() => {
+    if (!unsafeLocalToolsEnabled) {
+      setSchedules([]);
+      return;
+    }
     if (typeof window === 'undefined') return;
     try {
       const raw = window.localStorage.getItem(SCHEDULE_STORAGE_KEY);
@@ -360,9 +366,10 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
       console.warn('Failed to read backup schedules from local storage:', err);
       setSchedules([]);
     }
-  }, []);
+  }, [unsafeLocalToolsEnabled]);
 
   const persistSchedules = useCallback((nextSchedules: BackupSchedule[]) => {
+    if (!unsafeLocalToolsEnabled) return;
     setSchedules(nextSchedules);
     if (typeof window === 'undefined') return;
     try {
@@ -370,7 +377,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
     } catch (err) {
       console.warn('Failed to persist backup schedules:', err);
     }
-  }, []);
+  }, [unsafeLocalToolsEnabled]);
 
   const handleBackupFilterChange = (key: 'dataset' | 'user', value: string) => {
     if (key === 'dataset') {
@@ -469,6 +476,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   };
 
   const handleSubmitSchedule = () => {
+    if (!unsafeLocalToolsEnabled) return;
     const validationError = validateScheduleForm();
     if (validationError) {
       setScheduleError(validationError);
@@ -513,6 +521,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   };
 
   const handleEditSchedule = (schedule: BackupSchedule) => {
+    if (!unsafeLocalToolsEnabled) return;
     setEditingScheduleId(schedule.id);
     setScheduleDataset(schedule.dataset);
     setScheduleFrequency(schedule.frequency);
@@ -522,6 +531,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   };
 
   const handleToggleSchedulePause = (schedule: BackupSchedule) => {
+    if (!unsafeLocalToolsEnabled) return;
     const nextSchedules = schedules.map((entry) => (
       entry.id === schedule.id
         ? { ...entry, is_paused: !entry.is_paused, updated_at: new Date().toISOString() }
@@ -532,6 +542,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   };
 
   const handleDeleteSchedule = async (scheduleId: string) => {
+    if (!unsafeLocalToolsEnabled) return;
     const accepted = await confirm({
       title: 'Delete backup schedule?',
       message: 'This removes the local schedule configuration.',
@@ -587,17 +598,26 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
       <CardContent className="space-y-6">
         {activeTab === 'schedule' ? (
           <>
-            <Alert>
-              <AlertDescription>
-                Backup scheduling is currently stored in browser local storage until backend schedule APIs are available.
-              </AlertDescription>
-            </Alert>
+            {unsafeLocalToolsEnabled ? (
+              <Alert>
+                <AlertDescription>
+                  Backup scheduling is currently stored in browser local storage for development only.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert>
+                <AlertDescription>
+                  Backup scheduling is unavailable until backend schedule APIs are available.
+                </AlertDescription>
+              </Alert>
+            )}
 
             <div className="grid gap-3 md:grid-cols-5">
               <Field id="backup-schedule-dataset" label="Dataset">
                 <Select
                   id="backup-schedule-dataset"
                   value={scheduleDataset}
+                  disabled={!unsafeLocalToolsEnabled}
                   onChange={(event) => setScheduleDataset(event.target.value)}
                 >
                   {DATASET_OPTIONS.map((option) => (
@@ -611,6 +631,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                 <Select
                   id="backup-schedule-frequency"
                   value={scheduleFrequency}
+                  disabled={!unsafeLocalToolsEnabled}
                   onChange={(event) => setScheduleFrequency(event.target.value)}
                 >
                   <option value="">Select frequency</option>
@@ -626,6 +647,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                   id="backup-schedule-time"
                   type="time"
                   value={scheduleTimeOfDay}
+                  disabled={!unsafeLocalToolsEnabled}
                   onChange={(event) => setScheduleTimeOfDay(event.target.value)}
                 />
               </Field>
@@ -633,20 +655,27 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                 <Input
                   id="backup-schedule-retention"
                   value={scheduleRetentionCount}
+                  disabled={!unsafeLocalToolsEnabled}
                   onChange={(event) => setScheduleRetentionCount(event.target.value)}
                 />
               </Field>
               <div className="flex items-end gap-2">
-                <Button onClick={handleSubmitSchedule}>
+                <Button onClick={handleSubmitSchedule} disabled={!unsafeLocalToolsEnabled}>
                   {editingScheduleId ? 'Update schedule' : 'Create schedule'}
                 </Button>
                 {editingScheduleId && (
-                  <Button variant="outline" onClick={resetScheduleForm}>
+                  <Button variant="outline" onClick={resetScheduleForm} disabled={!unsafeLocalToolsEnabled}>
                     Cancel
                   </Button>
                 )}
               </div>
             </div>
+
+            {!unsafeLocalToolsEnabled && (
+              <p className="text-sm text-muted-foreground">
+                Scheduling controls are disabled in production-safe mode.
+              </p>
+            )}
 
             {scheduleError && (
               <Alert variant="destructive">
@@ -692,6 +721,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                             variant="ghost"
                             size="sm"
                             onClick={() => handleEditSchedule(schedule)}
+                            disabled={!unsafeLocalToolsEnabled}
                             aria-label="Edit schedule"
                             title="Edit schedule"
                           >
@@ -701,6 +731,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                             variant="ghost"
                             size="sm"
                             onClick={() => handleToggleSchedulePause(schedule)}
+                            disabled={!unsafeLocalToolsEnabled}
                             aria-label={schedule.is_paused ? 'Resume schedule' : 'Pause schedule'}
                             title={schedule.is_paused ? 'Resume schedule' : 'Pause schedule'}
                             data-testid={`backup-schedule-toggle-${schedule.id}`}
@@ -711,6 +742,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                             variant="ghost"
                             size="sm"
                             onClick={() => { void handleDeleteSchedule(schedule.id); }}
+                            disabled={!unsafeLocalToolsEnabled}
                             aria-label="Delete schedule"
                             title="Delete schedule"
                           >

@@ -128,4 +128,15 @@ describe('SecurityPage', () => {
     expect(keysLink.getAttribute('href')).toBe('/api-keys?status=active');
     expect(failedLoginLink.getAttribute('href')).toBe('/audit?action=login.failed');
   });
+
+  it('fails closed when security health is unavailable instead of rendering a zero-risk posture', async () => {
+    apiMock.getSecurityHealth.mockRejectedValue(new Error('health unavailable'));
+
+    render(<SecurityPage />);
+
+    expect(await screen.findByText('Security health data is unavailable. Risk score and summary metrics cannot be calculated.')).toBeInTheDocument();
+    expect(screen.getByTestId('security-risk-unavailable').textContent).toContain('Risk score unavailable.');
+    expect(screen.queryByLabelText(/Security risk score:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Low Risk')).not.toBeInTheDocument();
+  });
 });

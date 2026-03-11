@@ -109,6 +109,11 @@ jobs:
         working-directory: admin-ui
         run: bun run lint
 
+      - name: Run admin-ui typecheck
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        working-directory: admin-ui
+        run: bun run typecheck
+
       - name: Run admin-ui unit tests
         if: needs.changes.outputs.admin_ui_changed == 'true'
         working-directory: admin-ui

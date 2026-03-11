@@ -43,6 +43,7 @@ type UseAlertActionsArgs = {
   setSuccess: (message: string) => void;
   onReloadRequested: () => void | Promise<void>;
   assignableUsers: AlertAssignableUser[];
+  allowLocalMutations: boolean;
 };
 
 export const useAlertActions = ({
@@ -54,6 +55,7 @@ export const useAlertActions = ({
   setSuccess,
   onReloadRequested,
   assignableUsers,
+  allowLocalMutations,
 }: UseAlertActionsArgs) => {
   const appendAlertHistory = useCallback((
     alertId: string,
@@ -105,29 +107,38 @@ export const useAlertActions = ({
   }, [apiClient, appendAlertHistory, confirm, onReloadRequested, setAlerts, setError, setSuccess]);
 
   const handleAssignAlert = useCallback((alert: SystemAlert, userId: string) => {
+    if (!allowLocalMutations) {
+      return;
+    }
     setAlerts((prev) => setAlertAssignment(prev, alert.id, userId || undefined));
     const assignedLabel = userId
       ? (assignableUsers.find((user) => user.id === userId)?.label ?? userId)
       : 'Unassigned';
     appendAlertHistory(alert.id, 'assigned', `Assigned to ${assignedLabel}`);
     setSuccess(userId ? 'Alert assigned' : 'Alert unassigned');
-  }, [appendAlertHistory, assignableUsers, setAlerts, setSuccess]);
+  }, [allowLocalMutations, appendAlertHistory, assignableUsers, setAlerts, setSuccess]);
 
   const handleSnoozeAlert = useCallback((alert: SystemAlert, duration: SnoozeDurationOption) => {
+    if (!allowLocalMutations) {
+      return;
+    }
     const snoozedUntil = resolveSnoozedUntil(duration);
     setAlerts((prev) => setAlertSnoozeUntil(prev, alert.id, snoozedUntil));
     appendAlertHistory(alert.id, 'snoozed', `Snoozed for ${duration}`);
     setSuccess(`Alert snoozed for ${duration}`);
-  }, [appendAlertHistory, setAlerts, setSuccess]);
+  }, [allowLocalMutations, appendAlertHistory, setAlerts, setSuccess]);
 
   const handleEscalateAlert = useCallback((alert: SystemAlert) => {
+    if (!allowLocalMutations) {
+      return;
+    }
     if (alert.severity === 'critical') {
       return;
     }
     setAlerts((prev) => escalateAlertSeverity(prev, alert.id));
     appendAlertHistory(alert.id, 'escalated', 'Severity escalated to critical');
     setSuccess('Alert escalated to critical');
-  }, [appendAlertHistory, setAlerts, setSuccess]);
+  }, [allowLocalMutations, appendAlertHistory, setAlerts, setSuccess]);
 
   return {
     handleAcknowledgeAlert,

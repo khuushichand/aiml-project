@@ -255,7 +255,7 @@ git commit -m "fix(admin-ui): restore truthful type-safe build gates"
 **Goal:** Add the missing browser-level and CI/release checks for the privileged admin paths that matter most in production.
 **Success Criteria:** Critical login and privileged user-management flows have browser smoke coverage, and the required frontend gate runs the same checks the release checklist requires.
 **Tests:** Playwright smoke specs, `bun run test:a11y`, updated frontend-required workflow green
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 4: Add browser smoke coverage for critical admin flows
 
@@ -410,7 +410,7 @@ git commit -m "ci(admin-ui): align frontend gate with production checks"
 **Goal:** Lower the probability that future production changes regress critical admin flows by extracting the highest-risk monoliths into smaller typed units.
 **Success Criteria:** The largest user-management pages and their helper state are split into section components or hooks with no behavior change.
 **Tests:** Existing page suites remain green; new extracted helpers have focused unit tests
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 6: Decompose the highest-risk user-management modules after the gate is green
 

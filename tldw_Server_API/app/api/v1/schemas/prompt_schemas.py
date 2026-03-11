@@ -2,7 +2,7 @@
 #
 # Imports
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -41,6 +41,19 @@ class PromptBase(BaseModel):
     details: Optional[str] = Field(None, max_length=4000, description="Detailed description or notes about the prompt.")
     system_prompt: Optional[str] = Field(None, max_length=20000, description="The system part of the prompt.")
     user_prompt: Optional[str] = Field(None, max_length=20000, description="The user part of the prompt.")
+    prompt_format: Literal["legacy", "structured"] = Field(
+        "legacy",
+        description="Whether the prompt is stored as legacy text fields or a structured definition.",
+    )
+    prompt_schema_version: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Structured prompt schema version when prompt_format is 'structured'.",
+    )
+    prompt_definition: Optional[dict[str, Any]] = Field(
+        None,
+        description="Structured prompt definition when prompt_format is 'structured'.",
+    )
 
 
 class PromptCreate(PromptBase):
@@ -173,6 +186,38 @@ class TemplateRenderRequest(BaseModel):
 
 class TemplateRenderResponse(BaseModel):
     rendered: str
+
+
+# --- Structured Prompt Preview / Conversion ---
+class StructuredPromptPreviewRequest(BaseModel):
+    prompt_format: Literal["legacy", "structured"] = "legacy"
+    system_prompt: Optional[str] = Field(None, max_length=20000)
+    user_prompt: Optional[str] = Field(None, max_length=20000)
+    prompt_schema_version: Optional[int] = Field(None, ge=1)
+    prompt_definition: Optional[dict[str, Any]] = None
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class StructuredPromptPreviewResponse(BaseModel):
+    prompt_format: Literal["legacy", "structured"]
+    prompt_schema_version: Optional[int] = None
+    assembled_messages: list[dict[str, str]] = Field(default_factory=list)
+    legacy_system_prompt: str = ""
+    legacy_user_prompt: str = ""
+
+
+class StructuredPromptConvertRequest(BaseModel):
+    system_prompt: Optional[str] = Field(None, max_length=20000)
+    user_prompt: Optional[str] = Field(None, max_length=20000)
+
+
+class StructuredPromptConvertResponse(BaseModel):
+    prompt_format: Literal["structured"] = "structured"
+    prompt_schema_version: int = 1
+    prompt_definition: dict[str, Any]
+    extracted_variables: list[str] = Field(default_factory=list)
+    legacy_system_prompt: str = ""
+    legacy_user_prompt: str = ""
 
 
 # --- Bulk Operations ---

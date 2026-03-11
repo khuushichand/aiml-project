@@ -52,6 +52,11 @@ export type ChatModelSettings = {
   apiProvider?: string
   extraHeaders?: string
   extraBody?: string
+  llamaThinkingBudgetTokens?: number
+  llamaGrammarMode?: "none" | "library" | "inline"
+  llamaGrammarId?: string
+  llamaGrammarInline?: string
+  llamaGrammarOverride?: string
 
   // Response format
   jsonMode?: boolean
@@ -111,6 +116,13 @@ type ChatModelSettingsStore = ChatModelSettings & {
   setApiProvider: (value: string) => void
   setExtraHeaders: (value: string) => void
   setExtraBody: (value: string) => void
+  setLlamaThinkingBudgetTokens: (value: number | undefined) => void
+  setLlamaGrammarMode: (
+    value: "none" | "library" | "inline" | undefined
+  ) => void
+  setLlamaGrammarId: (value: string | undefined) => void
+  setLlamaGrammarInline: (value: string | undefined) => void
+  setLlamaGrammarOverride: (value: string | undefined) => void
   setJsonMode: (value: boolean | undefined) => void
 }
 
@@ -156,6 +168,11 @@ const INITIAL_STATE: ChatModelSettings = {
   apiProvider: undefined,
   extraHeaders: undefined,
   extraBody: undefined,
+  llamaThinkingBudgetTokens: undefined,
+  llamaGrammarMode: undefined,
+  llamaGrammarId: undefined,
+  llamaGrammarInline: undefined,
+  llamaGrammarOverride: undefined,
   jsonMode: undefined
 }
 
@@ -215,6 +232,13 @@ export const useStoreChatModelSettings = createWithEqualityFn<ChatModelSettingsS
     setApiProvider: (value) => set({ apiProvider: value }),
     setExtraHeaders: (value) => set({ extraHeaders: value }),
     setExtraBody: (value) => set({ extraBody: value }),
+    setLlamaThinkingBudgetTokens: (value) =>
+      set({ llamaThinkingBudgetTokens: value }),
+    setLlamaGrammarMode: (value) => set({ llamaGrammarMode: value }),
+    setLlamaGrammarId: (value) => set({ llamaGrammarId: value }),
+    setLlamaGrammarInline: (value) => set({ llamaGrammarInline: value }),
+    setLlamaGrammarOverride: (value) =>
+      set({ llamaGrammarOverride: value }),
     setJsonMode: (value) => set({ jsonMode: value })
   })
 )
