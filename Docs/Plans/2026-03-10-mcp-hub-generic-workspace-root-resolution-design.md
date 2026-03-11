@@ -1,6 +1,6 @@
 # MCP Hub Generic Workspace Root Resolution Design
 
-Status: Reviewed for planning
+Status: Implemented
 
 ## Goal
 

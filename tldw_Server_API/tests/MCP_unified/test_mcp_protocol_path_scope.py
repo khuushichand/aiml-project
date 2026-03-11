@@ -29,6 +29,15 @@ class _FakeModule:
     async def execute_tool(self, tool_name: str, arguments: dict, context=None):  # noqa: ANN001, ARG002
         return {"ok": True}
 
+    async def execute_with_circuit_breaker(
+        self,
+        func,  # noqa: ANN001
+        tool_name: str,
+        arguments: dict,
+        context=None,  # noqa: ANN001
+    ):
+        return await func(tool_name, arguments, context=context)
+
 
 class _FakeRegistry:
     def __init__(self, module: _FakeModule) -> None:
@@ -81,6 +90,16 @@ class _NoopApprovalService:
     async def evaluate_tool_call(self, **kwargs) -> dict:  # noqa: ANN003
         self.calls.append(dict(kwargs))
         return {"status": "approval_required", "approval": {"tool_name": kwargs["tool_name"]}}
+
+
+class _FakeWorkspaceRootResolver:
+    def __init__(self, result: dict) -> None:
+        self.result = dict(result)
+        self.calls: list[dict] = []
+
+    async def resolve_for_context(self, **kwargs) -> dict:  # noqa: ANN003
+        self.calls.append(dict(kwargs))
+        return dict(self.result)
 
 
 @pytest.mark.asyncio
@@ -319,3 +338,286 @@ def test_external_slot_scope_key_includes_requested_slots() -> None:
 
     assert scope_key_a != scope_key_b
     assert scope_key_a != scope_key_c
+
+
+@pytest.mark.asyncio
+async def test_handle_tools_call_allows_direct_workspace_scoped_reader(monkeypatch) -> None:
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_path_enforcement_service as path_service_mod
+    from tldw_Server_API.app.services.mcp_hub_path_enforcement_service import (
+        McpHubPathEnforcementService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
+
+    tool_def = {
+        "name": "files.read",
+        "description": "Read a file",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "retrieval",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+        },
+    }
+    fake_module = _FakeModule(tool_def)
+    fake_resolver = _FakeWorkspaceRootResolver(
+        {
+            "workspace_root": "/tmp/mcp-hub-direct/project",
+            "workspace_id": "workspace-direct",
+            "source": "sandbox_workspace_lookup",
+            "reason": None,
+        }
+    )
+    path_service = McpHubPathEnforcementService(
+        path_scope_service=McpHubPathScopeService(
+            sandbox_service=object(),
+            workspace_root_resolver=fake_resolver,
+        )
+    )
+
+    async def _fake_get_path_service():
+        return path_service
+
+    monkeypatch.setattr(path_service_mod, "get_mcp_hub_path_enforcement_service", _fake_get_path_service)
+
+    protocol = MCPProtocol()
+    protocol.module_registry = _FakeRegistry(fake_module)
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["files.read"],
+            "policy_document": {
+                "path_scope_mode": "workspace_root",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+            },
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id="req-direct-workspace-root",
+        user_id="7",
+        client_id="test-client",
+        session_id=None,
+        metadata={"workspace_id": "workspace-direct", "cwd": "src"},
+    )
+
+    result = await protocol._handle_tools_call(
+        {"name": "files.read", "arguments": {"path": "notes.txt"}},
+        context,
+    )
+
+    assert result["tool"] == "files.read"
+    assert result["module"] == "files"
+    assert result["content"][0]["json"] == {"ok": True}
+    assert fake_resolver.calls[0]["user_id"] == "7"
+    assert fake_resolver.calls[0]["workspace_id"] == "workspace-direct"
+
+
+@pytest.mark.asyncio
+async def test_handle_tools_call_requires_approval_when_direct_workspace_root_missing(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.protocol import ApprovalRequiredError
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_approval_service as approval_service_mod
+    from tldw_Server_API.app.services import mcp_hub_path_enforcement_service as path_service_mod
+    from tldw_Server_API.app.services.mcp_hub_path_enforcement_service import (
+        McpHubPathEnforcementService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
+
+    tool_def = {
+        "name": "files.read",
+        "description": "Read a file",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "retrieval",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+        },
+    }
+    fake_module = _FakeModule(tool_def)
+    fake_resolver = _FakeWorkspaceRootResolver(
+        {
+            "workspace_root": None,
+            "workspace_id": "workspace-direct",
+            "source": "sandbox_workspace_lookup",
+            "reason": "workspace_root_unavailable",
+        }
+    )
+    fake_approval_service = _FakeApprovalService()
+    path_service = McpHubPathEnforcementService(
+        path_scope_service=McpHubPathScopeService(
+            sandbox_service=object(),
+            workspace_root_resolver=fake_resolver,
+        )
+    )
+
+    async def _fake_get_path_service():
+        return path_service
+
+    async def _fake_get_approval_service():
+        return fake_approval_service
+
+    monkeypatch.setattr(path_service_mod, "get_mcp_hub_path_enforcement_service", _fake_get_path_service)
+    monkeypatch.setattr(approval_service_mod, "get_mcp_hub_approval_service", _fake_get_approval_service)
+
+    protocol = MCPProtocol()
+    protocol.module_registry = _FakeRegistry(fake_module)
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["files.read"],
+            "approval_policy_id": 1,
+            "policy_document": {
+                "path_scope_mode": "workspace_root",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+            },
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id="req-direct-missing-root",
+        user_id="7",
+        client_id="test-client",
+        session_id=None,
+        metadata={"workspace_id": "workspace-direct", "cwd": "src"},
+    )
+
+    with pytest.raises(ApprovalRequiredError) as exc:
+        await protocol._handle_tools_call(
+            {"name": "files.read", "arguments": {"path": "notes.txt"}},
+            context,
+        )
+
+    approval = exc.value.approval or {}
+    assert approval["reason"] == "workspace_root_unavailable"
+    assert approval["scope_context"]["path_scope_mode"] == "workspace_root"
+
+
+@pytest.mark.asyncio
+async def test_handle_tools_call_direct_cwd_descendants_stays_narrower_than_workspace_root(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.protocol import ApprovalRequiredError
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_approval_service as approval_service_mod
+    from tldw_Server_API.app.services import mcp_hub_path_enforcement_service as path_service_mod
+    from tldw_Server_API.app.services.mcp_hub_path_enforcement_service import (
+        McpHubPathEnforcementService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
+
+    tool_def = {
+        "name": "files.read",
+        "description": "Read a file",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "retrieval",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+        },
+    }
+    fake_module = _FakeModule(tool_def)
+    fake_resolver = _FakeWorkspaceRootResolver(
+        {
+            "workspace_root": "/tmp/mcp-hub-direct/project",
+            "workspace_id": "workspace-direct",
+            "source": "sandbox_workspace_lookup",
+            "reason": None,
+        }
+    )
+    fake_approval_service = _FakeApprovalService()
+    path_service = McpHubPathEnforcementService(
+        path_scope_service=McpHubPathScopeService(
+            sandbox_service=object(),
+            workspace_root_resolver=fake_resolver,
+        )
+    )
+
+    async def _fake_get_path_service():
+        return path_service
+
+    async def _fake_get_approval_service():
+        return fake_approval_service
+
+    monkeypatch.setattr(path_service_mod, "get_mcp_hub_path_enforcement_service", _fake_get_path_service)
+    monkeypatch.setattr(approval_service_mod, "get_mcp_hub_approval_service", _fake_get_approval_service)
+
+    protocol = MCPProtocol()
+    protocol.module_registry = _FakeRegistry(fake_module)
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["files.read"],
+            "approval_policy_id": 1,
+            "policy_document": {
+                "path_scope_mode": "cwd_descendants",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+            },
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id="req-direct-cwd-descendants",
+        user_id="7",
+        client_id="test-client",
+        session_id=None,
+        metadata={"workspace_id": "workspace-direct", "cwd": "src"},
+    )
+
+    with pytest.raises(ApprovalRequiredError) as exc:
+        await protocol._handle_tools_call(
+            {"name": "files.read", "arguments": {"path": "../README.md"}},
+            context,
+        )
+
+    approval = exc.value.approval or {}
+    assert approval["reason"] == "path_outside_current_folder_scope"
+    assert approval["scope_context"]["path_scope_mode"] == "cwd_descendants"
+    assert approval["scope_context"]["scope_root"] == "/private/tmp/mcp-hub-direct/project/src"

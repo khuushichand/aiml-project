@@ -561,6 +561,7 @@ async def _attach_api_key_metadata(
             )
 
     _attach_rg_ingress_metadata(metadata, http_request)
+    _attach_workspace_ingress_metadata(metadata, http_request)
     return metadata
 
 
@@ -576,6 +577,28 @@ def _attach_rg_ingress_metadata(metadata: dict[str, Any], http_request: Optional
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Failed to read rg_policy_id from request state",
+            error=str(exc),
+            exc_info=True,
+        )
+
+
+def _attach_workspace_ingress_metadata(
+    metadata: dict[str, Any],
+    http_request: Optional[Request],
+) -> None:
+    """Attach trusted direct-ingress workspace metadata for MCP path scoping."""
+    if not http_request:
+        return
+    try:
+        workspace_id = str(http_request.headers.get("x-tldw-workspace-id") or "").strip()
+        if workspace_id:
+            metadata["workspace_id"] = workspace_id
+        cwd = str(http_request.headers.get("x-tldw-cwd") or "").strip()
+        if cwd:
+            metadata["cwd"] = cwd
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(
+            "Failed to read direct MCP workspace headers",
             error=str(exc),
             exc_info=True,
         )

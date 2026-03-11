@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import Any
 
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
+from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import (
+    McpHubWorkspaceRootResolver,
+)
 
 _DEFAULT_PATH_SCOPE_ENFORCEMENT = "approval_required_when_unenforceable"
 
@@ -35,8 +38,16 @@ def _is_within(root: Path, candidate: Path) -> bool:
 class McpHubPathScopeService:
     """Resolve a trusted local path scope for MCP Hub runtime evaluation."""
 
-    def __init__(self, sandbox_service: SandboxService | Any | None = None) -> None:
+    def __init__(
+        self,
+        sandbox_service: SandboxService | Any | None = None,
+        workspace_root_resolver: McpHubWorkspaceRootResolver | Any | None = None,
+    ) -> None:
         self._sandbox_service = sandbox_service or SandboxService()
+        self._workspace_root_resolver = (
+            workspace_root_resolver
+            or McpHubWorkspaceRootResolver(sandbox_service=self._sandbox_service)
+        )
 
     async def resolve_for_context(
         self,
@@ -50,6 +61,10 @@ class McpHubPathScopeService:
         session_id = _first_nonempty(
             getattr(context, "session_id", None),
             metadata.get("session_id"),
+        )
+        user_id = _first_nonempty(
+            getattr(context, "user_id", None),
+            metadata.get("user_id"),
         )
         workspace_id = _first_nonempty(metadata.get("workspace_id"))
         path_scope_mode = _first_nonempty(policy_document.get("path_scope_mode")) or "none"
@@ -71,11 +86,20 @@ class McpHubPathScopeService:
         if not result["enabled"]:
             return result
 
-        workspace_root = None
-        if session_id:
-            workspace_root = self._sandbox_service.get_session_workspace_path(session_id)
+        workspace_resolution = await self._workspace_root_resolver.resolve_for_context(
+            session_id=session_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+        workspace_root = workspace_resolution.get("workspace_root")
+        if workspace_resolution.get("workspace_id") and not result["workspace_id"]:
+            result["workspace_id"] = str(workspace_resolution["workspace_id"])
+        if workspace_resolution.get("source"):
+            result["workspace_root_source"] = str(workspace_resolution["source"])
         if not workspace_root:
-            result["reason"] = "workspace_root_unavailable"
+            result["reason"] = str(
+                workspace_resolution.get("reason") or "workspace_root_unavailable"
+            )
             return result
 
         workspace_root_path = Path(str(workspace_root)).expanduser().resolve(strict=False)

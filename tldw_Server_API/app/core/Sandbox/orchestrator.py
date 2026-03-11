@@ -1361,6 +1361,25 @@ class SandboxOrchestrator:
             self._session_roots[sid] = ws_str
         return ws_str
 
+    def list_workspace_paths_for_user_workspace(self, *, user_id: str, workspace_id: str) -> list[str]:
+        owner_key = str(user_id or "").strip()
+        workspace_key = str(workspace_id or "").strip()
+        if not owner_key or not workspace_key:
+            return []
+        with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+            self._prune_expired_sessions()
+        try:
+            return self._store.list_workspace_paths_for_user_workspace(
+                user_id=owner_key,
+                workspace_id=workspace_key,
+            )
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(
+                "store.list_workspace_paths_for_user_workspace failed: {}",
+                exc,
+            )
+            return []
+
     # -----------------
     # Admin listing helpers
     # -----------------

@@ -14,6 +14,16 @@ class _FakeSandboxService:
         return self.roots.get(session_id)
 
 
+class _FakeWorkspaceRootResolver:
+    def __init__(self, result: dict | None = None) -> None:
+        self.result = dict(result or {})
+        self.calls: list[dict] = []
+
+    async def resolve_for_context(self, **kwargs) -> dict:
+        self.calls.append(dict(kwargs))
+        return dict(self.result)
+
+
 @pytest.mark.asyncio
 async def test_path_scope_service_resolves_workspace_root_and_relative_cwd() -> None:
     from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
@@ -96,3 +106,81 @@ async def test_path_scope_service_returns_workspace_unavailable_without_trusted_
     assert result["workspace_root"] is None
     assert result["cwd"] is None
     assert result["reason"] == "workspace_root_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_path_scope_service_uses_workspace_id_resolver_for_direct_callers() -> None:
+    from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
+
+    resolver = _FakeWorkspaceRootResolver(
+        {
+            "workspace_root": "/tmp/mcp-hub-path-scope/direct-workspace",
+            "workspace_id": "workspace-direct",
+            "source": "sandbox_workspace_lookup",
+            "reason": None,
+        }
+    )
+    svc = McpHubPathScopeService(
+        sandbox_service=_FakeSandboxService({}),
+        workspace_root_resolver=resolver,
+    )
+    context = SimpleNamespace(
+        session_id=None,
+        user_id="7",
+        metadata={"workspace_id": "workspace-direct", "cwd": "src"},
+    )
+
+    result = await svc.resolve_for_context(
+        effective_policy={
+            "enabled": True,
+            "policy_document": {
+                "path_scope_mode": "workspace_root",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+            },
+        },
+        context=context,
+    )
+
+    assert result["workspace_root"] == str(Path("/tmp/mcp-hub-path-scope/direct-workspace").resolve())
+    assert result["cwd"] == str(Path("/tmp/mcp-hub-path-scope/direct-workspace/src").resolve())
+    assert result["reason"] is None
+    assert resolver.calls[0]["workspace_id"] == "workspace-direct"
+    assert resolver.calls[0]["user_id"] == "7"
+
+
+@pytest.mark.asyncio
+async def test_path_scope_service_fails_closed_for_ambiguous_workspace_id() -> None:
+    from tldw_Server_API.app.services.mcp_hub_path_scope_service import McpHubPathScopeService
+
+    resolver = _FakeWorkspaceRootResolver(
+        {
+            "workspace_root": None,
+            "workspace_id": "workspace-direct",
+            "source": "sandbox_workspace_lookup",
+            "reason": "workspace_root_ambiguous",
+        }
+    )
+    svc = McpHubPathScopeService(
+        sandbox_service=_FakeSandboxService({}),
+        workspace_root_resolver=resolver,
+    )
+    context = SimpleNamespace(
+        session_id=None,
+        user_id="7",
+        metadata={"workspace_id": "workspace-direct", "cwd": "src"},
+    )
+
+    result = await svc.resolve_for_context(
+        effective_policy={
+            "enabled": True,
+            "policy_document": {
+                "path_scope_mode": "workspace_root",
+                "path_scope_enforcement": "approval_required_when_unenforceable",
+            },
+        },
+        context=context,
+    )
+
+    assert result["workspace_root"] is None
+    assert result["cwd"] is None
+    assert result["reason"] == "workspace_root_ambiguous"
