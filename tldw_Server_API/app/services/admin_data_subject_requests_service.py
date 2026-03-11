@@ -249,6 +249,12 @@ async def preview_data_subject_request(
     principal: AuthPrincipal | None = None,
     users_repo: AuthnzUsersRepo,
 ) -> dict[str, Any]:
+    """Return an authoritative DSR preview for a requester within admin scope.
+
+    The requester is resolved through the AuthNZ user repo, then scoped visibility is
+    enforced before any per-user store is queried. Unsupported or unavailable coverage
+    fails closed so the caller never receives synthetic zero-count summaries.
+    """
     user = await _resolve_requester_user(
         requester_identifier,
         users_repo=users_repo,
@@ -313,6 +319,12 @@ async def record_data_subject_request(
     preview: dict[str, Any] | None = None,
     notes: str | None = None,
 ) -> dict[str, Any]:
+    """Persist an idempotent DSR intake record after authoritative preview validation.
+
+    Callers may supply a previously computed preview to avoid duplicate work, but the
+    preview must still come from the authoritative preview path. Records are stored in
+    the AuthNZ control-plane DB with newest request history and review status metadata.
+    """
     if preview is None:
         preview = await preview_data_subject_request(
             requester_identifier=requester_identifier,
@@ -348,6 +360,12 @@ async def list_data_subject_requests(
     offset: int,
     requests_repo: AuthnzDataSubjectRequestsRepo,
 ) -> tuple[list[dict[str, Any]], int]:
+    """Return paged DSR history limited to the admin's permitted scope.
+
+    Platform admins receive the full request log. Org-scoped admins are limited by the
+    same org scope used elsewhere in admin data-ops, and that filtering is delegated to
+    the repository query so pagination stays authoritative.
+    """
     await requests_repo.ensure_schema()
     org_ids = await admin_scope_service.get_admin_org_ids(principal)
     return await requests_repo.list_requests(
