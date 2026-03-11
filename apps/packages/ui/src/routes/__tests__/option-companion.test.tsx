@@ -255,6 +255,20 @@ describe("option companion route", () => {
       title: "Daily reflection",
       cadence: "daily",
       summary: "You revisited project alpha.",
+      delivery_decision: "delivered",
+      delivery_reason: "meaningful_signal",
+      theme_key: "project-alpha",
+      signal_strength: 3,
+      follow_up_prompts: [
+        {
+          prompt_id: "prompt-1",
+          label: "Next concrete step",
+          prompt_text: "What is the next concrete step for project alpha?",
+          prompt_type: "clarify_priority",
+          source_reflection_id: "reflection-1",
+          source_evidence_ids: ["activity-1"]
+        }
+      ],
       evidence: [],
       provenance: {
         source_event_ids: ["activity-1"],
@@ -447,6 +461,28 @@ describe("option companion route", () => {
     expect(await screen.findByText("Source event ids")).toBeInTheDocument()
     expect(screen.getByText("activity-1")).toBeInTheDocument()
     expect(screen.getByText("knowledge-1")).toBeInTheDocument()
+  })
+
+  it("shows follow-up prompts when a reflection is opened", async () => {
+    renderRoute()
+
+    await screen.findByText("You revisited project alpha.")
+    fireEvent.click(screen.getByRole("button", { name: "View reflection provenance" }))
+
+    expect(await screen.findByText("Follow-up prompts")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Next concrete step" })
+    ).toBeInTheDocument()
+  })
+
+  it("does not render standalone prompt chips on the default workspace surface", async () => {
+    renderRoute()
+
+    await screen.findByText("You revisited project alpha.")
+    expect(screen.queryByText("Follow-up prompts")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Next concrete step" })
+    ).not.toBeInTheDocument()
   })
 
   it("registers the companion workspace route in the route registry", () => {

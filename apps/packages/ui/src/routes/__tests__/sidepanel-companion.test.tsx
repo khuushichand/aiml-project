@@ -231,4 +231,35 @@ describe("SidepanelCompanion", () => {
       screen.queryByRole("button", { name: "Rebuild knowledge" })
     ).not.toBeInTheDocument()
   })
+
+  it("does not render standalone follow-up prompts on the default workspace surface", async () => {
+    mocks.fetchCompanionWorkspaceSnapshot.mockResolvedValueOnce({
+      activity: [],
+      activityTotal: 0,
+      knowledge: [],
+      knowledgeTotal: 0,
+      goals: [],
+      activeGoalCount: 0,
+      reflections: [
+        {
+          id: "reflection-1",
+          cadence: "daily",
+          title: "Daily reflection",
+          summary: "You revisited project alpha.",
+          evidence: [{ source_id: "activity-1" }],
+          provenance: { source_event_ids: ["activity-1"] },
+          created_at: "2026-03-10T13:00:00Z"
+        }
+      ],
+      reflectionNotifications: []
+    })
+
+    renderRoute()
+
+    await screen.findByText("You revisited project alpha.")
+    expect(screen.queryByText("Follow-up prompts")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Next concrete step" })
+    ).not.toBeInTheDocument()
+  })
 })

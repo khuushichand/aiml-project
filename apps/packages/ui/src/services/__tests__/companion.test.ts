@@ -220,6 +220,49 @@ describe("companion service", () => {
     )
   })
 
+  it("loads reflection detail with follow-up prompt payloads", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      id: "reflection-1",
+      title: "Daily reflection",
+      cadence: "daily",
+      summary: "You revisited project alpha.",
+      evidence: [{ source_id: "42" }],
+      provenance: {
+        source_event_ids: ["activity-1"]
+      },
+      created_at: "2026-03-10T13:00:00Z",
+      delivery_decision: "delivered",
+      delivery_reason: "meaningful_signal",
+      theme_key: "project-alpha",
+      signal_strength: 3,
+      follow_up_prompts: [
+        {
+          prompt_id: "prompt-1",
+          label: "Next concrete step",
+          prompt_text: "What is the next concrete step for project alpha?",
+          prompt_type: "clarify_priority",
+          source_reflection_id: "reflection-1",
+          source_evidence_ids: ["activity-1"]
+        }
+      ],
+      activity_events: [],
+      knowledge_cards: [],
+      goals: []
+    })
+
+    const detail = await fetchCompanionReflectionDetail("reflection-1")
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/companion/reflections/reflection-1",
+        method: "GET"
+      })
+    )
+    expect(detail.follow_up_prompts[0].prompt_text).toBe(
+      "What is the next concrete step for project alpha?"
+    )
+  })
+
   it("records explicit companion capture through the activity endpoint", async () => {
     mocks.bgRequest.mockResolvedValue({
       id: "activity-1",

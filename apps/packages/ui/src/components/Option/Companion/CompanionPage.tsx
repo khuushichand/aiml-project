@@ -99,6 +99,18 @@ const reflectionInboxLabel = (
   return linkedNotification.read_at ? "In inbox" : "New in inbox"
 }
 
+const normalizeFollowUpPrompts = (
+  value: CompanionReflectionDetail["follow_up_prompts"]
+): CompanionReflectionDetail["follow_up_prompts"] =>
+  Array.isArray(value)
+    ? value.filter(
+        (item) =>
+          item &&
+          typeof item.prompt_text === "string" &&
+          item.prompt_text.trim().length > 0
+      )
+    : []
+
 type CompanionPageProps = {
   surface?: "options" | "sidepanel"
   onCompanionEnabled?: () => void
@@ -832,6 +844,29 @@ export const CompanionPage = ({
                       {provenance.detail.summary}
                     </p>
                   </div>
+                  {normalizeFollowUpPrompts(provenance.detail.follow_up_prompts).length ? (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Follow-up prompts
+                      </p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        These stay visible only after you open a reflection detail.
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {normalizeFollowUpPrompts(provenance.detail.follow_up_prompts).map(
+                          (prompt) => (
+                            <button
+                              className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-800"
+                              key={prompt.prompt_id}
+                              type="button"
+                            >
+                              {prompt.label}
+                            </button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Source event ids

@@ -75,12 +75,26 @@ export type CompanionGoalUpdate = {
   status?: string
 }
 
+export type CompanionFollowUpPrompt = {
+  prompt_id: string
+  label: string
+  prompt_text: string
+  prompt_type: string
+  source_reflection_id?: string | null
+  source_evidence_ids: string[]
+}
+
 export type CompanionReflection = {
   id: string
   cadence: string | null
   title: string | null
   summary: string
   evidence: Array<Record<string, unknown>>
+  delivery_decision?: string | null
+  delivery_reason?: string | null
+  theme_key?: string | null
+  signal_strength?: number | null
+  follow_up_prompts: CompanionFollowUpPrompt[]
   provenance: Record<string, unknown>
   created_at: string
 }
@@ -91,6 +105,11 @@ export type CompanionReflectionDetail = {
   cadence: string | null
   summary: string
   evidence: Array<Record<string, unknown>>
+  delivery_decision?: string | null
+  delivery_reason?: string | null
+  theme_key?: string | null
+  signal_strength?: number | null
+  follow_up_prompts: CompanionFollowUpPrompt[]
   provenance: Record<string, unknown>
   created_at: string
   activity_events: CompanionActivityItem[]
@@ -252,12 +271,29 @@ const toReflection = (item: CompanionActivityItem): CompanionReflection => {
   const evidence = Array.isArray(metadata.evidence)
     ? (metadata.evidence as Array<Record<string, unknown>>)
     : []
+  const followUpPrompts = Array.isArray(metadata.follow_up_prompts)
+    ? (metadata.follow_up_prompts as CompanionFollowUpPrompt[])
+    : []
   return {
     id: item.id,
     cadence,
     title,
     summary,
     evidence,
+    delivery_decision:
+      typeof metadata.delivery_decision === "string"
+        ? metadata.delivery_decision
+        : null,
+    delivery_reason:
+      typeof metadata.delivery_reason === "string"
+        ? metadata.delivery_reason
+        : null,
+    theme_key: typeof metadata.theme_key === "string" ? metadata.theme_key : null,
+    signal_strength:
+      typeof metadata.signal_strength === "number"
+        ? metadata.signal_strength
+        : null,
+    follow_up_prompts: followUpPrompts,
     provenance: item.provenance || {},
     created_at: item.created_at
   }
