@@ -116,6 +116,10 @@ class CompanionGoal(BaseModel):
     goal_type: str
     config: dict[str, Any] = Field(default_factory=dict)
     progress: dict[str, Any] = Field(default_factory=dict)
+    origin_kind: str = "manual"
+    progress_mode: str = "manual"
+    derivation_key: str | None = None
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
     status: str
     created_at: datetime
     updated_at: datetime

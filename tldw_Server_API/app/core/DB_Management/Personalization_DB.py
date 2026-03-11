@@ -84,6 +84,9 @@ class PersonalizationDB:
                         preferred_format TEXT NOT NULL DEFAULT 'auto',
                         session_continuity_enabled INTEGER NOT NULL DEFAULT 1,
                         session_summaries_enabled INTEGER NOT NULL DEFAULT 1,
+                        companion_reflections_enabled INTEGER NOT NULL DEFAULT 1,
+                        companion_daily_reflections_enabled INTEGER NOT NULL DEFAULT 1,
+                        companion_weekly_reflections_enabled INTEGER NOT NULL DEFAULT 1,
                         purged_at TEXT,
                         updated_at TEXT NOT NULL
                     );
@@ -177,6 +180,10 @@ class PersonalizationDB:
                         goal_type TEXT NOT NULL,
                         config_json TEXT NOT NULL,
                         progress_json TEXT NOT NULL,
+                        origin_kind TEXT NOT NULL DEFAULT 'manual',
+                        progress_mode TEXT NOT NULL DEFAULT 'manual',
+                        derivation_key TEXT,
+                        evidence_json TEXT NOT NULL DEFAULT '[]',
                         status TEXT NOT NULL DEFAULT 'active',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
@@ -204,10 +211,17 @@ class PersonalizationDB:
             ("profiles", "preferred_format", "TEXT NOT NULL DEFAULT 'auto'"),
             ("profiles", "session_continuity_enabled", "INTEGER NOT NULL DEFAULT 1"),
             ("profiles", "session_summaries_enabled", "INTEGER NOT NULL DEFAULT 1"),
+            ("profiles", "companion_reflections_enabled", "INTEGER NOT NULL DEFAULT 1"),
+            ("profiles", "companion_daily_reflections_enabled", "INTEGER NOT NULL DEFAULT 1"),
+            ("profiles", "companion_weekly_reflections_enabled", "INTEGER NOT NULL DEFAULT 1"),
             ("profiles", "purged_at", "TEXT"),
             ("semantic_memories", "hidden", "INTEGER NOT NULL DEFAULT 0"),
             ("semantic_memories", "last_validated", "TEXT"),
             ("topic_profiles", "centroid_embedding", "BLOB"),
+            ("companion_goals", "origin_kind", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("companion_goals", "progress_mode", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("companion_goals", "derivation_key", "TEXT"),
+            ("companion_goals", "evidence_json", "TEXT NOT NULL DEFAULT '[]'"),
         ]
         with self._lock:
             conn = self._connect()
@@ -248,6 +262,9 @@ class PersonalizationDB:
                     "beta": 0.6,
                     "gamma": 0.2,
                     "recency_half_life_days": 14,
+                    "companion_reflections_enabled": 1,
+                    "companion_daily_reflections_enabled": 1,
+                    "companion_weekly_reflections_enabled": 1,
                     "updated_at": now,
                 }
             finally:
@@ -264,6 +281,9 @@ class PersonalizationDB:
             "quiet_hours_start", "quiet_hours_end", "response_style",
             "preferred_format", "session_continuity_enabled",
             "session_summaries_enabled",
+            "companion_reflections_enabled",
+            "companion_daily_reflections_enabled",
+            "companion_weekly_reflections_enabled",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
@@ -907,6 +927,10 @@ class PersonalizationDB:
         goal_type: str,
         config: dict[str, Any] | None = None,
         progress: dict[str, Any] | None = None,
+        origin_kind: str = "manual",
+        progress_mode: str = "manual",
+        derivation_key: str | None = None,
+        evidence: list[dict[str, Any]] | None = None,
         status: str = "active",
     ) -> str:
         import uuid
@@ -922,9 +946,10 @@ class PersonalizationDB:
                     """
                     INSERT INTO companion_goals (
                         id, user_id, title, description, goal_type, config_json,
-                        progress_json, status, created_at, updated_at
+                        progress_json, origin_kind, progress_mode, derivation_key,
+                        evidence_json, status, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         goal_id,
@@ -934,6 +959,10 @@ class PersonalizationDB:
                         str(goal_type),
                         json.dumps(config or {}),
                         json.dumps(progress or {}),
+                        str(origin_kind),
+                        str(progress_mode),
+                        None if derivation_key is None else str(derivation_key),
+                        json.dumps(evidence or []),
                         str(status),
                         now,
                         now,
@@ -945,7 +974,17 @@ class PersonalizationDB:
                 conn.close()
 
     def update_companion_goal(self, goal_id: str, user_id: str, **updates: Any) -> dict[str, Any] | None:
-        allowed_fields = {"title", "description", "config", "progress", "status"}
+        allowed_fields = {
+            "title",
+            "description",
+            "config",
+            "progress",
+            "origin_kind",
+            "progress_mode",
+            "derivation_key",
+            "evidence",
+            "status",
+        }
         filtered_updates = {key: value for key, value in updates.items() if key in allowed_fields}
 
         with self._lock:
@@ -959,6 +998,10 @@ class PersonalizationDB:
                             description = CASE WHEN ? THEN ? ELSE description END,
                             config_json = CASE WHEN ? THEN ? ELSE config_json END,
                             progress_json = CASE WHEN ? THEN ? ELSE progress_json END,
+                            origin_kind = CASE WHEN ? THEN ? ELSE origin_kind END,
+                            progress_mode = CASE WHEN ? THEN ? ELSE progress_mode END,
+                            derivation_key = CASE WHEN ? THEN ? ELSE derivation_key END,
+                            evidence_json = CASE WHEN ? THEN ? ELSE evidence_json END,
                             status = CASE WHEN ? THEN ? ELSE status END,
                             updated_at = ?
                         WHERE id = ? AND user_id = ?
@@ -972,6 +1015,14 @@ class PersonalizationDB:
                             json.dumps(filtered_updates.get("config") or {}),
                             int("progress" in filtered_updates),
                             json.dumps(filtered_updates.get("progress") or {}),
+                            int("origin_kind" in filtered_updates),
+                            filtered_updates.get("origin_kind"),
+                            int("progress_mode" in filtered_updates),
+                            filtered_updates.get("progress_mode"),
+                            int("derivation_key" in filtered_updates),
+                            filtered_updates.get("derivation_key"),
+                            int("evidence" in filtered_updates),
+                            json.dumps(filtered_updates.get("evidence") or []),
                             int("status" in filtered_updates),
                             filtered_updates.get("status"),
                             _utcnow_iso(),
@@ -985,7 +1036,9 @@ class PersonalizationDB:
 
                 row = conn.execute(
                     """
-                    SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at
+                    SELECT id, title, description, goal_type, config_json, progress_json,
+                           origin_kind, progress_mode, derivation_key, evidence_json,
+                           status, created_at, updated_at
                     FROM companion_goals
                     WHERE id = ? AND user_id = ?
                     """,
@@ -1000,6 +1053,10 @@ class PersonalizationDB:
                     "goal_type": row["goal_type"],
                     "config": json.loads(row["config_json"] or "{}"),
                     "progress": json.loads(row["progress_json"] or "{}"),
+                    "origin_kind": row["origin_kind"],
+                    "progress_mode": row["progress_mode"],
+                    "derivation_key": row["derivation_key"],
+                    "evidence": json.loads(row["evidence_json"] or "[]"),
                     "status": row["status"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
@@ -1010,7 +1067,8 @@ class PersonalizationDB:
     def list_companion_goals(self, user_id: str, status: str | None = None) -> list[dict[str, Any]]:
         if status is None:
             sql = (
-                "SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at "
+                "SELECT id, title, description, goal_type, config_json, progress_json, "
+                "origin_kind, progress_mode, derivation_key, evidence_json, status, created_at, updated_at "
                 "FROM companion_goals "
                 "WHERE user_id = ? "
                 "ORDER BY updated_at DESC"
@@ -1018,7 +1076,8 @@ class PersonalizationDB:
             params: list[Any] = [str(user_id)]
         else:
             sql = (
-                "SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at "
+                "SELECT id, title, description, goal_type, config_json, progress_json, "
+                "origin_kind, progress_mode, derivation_key, evidence_json, status, created_at, updated_at "
                 "FROM companion_goals "
                 "WHERE user_id = ? AND status = ? "
                 "ORDER BY updated_at DESC"
@@ -1037,6 +1096,10 @@ class PersonalizationDB:
                         "goal_type": row["goal_type"],
                         "config": json.loads(row["config_json"] or "{}"),
                         "progress": json.loads(row["progress_json"] or "{}"),
+                        "origin_kind": row["origin_kind"],
+                        "progress_mode": row["progress_mode"],
+                        "derivation_key": row["derivation_key"],
+                        "evidence": json.loads(row["evidence_json"] or "[]"),
                         "status": row["status"],
                         "created_at": row["created_at"],
                         "updated_at": row["updated_at"],
