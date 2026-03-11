@@ -478,7 +478,24 @@ and this project adheres to Some kind of Versioning
   - Added/updated regression coverage for MLX path handling, notes frontmatter escaping, and admin auth API key storage behavior.
 
 
-## [0.1.26] 2026-03-01
+## [0.1.26] 2026-03-11
+
+### Consolidated Release Summary (Merged PRs #790-#829)
+
+- Added: Repo2Txt shipped across shared UI, web, and extension surfaces with GitHub and local sources, file-tree filtering, preview/copy/download flows, and better launcher discoverability. (PR #790)
+- Added: Safety and admin surfaces expanded with the Family Guardrails Wizard, per-user moderation phrase lists, and router analytics usage tabs plus aggregate APIs for operators. (PRs #804, #810, #797)
+- Added: Reading and research workflows grew with pinboard-style Collections enhancements, switchable unified RAG profiles, and multi-source quiz generation. (PRs #805, #796, #807)
+- Added: MCP Hub management shipped across AuthNZ storage, API, WebUI, and extension settings for ACP profiles and external server lifecycle management. (PR #806)
+- Added: Workflow capabilities expanded with kanban orchestration primitives, strict structured-output generation, structured QA chat workflows, unified queued-request handling, and connector-backed external file sync orchestration. (PRs #809, #818, #820, #823, #821)
+- Changed: Audio and ingestion experiences were redesigned: the Speech Playground gained richer TTS and STT comparison workflows, while Quick Ingest became a 5-step wizard with live progress, retry/error classification, and minimize-to-background controls. (PRs #816, #827)
+- Changed: Knowledge and watchlists moved to more progressive, task-oriented layouts with clearer defaults, navigation, empty states, and reliability feedback. (PRs #812, #813)
+- Changed: Prompt and writing workflows were reorganized with a fuller prompt workspace, stronger filtering/discoverability, and a restructured Writing Playground inspector. (PRs #817, #815)
+- Changed: Notes management was overhauled around decomposed editor/sidebar panes, progressive disclosure, and clearer save-status handling. (PR #826)
+- Changed: Media compatibility cleanup reduced legacy shim behavior and made deprecation signaling more explicit across ingestion flows. (PR #794)
+- Fixed: Platform reliability hardened across monitoring, benchmark recovery, shim cleanup, and core runtime paths, including sandbox admission/state handling, monitoring range interactions, and broader cleanup bundles that had previously been scattered across draft entries. (PRs #792, #793, #795, #798)
+- Fixed: Chat reliability issues were addressed for tool routing parity, OpenRouter freeze cases, selected-chat failure states, and conflict/retry behavior. (PRs #811, #814)
+- Fixed: ACP and admin surfaces received remediation for control auth, persistence, forks, login/auth proxy paths, privileged actions, and users views. (PRs #825, #829)
+- Fixed: Repo2Txt was hardened for local source selection, GitHub provider permissions, worker recovery, and deterministic compile behavior. (PR #790)
 
 ### Added
 
