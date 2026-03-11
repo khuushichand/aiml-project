@@ -2112,6 +2112,35 @@ class WorkflowsDatabase:
         finally:
             self._release_sqlite(conn)
 
+    def list_step_runs(self, *, run_id: str) -> list[dict[str, Any]]:
+        query = """
+            SELECT * FROM workflow_step_runs
+            WHERE run_id = ?
+            ORDER BY started_at ASC, step_run_id ASC
+        """
+        params = (str(run_id),)
+        rows: list[Any]
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, params, connection=conn)
+            rows = self._rows_from_result(result)
+        else:
+            conn = self._acquire_sqlite()
+            try:
+                rows = conn.cursor().execute(query, params).fetchall()
+            finally:
+                self._release_sqlite(conn)
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            data = self._row_to_dict(row)
+            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
+                data["inputs_json"] = json.loads(data.get("inputs_json") or "{}")
+            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
+                data["outputs_json"] = json.loads(data.get("outputs_json") or "{}")
+            out.append(data)
+        return out
+
     def update_step_attempt(self, *, step_run_id: str, attempt: int) -> None:
         """Persist the current attempt count for a step run."""
         params = (int(attempt), step_run_id)

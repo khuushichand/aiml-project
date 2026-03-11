@@ -39,10 +39,13 @@ from tldw_Server_API.app.api.v1.schemas.workflows import (
     RunRequest,
     WorkflowDefinitionCreate,
     WorkflowDefinitionResponse,
+    WorkflowRunInvestigationResponse,
     WorkflowRagSearchConfig,
     WorkflowRunListItem,
     WorkflowRunListResponse,
     WorkflowRunResponse,
+    WorkflowRunStepsResponse,
+    WorkflowStepAttemptsResponse,
 )
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditContext,
@@ -94,6 +97,9 @@ from tldw_Server_API.app.core.Workflows.daily_ledger import (
     record_workflow_run,
     workflows_ledger_category,
 )
+from tldw_Server_API.app.core.Workflows.investigation import build_run_investigation
+from tldw_Server_API.app.core.Workflows.investigation import list_run_steps as build_run_steps
+from tldw_Server_API.app.core.Workflows.investigation import list_step_attempts as build_step_attempts
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 
 _WORKFLOWS_NONCRITICAL_EXCEPTIONS = (
@@ -177,6 +183,24 @@ def _is_workflows_admin_user(current_user: User) -> bool:
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         return False
     return False
+
+
+def _get_authorized_run_or_404(
+    *,
+    run_id: str,
+    current_user: User,
+    db: WorkflowsDatabase,
+) -> tuple[Any, bool]:
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = _is_workflows_admin_user(current_user)
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run, is_admin
 
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
@@ -3002,6 +3026,71 @@ async def get_chunker_options():
 
 
 
+
+
+@router.get(
+    "/runs/{run_id}/investigation",
+    response_model=WorkflowRunInvestigationResponse,
+    dependencies=[Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ))],
+)
+async def get_run_investigation(
+    run_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    _run, is_admin = _get_authorized_run_or_404(run_id=run_id, current_user=current_user, db=db)
+    investigation = build_run_investigation(
+        db,
+        run_id=run_id,
+        include_operator_detail=is_admin,
+    )
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return WorkflowRunInvestigationResponse(**investigation)
+
+
+@router.get(
+    "/runs/{run_id}/steps",
+    response_model=WorkflowRunStepsResponse,
+    dependencies=[Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ))],
+)
+async def get_run_steps(
+    run_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    _run, is_admin = _get_authorized_run_or_404(run_id=run_id, current_user=current_user, db=db)
+    steps = build_run_steps(
+        db,
+        run_id=run_id,
+        include_operator_detail=is_admin,
+    )
+    if steps is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return WorkflowRunStepsResponse(**steps)
+
+
+@router.get(
+    "/runs/{run_id}/steps/{step_id}/attempts",
+    response_model=WorkflowStepAttemptsResponse,
+    dependencies=[Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ))],
+)
+async def get_step_attempts(
+    run_id: str,
+    step_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    _run, is_admin = _get_authorized_run_or_404(run_id=run_id, current_user=current_user, db=db)
+    attempts = build_step_attempts(
+        db,
+        run_id=run_id,
+        step_id=step_id,
+        include_operator_detail=is_admin,
+    )
+    if attempts is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return WorkflowStepAttemptsResponse(**attempts)
 
 
 @router.post(
