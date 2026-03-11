@@ -582,6 +582,118 @@ async def test_profile_credential_binding_endpoints_round_trip() -> None:
 
 
 @pytest.mark.asyncio
+async def test_profile_slot_write_binding_requires_credential_grant_authority() -> None:
+    class _WriteSlotService(_FakeService):
+        async def list_external_server_credential_slots(self, *, server_id: str) -> list[dict[str, Any]]:
+            assert server_id == "docs"
+            return [
+                {
+                    "server_id": "docs",
+                    "slot_name": "token_write",
+                    "display_name": "Write token",
+                    "secret_kind": "api_key",
+                    "privilege_class": "write",
+                    "is_required": False,
+                    "secret_configured": True,
+                }
+            ]
+
+        async def upsert_profile_credential_binding(
+            self,
+            *,
+            profile_id: int,
+            external_server_id: str,
+            slot_name: str | None = None,
+            actor_id: int | None,
+        ) -> dict[str, Any]:
+            assert profile_id == 7
+            assert external_server_id == "docs"
+            assert slot_name == "token_write"
+            assert actor_id == 1
+            return {
+                "id": 9,
+                "binding_target_type": "profile",
+                "binding_target_id": "7",
+                "external_server_id": "docs",
+                "slot_name": "token_write",
+                "credential_ref": "slot",
+                "binding_mode": "grant",
+                "usage_rules": {},
+                "created_by": 1,
+                "updated_by": 1,
+                "created_at": None,
+                "updated_at": None,
+            }
+
+    app = _build_app(
+        principal=_make_principal(permissions=["system.configure", "grant.credentials.read"]),
+        fail_with_401=False,
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_service] = lambda: _WriteSlotService()
+    with TestClient(app) as client:
+        resp = client.put("/api/v1/mcp/hub/permission-profiles/7/credential-bindings/docs/token_write")
+
+    assert resp.status_code == 403
+    assert "grant.credentials.write" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_profile_server_binding_uses_default_slot_grant_authority() -> None:
+    class _DefaultWriteSlotService(_FakeService):
+        async def list_external_server_credential_slots(self, *, server_id: str) -> list[dict[str, Any]]:
+            assert server_id == "docs"
+            return [
+                {
+                    "server_id": "docs",
+                    "slot_name": "bearer_token",
+                    "display_name": "Bearer token",
+                    "secret_kind": "bearer_token",
+                    "privilege_class": "write",
+                    "is_required": True,
+                    "secret_configured": True,
+                }
+            ]
+
+        async def upsert_profile_credential_binding(
+            self,
+            *,
+            profile_id: int,
+            external_server_id: str,
+            slot_name: str | None = None,
+            actor_id: int | None,
+        ) -> dict[str, Any]:
+            assert profile_id == 7
+            assert external_server_id == "docs"
+            assert slot_name is None
+            assert actor_id == 1
+            return {
+                "id": 10,
+                "binding_target_type": "profile",
+                "binding_target_id": "7",
+                "external_server_id": "docs",
+                "slot_name": "bearer_token",
+                "credential_ref": "server",
+                "binding_mode": "grant",
+                "usage_rules": {},
+                "created_by": 1,
+                "updated_by": 1,
+                "created_at": None,
+                "updated_at": None,
+            }
+
+    app = _build_app(
+        principal=_make_principal(permissions=["system.configure", "grant.credentials.read"]),
+        fail_with_401=False,
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_service] = lambda: _DefaultWriteSlotService()
+    with TestClient(app) as client:
+        resp = client.put("/api/v1/mcp/hub/permission-profiles/7/credential-bindings/docs")
+
+    assert resp.status_code == 403
+    assert "grant.credentials.write" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_assignment_credential_binding_and_external_access_endpoints_round_trip() -> None:
     app = _build_app(
         principal=_make_principal(roles=["admin"], permissions=[]),
@@ -601,6 +713,22 @@ async def test_assignment_credential_binding_and_external_access_endpoints_round
     assert put_resp.json()["binding_mode"] == "disable"
     assert preview_resp.status_code == 200
     assert preview_resp.json()["servers"][0]["blocked_reason"] == "disabled_by_assignment"
+
+
+@pytest.mark.asyncio
+async def test_assignment_disable_does_not_require_credential_grant_authority() -> None:
+    app = _build_app(
+        principal=_make_principal(permissions=["system.configure"]),
+        fail_with_401=False,
+    )
+    with TestClient(app) as client:
+        put_resp = client.put(
+            "/api/v1/mcp/hub/policy-assignments/11/credential-bindings/docs/token_write",
+            json={"binding_mode": "disable"},
+        )
+
+    assert put_resp.status_code == 200
+    assert put_resp.json()["binding_mode"] == "disable"
 
 
 @pytest.mark.asyncio
@@ -648,6 +776,112 @@ async def test_external_server_credential_slot_endpoints_round_trip() -> None:
     assert clear_secret_resp.json()["ok"] is True
     assert delete_resp.status_code == 200
     assert delete_resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_external_server_credential_slot_admin_requires_grant_authority() -> None:
+    class _AdminSlotService(_FakeService):
+        async def create_external_server_credential_slot(
+            self,
+            *,
+            server_id: str,
+            slot_name: str,
+            display_name: str,
+            secret_kind: str,
+            privilege_class: str,
+            is_required: bool,
+            actor_id: int | None,
+        ) -> dict[str, Any]:
+            assert server_id == "docs"
+            assert slot_name == "token_admin"
+            assert privilege_class == "admin"
+            assert actor_id == 1
+            return {
+                "server_id": server_id,
+                "slot_name": slot_name,
+                "display_name": display_name,
+                "secret_kind": secret_kind,
+                "privilege_class": privilege_class,
+                "is_required": is_required,
+                "secret_configured": False,
+            }
+
+    app = _build_app(
+        principal=_make_principal(permissions=["system.configure"]),
+        fail_with_401=False,
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_service] = lambda: _AdminSlotService()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/external-servers/docs/credential-slots",
+            json={
+                "slot_name": "token_admin",
+                "display_name": "Admin token",
+                "secret_kind": "bearer_token",
+                "privilege_class": "admin",
+                "is_required": True,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "grant.credentials.admin" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_update_external_server_credential_slot_privilege_escalation_requires_grant_authority() -> None:
+    class _EscalatingSlotService(_FakeService):
+        async def list_external_server_credential_slots(self, *, server_id: str) -> list[dict[str, Any]]:
+            assert server_id == "docs"
+            return [
+                {
+                    "server_id": "docs",
+                    "slot_name": "token_readonly",
+                    "display_name": "Read-only token",
+                    "secret_kind": "bearer_token",
+                    "privilege_class": "read",
+                    "is_required": True,
+                    "secret_configured": True,
+                }
+            ]
+
+        async def update_external_server_credential_slot(
+            self,
+            *,
+            server_id: str,
+            slot_name: str,
+            display_name: str | None = None,
+            secret_kind: str | None = None,
+            privilege_class: str | None = None,
+            is_required: bool | None = None,
+            actor_id: int | None,
+        ) -> dict[str, Any]:
+            assert server_id == "docs"
+            assert slot_name == "token_readonly"
+            assert privilege_class == "write"
+            assert actor_id == 1
+            return {
+                "server_id": server_id,
+                "slot_name": slot_name,
+                "display_name": display_name or "Read-only token",
+                "secret_kind": secret_kind or "bearer_token",
+                "privilege_class": "write",
+                "is_required": True if is_required is None else is_required,
+                "secret_configured": True,
+            }
+
+    app = _build_app(
+        principal=_make_principal(permissions=["system.configure"]),
+        fail_with_401=False,
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_service] = lambda: _EscalatingSlotService()
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/mcp/hub/external-servers/docs/credential-slots/token_readonly",
+            json={"privilege_class": "write"},
+        )
+
+    assert resp.status_code == 403
+    assert "grant.credentials.write" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

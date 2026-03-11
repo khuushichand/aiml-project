@@ -536,3 +536,123 @@ async def test_service_rejects_server_secret_alias_for_multislot_server(tmp_path
             secret_value="ambiguous-server-secret",
             actor_id=1,
         )
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_unknown_slot_privilege_class(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.exceptions import BadRequestError
+    from tldw_Server_API.app.services.mcp_hub_service import McpHubService
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
+
+    reset_settings()
+    await reset_db_pool()
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    svc = McpHubService(repo=repo)
+
+    await svc.create_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config={"websocket": {"url": "wss://docs.example/ws"}},
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+
+    with pytest.raises(BadRequestError):
+        await svc.create_external_server_credential_slot(
+            server_id="docs",
+            slot_name="token_super",
+            display_name="Super token",
+            secret_kind="bearer_token",
+            privilege_class="superuser",
+            is_required=True,
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_audits_slot_binding_with_privilege_metadata(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.services.mcp_hub_service import McpHubService
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
+
+    reset_settings()
+    await reset_db_pool()
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    audit_calls: list[dict[str, object]] = []
+
+    def _capture(**kwargs):
+        audit_calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.mcp_hub_service.emit_mcp_hub_audit",
+        _capture,
+    )
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    svc = McpHubService(repo=repo)
+
+    profile = await repo.create_permission_profile(
+        name="External Docs",
+        owner_scope_type="user",
+        owner_scope_id=1,
+        mode="custom",
+        policy_document={"capabilities": ["network.external"]},
+        actor_id=1,
+    )
+    await svc.create_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config={"websocket": {"url": "wss://docs.example/ws"}},
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=1,
+    )
+    await svc.create_external_server_credential_slot(
+        server_id="docs",
+        slot_name="token_write",
+        display_name="Write token",
+        secret_kind="api_key",
+        privilege_class="write",
+        is_required=False,
+        actor_id=1,
+    )
+
+    audit_calls.clear()
+    await svc.upsert_profile_credential_binding(
+        profile_id=int(profile["id"]),
+        external_server_id="docs",
+        slot_name="token_write",
+        actor_id=1,
+    )
+
+    assert audit_calls
+    metadata = dict(audit_calls[-1].get("metadata") or {})
+    assert metadata["slot_name"] == "token_write"
+    assert metadata["privilege_class"] == "write"
+    assert metadata["required_permission"] == "grant.credentials.write"
