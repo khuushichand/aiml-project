@@ -80,6 +80,11 @@ async def test_non_retriable_reason_does_not_consume_retries(tmp_path, monkeypat
     assert row is not None
     assert int(row[0] or 0) == 1
 
+    attempts = db.list_step_attempts(run_id=run_id, step_id="s1")
+    assert len(attempts) == 1
+    assert attempts[0]["reason_code_core"] == "acp_governance_blocked"
+    assert bool(attempts[0]["retryable"]) is False
+
     events = db.get_events(run_id)
     assert any(event.get("event_type") == "step_retry_suppressed" for event in events)
 
@@ -121,3 +126,8 @@ async def test_retriable_reason_consumes_retry_attempts(tmp_path, monkeypatch):
     ).fetchone()
     assert row is not None
     assert int(row[0] or 0) == 3
+
+    attempts = db.list_step_attempts(run_id=run_id, step_id="s1")
+    assert len(attempts) == 3
+    assert {attempt["reason_code_core"] for attempt in attempts} == {"transient_network_error"}
+    assert all(bool(attempt["retryable"]) is True for attempt in attempts)

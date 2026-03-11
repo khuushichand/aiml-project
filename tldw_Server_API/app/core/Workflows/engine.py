@@ -18,6 +18,11 @@ from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabas
 from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Workflows.adapters import get_adapter
+from tldw_Server_API.app.core.Workflows.capabilities import get_step_capability
+from tldw_Server_API.app.core.Workflows.failures import FailureEnvelope
+from tldw_Server_API.app.core.Workflows.failures import build_failure_envelope
+from tldw_Server_API.app.core.Workflows.failures import is_retriable_reason
+from tldw_Server_API.app.core.Workflows.failures import normalize_reason_code
 
 _WF_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
@@ -72,15 +77,6 @@ _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "waiting_approval": {"running", "failed", "cancelled"},
 }
 
-_NON_RETRIABLE_REASONS: set[str] = {
-    "validation_error",
-    "authz_error",
-    "acp_governance_blocked",
-    "session_access_denied",
-    "invariant_violation",
-}
-
-
 def _is_allowed_transition(current: str, target: str) -> bool:
     """Return True when a run status transition is allowed by the state contract."""
     return target in _ALLOWED_TRANSITIONS.get(current, set())
@@ -88,24 +84,12 @@ def _is_allowed_transition(current: str, target: str) -> bool:
 
 def _reason_code_from_error(error: BaseException | str | None) -> str:
     """Normalize an error payload into a reason code token used for retry policy."""
-    if error is None:
-        return ""
-    text = str(error).strip().lower()
-    if not text:
-        return ""
-    for sep in (":", ";", "|", "\n", "\t", " "):
-        if sep in text:
-            text = text.split(sep, 1)[0].strip()
-            break
-    return text
+    return normalize_reason_code(error)
 
 
 def _is_retriable_error(reason_code: str | None) -> bool:
     """Return True when a reason code should consume retry attempts."""
-    normalized = _reason_code_from_error(reason_code)
-    if not normalized:
-        return True
-    return normalized not in _NON_RETRIABLE_REASONS
+    return is_retriable_reason(reason_code)
 
 
 def _resolve_config_templates(cfg: Any, context: dict[str, Any]) -> Any:
@@ -256,6 +240,80 @@ class WorkflowEngine:
             return self.db.aggregate_run_token_usage(run_id)
         except _WF_NONCRITICAL_EXCEPTIONS:
             return (None, None, None)
+
+    def _attempt_metadata_base(self, step_type: str) -> dict[str, Any]:
+        capability = get_step_capability(step_type)
+        return {
+            "step_type": step_type,
+            "step_capability": capability.to_dict(),
+            "evidence_level": capability.evidence_level,
+        }
+
+    def _create_step_attempt_record(
+        self,
+        *,
+        run_id: str,
+        step_run_id: str,
+        step_id: str,
+        step_type: str,
+        attempt_number: int,
+    ) -> str | None:
+        try:
+            return self.db.create_step_attempt(
+                tenant_id=self._tenant_for_run(run_id),
+                run_id=run_id,
+                step_run_id=step_run_id,
+                step_id=step_id,
+                attempt_number=attempt_number,
+                metadata=self._attempt_metadata_base(step_type),
+            )
+        except _WF_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(
+                "WorkflowEngine: failed to create step attempt run_id={} step_id={} attempt={} error={}",
+                run_id,
+                step_id,
+                attempt_number,
+                e,
+            )
+            return None
+
+    def _complete_step_attempt_record(
+        self,
+        *,
+        attempt_id: str | None,
+        step_type: str,
+        status: str,
+        failure: FailureEnvelope | None = None,
+    ) -> None:
+        if not attempt_id:
+            return
+        metadata = self._attempt_metadata_base(step_type)
+        if failure is not None:
+            metadata.update(
+                {
+                    "category": failure.category,
+                    "blame_scope": failure.blame_scope,
+                    "retry_recommendation": failure.retry_recommendation,
+                    "failure_envelope": failure.to_dict(),
+                }
+            )
+        try:
+            self.db.complete_step_attempt(
+                attempt_id=attempt_id,
+                status=status,
+                reason_code_core=failure.reason_code_core if failure else None,
+                reason_code_detail=failure.reason_code_detail if failure else None,
+                retryable=failure.retryable if failure else None,
+                error_summary=failure.error_summary if failure else None,
+                metadata=metadata,
+            )
+        except _WF_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(
+                "WorkflowEngine: failed to complete step attempt attempt_id={} status={} error={}",
+                attempt_id,
+                status,
+                e,
+            )
 
     def _append_event(self, run_id: str, event_type: str, payload: dict[str, Any] | None = None, step_run_id: str | None = None) -> None:
         try:
@@ -531,6 +589,7 @@ class WorkflowEngine:
                     attempt = 0
                     err: Exception | None = None
                     error_reason_code = ""
+                    failure: FailureEnvelope | None = None
                     outputs: dict[str, Any] = {}
 
                     step_start_ts = time.time()
@@ -544,6 +603,13 @@ class WorkflowEngine:
                         # Persist attempt
                         with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                             self.db.update_step_attempt(step_run_id=step_run_id, attempt=attempt)
+                        attempt_id = self._create_step_attempt_record(
+                            run_id=run_id,
+                            step_run_id=step_run_id,
+                            step_id=step_id,
+                            step_type=step_type,
+                            attempt_number=attempt,
+                        )
                         # Honor pause before attempting execution
                         await self._wait_if_paused(run_id, step_run_id)
                         try:
@@ -585,21 +651,40 @@ class WorkflowEngine:
                                 except _WF_NONCRITICAL_EXCEPTIONS:
                                     pass
                             err = None
+                            failure = None
                             break
                         except asyncio.TimeoutError as te:
                             err = te
-                            error_reason_code = _reason_code_from_error(te)
-                            self._append_event(run_id, "step_timeout", {"step_id": step_id, "attempt": attempt})
+                            failure = build_failure_envelope(te, step_type=step_type)
+                            error_reason_code = failure.reason_code_core
+                            self._append_event(
+                                run_id,
+                                "step_timeout",
+                                {"step_id": step_id, "attempt": attempt, "reason_code": error_reason_code},
+                            )
                             with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                                 record_span_exception(te)
+                            self._complete_step_attempt_record(
+                                attempt_id=attempt_id,
+                                step_type=step_type,
+                                status="failed",
+                                failure=failure,
+                            )
                         except _WF_NONCRITICAL_EXCEPTIONS as e:
                             err = e
-                            error_reason_code = _reason_code_from_error(e)
+                            failure = build_failure_envelope(e, step_type=step_type)
+                            error_reason_code = failure.reason_code_core
                             with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                                 record_span_exception(e)
+                            self._complete_step_attempt_record(
+                                attempt_id=attempt_id,
+                                step_type=step_type,
+                                status="failed",
+                                failure=failure,
+                            )
 
                         if attempt <= max_retries:
-                            if not _is_retriable_error(error_reason_code):
+                            if not failure or not failure.retryable:
                                 self._append_event(
                                     run_id,
                                     "step_retry_suppressed",
@@ -607,6 +692,7 @@ class WorkflowEngine:
                                         "step_id": step_id,
                                         "attempt": attempt,
                                         "reason_code": error_reason_code,
+                                        "retry_recommendation": failure.retry_recommendation if failure else "unsafe",
                                     },
                                 )
                                 break
@@ -622,7 +708,18 @@ class WorkflowEngine:
                     # Final outcome
                     if err:
                         # Failed step
-                        self._append_event(run_id, "step_failed", {"step_id": step_id, "error": str(err)})
+                        final_failure = failure or build_failure_envelope(err, step_type=step_type)
+                        self._append_event(
+                            run_id,
+                            "step_failed",
+                            {
+                                "step_id": step_id,
+                                "error": str(err),
+                                "reason_code": final_failure.reason_code_core,
+                                "retryable": final_failure.retryable,
+                                "retry_recommendation": final_failure.retry_recommendation,
+                            },
+                        )
                         with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                             increment_counter("workflows_steps_failed", labels={"type": step_type})
                         with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
@@ -645,14 +742,22 @@ class WorkflowEngine:
                         self.db.update_run_status(
                             run_id,
                             status="failed",
-                            status_reason=str(err),
+                            status_reason=final_failure.reason_code_core or str(err),
                             ended_at=self._now_iso(),
                             error=str(err),
                             tokens_input=tokens_in,
                             tokens_output=tokens_out,
                             cost_usd=cost_usd,
                         )
-                        self._append_event(run_id, "run_failed", {"error": str(err)})
+                        self._append_event(
+                            run_id,
+                            "run_failed",
+                            {
+                                "error": str(err),
+                                "reason_code": final_failure.reason_code_core,
+                                "retry_recommendation": final_failure.retry_recommendation,
+                            },
+                        )
                         with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                             increment_counter("workflows_runs_failed", labels={"tenant": self._tenant_for_run(run_id)})
                         # Completion webhook on failure
@@ -669,6 +774,11 @@ class WorkflowEngine:
                     # If adapter returned special status
                     status_flag = last_outputs.get("__status__") if isinstance(last_outputs, dict) else None
                     if status_flag in {"waiting_human", "waiting_approval"}:
+                        self._complete_step_attempt_record(
+                            attempt_id=attempt_id,
+                            step_type=step_type,
+                            status="waiting_human",
+                        )
                         with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                             self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last_outputs)
                         try:
@@ -683,6 +793,11 @@ class WorkflowEngine:
                         finalized = True
                         return
                     if status_flag == "cancelled":
+                        self._complete_step_attempt_record(
+                            attempt_id=attempt_id,
+                            step_type=step_type,
+                            status="cancelled",
+                        )
                         with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                             self.db.complete_step_run(step_run_id=step_run_id, status="cancelled", outputs=last_outputs)
                         # Emit a step_cancelled event for observability
@@ -706,6 +821,11 @@ class WorkflowEngine:
                             int((time.time() - step_start_ts) * 1000),
                             labels={"type": step_type, "tenant": self._tenant_for_run(run_id)},
                         )
+                    self._complete_step_attempt_record(
+                        attempt_id=attempt_id,
+                        step_type=step_type,
+                        status="succeeded",
+                    )
                     with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                         self.db.complete_step_run(step_run_id=step_run_id, status="succeeded", outputs=last_outputs)
 
@@ -944,6 +1064,7 @@ class WorkflowEngine:
             attempt = 0
             err: Exception | None = None
             error_reason_code = ""
+            failure: FailureEnvelope | None = None
             outputs: dict[str, Any] = {}
             while attempt <= max_retries:
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
@@ -951,6 +1072,13 @@ class WorkflowEngine:
                 attempt += 1
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                     self.db.update_step_attempt(step_run_id=step_run_id, attempt=attempt)
+                attempt_id = self._create_step_attempt_record(
+                    run_id=run_id,
+                    step_run_id=step_run_id,
+                    step_id=sid,
+                    step_type=stype,
+                    attempt_number=attempt,
+                )
                 await self._wait_if_paused(run_id, step_run_id)
                 try:
                     outputs = await asyncio.wait_for(
@@ -958,16 +1086,31 @@ class WorkflowEngine:
                         timeout=step_timeout,
                     )
                     err = None
+                    failure = None
                     break
                 except asyncio.TimeoutError as te:
                     err = te
-                    error_reason_code = _reason_code_from_error(te)
-                    self._append_event(run_id, "step_timeout", {"step_id": sid, "attempt": attempt})
+                    failure = build_failure_envelope(te, step_type=stype)
+                    error_reason_code = failure.reason_code_core
+                    self._append_event(run_id, "step_timeout", {"step_id": sid, "attempt": attempt, "reason_code": error_reason_code})
+                    self._complete_step_attempt_record(
+                        attempt_id=attempt_id,
+                        step_type=stype,
+                        status="failed",
+                        failure=failure,
+                    )
                 except _WF_NONCRITICAL_EXCEPTIONS as e:
                     err = e
-                    error_reason_code = _reason_code_from_error(e)
+                    failure = build_failure_envelope(e, step_type=stype)
+                    error_reason_code = failure.reason_code_core
+                    self._complete_step_attempt_record(
+                        attempt_id=attempt_id,
+                        step_type=stype,
+                        status="failed",
+                        failure=failure,
+                    )
                 if attempt <= max_retries:
-                    if not _is_retriable_error(error_reason_code):
+                    if not failure or not failure.retryable:
                         self._append_event(
                             run_id,
                             "step_retry_suppressed",
@@ -975,6 +1118,7 @@ class WorkflowEngine:
                                 "step_id": sid,
                                 "attempt": attempt,
                                 "reason_code": error_reason_code,
+                                "retry_recommendation": failure.retry_recommendation if failure else "unsafe",
                             },
                         )
                         break
@@ -987,7 +1131,18 @@ class WorkflowEngine:
                     await asyncio.sleep(backoff + jitter)
 
             if err:
-                self._append_event(run_id, "step_failed", {"step_id": sid, "error": str(err)})
+                final_failure = failure or build_failure_envelope(err, step_type=stype)
+                self._append_event(
+                    run_id,
+                    "step_failed",
+                    {
+                        "step_id": sid,
+                        "error": str(err),
+                        "reason_code": final_failure.reason_code_core,
+                        "retryable": final_failure.retryable,
+                        "retry_recommendation": final_failure.retry_recommendation,
+                    },
+                )
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                     self.db.complete_step_run(step_run_id=step_run_id, status="failed", outputs=outputs, error=str(err))
                 failure_next = str(step.get("on_failure") or "").strip()
@@ -1000,14 +1155,22 @@ class WorkflowEngine:
                 self.db.update_run_status(
                     run_id,
                     status="failed",
-                    status_reason=str(err),
+                    status_reason=final_failure.reason_code_core or str(err),
                     ended_at=self._now_iso(),
                     error=str(err),
                     tokens_input=tokens_in,
                     tokens_output=tokens_out,
                     cost_usd=cost_usd,
                 )
-                self._append_event(run_id, "run_failed", {"error": str(err)})
+                self._append_event(
+                    run_id,
+                    "run_failed",
+                    {
+                        "error": str(err),
+                        "reason_code": final_failure.reason_code_core,
+                        "retry_recommendation": final_failure.retry_recommendation,
+                    },
+                )
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                     await self._maybe_send_completion_webhook(definition, run_id, status="failed")
                 _finalize(False)
@@ -1017,6 +1180,11 @@ class WorkflowEngine:
             last = outputs or {}
             context.update({"last": last})
             if last.get("__status__") in {"waiting_human", "waiting_approval"}:
+                self._complete_step_attempt_record(
+                    attempt_id=attempt_id,
+                    step_type=stype,
+                    status="waiting_human",
+                )
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                     self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last)
                 try:
@@ -1031,6 +1199,11 @@ class WorkflowEngine:
                 finalized = True
                 return
             if last.get("__status__") == "cancelled":
+                self._complete_step_attempt_record(
+                    attempt_id=attempt_id,
+                    step_type=stype,
+                    status="cancelled",
+                )
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                     self.db.complete_step_run(step_run_id=step_run_id, status="cancelled", outputs=last)
                 self._append_event(run_id, "step_cancelled", {"step_id": sid})
@@ -1049,6 +1222,11 @@ class WorkflowEngine:
                 return
 
             self._append_event(run_id, "step_completed", {"step_id": sid, "type": stype})
+            self._complete_step_attempt_record(
+                attempt_id=attempt_id,
+                step_type=stype,
+                status="succeeded",
+            )
             with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                 self.db.complete_step_run(step_run_id=step_run_id, status="succeeded", outputs=last)
 
@@ -1350,6 +1528,7 @@ class WorkflowEngine:
         # Inject helper hooks
         ctx = {**context, "prev": last_outputs}
         ctx["run_id"] = run_id
+        ctx["step_capability"] = get_step_capability(step_type).to_dict()
         if step_run_id:
             ctx["step_run_id"] = step_run_id
         ctx["is_cancelled"] = lambda: self.db.is_cancel_requested(run_id)
