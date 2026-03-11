@@ -5971,6 +5971,15 @@ elif _MINIMAL_TEST_APP:
             logger.info("Route disabled by policy: evaluations (minimal test app)")
     except _STARTUP_GUARD_EXCEPTIONS as _evals_min_err:
         logger.debug(f"Skipping evaluations routers in minimal test app: {_evals_min_err}")
+    try:
+        if route_enabled("monitoring"):
+            from tldw_Server_API.app.api.v1.endpoints.monitoring import router as _monitoring_router
+
+            app.include_router(_monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
+        else:
+            logger.info("Route disabled by policy: monitoring (minimal test app)")
+    except _STARTUP_GUARD_EXCEPTIONS as _monitoring_min_err:
+        logger.debug(f"Skipping monitoring router in minimal test app: {_monitoring_min_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(

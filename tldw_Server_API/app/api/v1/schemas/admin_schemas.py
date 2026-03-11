@@ -654,6 +654,134 @@ class DataSubjectRequestListResponse(BaseModel):
 
 #######################################################################################################################
 #
+# Admin Monitoring Schemas
+
+class AdminAlertRuleResponse(BaseModel):
+    """Admin alert-rule response payload."""
+
+    id: int
+    metric: str
+    operator: str
+    threshold: float
+    duration_minutes: int
+    severity: str
+    enabled: bool = True
+    created_by_user_id: int | None = None
+    updated_by_user_id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleListResponse(BaseModel):
+    """List response for admin alert rules."""
+
+    items: list[AdminAlertRuleResponse]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleCreateRequest(BaseModel):
+    """Create request for an admin alert rule."""
+
+    metric: str = Field(..., min_length=1, max_length=100)
+    operator: str = Field(..., min_length=1, max_length=32)
+    threshold: float
+    duration_minutes: int = Field(..., ge=1, le=1440)
+    severity: str = Field(..., min_length=1, max_length=32)
+    enabled: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleCreateResponse(BaseModel):
+    """Create response for an admin alert rule."""
+
+    item: AdminAlertRuleResponse
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleDeleteResponse(BaseModel):
+    """Delete response for an admin alert rule."""
+
+    status: str
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertStateResponse(BaseModel):
+    """Authoritative admin overlay state for a runtime alert."""
+
+    alert_identity: str
+    assigned_to_user_id: int | None = None
+    snoozed_until: datetime | None = None
+    escalated_severity: str | None = None
+    acknowledged_at: datetime | None = None
+    dismissed_at: datetime | None = None
+    updated_by_user_id: int | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertStateMutationResponse(BaseModel):
+    """Mutation response for admin alert overlay changes."""
+
+    item: AdminAlertStateResponse
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertAssignRequest(BaseModel):
+    """Assign request for a monitoring alert."""
+
+    assigned_to_user_id: int | None = Field(default=None, ge=1)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertSnoozeRequest(BaseModel):
+    """Snooze request for a monitoring alert."""
+
+    snoozed_until: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertEscalateRequest(BaseModel):
+    """Escalate request for a monitoring alert."""
+
+    severity: Literal["warning", "critical"] = "critical"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertEventResponse(BaseModel):
+    """History item for admin monitoring alert actions."""
+
+    id: int
+    alert_identity: str
+    action: str
+    actor_user_id: int | None = None
+    details: dict[str, Any] | None = None
+    created_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertHistoryListResponse(BaseModel):
+    """List response for admin monitoring alert history."""
+
+    items: list[AdminAlertEventResponse]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
 # System Ops Schemas (Logs, Incidents, Maintenance, Feature Flags)
 
 class SystemLogEntry(BaseModel):

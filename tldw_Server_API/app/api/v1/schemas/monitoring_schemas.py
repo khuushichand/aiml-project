@@ -45,6 +45,7 @@ class WatchlistsReloadResponse(BaseModel):
 
 class AlertItem(BaseModel):
     id: int
+    alert_identity: str | None = None
     created_at: str
     user_id: str | None = None
     scope_type: str | None = None
@@ -62,6 +63,11 @@ class AlertItem(BaseModel):
     metadata: dict[str, Any] | None = None
     is_read: bool = False
     read_at: str | None = None
+    acknowledged_at: str | None = None
+    dismissed_at: str | None = None
+    assigned_to_user_id: int | None = None
+    snoozed_until: str | None = None
+    escalated_severity: str | None = None
 
 
 class AlertsListResponse(BaseModel):
