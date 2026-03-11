@@ -3,11 +3,18 @@ from __future__ import annotations
 import builtins
 from dataclasses import dataclass
 
+from tldw_Server_API.app.core.Workflows.capabilities import StepCapability
+from tldw_Server_API.app.core.Workflows.capabilities import get_step_capability
+
 
 @dataclass
 class StepType:
     name: str
     description: str
+
+    @property
+    def capability(self) -> StepCapability:
+        return get_step_capability(self.name)
 
 
 class StepTypeRegistry:

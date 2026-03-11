@@ -3417,6 +3417,7 @@ async def list_step_types():
             "schema": sch,
             "example": sch.get("example", {}),
             "min_engine_version": sch.get("min_engine_version", "0.1.0"),
+            "capabilities": s.capability.to_dict(),
         })
     return out
 
