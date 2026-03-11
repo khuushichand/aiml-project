@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone as dt_timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -12,13 +13,18 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     BackupCreateResponse,
     BackupItem,
     BackupListResponse,
+    BackupScheduleCreateRequest,
+    BackupScheduleItem,
+    BackupScheduleListResponse,
+    BackupScheduleMutationResponse,
+    BackupScheduleUpdateRequest,
     BackupRestoreRequest,
     BackupRestoreResponse,
     RetentionPoliciesResponse,
     RetentionPolicy,
     RetentionPolicyUpdateRequest,
 )
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, is_single_user_principal
 from tldw_Server_API.app.services.admin_data_ops_service import (
     create_backup_snapshot as svc_create_backup_snapshot,
 )
@@ -33,6 +39,9 @@ from tldw_Server_API.app.services.admin_data_ops_service import (
 )
 from tldw_Server_API.app.services.admin_data_ops_service import (
     update_retention_policy as svc_update_retention_policy,
+)
+from tldw_Server_API.app.services.admin_backup_schedules_service import (
+    AdminBackupSchedulesService,
 )
 
 router = APIRouter()
@@ -100,11 +109,108 @@ async def _emit_admin_audit_event(
 
 _BACKUP_DATASETS = {"media", "chacha", "prompts", "evaluations", "audit", "authnz"}
 _PER_USER_BACKUP_DATASETS = _BACKUP_DATASETS - {"authnz"}
+_BACKUP_SCHEDULE_PLATFORM_ROLES = {"owner", "super_admin"}
+_WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
 def _require_user_id_for_dataset(dataset: str, user_id: int | None) -> None:
     if dataset in _PER_USER_BACKUP_DATASETS and user_id is None:
         raise HTTPException(status_code=400, detail="user_id_required")
+
+
+def _require_target_user_for_schedule(dataset: str, target_user_id: int | None) -> None:
+    if dataset in _PER_USER_BACKUP_DATASETS and target_user_id is None:
+        raise HTTPException(status_code=400, detail="target_user_required")
+    if dataset == "authnz" and target_user_id is not None:
+        raise HTTPException(status_code=400, detail="target_user_forbidden")
+
+
+def _is_backup_schedule_platform_admin(principal: AuthPrincipal) -> bool:
+    if is_single_user_principal(principal):
+        return True
+    roles = {str(role).strip().lower() for role in (principal.roles or []) if role}
+    return bool(roles & _BACKUP_SCHEDULE_PLATFORM_ROLES)
+
+
+def _require_backup_schedule_platform_admin(principal: AuthPrincipal) -> None:
+    if _is_backup_schedule_platform_admin(principal):
+        return
+    raise HTTPException(status_code=403, detail="platform_admin_required")
+
+
+def _build_schedule_description(item: dict[str, Any]) -> str:
+    frequency = str(item.get("frequency") or "").strip().lower()
+    time_of_day = str(item.get("time_of_day") or "00:00")
+    timezone_name = str(item.get("timezone") or "UTC")
+    if frequency == "weekly":
+        weekday_idx = item.get("anchor_day_of_week")
+        if isinstance(weekday_idx, int) and 0 <= weekday_idx <= 6:
+            return f"Weekly on {_WEEKDAY_NAMES[weekday_idx]} at {time_of_day} {timezone_name}"
+        return f"Weekly at {time_of_day} {timezone_name}"
+    if frequency == "monthly":
+        month_day = item.get("anchor_day_of_month")
+        if isinstance(month_day, int):
+            return f"Monthly on day {month_day} at {time_of_day} {timezone_name}"
+        return f"Monthly at {time_of_day} {timezone_name}"
+    return f"Daily at {time_of_day} {timezone_name}"
+
+
+def _serialize_backup_schedule_item(item: dict[str, Any]) -> BackupScheduleItem:
+    return BackupScheduleItem(
+        id=str(item["id"]),
+        dataset=str(item["dataset"]),
+        target_user_id=item.get("target_user_id"),
+        frequency=str(item["frequency"]),
+        time_of_day=str(item["time_of_day"]),
+        timezone=str(item.get("timezone") or "UTC"),
+        anchor_day_of_week=item.get("anchor_day_of_week"),
+        anchor_day_of_month=item.get("anchor_day_of_month"),
+        retention_count=int(item["retention_count"]),
+        is_paused=bool(item.get("is_paused", False)),
+        schedule_description=_build_schedule_description(item),
+        next_run_at=item.get("next_run_at"),
+        last_run_at=item.get("last_run_at"),
+        last_status=item.get("last_status"),
+        last_job_id=item.get("last_job_id"),
+        last_error=item.get("last_error"),
+        created_at=item["created_at"],
+        updated_at=item["updated_at"],
+        deleted_at=item.get("deleted_at"),
+    )
+
+
+async def _get_backup_schedules_repo():
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import (
+        AuthnzBackupSchedulesRepo,
+    )
+
+    pool = await get_db_pool()
+    repo = AuthnzBackupSchedulesRepo(pool)
+    await repo.ensure_schema()
+    return repo
+
+
+async def _get_backup_schedule_service() -> AdminBackupSchedulesService:
+    repo = await _get_backup_schedules_repo()
+    return AdminBackupSchedulesService(repo=repo)
+
+
+def _derive_schedule_anchors(
+    *,
+    frequency: str,
+    current: dict[str, Any] | None = None,
+) -> tuple[int | None, int | None]:
+    normalized_frequency = frequency.strip().lower()
+    if normalized_frequency == "weekly":
+        if current and current.get("anchor_day_of_week") is not None:
+            return int(current["anchor_day_of_week"]), None
+        return datetime.now(dt_timezone.utc).weekday(), None
+    if normalized_frequency == "monthly":
+        if current and current.get("anchor_day_of_month") is not None:
+            return None, int(current["anchor_day_of_month"])
+        return None, datetime.now(dt_timezone.utc).day
+    return None, None
 
 
 @router.get("/backups", response_model=BackupListResponse)
@@ -247,6 +353,247 @@ async def restore_backup(
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to restore backup: {exc}")
         raise HTTPException(status_code=500, detail="Failed to restore backup") from exc
+
+
+@router.get("/backup-schedules", response_model=BackupScheduleListResponse)
+async def list_backup_schedules(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupScheduleListResponse:
+    try:
+        service = await _get_backup_schedule_service()
+        repo = service.repo
+        items, total = await repo.list_schedules(limit=limit, offset=offset)
+        items = service.filter_visible_items(items, principal=principal)
+        total = len(items)
+        payload = [_serialize_backup_schedule_item(item) for item in items]
+        return BackupScheduleListResponse(items=payload, total=total, limit=limit, offset=offset)
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to list backup schedules: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list backup schedules") from exc
+
+
+@router.post("/backup-schedules", response_model=BackupScheduleMutationResponse)
+async def create_backup_schedule(
+    payload: BackupScheduleCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupScheduleMutationResponse:
+    try:
+        service = await _get_backup_schedule_service()
+        dataset = service.normalize_dataset(payload.dataset)
+        service.validate_target_rules(dataset, payload.target_user_id)
+        if service.requires_platform_admin(dataset):
+            service.require_platform_admin(principal)
+        if payload.target_user_id is not None:
+            await _enforce_admin_user_scope(principal, payload.target_user_id, require_hierarchy=False)
+
+        created = await service.create_schedule(
+            dataset=dataset,
+            target_user_id=payload.target_user_id,
+            frequency=payload.frequency,
+            time_of_day=payload.time_of_day,
+            timezone_name=payload.timezone,
+            retention_count=payload.retention_count,
+            principal_user_id=principal.user_id,
+        )
+        item = _serialize_backup_schedule_item(created)
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="system",
+            resource_type="backup_schedule",
+            resource_id=str(item.id),
+            action="backup_schedule.create",
+            metadata={
+                "dataset": item.dataset,
+                "target_user_id": item.target_user_id,
+                "frequency": item.frequency,
+            },
+        )
+        return BackupScheduleMutationResponse(status="created", item=item)
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to create backup schedule: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to create backup schedule") from exc
+
+
+@router.patch("/backup-schedules/{schedule_id}", response_model=BackupScheduleMutationResponse)
+async def update_backup_schedule(
+    schedule_id: str,
+    payload: BackupScheduleUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupScheduleMutationResponse:
+    try:
+        service = await _get_backup_schedule_service()
+        repo = service.repo
+        current = await repo.get_schedule(schedule_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="schedule_not_found")
+        if service.requires_platform_admin(str(current.get("dataset"))):
+            service.require_platform_admin(principal)
+        elif current.get("target_user_id") is not None:
+            await _enforce_admin_user_scope(principal, int(current["target_user_id"]), require_hierarchy=False)
+
+        updated = await service.update_schedule(
+            schedule_id=schedule_id,
+            current=current,
+            frequency=payload.frequency,
+            time_of_day=payload.time_of_day,
+            timezone_name=payload.timezone,
+            retention_count=payload.retention_count,
+            principal_user_id=principal.user_id,
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="schedule_not_found")
+        item = _serialize_backup_schedule_item(updated)
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="system",
+            resource_type="backup_schedule",
+            resource_id=str(item.id),
+            action="backup_schedule.update",
+            metadata={
+                "dataset": item.dataset,
+                "target_user_id": item.target_user_id,
+                "frequency": item.frequency,
+            },
+        )
+        return BackupScheduleMutationResponse(status="updated", item=item)
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to update backup schedule: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to update backup schedule") from exc
+
+
+@router.post("/backup-schedules/{schedule_id}/pause", response_model=BackupScheduleMutationResponse)
+async def pause_backup_schedule(
+    schedule_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupScheduleMutationResponse:
+    try:
+        service = await _get_backup_schedule_service()
+        repo = service.repo
+        current = await repo.get_schedule(schedule_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="schedule_not_found")
+        if service.requires_platform_admin(str(current.get("dataset"))):
+            service.require_platform_admin(principal)
+        elif current.get("target_user_id") is not None:
+            await _enforce_admin_user_scope(principal, int(current["target_user_id"]), require_hierarchy=False)
+
+        updated = await repo.pause_schedule(schedule_id, updated_by_user_id=principal.user_id)
+        if not updated:
+            raise HTTPException(status_code=404, detail="schedule_not_found")
+        item = _serialize_backup_schedule_item(updated)
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="system",
+            resource_type="backup_schedule",
+            resource_id=str(item.id),
+            action="backup_schedule.pause",
+            metadata={"dataset": item.dataset, "target_user_id": item.target_user_id},
+        )
+        return BackupScheduleMutationResponse(status="paused", item=item)
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to pause backup schedule: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to pause backup schedule") from exc
+
+
+@router.post("/backup-schedules/{schedule_id}/resume", response_model=BackupScheduleMutationResponse)
+async def resume_backup_schedule(
+    schedule_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupScheduleMutationResponse:
+    try:
+        service = await _get_backup_schedule_service()
+        repo = service.repo
+        current = await repo.get_schedule(schedule_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="schedule_not_found")
+        if service.requires_platform_admin(str(current.get("dataset"))):
+            service.require_platform_admin(principal)
+        elif current.get("target_user_id") is not None:
+            await _enforce_admin_user_scope(principal, int(current["target_user_id"]), require_hierarchy=False)
+
+        updated = await repo.resume_schedule(schedule_id, updated_by_user_id=principal.user_id)
+        if not updated:
+            raise HTTPException(status_code=404, detail="schedule_not_found")
+        item = _serialize_backup_schedule_item(updated)
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="system",
+            resource_type="backup_schedule",
+            resource_id=str(item.id),
+            action="backup_schedule.resume",
+            metadata={"dataset": item.dataset, "target_user_id": item.target_user_id},
+        )
+        return BackupScheduleMutationResponse(status="resumed", item=item)
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to resume backup schedule: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to resume backup schedule") from exc
+
+
+@router.delete("/backup-schedules/{schedule_id}", response_model=BackupScheduleMutationResponse)
+async def delete_backup_schedule(
+    schedule_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupScheduleMutationResponse:
+    try:
+        service = await _get_backup_schedule_service()
+        repo = service.repo
+        current = await repo.get_schedule(schedule_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="schedule_not_found")
+        if service.requires_platform_admin(str(current.get("dataset"))):
+            service.require_platform_admin(principal)
+        elif current.get("target_user_id") is not None:
+            await _enforce_admin_user_scope(principal, int(current["target_user_id"]), require_hierarchy=False)
+
+        deleted_at = datetime.now(dt_timezone.utc).isoformat()
+        deleted = await repo.delete_schedule(schedule_id, deleted_at=deleted_at)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="schedule_not_found")
+        deleted_row = await repo.get_schedule(schedule_id, include_deleted=True)
+        if not deleted_row:
+            raise HTTPException(status_code=404, detail="schedule_not_found")
+        item = _serialize_backup_schedule_item(deleted_row)
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="system",
+            resource_type="backup_schedule",
+            resource_id=str(item.id),
+            action="backup_schedule.delete",
+            metadata={"dataset": item.dataset, "target_user_id": item.target_user_id},
+        )
+        return BackupScheduleMutationResponse(status="deleted", item=item)
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to delete backup schedule: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to delete backup schedule") from exc
 
 
 @router.get("/retention-policies", response_model=RetentionPoliciesResponse)

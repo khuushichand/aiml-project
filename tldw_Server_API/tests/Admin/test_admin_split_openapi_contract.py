@@ -43,6 +43,12 @@ EXPECTED_SPLIT_ADMIN_OPERATIONS: set[tuple[str, str]] = {
     ("GET", "/api/v1/admin/backups"),
     ("POST", "/api/v1/admin/backups"),
     ("POST", "/api/v1/admin/backups/{backup_id}/restore"),
+    ("GET", "/api/v1/admin/backup-schedules"),
+    ("POST", "/api/v1/admin/backup-schedules"),
+    ("PATCH", "/api/v1/admin/backup-schedules/{schedule_id}"),
+    ("POST", "/api/v1/admin/backup-schedules/{schedule_id}/pause"),
+    ("POST", "/api/v1/admin/backup-schedules/{schedule_id}/resume"),
+    ("DELETE", "/api/v1/admin/backup-schedules/{schedule_id}"),
     ("GET", "/api/v1/admin/retention-policies"),
     ("PUT", "/api/v1/admin/retention-policies/{policy_key}"),
     ("GET", "/api/v1/admin/maintenance"),
@@ -103,6 +109,14 @@ def test_admin_split_openapi_schema_contracts(monkeypatch, tmp_path) -> None:
     backups_get = paths["/api/v1/admin/backups"]["get"]
     backups_schema = backups_get["responses"]["200"]["content"]["application/json"]["schema"]
     assert backups_schema["$ref"].endswith("/BackupListResponse")
+
+    backup_schedules_get = paths["/api/v1/admin/backup-schedules"]["get"]
+    backup_schedules_schema = backup_schedules_get["responses"]["200"]["content"]["application/json"]["schema"]
+    assert backup_schedules_schema["$ref"].endswith("/BackupScheduleListResponse")
+
+    backup_schedules_post = paths["/api/v1/admin/backup-schedules"]["post"]
+    backup_schedules_post_schema = backup_schedules_post["responses"]["200"]["content"]["application/json"]["schema"]
+    assert backup_schedules_post_schema["$ref"].endswith("/BackupScheduleMutationResponse")
 
     maintenance_put = paths["/api/v1/admin/maintenance"]["put"]
     maintenance_schema = maintenance_put["responses"]["200"]["content"]["application/json"]["schema"]

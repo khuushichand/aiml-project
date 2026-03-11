@@ -2627,6 +2627,21 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reminder Jobs worker: {e}")
 
+    # Admin backup Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Admin backup Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.services.admin_backup_jobs_worker import start_admin_backup_jobs_worker
+
+            admin_backup_jobs_task = await start_admin_backup_jobs_worker()
+            if admin_backup_jobs_task:
+                logger.info("Admin backup Jobs worker started")
+            else:
+                logger.info("Admin backup Jobs worker disabled (ADMIN_BACKUP_JOBS_WORKER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Admin backup Jobs worker: {e}")
+
     # Jobs notifications bridge worker
     try:
         if _sidecar_mode:
@@ -3193,6 +3208,19 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reading digest scheduler: {e}")
 
+    # Start Admin backup scheduler (platform backup schedule submission into Jobs)
+    admin_backup_sched_task = None
+    try:
+        from tldw_Server_API.app.services.admin_backup_scheduler import start_admin_backup_scheduler
+
+        admin_backup_sched_task = await start_admin_backup_scheduler()
+        if admin_backup_sched_task:
+            logger.info("Admin backup scheduler started")
+        else:
+            logger.info("Admin backup scheduler disabled (ADMIN_BACKUP_SCHEDULER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Admin backup scheduler: {e}")
+
     # Start Reminders scheduler (cron/date based submission into Jobs)
     try:
         from tldw_Server_API.app.services.reminders_scheduler import start_reminders_scheduler
@@ -3558,6 +3586,16 @@ async def lifespan(app: FastAPI):
             except _STARTUP_GUARD_EXCEPTIONS:
                 with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     reminder_jobs_task.cancel()
+        if "admin_backup_jobs_task" in locals() and admin_backup_jobs_task:
+            try:
+                admin_backup_jobs_task.cancel()
+                await _asyncio.wait_for(admin_backup_jobs_task, timeout=5.0)
+                logger.info("Admin backup Jobs worker cancelled")
+            except _asyncio.CancelledError:
+                pass
+            except _STARTUP_GUARD_EXCEPTIONS:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                    admin_backup_jobs_task.cancel()
         if "jobs_notifications_bridge_task" in locals() and jobs_notifications_bridge_task:
             try:
                 jobs_notifications_bridge_task.cancel()
@@ -3640,6 +3678,20 @@ async def lifespan(app: FastAPI):
             try:
                 if "reading_digest_sched_task" in locals() and reading_digest_sched_task:
                     reading_digest_sched_task.cancel()
+            except _STARTUP_GUARD_EXCEPTIONS:
+                pass
+        # Stop Admin backup scheduler
+        try:
+            if "admin_backup_sched_task" in locals() and admin_backup_sched_task:
+                from tldw_Server_API.app.services.admin_backup_scheduler import (
+                    stop_admin_backup_scheduler as _stop_admin_backup_scheduler,
+                )
+
+                await _stop_admin_backup_scheduler(admin_backup_sched_task)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            try:
+                if "admin_backup_sched_task" in locals() and admin_backup_sched_task:
+                    admin_backup_sched_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
                 pass
         # Stop Reminders scheduler

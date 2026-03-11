@@ -8,6 +8,16 @@
 
 **Tech Stack:** FastAPI, Pydantic v2, AuthNZ SQLite/PostgreSQL migrations, APScheduler, core Jobs `JobManager`, Loguru, Next.js/React, Vitest, pytest, Bandit.
 
+## Progress
+
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
+- Task 6: Complete
+- Task 7: Complete
+
 ---
 
 ### Task 1: Add AuthNZ schedule persistence and failing repository tests

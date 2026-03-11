@@ -1423,6 +1423,88 @@ def migration_055_create_mcp_hub_tables(conn: sqlite3.Connection) -> None:
     logger.info("Migration 055: Created MCP Hub tables")
 
 
+def migration_056_create_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+    """Create backup schedule persistence tables (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedules (
+            id TEXT PRIMARY KEY,
+            dataset TEXT NOT NULL,
+            target_user_id INTEGER,
+            target_scope_key TEXT NOT NULL,
+            frequency TEXT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            timezone TEXT NOT NULL,
+            anchor_day_of_week INTEGER,
+            anchor_day_of_month INTEGER,
+            retention_count INTEGER NOT NULL,
+            is_paused INTEGER NOT NULL DEFAULT 0,
+            created_by_user_id INTEGER,
+            updated_by_user_id INTEGER,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL,
+            next_run_at TIMESTAMP,
+            last_run_at TIMESTAMP,
+            last_status TEXT,
+            last_job_id TEXT,
+            last_error TEXT,
+            deleted_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backup_schedules_target_scope_active
+        ON backup_schedules(target_scope_key)
+        WHERE deleted_at IS NULL
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_next_run_at "
+        "ON backup_schedules(next_run_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_deleted_at "
+        "ON backup_schedules(deleted_at)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedule_runs (
+            id TEXT PRIMARY KEY,
+            schedule_id TEXT NOT NULL,
+            scheduled_for TIMESTAMP NOT NULL,
+            run_slot_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            job_id TEXT,
+            error TEXT,
+            enqueued_at TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            FOREIGN KEY (schedule_id) REFERENCES backup_schedules(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_schedule_id "
+        "ON backup_schedule_runs(schedule_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for "
+        "ON backup_schedule_runs(scheduled_for)"
+    )
+
+    conn.commit()
+    logger.info("Migration 056: Created backup schedule tables")
+
+
+def rollback_056_drop_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+    """Drop backup schedule persistence tables (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS backup_schedule_runs")
+    conn.execute("DROP TABLE IF EXISTS backup_schedules")
+    conn.commit()
+    logger.info("Rollback 056: Dropped backup schedule tables")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -2855,6 +2937,12 @@ def get_authnz_migrations() -> list[Migration]:
             55,
             "Create MCP Hub tables",
             migration_055_create_mcp_hub_tables,
+        ),
+        Migration(
+            56,
+            "Create backup schedule tables",
+            migration_056_create_backup_schedule_tables,
+            rollback_056_drop_backup_schedule_tables,
         ),
     ]
 
