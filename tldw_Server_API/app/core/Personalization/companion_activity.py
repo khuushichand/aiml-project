@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Helpers for recording explicit companion activity from adjacent systems."""
+
 import hashlib
 import json
 import sqlite3
@@ -13,6 +15,7 @@ from tldw_Server_API.app.core.feature_flags import is_personalization_enabled
 
 
 def _open_db_for_user(user_id: str | int) -> tuple[PersonalizationDB, str]:
+    """Open the personalization DB for a user and return the normalized user id."""
     normalized_user_id = str(user_id or "").strip()
     if not normalized_user_id:
         raise ValueError("user_id is required")
@@ -65,6 +68,7 @@ def record_companion_activity(
     provenance: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> str | None:
+    """Persist one explicit companion activity event when the user has opted in."""
     if user_id is None or not is_personalization_enabled():
         return None
 
@@ -130,6 +134,7 @@ _DEFAULT_PERSONA_ACTIVITY_SURFACE = "api.persona"
 
 
 def normalize_persona_activity_surface(surface: Any) -> str:
+    """Normalize persona-related activity surfaces to the supported allowlist."""
     candidate = str(surface or "").strip().lower()
     if candidate in _PERSONA_ACTIVITY_SURFACES:
         return candidate
@@ -146,6 +151,7 @@ def build_manual_check_in_activity(
     route: str = "/api/v1/companion/check-ins",
     surface: str = "companion.workspace",
 ) -> dict[str, Any]:
+    """Build a normalized companion activity payload for a manual check-in."""
     normalized_summary = str(summary or "").strip()
     if not normalized_summary:
         raise ValueError("summary is required")
@@ -948,23 +954,35 @@ def record_watchlist_item_added(
     item: Any,
     route: str,
 ) -> str | None:
-    item_id = str(_value(item, "id"))
-    source_timestamp = _watchlist_item_timestamp(item)
+    """Record a watchlist item that was explicitly ingested into collections."""
     return record_companion_activity(
         user_id=user_id,
-        event_type="watchlist_item_added",
-        source_type="watchlist_item",
-        source_id=item_id,
-        surface="api.watchlists",
-        dedupe_key=f"watchlists.item.add:{item_id}",
-        tags=_watchlist_item_tags(item),
-        provenance=_explicit_provenance(
+        **build_watchlist_item_added_activity(item=item, route=route),
+    )
+
+
+def build_watchlist_item_added_activity(
+    *,
+    item: Any,
+    route: str,
+) -> dict[str, Any]:
+    """Build a normalized companion payload for a watchlist item ingest event."""
+    item_id = str(_value(item, "id"))
+    source_timestamp = _watchlist_item_timestamp(item)
+    return {
+        "event_type": "watchlist_item_added",
+        "source_type": "watchlist_item",
+        "source_id": item_id,
+        "surface": "api.watchlists",
+        "dedupe_key": f"watchlists.item.add:{item_id}",
+        "tags": _watchlist_item_tags(item),
+        "provenance": _explicit_provenance(
             route=route,
             action="item_ingested",
             source_timestamp=source_timestamp,
         ),
-        metadata=_watchlist_item_metadata(item),
-    )
+        "metadata": _watchlist_item_metadata(item),
+    }
 
 
 def record_watchlist_item_updated(

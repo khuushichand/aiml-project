@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Pydantic schemas for the companion personalization API."""
+
 from datetime import datetime
 from typing import Any
 
@@ -7,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 class CompanionActivityItem(BaseModel):
+    """One persisted companion activity event."""
+
     id: str
     event_type: str
     source_type: str
@@ -19,6 +23,8 @@ class CompanionActivityItem(BaseModel):
 
 
 class CompanionActivityListResponse(BaseModel):
+    """Paginated response for companion activity items."""
+
     items: list[CompanionActivityItem]
     total: int
     limit: int
@@ -26,6 +32,8 @@ class CompanionActivityListResponse(BaseModel):
 
 
 class CompanionActivityCreate(BaseModel):
+    """Request payload for explicit companion activity capture."""
+
     event_type: str
     source_type: str
     source_id: str
@@ -45,6 +53,8 @@ class CompanionActivityCreate(BaseModel):
 
 
 class CompanionCheckInCreate(BaseModel):
+    """Request payload for a manual companion check-in."""
+
     title: str | None = None
     summary: str
     surface: str | None = None
@@ -78,6 +88,8 @@ class CompanionCheckInCreate(BaseModel):
 
 
 class CompanionKnowledgeCard(BaseModel):
+    """One derived companion knowledge card."""
+
     id: str
     card_type: str
     title: str
@@ -89,11 +101,15 @@ class CompanionKnowledgeCard(BaseModel):
 
 
 class CompanionKnowledgeListResponse(BaseModel):
+    """List response for companion knowledge cards."""
+
     items: list[CompanionKnowledgeCard]
     total: int
 
 
 class CompanionGoal(BaseModel):
+    """One tracked companion goal."""
+
     id: str
     title: str
     description: str | None = None
@@ -106,6 +122,8 @@ class CompanionGoal(BaseModel):
 
 
 class CompanionGoalCreate(BaseModel):
+    """Request payload for creating a companion goal."""
+
     title: str
     description: str | None = None
     goal_type: str
@@ -115,6 +133,8 @@ class CompanionGoalCreate(BaseModel):
 
 
 class CompanionGoalUpdate(BaseModel):
+    """Request payload for updating a companion goal."""
+
     title: str | None = None
     description: str | None = None
     config: dict[str, Any] | None = None
@@ -125,11 +145,15 @@ class CompanionGoalUpdate(BaseModel):
 
 
 class CompanionGoalListResponse(BaseModel):
+    """List response for companion goals."""
+
     items: list[CompanionGoal]
     total: int
 
 
 class CompanionReflectionItem(BaseModel):
+    """One companion reflection entry shown in the workspace."""
+
     id: str
     cadence: str | None = None
     summary: str

@@ -264,6 +264,41 @@ def test_persona_ws_persistence_offloads_to_thread(monkeypatch):
     assert any("persist_tool_outcome" in name for name in offloaded_calls)
 
 
+def test_persona_ws_companion_context_load_offloads_to_thread(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    user_id = "905"
+    _seed_personalization_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+
+    async def _fake_resolve(*args, **kwargs):
+        return user_id, True, True
+
+    offloaded_calls: list[str] = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        offloaded_calls.append(getattr(func, "__name__", str(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+    monkeypatch.setattr(persona_ep.asyncio, "to_thread", _fake_to_thread)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_companion_offload",
+                        "text": "find notes about pytest",
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    assert any("load_companion_context" in name for name in offloaded_calls)
+
+
 def test_persona_confirm_plan_ignores_client_supplied_steps():
 
     with TestClient(fastapi_app) as c:

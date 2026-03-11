@@ -89,3 +89,46 @@ def test_companion_goal_create_and_list(tmp_path) -> None:
     assert rows[0]["config"] == {"target_count": 3}
     assert rows[0]["progress"] == {"completed_count": 0}
     assert rows[0]["status"] == "active"
+
+
+def test_companion_activity_bulk_insert_and_lookup_by_dedupe_key(tmp_path) -> None:
+    db = PersonalizationDB(str(tmp_path / "personalization.db"))
+
+    event_ids = db.insert_companion_activity_events_bulk(
+        user_id="1",
+        events=[
+            {
+                "event_type": "watchlist_item_added",
+                "source_type": "watchlist_item",
+                "source_id": "42",
+                "surface": "api.watchlists",
+                "dedupe_key": "watchlists.item.add:42",
+                "tags": ["security"],
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "First item"},
+            },
+            {
+                "event_type": "watchlist_item_added",
+                "source_type": "watchlist_item",
+                "source_id": "43",
+                "surface": "api.watchlists",
+                "dedupe_key": "watchlists.item.add:43",
+                "tags": ["security"],
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "Second item"},
+            },
+        ],
+    )
+
+    rows, total = db.list_companion_activity_events("1", limit=10, offset=0)
+
+    assert len(event_ids) == 2
+    assert total == 2
+    assert {row["id"] for row in rows} == set(event_ids)
+    assert (
+        db.get_companion_activity_event_id_by_dedupe_key(
+            user_id="1",
+            dedupe_key="watchlists.item.add:42",
+        )
+        in event_ids
+    )

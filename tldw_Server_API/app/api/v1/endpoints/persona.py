@@ -3142,7 +3142,10 @@ async def persona_stream(
                     "activity_count": 0,
                 }
                 if use_companion_context:
-                    companion_context = load_companion_context(user_id=authenticated_user_id)
+                    companion_context = await asyncio.to_thread(
+                        load_companion_context,
+                        user_id=authenticated_user_id,
+                    )
                 persona_state_hints: dict[str, str] = {}
                 if use_persona_state_context and state_context_allowed_by_mode:
                     persona_state_hints = _load_persona_state_hints_for_runtime(

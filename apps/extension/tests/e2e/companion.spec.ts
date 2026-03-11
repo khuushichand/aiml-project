@@ -32,6 +32,11 @@ const installCompanionApiMock = async (
         (message: any, sender?: any, sendResponse?: any) => void
       >()
       const activityItems: any[] = []
+      let profile = {
+        enabled: true,
+        updated_at: "2026-03-10T08:00:00Z"
+      }
+      let activityCounter = 0
       let checkInCounter = 0
 
       onMessage.addListener = (listener: any) => {
@@ -62,6 +67,27 @@ const installCompanionApiMock = async (
               limit: 25,
               offset: 0
             }
+          }
+        }
+
+        if (method === "GET" && path === "/api/v1/personalization/profile") {
+          return {
+            ok: true,
+            status: 200,
+            data: profile
+          }
+        }
+
+        if (method === "POST" && path === "/api/v1/personalization/opt-in") {
+          const body = payload.body || {}
+          profile = {
+            enabled: Boolean(body.enabled),
+            updated_at: "2026-03-10T15:00:00Z"
+          }
+          return {
+            ok: true,
+            status: 200,
+            data: profile
           }
         }
 
@@ -100,8 +126,9 @@ const installCompanionApiMock = async (
 
         if (method === "POST" && path === "/api/v1/companion/activity") {
           const body = payload.body || {}
+          activityCounter += 1
           activityItems.unshift({
-            id: "activity-1",
+            id: `activity-${activityCounter}`,
             event_type: body.event_type,
             source_type: body.source_type,
             source_id: body.source_id,

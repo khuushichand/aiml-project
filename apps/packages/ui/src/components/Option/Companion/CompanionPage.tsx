@@ -80,6 +80,17 @@ type CompanionPageProps = {
   onCompanionEnabled?: () => void
 }
 
+type CheckInFormState = {
+  title: string
+  summary: string
+  tags: string
+}
+
+type GoalFormState = {
+  title: string
+  description: string
+}
+
 export const CompanionPage = ({
   surface = "options",
   onCompanionEnabled
@@ -95,15 +106,33 @@ export const CompanionPage = ({
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [reloadToken, setReloadToken] = React.useState(0)
-  const [checkInTitle, setCheckInTitle] = React.useState("")
-  const [checkInSummary, setCheckInSummary] = React.useState("")
-  const [checkInTags, setCheckInTags] = React.useState("")
+  const [checkInForm, setCheckInForm] = React.useState<CheckInFormState>({
+    title: "",
+    summary: "",
+    tags: ""
+  })
   const [savingCheckIn, setSavingCheckIn] = React.useState(false)
-  const [goalTitle, setGoalTitle] = React.useState("")
-  const [goalDescription, setGoalDescription] = React.useState("")
+  const [goalForm, setGoalForm] = React.useState<GoalFormState>({
+    title: "",
+    description: ""
+  })
   const [creatingGoal, setCreatingGoal] = React.useState(false)
   const [updatingGoalId, setUpdatingGoalId] = React.useState<string | null>(null)
   const [enablingCompanion, setEnablingCompanion] = React.useState(false)
+
+  const updateCheckInForm = (field: keyof CheckInFormState, value: string) => {
+    setCheckInForm((current) => ({
+      ...current,
+      [field]: value
+    }))
+  }
+
+  const updateGoalForm = (field: keyof GoalFormState, value: string) => {
+    setGoalForm((current) => ({
+      ...current,
+      [field]: value
+    }))
+  }
 
   React.useEffect(() => {
     if (!isOnline || capsLoading) return
@@ -175,8 +204,8 @@ export const CompanionPage = ({
 
   const handleCreateGoal = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const trimmedTitle = goalTitle.trim()
-    const trimmedDescription = goalDescription.trim()
+    const trimmedTitle = goalForm.title.trim()
+    const trimmedDescription = goalForm.description.trim()
     if (!trimmedTitle) return
 
     setCreatingGoal(true)
@@ -187,8 +216,7 @@ export const CompanionPage = ({
         description: trimmedDescription || undefined,
         goal_type: "manual"
       })
-      setGoalTitle("")
-      setGoalDescription("")
+      setGoalForm({ title: "", description: "" })
       handleRefresh()
     } catch (nextError) {
       setError(
@@ -220,8 +248,8 @@ export const CompanionPage = ({
 
   const handleCreateCheckIn = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const trimmedTitle = checkInTitle.trim()
-    const trimmedSummary = checkInSummary.trim()
+    const trimmedTitle = checkInForm.title.trim()
+    const trimmedSummary = checkInForm.summary.trim()
     if (!trimmedSummary) return
 
     setSavingCheckIn(true)
@@ -230,11 +258,9 @@ export const CompanionPage = ({
       await recordCompanionCheckIn({
         title: trimmedTitle || undefined,
         summary: trimmedSummary,
-        tags: parseTagInput(checkInTags)
+        tags: parseTagInput(checkInForm.tags)
       })
-      setCheckInTitle("")
-      setCheckInSummary("")
-      setCheckInTags("")
+      setCheckInForm({ title: "", summary: "", tags: "" })
       handleRefresh()
     } catch (nextError) {
       setError(
@@ -548,9 +574,11 @@ export const CompanionPage = ({
                 <input
                   aria-label="Check-in title"
                   className="w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-500"
-                  onChange={(event) => setCheckInTitle(event.target.value)}
+                  onChange={(event) =>
+                    updateCheckInForm("title", event.target.value)
+                  }
                   placeholder="Morning reset"
-                  value={checkInTitle}
+                  value={checkInForm.title}
                 />
               </div>
               <div>
@@ -560,9 +588,11 @@ export const CompanionPage = ({
                 <textarea
                   aria-label="Summary"
                   className="min-h-[100px] w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-500"
-                  onChange={(event) => setCheckInSummary(event.target.value)}
+                  onChange={(event) =>
+                    updateCheckInForm("summary", event.target.value)
+                  }
                   placeholder="Re-focused on the companion capture backlog before lunch."
-                  value={checkInSummary}
+                  value={checkInForm.summary}
                 />
               </div>
               <div>
@@ -572,14 +602,16 @@ export const CompanionPage = ({
                 <input
                   aria-label="Tags"
                   className="w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-500"
-                  onChange={(event) => setCheckInTags(event.target.value)}
+                  onChange={(event) =>
+                    updateCheckInForm("tags", event.target.value)
+                  }
                   placeholder="planning, focus"
-                  value={checkInTags}
+                  value={checkInForm.tags}
                 />
               </div>
               <button
                 className="rounded-full border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300"
-                disabled={savingCheckIn || !checkInSummary.trim()}
+                disabled={savingCheckIn || !checkInForm.summary.trim()}
                 type="submit"
               >
                 {savingCheckIn ? "Saving..." : "Save check-in"}
@@ -604,9 +636,9 @@ export const CompanionPage = ({
                 </label>
                 <input
                   className="w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-500"
-                  onChange={(event) => setGoalTitle(event.target.value)}
+                  onChange={(event) => updateGoalForm("title", event.target.value)}
                   placeholder="Capture a weekly review"
-                  value={goalTitle}
+                  value={goalForm.title}
                 />
               </div>
               <div>
@@ -615,14 +647,16 @@ export const CompanionPage = ({
                 </label>
                 <textarea
                   className="min-h-[88px] w-full rounded-2xl border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-500"
-                  onChange={(event) => setGoalDescription(event.target.value)}
+                  onChange={(event) =>
+                    updateGoalForm("description", event.target.value)
+                  }
                   placeholder="Keep the explicit companion loop active every Friday."
-                  value={goalDescription}
+                  value={goalForm.description}
                 />
               </div>
               <button
                 className="rounded-full border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300"
-                disabled={creatingGoal || !goalTitle.trim()}
+                disabled={creatingGoal || !goalForm.title.trim()}
                 type="submit"
               >
                 {creatingGoal ? "Creating..." : "Create goal"}

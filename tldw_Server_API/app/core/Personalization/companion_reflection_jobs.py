@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Jobs-backed companion reflection generation and notification helpers."""
+
 import asyncio
 import json
 import sqlite3
@@ -17,6 +19,7 @@ COMPANION_REFLECTION_JOB_TYPE = "companion_reflection"
 
 
 def companion_reflection_queue() -> str:
+    """Return the queue name used for companion reflection jobs."""
     queue = "companion-reflection"
     return queue
 
@@ -172,17 +175,13 @@ def _lookup_existing_reflection_id(
     *,
     db: PersonalizationDB,
     user_id: str,
-    slot_key: str,
+    dedupe_key: str,
 ) -> str | None:
-    rows, _total = db.list_companion_activity_events(user_id, limit=200, offset=0)
-    for row in rows:
-        if row["event_type"] != "companion_reflection_generated":
-            continue
-        if row["source_type"] != "companion_reflection":
-            continue
-        if row["source_id"] == slot_key:
-            return str(row["id"])
-    return None
+    """Resolve the existing reflection id directly from the dedupe key."""
+    return db.get_companion_activity_event_id_by_dedupe_key(
+        user_id=user_id,
+        dedupe_key=dedupe_key,
+    )
 
 
 def run_companion_reflection_job(
@@ -195,6 +194,7 @@ def run_companion_reflection_job(
     personalization_db: PersonalizationDB | None = None,
     collections_db: CollectionsDatabase | None = None,
 ) -> dict[str, Any]:
+    """Generate one companion reflection for the given cadence slot."""
     normalized_user_id = str(user_id)
     current_time = _coerce_now(_parse_iso_datetime(scheduled_for) or now)
     db = personalization_db or PersonalizationDB(str(DatabasePaths.get_personalization_db_path(normalized_user_id)))
@@ -236,7 +236,11 @@ def run_companion_reflection_job(
             metadata=metadata,
         )
     except sqlite3.IntegrityError:
-        reflection_id = _lookup_existing_reflection_id(db=db, user_id=normalized_user_id, slot_key=slot_key)
+        reflection_id = _lookup_existing_reflection_id(
+            db=db,
+            user_id=normalized_user_id,
+            dedupe_key=dedupe_key,
+        )
         if reflection_id is None:
             raise
 

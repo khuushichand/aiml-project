@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -102,3 +103,43 @@ def test_load_companion_context_returns_empty_when_profile_disabled(companion_co
         "card_count": 0,
         "activity_count": 0,
     }
+
+
+def test_load_companion_context_returns_empty_for_recoverable_db_errors(
+    companion_context_env,
+    monkeypatch,
+):
+    user_id = "73"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+
+    def _raise_sqlite_error(self, user_id_value):
+        raise sqlite3.OperationalError("database is busy")
+
+    monkeypatch.setattr(PersonalizationDB, "get_or_create_profile", _raise_sqlite_error)
+
+    payload = load_companion_context(user_id=user_id)
+
+    assert payload == {
+        "knowledge_lines": [],
+        "activity_lines": [],
+        "card_count": 0,
+        "activity_count": 0,
+    }
+
+
+def test_load_companion_context_does_not_suppress_unexpected_errors(
+    companion_context_env,
+    monkeypatch,
+):
+    user_id = "74"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+
+    def _raise_runtime_error(self, user_id_value):
+        raise RuntimeError("unexpected failure")
+
+    monkeypatch.setattr(PersonalizationDB, "get_or_create_profile", _raise_runtime_error)
+
+    with pytest.raises(RuntimeError, match="unexpected failure"):
+        load_companion_context(user_id=user_id)

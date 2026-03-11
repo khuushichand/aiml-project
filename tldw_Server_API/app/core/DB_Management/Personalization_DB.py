@@ -675,6 +675,83 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
+    def insert_companion_activity_events_bulk(
+        self,
+        *,
+        user_id: str,
+        events: list[dict[str, Any]],
+    ) -> list[str]:
+        """Insert multiple companion activity events in a single transaction."""
+        if not events:
+            return []
+
+        import uuid
+
+        self.get_or_create_profile(user_id)
+        rows: list[tuple[Any, ...]] = []
+        event_ids: list[str] = []
+        for event in events:
+            event_id = uuid.uuid4().hex
+            event_ids.append(event_id)
+            rows.append(
+                (
+                    event_id,
+                    str(user_id),
+                    str(event["event_type"]),
+                    str(event["source_type"]),
+                    str(event["source_id"]),
+                    str(event["surface"]),
+                    str(event["dedupe_key"]),
+                    json.dumps(event.get("tags")) if event.get("tags") is not None else None,
+                    json.dumps(event.get("provenance") or {}),
+                    json.dumps(event.get("metadata")) if event.get("metadata") is not None else None,
+                    _utcnow_iso(),
+                )
+            )
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.executemany(
+                    """
+                    INSERT INTO companion_activity_events (
+                        id, user_id, event_type, source_type, source_id, surface,
+                        dedupe_key, tags, provenance_json, metadata_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                conn.commit()
+                return event_ids
+            finally:
+                conn.close()
+
+    def get_companion_activity_event_id_by_dedupe_key(
+        self,
+        *,
+        user_id: str,
+        dedupe_key: str,
+    ) -> str | None:
+        """Return the event id for a user's dedupe key, if one exists."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id
+                    FROM companion_activity_events
+                    WHERE user_id = ? AND dedupe_key = ?
+                    LIMIT 1
+                    """,
+                    (str(user_id), str(dedupe_key)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return str(row["id"])
+            finally:
+                conn.close()
+
     def list_companion_activity_events(
         self,
         user_id: str,
@@ -784,18 +861,22 @@ class PersonalizationDB:
                 conn.close()
 
     def list_companion_knowledge_cards(self, user_id: str, status: str | None = "active") -> list[dict[str, Any]]:
-        params: list[Any] = [str(user_id)]
-        where = "WHERE user_id = ?"
-        if status is not None:
-            where += " AND status = ?"
-            params.append(str(status))
-
-        knowledge_sql_template = (
-            "SELECT id, card_type, title, summary, evidence_json, score, status, updated_at "
-            "FROM companion_knowledge_cards {where} "
-            "ORDER BY score DESC, updated_at DESC"
-        )
-        sql = knowledge_sql_template.format_map(locals())  # nosec B608
+        if status is None:
+            sql = (
+                "SELECT id, card_type, title, summary, evidence_json, score, status, updated_at "
+                "FROM companion_knowledge_cards "
+                "WHERE user_id = ? "
+                "ORDER BY score DESC, updated_at DESC"
+            )
+            params: list[Any] = [str(user_id)]
+        else:
+            sql = (
+                "SELECT id, card_type, title, summary, evidence_json, score, status, updated_at "
+                "FROM companion_knowledge_cards "
+                "WHERE user_id = ? AND status = ? "
+                "ORDER BY score DESC, updated_at DESC"
+            )
+            params = [str(user_id), str(status)]
 
         with self._lock:
             conn = self._connect()
@@ -871,25 +952,33 @@ class PersonalizationDB:
             conn = self._connect()
             try:
                 if filtered_updates:
-                    set_clauses: list[str] = []
-                    params: list[Any] = []
-                    for key, value in filtered_updates.items():
-                        if key == "config":
-                            set_clauses.append("config_json = ?")
-                            params.append(json.dumps(value or {}))
-                        elif key == "progress":
-                            set_clauses.append("progress_json = ?")
-                            params.append(json.dumps(value or {}))
-                        else:
-                            set_clauses.append(f"{key} = ?")
-                            params.append(value)
-                    set_clauses.append("updated_at = ?")
-                    params.append(_utcnow_iso())
-                    params.extend([str(goal_id), str(user_id)])
-                    set_clause_sql = ", ".join(set_clauses)
-                    # The dynamic SET clause is built exclusively from the fixed allowlist above.
-                    update_sql = f"UPDATE companion_goals SET {set_clause_sql} WHERE id = ? AND user_id = ?"  # nosec B608
-                    cur = conn.execute(update_sql, params)
+                    cur = conn.execute(
+                        """
+                        UPDATE companion_goals
+                        SET title = CASE WHEN ? THEN ? ELSE title END,
+                            description = CASE WHEN ? THEN ? ELSE description END,
+                            config_json = CASE WHEN ? THEN ? ELSE config_json END,
+                            progress_json = CASE WHEN ? THEN ? ELSE progress_json END,
+                            status = CASE WHEN ? THEN ? ELSE status END,
+                            updated_at = ?
+                        WHERE id = ? AND user_id = ?
+                        """,
+                        (
+                            int("title" in filtered_updates),
+                            filtered_updates.get("title"),
+                            int("description" in filtered_updates),
+                            filtered_updates.get("description"),
+                            int("config" in filtered_updates),
+                            json.dumps(filtered_updates.get("config") or {}),
+                            int("progress" in filtered_updates),
+                            json.dumps(filtered_updates.get("progress") or {}),
+                            int("status" in filtered_updates),
+                            filtered_updates.get("status"),
+                            _utcnow_iso(),
+                            str(goal_id),
+                            str(user_id),
+                        ),
+                    )
                     if (cur.rowcount or 0) == 0:
                         return None
                     conn.commit()
@@ -919,18 +1008,22 @@ class PersonalizationDB:
                 conn.close()
 
     def list_companion_goals(self, user_id: str, status: str | None = None) -> list[dict[str, Any]]:
-        params: list[Any] = [str(user_id)]
-        where = "WHERE user_id = ?"
-        if status is not None:
-            where += " AND status = ?"
-            params.append(str(status))
-
-        goals_sql_template = (
-            "SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at "
-            "FROM companion_goals {where} "
-            "ORDER BY updated_at DESC"
-        )
-        sql = goals_sql_template.format_map(locals())  # nosec B608
+        if status is None:
+            sql = (
+                "SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at "
+                "FROM companion_goals "
+                "WHERE user_id = ? "
+                "ORDER BY updated_at DESC"
+            )
+            params: list[Any] = [str(user_id)]
+        else:
+            sql = (
+                "SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at "
+                "FROM companion_goals "
+                "WHERE user_id = ? AND status = ? "
+                "ORDER BY updated_at DESC"
+            )
+            params = [str(user_id), str(status)]
 
         with self._lock:
             conn = self._connect()

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.endpoints import companion as companion_ep
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_personalization_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
@@ -268,6 +271,65 @@ def test_companion_goal_patch_rejects_null_for_non_nullable_fields(client_with_c
     )
 
     assert response.status_code == 422, response.text
+
+
+def test_companion_routes_include_rbac_rate_limits() -> None:
+    route_resources = {
+        (route.path, next(iter(sorted(route.methods or [])))): [
+            getattr(dependency.call, "_tldw_rate_limit_resource", None)
+            for dependency in route.dependant.dependencies
+        ]
+        for route in companion_ep.router.routes
+        if getattr(route, "path", "").startswith("/")
+    }
+
+    assert "companion.activity.create" in route_resources[("/activity", "POST")]
+    assert "companion.activity.read" in route_resources[("/activity", "GET")]
+    assert "companion.checkins.create" in route_resources[("/check-ins", "POST")]
+    assert "companion.knowledge.read" in route_resources[("/knowledge", "GET")]
+    assert "companion.goals.read" in route_resources[("/goals", "GET")]
+    assert "companion.goals.create" in route_resources[("/goals", "POST")]
+    assert "companion.goals.update" in route_resources[("/goals/{goal_id}", "PATCH")]
+
+
+def test_companion_activity_create_offloads_db_and_usage_logging(
+    client_with_companion_db,
+    monkeypatch,
+) -> None:
+    client, _db = client_with_companion_db
+    offloaded_calls: list[str] = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        offloaded_calls.append(getattr(func, "__name__", str(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        companion_ep,
+        "asyncio",
+        SimpleNamespace(to_thread=_fake_to_thread),
+        raising=False,
+    )
+
+    response = client.post(
+        "/api/v1/companion/activity",
+        json={
+            "event_type": "extension.selection_saved",
+            "source_type": "browser_selection",
+            "source_id": "capture-1",
+            "surface": "extension.sidepanel",
+            "dedupe_key": "extension.selection_saved:capture-1",
+            "provenance": {
+                "capture_mode": "explicit",
+                "route": "extension.context_menu",
+                "action": "save_selection",
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert any("_ensure_companion_opt_in" in name for name in offloaded_calls)
+    assert any("insert_companion_activity_event" in name for name in offloaded_calls)
+    assert any("log_event" in name for name in offloaded_calls)
 
 
 @pytest.mark.parametrize(

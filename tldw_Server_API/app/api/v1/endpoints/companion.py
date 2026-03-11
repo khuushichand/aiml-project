@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+"""Companion API endpoints for explicit activity, goals, and workspace data."""
+
+import asyncio
 import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_personalization_db_for_user,
@@ -31,11 +35,13 @@ router = APIRouter()
 
 
 def _ensure_personalization_enabled() -> None:
+    """Raise when the companion module is unavailable."""
     if not is_personalization_enabled():
         raise HTTPException(status_code=404, detail="Personalization disabled")
 
 
 def _ensure_companion_opt_in(db: PersonalizationDB, user_id: str) -> None:
+    """Raise when the user has not explicitly enabled personalization."""
     profile = db.get_or_create_profile(user_id)
     if not bool(profile.get("enabled")):
         raise HTTPException(
@@ -49,20 +55,23 @@ def _ensure_companion_opt_in(db: PersonalizationDB, user_id: str) -> None:
     response_model=CompanionActivityItem,
     tags=["companion"],
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rbac_rate_limit("companion.activity.create"))],
 )
 async def create_companion_activity(
     payload: CompanionActivityCreate = Body(...),
     db: PersonalizationDB = Depends(get_personalization_db_for_user),
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionActivityItem:
+    """Create one explicit companion activity event."""
     _ensure_personalization_enabled()
-    _ensure_companion_opt_in(db, log.user_id)
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
     dedupe_key = (
         payload.dedupe_key
         or f"{payload.event_type}:{payload.source_type}:{payload.source_id}"
     )
     try:
-        event_id = db.insert_companion_activity_event(
+        event_id = await asyncio.to_thread(
+            db.insert_companion_activity_event,
             user_id=log.user_id,
             event_type=payload.event_type,
             source_type=payload.source_type,
@@ -79,7 +88,8 @@ async def create_companion_activity(
             detail="Companion activity already captured",
         ) from exc
 
-    log.log_event(
+    await asyncio.to_thread(
+        log.log_event,
         "companion.activity.create",
         resource_id=event_id,
         tags=list(payload.tags or []),
@@ -103,14 +113,16 @@ async def create_companion_activity(
     response_model=CompanionActivityItem,
     tags=["companion"],
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rbac_rate_limit("companion.checkins.create"))],
 )
 async def create_companion_check_in(
     payload: CompanionCheckInCreate = Body(...),
     db: PersonalizationDB = Depends(get_personalization_db_for_user),
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionActivityItem:
+    """Create one manual companion check-in."""
     _ensure_personalization_enabled()
-    _ensure_companion_opt_in(db, log.user_id)
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
     created_at = datetime.now(timezone.utc)
     source_id = f"checkin-{uuid4().hex}"
     activity_payload = build_manual_check_in_activity(
@@ -121,8 +133,13 @@ async def create_companion_check_in(
         tags=payload.tags,
         event_timestamp=created_at.isoformat(),
     )
-    event_id = db.insert_companion_activity_event(user_id=log.user_id, **activity_payload)
-    log.log_event(
+    event_id = await asyncio.to_thread(
+        db.insert_companion_activity_event,
+        user_id=log.user_id,
+        **activity_payload,
+    )
+    await asyncio.to_thread(
+        log.log_event,
         "companion.checkins.create",
         resource_id=event_id,
         tags=list(activity_payload["tags"] or []),
@@ -141,55 +158,86 @@ async def create_companion_check_in(
     )
 
 
-@router.get("/activity", response_model=CompanionActivityListResponse, tags=["companion"])
+@router.get(
+    "/activity",
+    response_model=CompanionActivityListResponse,
+    tags=["companion"],
+    dependencies=[Depends(rbac_rate_limit("companion.activity.read"))],
+)
 async def list_companion_activity(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: PersonalizationDB = Depends(get_personalization_db_for_user),
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionActivityListResponse:
+    """List persisted companion activity events for the current user."""
     _ensure_personalization_enabled()
-    _ensure_companion_opt_in(db, log.user_id)
-    items, total = db.list_companion_activity_events(log.user_id, limit=limit, offset=offset)
-    log.log_event("companion.activity.view", metadata={"count": len(items)})
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
+    items, total = await asyncio.to_thread(
+        db.list_companion_activity_events,
+        log.user_id,
+        limit,
+        offset,
+    )
+    await asyncio.to_thread(log.log_event, "companion.activity.view", metadata={"count": len(items)})
     return CompanionActivityListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
-@router.get("/knowledge", response_model=CompanionKnowledgeListResponse, tags=["companion"])
+@router.get(
+    "/knowledge",
+    response_model=CompanionKnowledgeListResponse,
+    tags=["companion"],
+    dependencies=[Depends(rbac_rate_limit("companion.knowledge.read"))],
+)
 async def list_companion_knowledge(
     status_filter: str | None = Query("active", alias="status"),
     db: PersonalizationDB = Depends(get_personalization_db_for_user),
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionKnowledgeListResponse:
+    """List derived companion knowledge cards for the current user."""
     _ensure_personalization_enabled()
-    _ensure_companion_opt_in(db, log.user_id)
-    items = db.list_companion_knowledge_cards(log.user_id, status=status_filter)
-    log.log_event("companion.knowledge.view", metadata={"count": len(items)})
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
+    items = await asyncio.to_thread(db.list_companion_knowledge_cards, log.user_id, status_filter)
+    await asyncio.to_thread(log.log_event, "companion.knowledge.view", metadata={"count": len(items)})
     return CompanionKnowledgeListResponse(items=items, total=len(items))
 
 
-@router.get("/goals", response_model=CompanionGoalListResponse, tags=["companion"])
+@router.get(
+    "/goals",
+    response_model=CompanionGoalListResponse,
+    tags=["companion"],
+    dependencies=[Depends(rbac_rate_limit("companion.goals.read"))],
+)
 async def list_companion_goals(
     status_filter: str | None = Query(None, alias="status"),
     db: PersonalizationDB = Depends(get_personalization_db_for_user),
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionGoalListResponse:
+    """List companion goals for the current user."""
     _ensure_personalization_enabled()
-    _ensure_companion_opt_in(db, log.user_id)
-    items = db.list_companion_goals(log.user_id, status=status_filter)
-    log.log_event("companion.goals.view", metadata={"count": len(items)})
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
+    items = await asyncio.to_thread(db.list_companion_goals, log.user_id, status_filter)
+    await asyncio.to_thread(log.log_event, "companion.goals.view", metadata={"count": len(items)})
     return CompanionGoalListResponse(items=items, total=len(items))
 
 
-@router.post("/goals", response_model=CompanionGoal, tags=["companion"], status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/goals",
+    response_model=CompanionGoal,
+    tags=["companion"],
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rbac_rate_limit("companion.goals.create"))],
+)
 async def create_companion_goal(
     payload: CompanionGoalCreate = Body(...),
     db: PersonalizationDB = Depends(get_personalization_db_for_user),
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionGoal:
+    """Create a new companion goal."""
     _ensure_personalization_enabled()
-    _ensure_companion_opt_in(db, log.user_id)
-    goal_id = db.create_companion_goal(
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
+    goal_id = await asyncio.to_thread(
+        db.create_companion_goal,
         user_id=log.user_id,
         title=payload.title,
         description=payload.description,
@@ -198,10 +246,11 @@ async def create_companion_goal(
         progress=payload.progress,
         status=payload.status,
     )
-    goal = db.update_companion_goal(goal_id, log.user_id)
+    goal = await asyncio.to_thread(db.update_companion_goal, goal_id, log.user_id)
     if goal is None:
         raise HTTPException(status_code=500, detail="Failed to load created goal")
-    log.log_event(
+    await asyncio.to_thread(
+        log.log_event,
         "companion.goals.create",
         resource_id=goal_id,
         tags=[payload.goal_type],
@@ -210,15 +259,21 @@ async def create_companion_goal(
     return CompanionGoal.model_validate(goal)
 
 
-@router.patch("/goals/{goal_id}", response_model=CompanionGoal, tags=["companion"])
+@router.patch(
+    "/goals/{goal_id}",
+    response_model=CompanionGoal,
+    tags=["companion"],
+    dependencies=[Depends(rbac_rate_limit("companion.goals.update"))],
+)
 async def update_companion_goal(
     goal_id: str,
     payload: CompanionGoalUpdate = Body(...),
     db: PersonalizationDB = Depends(get_personalization_db_for_user),
     log: UsageEventLogger = Depends(get_usage_event_logger),
 ) -> CompanionGoal:
+    """Update a companion goal."""
     _ensure_personalization_enabled()
-    _ensure_companion_opt_in(db, log.user_id)
+    await asyncio.to_thread(_ensure_companion_opt_in, db, log.user_id)
     fields = payload.model_dump(exclude_unset=True)
     invalid_null_fields = sorted(
         key for key in ("title", "config", "progress", "status") if key in fields and fields[key] is None
@@ -228,10 +283,11 @@ async def update_companion_goal(
             status_code=422,
             detail=f"Fields cannot be null: {', '.join(invalid_null_fields)}",
         )
-    goal = db.update_companion_goal(goal_id, log.user_id, **fields)
+    goal = await asyncio.to_thread(db.update_companion_goal, goal_id, log.user_id, **fields)
     if goal is None:
         raise HTTPException(status_code=404, detail="Goal not found")
-    log.log_event(
+    await asyncio.to_thread(
+        log.log_event,
         "companion.goals.update",
         resource_id=goal_id,
         tags=[goal["goal_type"], goal["status"]],

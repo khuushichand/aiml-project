@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+"""Companion context loading for persona retrieval and conversation planning."""
+
 import hashlib
+import sqlite3
 from typing import Any
 
 from loguru import logger
@@ -113,6 +116,7 @@ def load_companion_context(
     max_cards: int = _MAX_COMPANION_CARD_COUNT,
     max_activities: int = _MAX_COMPANION_ACTIVITY_COUNT,
 ) -> dict[str, Any]:
+    """Load a compact companion context payload for a user."""
     empty_payload = {
         "knowledge_lines": [],
         "activity_lines": [],
@@ -174,9 +178,9 @@ def load_companion_context(
             "card_count": len(knowledge_lines),
             "activity_count": len(activity_lines),
         }
-    except Exception as exc:
-        logger.debug(
-            "companion context lookup skipped for user_hash {}: {}",
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+        logger.warning(
+            "companion context lookup failed for user_hash {}: {}",
             _redacted_user_id(normalized_user_id),
             exc,
         )

@@ -46,10 +46,12 @@ from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddi
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import SourceRow, WatchlistsDatabase
-from tldw_Server_API.app.core.Personalization.companion_activity import record_watchlist_item_added
+from tldw_Server_API.app.core.Personalization.companion_activity import build_watchlist_item_added_activity
+from tldw_Server_API.app.core.feature_flags import is_personalization_enabled
 from tldw_Server_API.app.core.Watchlists.fetchers import (
     fetch_rss_feed,
     fetch_rss_feed_history,
@@ -594,6 +596,14 @@ async def run_watchlist_job(
         media_db_path = str(DatabasePaths.get_media_db_path(int(user_id)))
         mdb = create_media_database(client_id=str(user_id), db_path=media_db_path)
 
+    normalized_user_id = str(user_id)
+    companion_activity_db: PersonalizationDB | None = None
+    companion_capture_enabled = False
+    if capture_companion_activity and companion_route and is_personalization_enabled():
+        companion_activity_db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+        companion_profile = companion_activity_db.get_or_create_profile(normalized_user_id)
+        companion_capture_enabled = bool(companion_profile.get("enabled", 0))
+
     # Fetch scope and sources
     scope = {}
     try:
@@ -707,6 +717,7 @@ async def run_watchlist_job(
     history_used = False
 
     for src in sources:
+            source_companion_events: list[dict[str, Any]] = []
             if _run_is_cancelled(db, run.id):
                 logger.info(f"watchlists.run_cancelled: stopping run {run.id} before source {getattr(src, 'id', '?')}")
                 break
@@ -746,7 +757,7 @@ async def run_watchlist_job(
                     content: str | None = None,
                     published_at: str | None = None,
                     _src=src,
-                ) -> None:
+                    ) -> None:
                     try:
                         item = db.record_scraped_item(
                             run_id=run.id,
@@ -762,11 +773,12 @@ async def run_watchlist_job(
                             tags=_keywords_for_source(_src),
                             status=status,
                         )
-                        if capture_companion_activity and companion_route and status == "ingested":
-                            record_watchlist_item_added(
-                                user_id=user_id,
-                                item=item,
-                                route=companion_route,
+                        if companion_capture_enabled and status == "ingested":
+                            source_companion_events.append(
+                                build_watchlist_item_added_activity(
+                                    item=item,
+                                    route=str(companion_route),
+                                )
                             )
                     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as rec_err:
                         logger.debug(f"record_scraped_item failed (source_id={getattr(_src, 'id', '?')}): {rec_err}")
@@ -1505,6 +1517,19 @@ async def run_watchlist_job(
                     )
                     if auto_disable:
                         logger.warning(f"watchlists.health: auto-disabled source {src.id} after {new_errors} consecutive errors")
+            finally:
+                if companion_activity_db is not None and source_companion_events:
+                    try:
+                        companion_activity_db.insert_companion_activity_events_bulk(
+                            user_id=normalized_user_id,
+                            events=source_companion_events,
+                        )
+                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+                        logger.debug(
+                            "watchlists companion batch insert skipped for source {}: {}",
+                            getattr(src, "id", "?"),
+                            exc,
+                        )
 
     stats = {"items_found": items_found, "items_ingested": items_ingested}
     try:

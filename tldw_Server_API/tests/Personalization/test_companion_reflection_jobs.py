@@ -124,3 +124,49 @@ def test_companion_reflection_job_skips_when_quiet_hours_active(companion_reflec
     rows, _total = personalization_db.list_companion_activity_events("1", limit=20, offset=0)
     assert not any(row["event_type"] == "companion_reflection_generated" for row in rows)
     assert collections_db.list_user_notifications(limit=10, offset=0) == []
+
+
+def test_companion_reflection_job_reuses_existing_reflection_outside_recent_window(
+    companion_reflection_env,
+) -> None:
+    personalization_db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path("1")))
+    collections_db = CollectionsDatabase.for_user(user_id=1)
+    personalization_db.update_profile("1", enabled=1)
+
+    reflection_id = personalization_db.insert_companion_activity_event(
+        user_id="1",
+        event_type="companion_reflection_generated",
+        source_type="companion_reflection",
+        source_id="2026-03-10",
+        surface="jobs.companion",
+        dedupe_key="companion.reflection:daily:2026-03-10",
+        provenance={"capture_mode": "explicit"},
+        metadata={"title": "Daily reflection", "summary": "Existing reflection"},
+    )
+    for index in range(205):
+        personalization_db.insert_companion_activity_event(
+            user_id="1",
+            event_type="reading_item_saved",
+            source_type="reading_item",
+            source_id=f"reading-{index}",
+            surface="api.reading",
+            dedupe_key=f"reading.save:{index}",
+            tags=["project-alpha"],
+            provenance={"capture_mode": "explicit"},
+            metadata={"title": f"Reading item {index}"},
+        )
+
+    result = run_companion_reflection_job(
+        user_id="1",
+        cadence="daily",
+        now=datetime(2026, 3, 10, 16, 0, tzinfo=timezone.utc),
+        personalization_db=personalization_db,
+        collections_db=collections_db,
+    )
+
+    assert result["status"] == "completed"
+    assert result["reflection_id"] == reflection_id
+    rows, total = personalization_db.list_companion_activity_events("1", limit=500, offset=0)
+    reflections = [row for row in rows if row["event_type"] == "companion_reflection_generated"]
+    assert total == 206
+    assert len(reflections) == 1
