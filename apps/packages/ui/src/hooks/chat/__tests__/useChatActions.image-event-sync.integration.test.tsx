@@ -156,33 +156,39 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   }
 }))
 
-const createHookOptions = (overrides: Record<string, unknown> = {}) => {
-  let currentMessages: any[] = [
-const createHookOptions = (
-  initialMessages: any[] = [
-    {
-      id: "assistant-image-1",
-      role: "assistant",
-      name: "Image backend",
-      isBot: true,
-      message: "",
-      messageType: IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
-      images: ["data:image/png;base64,AAAA"],
-      generationInfo: {
-        image_generation: {
-          request: {
-            prompt: "sunlit city skyline",
-            backend: "comfyui"
-          },
-          source: "generate-modal",
-          variant_count: 1,
-          active_variant_index: 0,
-          createdAt: 1700000000000
-        }
+const defaultInitialMessages: any[] = [
+  {
+    id: "assistant-image-1",
+    role: "assistant",
+    name: "Image backend",
+    isBot: true,
+    message: "",
+    messageType: IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
+    images: ["data:image/png;base64,AAAA"],
+    generationInfo: {
+      image_generation: {
+        request: {
+          prompt: "sunlit city skyline",
+          backend: "comfyui"
+        },
+        source: "generate-modal",
+        variant_count: 1,
+        active_variant_index: 0,
+        createdAt: 1700000000000
       }
     }
-  ]
+  }
+]
+
+const createHookOptions = (
+  initialMessagesOrOverrides: any[] | Record<string, unknown> = defaultInitialMessages
 ) => {
+  const initialMessages = Array.isArray(initialMessagesOrOverrides)
+    ? initialMessagesOrOverrides
+    : defaultInitialMessages
+  const overrides = Array.isArray(initialMessagesOrOverrides)
+    ? {}
+    : initialMessagesOrOverrides
   let currentMessages: any[] = initialMessages
 
   const setMessages = vi.fn((next: any[] | ((prev: any[]) => any[])) => {

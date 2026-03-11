@@ -178,7 +178,11 @@ export const useSelectServerChat = () => {
       setServerChatExternalRef(chat.external_ref ?? null)
       setServerChatMetaLoaded(true)
       updatePageTitle(chat.title)
-      navigate("/")
+      const chatPath = typeof window !== "undefined" &&
+        window.location.pathname.toLowerCase().endsWith("sidepanel.html")
+        ? "/"
+        : "/chat"
+      navigate(chatPath)
     },
     [
       clearReplyTarget,
