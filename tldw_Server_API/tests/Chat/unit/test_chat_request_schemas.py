@@ -180,6 +180,43 @@ def test_chat_completion_request_rejects_json_schema_without_schema_object():
         )
 
 
+@pytest.mark.unit
+def test_chat_completion_request_accepts_llamacpp_extension_fields():
+    req = ChatCompletionRequest(
+        model="llama.cpp/local-model",
+        messages=[ChatCompletionUserMessageParam(role="user", content="reply in JSON")],
+        grammar_mode="library",
+        grammar_id="grammar_123",
+        grammar_override='root ::= "ok"',
+        thinking_budget_tokens=128,
+    )
+    assert req.grammar_mode == "library"
+    assert req.grammar_id == "grammar_123"
+    assert req.thinking_budget_tokens == 128
+
+
+@pytest.mark.unit
+def test_chat_completion_request_rejects_llamacpp_library_mode_without_grammar_id():
+    with pytest.raises(ValidationError) as exc_info:
+        ChatCompletionRequest(
+            model="llama.cpp/local-model",
+            messages=[ChatCompletionUserMessageParam(role="user", content="x")],
+            grammar_mode="library",
+        )
+    assert "grammar_id is required" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_chat_completion_request_rejects_llamacpp_inline_mode_without_grammar_inline():
+    with pytest.raises(ValidationError) as exc_info:
+        ChatCompletionRequest(
+            model="llama.cpp/local-model",
+            messages=[ChatCompletionUserMessageParam(role="user", content="x")],
+            grammar_mode="inline",
+        )
+    assert "grammar_inline is required" in str(exc_info.value)
+
+
 # --- Tests for FunctionDefinition Parameter Validation ---
 
 @pytest.mark.unit

@@ -259,7 +259,7 @@ Without this registry, the system would only be able to approximate the promised
 
 Presets should be implemented as normal profiles shipped by the system:
 
-- `No Security`
+- `No Additional MCP Restrictions`
 - `Read Only`
 - `Read In Current Folder`
 - `RW Current Folder`

@@ -22,11 +22,13 @@ import {
   MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
   normalizeMessageSteeringPrompts
 } from "@/utils/message-steering"
+import { MyChatIdentityMenu } from "@/components/Common/MyChatIdentityMenu"
 import { IconButton } from "@/components/Common/IconButton"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useAntdModal } from "@/hooks/useAntdModal"
 import { useConfirmModal } from "@/hooks/useConfirmModal"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
+import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
 import { getBrowserRuntime, isExtensionRuntime } from "@/utils/browser-runtime"
@@ -40,6 +42,11 @@ import type {
   CharacterApiResponse
 } from "@/types/character"
 import type { MessageSteeringPromptTemplates } from "@/types/message-steering"
+import {
+  characterToAssistantSelection,
+  personaToAssistantSelection,
+  type AssistantSelection
+} from "@/types/assistant-selection"
 
 type Props = {
   selectedCharacterId: string | null
@@ -66,6 +73,12 @@ type FavoriteCharacter = {
 type ImageOnlyErrorDetail = {
   code?: string
   message?: string
+}
+
+type PersonaApiResponse = Record<string, unknown> & {
+  id?: string | number
+  name?: string | null
+  avatar_url?: string | null
 }
 
 const GREETING_RETRY_DELAY_MS = 800
@@ -120,6 +133,7 @@ export const CharacterSelect: React.FC<Props> = ({
   )
   const [selectedCharacterStored, setSelectedCharacter] =
     useSelectedCharacter<StoredCharacter | null>(null)
+  const [selectedAssistant, setSelectedAssistant] = useSelectedAssistant(null)
   const clearChat = useClearChat()
   const messages = useStoreMessageOption((state) => state.messages)
   const serverChatId = useStoreMessageOption((state) => state.serverChatId)
@@ -143,6 +157,9 @@ export const CharacterSelect: React.FC<Props> = ({
   const [searchText, setSearchText] = useState("")
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
+  const [activeTab, setActiveTab] = useState<"character" | "persona">(
+    selectedAssistant?.kind === "persona" ? "persona" : "character"
+  )
   const searchInputRef = useRef<InputRef | null>(null)
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const personaImageInputRef = useRef<HTMLInputElement | null>(null)
@@ -162,6 +179,7 @@ export const CharacterSelect: React.FC<Props> = ({
   const { capabilities } = useServerCapabilities()
 
   const hasCharacters = capabilities?.hasCharacters
+  const hasPersona = capabilities?.hasPersona
 
   const destroyImageOnlyModal = React.useCallback(() => {
     if (!imageOnlyModalRef.current) return
@@ -186,6 +204,18 @@ export const CharacterSelect: React.FC<Props> = ({
     selectedCharacterIdRef.current = selectedCharacterId ?? null
   }, [selectedCharacterId])
 
+  useEffect(() => {
+    if (selectedAssistant?.kind === "character" || selectedAssistant?.kind === "persona") {
+      setActiveTab(selectedAssistant.kind)
+    }
+  }, [selectedAssistant?.kind])
+
+  useEffect(() => {
+    if (activeTab === "persona" && !hasPersona) {
+      setActiveTab("character")
+    }
+  }, [activeTab, hasPersona])
+
   const { data: characters = [], isLoading, refetch } = useQuery<
     CharacterApiResponse[]
   >({
@@ -197,6 +227,16 @@ export const CharacterSelect: React.FC<Props> = ({
     },
     enabled: !!hasCharacters,
     staleTime: 5 * 60 * 1000 // 5 minutes
+  })
+  const { data: personas = [] } = useQuery<PersonaApiResponse[]>({
+    queryKey: ["persona-profiles", "sidepanel-character-select"],
+    queryFn: async () => {
+      await tldwClient.initialize().catch(() => null)
+      const result = await tldwClient.listPersonaProfiles().catch(() => [])
+      return Array.isArray(result) ? (result as PersonaApiResponse[]) : []
+    },
+    enabled: !!hasPersona,
+    staleTime: 5 * 60 * 1000
   })
 
   // Filter characters based on search
@@ -211,6 +251,14 @@ export const CharacterSelect: React.FC<Props> = ({
         char.tags?.some((tag) => tag.toLowerCase().includes(q))
     )
   }, [characters, searchText])
+  const filteredPersonas = useMemo<PersonaApiResponse[]>(() => {
+    if (!personas) return []
+    if (!searchText.trim()) return personas
+    const q = searchText.toLowerCase()
+    return personas.filter((persona) =>
+      String(persona.name || "").toLowerCase().includes(q)
+    )
+  }, [personas, searchText])
 
   const favoriteIndex = useMemo(() => {
     const ids = new Set<string>()
@@ -288,6 +336,15 @@ export const CharacterSelect: React.FC<Props> = ({
       (char) => String(char.id) === String(selectedCharacterId)
     )
   }, [characters, selectedCharacterId])
+  const selectedPersona = useMemo(() => {
+    if (selectedAssistant?.kind !== "persona") return null
+    return (
+      personas.find(
+        (persona) => String(persona.id ?? "") === String(selectedAssistant.id)
+      ) ??
+      selectedAssistant
+    )
+  }, [personas, selectedAssistant])
   const selectedCharacterMoodImages = useMemo(
     () =>
       getCharacterMoodImagesFromExtensions(
@@ -308,6 +365,32 @@ export const CharacterSelect: React.FC<Props> = ({
     )
   }, [userPersonaImage])
   const trimmedDisplayName = userDisplayName.trim()
+  const displayNameActionLabel = trimmedDisplayName
+    ? (t("sidepanel:characterSelect.displayNameCurrent", {
+        defaultValue: "Your name: {{name}}",
+        name: trimmedDisplayName
+      }) as string)
+    : (t("sidepanel:characterSelect.displayNameAction", {
+        defaultValue: "Set your name"
+      }) as string)
+  const imageActionLabel = hasUserPersonaImage
+    ? (t("sidepanel:characterSelect.identityImageReplace", {
+        defaultValue: "Replace your image"
+      }) as string)
+    : (t("sidepanel:characterSelect.identityImageUpload", {
+        defaultValue: "Upload your image"
+      }) as string)
+  const clearImageActionLabel = hasUserPersonaImage
+    ? (t("sidepanel:characterSelect.identityImageClear", {
+        defaultValue: "Remove your image"
+      }) as string)
+    : undefined
+  const promptTemplatesActionLabel = t(
+    "sidepanel:characterSelect.promptTemplatesAction",
+    {
+      defaultValue: "Prompt style templates"
+    }
+  ) as string
   const displayNameInputRef = useRef(trimmedDisplayName)
   const steeringPromptDraftRef = useRef<MessageSteeringPromptTemplates>(
     normalizeMessageSteeringPrompts(messageSteeringPrompts)
@@ -415,7 +498,7 @@ export const CharacterSelect: React.FC<Props> = ({
     React.startTransition(() => {
       modal.confirm({
         title: t("sidepanel:characterSelect.editPromptsTitle", {
-          defaultValue: "Edit generation prompts"
+          defaultValue: "Prompt style templates"
         }),
         width: 720,
         centered: true,
@@ -496,7 +579,7 @@ export const CharacterSelect: React.FC<Props> = ({
           })
           notification.success({
             message: t("sidepanel:characterSelect.editPromptsSaved", {
-              defaultValue: "Generation prompts saved"
+              defaultValue: "Prompt style templates saved"
             })
           })
         }
@@ -594,6 +677,16 @@ export const CharacterSelect: React.FC<Props> = ({
     })
     setDropdownOpen(false)
   }, [notification, setDropdownOpen, setUserPersonaImage, t])
+
+  const openDisplayNameFromIdentityMenu = React.useCallback(() => {
+    setDropdownOpen(false)
+    openDisplayNameModal()
+  }, [openDisplayNameModal, setDropdownOpen])
+
+  const openPromptTemplatesFromIdentityMenu = React.useCallback(() => {
+    setDropdownOpen(false)
+    openGenerationPromptsModal()
+  }, [openGenerationPromptsModal, setDropdownOpen])
 
   const handleMoodImageUploadClick = React.useCallback(
     (mood: CharacterMoodLabel) => {
@@ -850,6 +943,7 @@ export const CharacterSelect: React.FC<Props> = ({
       setSelectedCharacterId(nextId)
       if (!nextId) {
         await setSelectedCharacter(null)
+        await setSelectedAssistant(null)
         setDropdownOpen(false)
         return
       }
@@ -858,6 +952,7 @@ export const CharacterSelect: React.FC<Props> = ({
         await setSelectedCharacter(null)
       } else {
         await setSelectedCharacter(stored)
+        await setSelectedAssistant(characterToAssistantSelection(stored))
       }
       setDropdownOpen(false)
 
@@ -929,6 +1024,7 @@ export const CharacterSelect: React.FC<Props> = ({
       hasActiveChat,
       notification,
       selectedCharacterId,
+      setSelectedAssistant,
       setSelectedCharacter,
       setSelectedCharacterId,
       t
@@ -944,6 +1040,45 @@ export const CharacterSelect: React.FC<Props> = ({
       void applySelection(id, stored)
     },
     [applySelection, buildStoredCharacter, characters]
+  )
+
+  const handlePersonaSelect = React.useCallback(
+    async (persona: PersonaApiResponse) => {
+      const selection = personaToAssistantSelection({
+        ...persona,
+        id: String(persona.id ?? ""),
+        name: String(persona.name ?? "Persona")
+      })
+      if (!selection) return
+      if (
+        selectedAssistant?.kind === "persona" &&
+        String(selectedAssistant.id) === String(selection.id)
+      ) {
+        setDropdownOpen(false)
+        return
+      }
+      if (hasActiveChat) {
+        const confirmed = await confirmCharacterSwitch(selection.name)
+        if (!confirmed) return
+        clearChat()
+      }
+      greetingRetryAbortRef.current?.abort()
+      greetingRetryAbortRef.current = null
+      setSelectedCharacterId(null)
+      await setSelectedCharacter(null)
+      await setSelectedAssistant(selection)
+      setDropdownOpen(false)
+    },
+    [
+      clearChat,
+      confirmCharacterSwitch,
+      hasActiveChat,
+      selectedAssistant?.id,
+      selectedAssistant?.kind,
+      setSelectedAssistant,
+      setSelectedCharacter,
+      setSelectedCharacterId
+    ]
   )
 
   const handleImportClick = React.useCallback(() => {
@@ -1291,73 +1426,6 @@ export const CharacterSelect: React.FC<Props> = ({
     })
 
     items.push({
-      key: "display-name",
-      label: (
-        <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
-          <span>
-            {trimmedDisplayName
-              ? t("sidepanel:characterSelect.displayNameCurrent", {
-                  defaultValue: "Your name: {{name}}",
-                  name: trimmedDisplayName
-                })
-              : t("sidepanel:characterSelect.displayNameAction", {
-                  defaultValue: "Set your name"
-                })}
-          </span>
-        </div>
-      ),
-      onClick: openDisplayNameModal
-    })
-
-    items.push({
-      key: "edit-generation-prompts",
-      label: (
-        <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
-          <span>
-            {t("sidepanel:characterSelect.editPrompts", {
-              defaultValue: "Edit generation prompts"
-            })}
-          </span>
-        </div>
-      ),
-      onClick: openGenerationPromptsModal
-    })
-
-    items.push({
-      key: "persona-image-upload",
-      label: (
-        <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
-          <span>
-            {hasUserPersonaImage
-              ? t("sidepanel:characterSelect.personaImageReplace", {
-                  defaultValue: "Replace your persona image"
-                })
-              : t("sidepanel:characterSelect.personaImageUpload", {
-                  defaultValue: "Upload your persona image"
-                })}
-          </span>
-        </div>
-      ),
-      onClick: handlePersonaImageUploadClick
-    })
-
-    if (hasUserPersonaImage) {
-      items.push({
-        key: "persona-image-clear",
-        label: (
-          <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
-            <span>
-              {t("sidepanel:characterSelect.personaImageClear", {
-                defaultValue: "Remove your persona image"
-              })}
-            </span>
-          </div>
-        ),
-        onClick: clearPersonaImage
-      })
-    }
-
-    items.push({
       key: "persona-portrait-toggle",
       label: (
         <div className="w-56 py-0.5 flex items-center gap-2 text-text-muted">
@@ -1457,11 +1525,6 @@ export const CharacterSelect: React.FC<Props> = ({
     handleImportClick,
     handleSelect,
     isLoading,
-    openDisplayNameModal,
-    openGenerationPromptsModal,
-    hasUserPersonaImage,
-    handlePersonaImageUploadClick,
-    clearPersonaImage,
     clearMoodImage,
     handleMoodImageUploadClick,
     openCharactersWorkspace,
@@ -1473,8 +1536,77 @@ export const CharacterSelect: React.FC<Props> = ({
     setDropdownOpen,
     sortedCharacters,
     sortMode,
-    t,
-    trimmedDisplayName
+    t
+  ])
+
+  const personaPanel = useMemo(() => {
+    if (!hasPersona) {
+      return (
+        <div className="px-3 py-4 text-center text-sm text-text-subtle">
+          {t("sidepanel:characterSelect.personaUnavailable", {
+            defaultValue: "Personas are not available on this server."
+          })}
+        </div>
+      )
+    }
+
+    if (filteredPersonas.length === 0) {
+      return (
+        <div className="px-3 py-4 text-center text-sm text-text-subtle">
+          {searchText
+            ? t("sidepanel:characterSelect.noPersonaMatches", {
+                defaultValue: "No matching personas."
+              })
+            : t("sidepanel:characterSelect.noPersonas", {
+                defaultValue: "No personas available."
+              })}
+        </div>
+      )
+    }
+
+    return (
+      <div className="max-h-[320px] overflow-y-auto px-2 py-2">
+        <div className="flex flex-col gap-1">
+          {filteredPersonas.map((persona) => {
+            const personaId = String(persona.id ?? "")
+            const isActive =
+              selectedAssistant?.kind === "persona" &&
+              String(selectedAssistant.id) === personaId
+            return (
+              <button
+                key={personaId}
+                type="button"
+                className={`w-full rounded-md border px-3 py-2 text-left text-sm transition ${
+                  isActive
+                    ? "border-primary bg-primary/10 text-text"
+                    : "border-border bg-background text-text hover:bg-surface2"
+                }`}
+                onClick={() => {
+                  void handlePersonaSelect(persona)
+                }}
+              >
+                <span className="block truncate font-medium">
+                  {String(persona.name ?? personaId ?? "Persona")}
+                </span>
+                <span className="block truncate text-xs text-text-subtle">
+                  {t("sidepanel:characterSelect.personaLabel", {
+                    defaultValue: "Persona"
+                  })}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }, [
+    filteredPersonas,
+    handlePersonaSelect,
+    hasPersona,
+    searchText,
+    selectedAssistant?.id,
+    selectedAssistant?.kind,
+    t
   ])
 
   // Focus search input when dropdown opens
@@ -1513,8 +1645,8 @@ export const CharacterSelect: React.FC<Props> = ({
     }
   }, [dropdownOpen])
 
-  // Don't render if characters feature is not available
-  if (!hasCharacters) {
+  // Don't render if neither assistant source is available
+  if (!hasCharacters && !hasPersona) {
     return null
   }
 
@@ -1559,10 +1691,17 @@ export const CharacterSelect: React.FC<Props> = ({
             <div className="p-2 border-b border-border flex items-center gap-2">
               <Input
                 ref={searchInputRef}
-                placeholder={t(
-                  "sidepanel:characterSelect.search",
-                  "Search characters..."
-                )}
+                placeholder={
+                  activeTab === "persona"
+                    ? t(
+                        "sidepanel:characterSelect.searchPersonas",
+                        "Search personas..."
+                      )
+                    : t(
+                        "sidepanel:characterSelect.search",
+                        "Search characters..."
+                      )
+                }
                 prefix={<Search className="size-4 text-text-subtle" />}
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
@@ -1571,42 +1710,95 @@ export const CharacterSelect: React.FC<Props> = ({
                 className="flex-1"
                 onKeyDown={(e) => e.stopPropagation()}
               />
-              <Select
-                size="small"
-                value={sortMode}
-                onChange={(value) => setSortMode(value as CharacterSortMode)}
-                options={[
-                  {
-                    value: "favorites",
-                    label: t("sidepanel:characterSelect.sort.favorites", "Favorites")
-                  },
-                  { value: "az", label: t("sidepanel:characterSelect.sort.az", "A-Z") }
-                ]}
-                className="min-w-[110px]"
-                onKeyDown={(event) => event.stopPropagation()}
-              />
+              {activeTab === "character" ? (
+                <Select
+                  size="small"
+                  value={sortMode}
+                  onChange={(value) => setSortMode(value as CharacterSortMode)}
+                  options={[
+                    {
+                      value: "favorites",
+                      label: t("sidepanel:characterSelect.sort.favorites", "Favorites")
+                    },
+                    { value: "az", label: t("sidepanel:characterSelect.sort.az", "A-Z") }
+                  ]}
+                  className="min-w-[110px]"
+                  onKeyDown={(event) => event.stopPropagation()}
+                />
+              ) : null}
             </div>
-            {menu}
+            <MyChatIdentityMenu
+              className="border-b border-border"
+              displayNameLabel={displayNameActionLabel}
+              imageLabel={imageActionLabel}
+              clearImageLabel={clearImageActionLabel}
+              promptTemplatesLabel={promptTemplatesActionLabel}
+              onDisplayName={openDisplayNameFromIdentityMenu}
+              onImage={handlePersonaImageUploadClick}
+              onPromptTemplates={openPromptTemplatesFromIdentityMenu}
+              onClearImage={clearImageActionLabel ? clearPersonaImage : undefined}
+            />
+            {hasCharacters && hasPersona ? (
+              <div className="flex items-center gap-1 border-b border-border px-2 pt-2">
+                {(["character", "persona"] as const).map((tab) => {
+                  const isActive = activeTab === tab
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      className={`rounded-t-md px-3 py-2 text-sm transition ${
+                        isActive
+                          ? "bg-surface2 font-medium text-text"
+                          : "text-text-subtle hover:text-text"
+                      }`}
+                      onClick={() => setActiveTab(tab)}
+                    >
+                      {tab === "persona"
+                        ? t("sidepanel:characterSelect.personasTab", "Personas")
+                        : t("sidepanel:characterSelect.charactersTab", "Characters")}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+            {activeTab === "persona" ? personaPanel : menu}
           </div>
         )}
         placement="topLeft"
         trigger={["click"]}
       >
         <Tooltip
-          title={t("sidepanel:characterSelect.tooltip", "Select a character")}
+          title={
+            hasPersona
+              ? t("sidepanel:characterSelect.tooltipAssistant", "Select an assistant")
+              : t("sidepanel:characterSelect.tooltip", "Select a character")
+          }
         >
           <IconButton
             ariaLabel={
-              t(
-                "sidepanel:characterSelect.tooltip",
-                "Select a character"
-              ) as string
+              (hasPersona
+                ? t(
+                    "sidepanel:characterSelect.tooltipAssistant",
+                    "Select an assistant"
+                  )
+                : t(
+                    "sidepanel:characterSelect.tooltip",
+                    "Select a character"
+                  )) as string
             }
             hasPopup="menu"
             dataTestId="chat-character-select"
             className={className}
           >
-            {selectedCharacter?.avatar_url ? (
+            {selectedAssistant?.kind === "persona" &&
+            typeof selectedPersona?.avatar_url === "string" &&
+            selectedPersona.avatar_url ? (
+              <Avatar
+                src={selectedPersona.avatar_url}
+                size="small"
+                className="size-5"
+              />
+            ) : selectedCharacter?.avatar_url ? (
               <Avatar
                 src={selectedCharacter.avatar_url}
                 size="small"
@@ -1616,8 +1808,14 @@ export const CharacterSelect: React.FC<Props> = ({
               <User2 className={iconClassName} />
             )}
             <span className="ml-1 hidden max-w-[100px] truncate text-xs font-medium text-text sm:inline">
-              {selectedCharacter?.name ||
-                t("sidepanel:characterSelect.label", "Character")}
+              {selectedAssistant?.kind === "persona"
+                ? String(
+                    selectedPersona?.name ||
+                      selectedAssistant.name ||
+                      t("sidepanel:characterSelect.personaLabel", "Persona")
+                  )
+                : selectedCharacter?.name ||
+                  t("sidepanel:characterSelect.label", "Character")}
             </span>
           </IconButton>
         </Tooltip>

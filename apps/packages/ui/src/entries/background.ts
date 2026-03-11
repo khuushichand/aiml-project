@@ -188,6 +188,7 @@ export default defineBackground({
       transcribe: "transcribe-media-pa",
       transcribeAndSummarize: "transcribe-and-summarize-media-pa"
     }
+    const saveToCompanionMenuId = "save-to-companion-pa"
     const saveToNotesMenuId = "save-to-notes-pa"
     const narrateSelectionMenuId = "narrate-selection-pa"
     const getActionApi = () => {
@@ -206,6 +207,7 @@ export default defineBackground({
         await initBackground({
           storage,
           contextMenuId,
+          saveToCompanionMenuId,
           saveToNotesMenuId,
           narrateSelectionMenuId,
           transcribeMenuId,
@@ -2308,6 +2310,53 @@ export default defineBackground({
               const failureMessage =
                 browser.i18n.getMessage("contextSaveToNotesDeliveryFailed") ||
                 "Could not open the sidebar to save this note. Check that the tldw Assistant sidepanel is allowed on this site and try again."
+              notify(title, failureMessage)
+            }
+          },
+          isCopilotRunning ? 0 : 5000
+        )
+      } else if (info.menuItemId === saveToCompanionMenuId) {
+        const selection = String(info.selectionText || "").trim()
+        if (!selection) {
+          notify(
+            browser.i18n.getMessage("contextSaveToCompanion") ||
+              "Save to Companion",
+            browser.i18n.getMessage("contextSaveToCompanionNoSelection") ||
+              "Select text first to save to Companion."
+          )
+          return
+        }
+        const title =
+          browser.i18n.getMessage("contextSaveToCompanion") ||
+          "Save to Companion"
+        const openingMessage =
+          browser.i18n.getMessage("contextSaveToCompanionOpeningSidebar") ||
+          "Opening sidebar to save selection to companion..."
+        notify(title, openingMessage)
+        setTimeout(
+          async () => {
+            try {
+              await ensureSidepanelOpen(tab?.id)
+              const captureId =
+                typeof globalThis.crypto?.randomUUID === "function"
+                  ? globalThis.crypto.randomUUID()
+                  : `capture-${Date.now()}`
+              await browser.runtime.sendMessage({
+                from: "background",
+                type: "save-to-companion",
+                text: selection,
+                payload: {
+                  captureId,
+                  selectionText: selection,
+                  pageUrl: info.pageUrl || (tab && tab.url) || "",
+                  pageTitle: tab?.title || "",
+                  action: "save_selection"
+                }
+              })
+            } catch (_error) {
+              const failureMessage =
+                browser.i18n.getMessage("contextSaveToCompanionDeliveryFailed") ||
+                "Could not open the sidebar to save this selection. Check that the tldw Assistant sidepanel is allowed on this site and try again."
               notify(title, failureMessage)
             }
           },

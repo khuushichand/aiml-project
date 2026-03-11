@@ -107,7 +107,7 @@ class StubRunnerClient:
 
 
 @pytest.fixture()
-def stub_runner_client(monkeypatch):
+def stub_runner_client(monkeypatch, tmp_path):
     import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
 
     stub = StubRunnerClient()
@@ -116,6 +116,19 @@ def stub_runner_client(monkeypatch):
         return stub
 
     monkeypatch.setattr(acp_endpoints, "get_runner_client", _get_runner_client)
+
+    # Provide a fresh session store backed by a temp DB for test isolation
+    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+    from tldw_Server_API.app.services.admin_acp_sessions_service import ACPSessionStore
+
+    _test_db = ACPSessionsDB(db_path=str(tmp_path / "test_acp_sessions.db"))
+    _test_store = ACPSessionStore(db=_test_db)
+
+    async def _get_test_store():
+        return _test_store
+
+    monkeypatch.setattr(acp_endpoints, "get_acp_session_store", _get_test_store)
+
     return stub
 
 
@@ -243,8 +256,9 @@ def test_acp_session_updates_denied_for_unowned_session(client_user_only, stub_r
     assert resp.json()["detail"] == "session_not_found"
 
 
-def test_acp_session_fork_creates_runtime_backed_session_and_bootstraps_first_prompt(client_user_only, monkeypatch):
+def test_acp_session_fork_creates_runtime_backed_session_and_bootstraps_first_prompt(client_user_only, monkeypatch, tmp_path):
     import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
     from tldw_Server_API.app.services.admin_acp_sessions_service import ACPSessionStore
 
     class ForkRunner:
@@ -297,7 +311,8 @@ def test_acp_session_fork_creates_runtime_backed_session_and_bootstraps_first_pr
             return False
 
     runner = ForkRunner()
-    store = ACPSessionStore()
+    _db = ACPSessionsDB(db_path=str(tmp_path / "fork_bootstrap_test.db"))
+    store = ACPSessionStore(db=_db)
 
     async def _seed() -> None:
         await store.register_session(
@@ -358,8 +373,9 @@ def test_acp_session_fork_creates_runtime_backed_session_and_bootstraps_first_pr
     assert fork_record.needs_bootstrap is False
 
 
-def test_acp_session_fork_rejects_non_bootstrappable_source(client_user_only, monkeypatch):
+def test_acp_session_fork_rejects_non_bootstrappable_source(client_user_only, monkeypatch, tmp_path):
     import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
     from tldw_Server_API.app.services.admin_acp_sessions_service import ACPSessionStore
 
     class ForkRunner:
@@ -379,7 +395,8 @@ def test_acp_session_fork_rejects_non_bootstrappable_source(client_user_only, mo
             return False
 
     runner = ForkRunner()
-    store = ACPSessionStore()
+    _db = ACPSessionsDB(db_path=str(tmp_path / "fork_test.db"))
+    store = ACPSessionStore(db=_db)
 
     async def _seed() -> None:
         await store.register_session(

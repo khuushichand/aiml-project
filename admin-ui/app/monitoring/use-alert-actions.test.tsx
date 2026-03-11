@@ -280,4 +280,5 @@ describe('useAlertActions', () => {
     expect(setSuccess.mock.calls.length).toBe(successCallCountBeforeNoop);
     expect(apiClient.escalateAdminAlert).toHaveBeenCalledTimes(1);
   });
+
 });

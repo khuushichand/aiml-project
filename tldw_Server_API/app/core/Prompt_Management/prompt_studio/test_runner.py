@@ -16,6 +16,7 @@ from ....core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
+from .prompt_executor import PromptExecutor
 from .program_evaluator import ProgramEvaluator
 
 
@@ -106,21 +107,24 @@ class TestRunner:
         inputs = test_case.get("inputs") or {}
         expected = test_case.get("expected_outputs") or {}
 
-        # Format prompt with inputs
-        user_prompt = prompt.get("user_prompt", "")
-        for key, value in inputs.items():
-            user_prompt = user_prompt.replace(f"{{{key}}}", str(value))
-
         # Call LLM
         try:
+            signature = None
+            if prompt.get("signature_id"):
+                signature = self.db.get_signature(prompt["signature_id"])
+                if signature and signature.get("deleted"):
+                    signature = None
+
+            prompt_request = PromptExecutor(self.db)._build_prompt_request(prompt, signature, inputs)
+            messages_payload = prompt_request.get("messages") or [
+                {"role": "user", "content": prompt_request.get("prompt", "")}
+            ]
             response = await asyncio.to_thread(
                 self._call_adapter,
                 provider=provider,
                 model=model,
-                messages_payload=[
-                    {"role": "user", "content": user_prompt}
-                ],
-                system_message=prompt.get("system_prompt"),
+                messages_payload=messages_payload,
+                system_message=prompt_request.get("system_prompt"),
                 temperature=temperature,
                 max_tokens=max_tokens,
                 app_config=app_config,

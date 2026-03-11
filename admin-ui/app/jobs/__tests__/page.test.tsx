@@ -158,6 +158,18 @@ describe('JobsPage', () => {
     expect(screen.getByTestId('queue-throughput-completed').textContent).toContain('0');
   });
 
+  it('does not fabricate queue depth history from a single metrics text snapshot', async () => {
+    apiMock.getMonitoringMetrics.mockResolvedValue([]);
+    apiMock.getMetricsText.mockResolvedValue('jobs_queue_depth 91');
+
+    render(<JobsPage />);
+
+    expect(await screen.findByText('Queue depth history unavailable.')).toBeInTheDocument();
+    expect(screen.queryByTestId('queue-depth-chart')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('queue-depth-current')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('queue-depth-peak')).not.toBeInTheDocument();
+  });
+
   it('renders dependency rows for related parent/child jobs', async () => {
     render(<JobsPage />);
 

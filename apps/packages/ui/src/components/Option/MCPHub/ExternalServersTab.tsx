@@ -65,7 +65,7 @@ export const ExternalServersTab = () => {
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
       <Typography.Text type="secondary">
         External MCP servers are configured here. Secrets are write-only after save.
       </Typography.Text>
@@ -89,7 +89,7 @@ export const ExternalServersTab = () => {
         </Space>
       ) : null}
 
-      <Space direction="vertical" style={{ width: "100%" }}>
+      <Space orientation="vertical" style={{ width: "100%" }}>
         <label htmlFor="mcp-external-secret">Secret</label>
         <input
           id="mcp-external-secret"

@@ -379,6 +379,22 @@ vi.mock('antd', async (importOriginal) => {
   }
 })
 
+vi.mock("@/components/Common/Markdown", () => ({
+  Markdown: ({ message }: { message: string }) => <div data-testid="mock-markdown">{message}</div>
+}))
+
+vi.mock("@/components/Media/diff-worker-client", () => ({
+  computeDiffSync: () => [],
+  shouldUseWorkerDiff: () => false,
+  shouldRequireSampling: () => false,
+  sampleTextForDiff: (t: string) => t,
+  computeDiffWithWorker: async () => [],
+  createDiffWorker: () => null,
+  DIFF_SYNC_LINE_THRESHOLD: 4000,
+  DIFF_HARD_CHAR_THRESHOLD: 300_000,
+  DIFF_SAMPLED_CHAR_BUDGET: 120_000
+}))
+
 describe('MediaReviewPage stage 1 selection limit clarity', () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -446,6 +462,12 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     return row as HTMLElement
   }
 
+  const selectItemByCheckbox = (title: string, options?: Record<string, unknown>): void => {
+    const row = getResultRowByTitle(title)
+    const checkbox = within(row).getByRole('checkbox')
+    fireEvent.click(checkbox, options)
+  }
+
   const setMobileViewport = (isMobile: boolean) => {
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
@@ -475,8 +497,8 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 5'), { shiftKey: true })
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 5', { shiftKey: true })
 
     await waitFor(() => {
       expect(screen.getByText('5 / 30 selected')).toBeInTheDocument()
@@ -491,7 +513,7 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     })
 
     for (let i = 1; i <= 25; i++) {
-      fireEvent.click(getResultRowByTitle(`Item ${i}`))
+      selectItemByCheckbox(`Item ${i}`)
     }
 
     await waitFor(() => {
@@ -500,14 +522,14 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     })
 
     for (let i = 26; i <= 30; i++) {
-      fireEvent.click(getResultRowByTitle(`Item ${i}`))
+      selectItemByCheckbox(`Item ${i}`)
     }
 
     await waitFor(() => {
       expect(screen.getByText('30 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 31'))
+    selectItemByCheckbox('Item 31')
 
     expect(mocks.messageWarning).toHaveBeenCalledWith('Selection limit reached (30 items)')
     expect(screen.getByText('30 / 30 selected')).toBeInTheDocument()
@@ -532,23 +554,21 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     expect(checkbox).toBeChecked()
   })
 
-  it('shows inline double-escape hint when selection exceeds five items', async () => {
+  it('shows status bar with selection count', async () => {
     render(<MediaReviewPage />)
 
     await waitFor(() => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
-    expect(screen.queryByTestId('escape-double-tap-hint-inline')).not.toBeInTheDocument()
 
-    for (let i = 1; i <= 6; i++) {
-      fireEvent.click(getResultRowByTitle(`Item ${i}`))
-    }
+    expect(screen.getByTestId('media-review-status-bar')).toBeInTheDocument()
+    expect(screen.getByText('No selection')).toBeInTheDocument()
+
+    selectItemByCheckbox('Item 1')
 
     await waitFor(() => {
-      expect(screen.getByText('6 / 30 selected')).toBeInTheDocument()
-      expect(screen.getByTestId('escape-double-tap-hint-inline')).toHaveTextContent(
-        'Tip: press Escape twice quickly to clear large selections.'
-      )
+      const statusBar = screen.getByTestId('media-review-status-bar')
+      expect(within(statusBar).getByText('1 selected')).toBeInTheDocument()
     })
   })
 
@@ -577,29 +597,29 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     })
     expect(screen.queryByRole('button', { name: 'Compare content' })).not.toBeInTheDocument()
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
+    selectItemByCheckbox('Item 1')
     expect(screen.queryByRole('button', { name: 'Compare content' })).not.toBeInTheDocument()
 
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 2')
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Compare content' })).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 2')
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'Compare content' })).not.toBeInTheDocument()
     })
   }, 10000)
 
-  it('opens content diff modal with selected item content when compare action is triggered', async () => {
+  it('opens inline comparison split with selected item content when compare action is triggered', async () => {
     render(<MediaReviewPage />)
 
     await waitFor(() => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Compare content' })).toBeInTheDocument()
@@ -608,44 +628,22 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Compare content' }))
 
     await waitFor(() => {
-      const modal = screen.getByTestId('compare-diff-modal')
-      expect(modal).toBeInTheDocument()
-      expect(within(modal).getByText('Item 1')).toBeInTheDocument()
-      expect(within(modal).getByText('Item 2')).toBeInTheDocument()
-      expect(within(modal).getByText('Content 1')).toBeInTheDocument()
-      expect(within(modal).getByText('Content 2')).toBeInTheDocument()
+      const split = screen.getByTestId('comparison-split')
+      expect(split).toBeInTheDocument()
+      expect(within(split).getByText('Item 1')).toBeInTheDocument()
+      expect(within(split).getByText('Item 2')).toBeInTheDocument()
     })
   })
 
-  it('shows actionable error when compare content is requested without content payloads', async () => {
-    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
-      const path = String(request?.path || '')
-      const idMatch = path.match(/\/api\/v1\/media\/([^?]+)/)
-      const id = idMatch ? Number(idMatch[1]) : null
-      if (id === 2) {
-        return {
-          id: 2,
-          title: 'Item 2',
-          type: 'pdf',
-          content: ''
-        }
-      }
-      return {
-        id: id ?? 1,
-        title: `Item ${id ?? 1}`,
-        type: 'pdf',
-        content: `Content ${id ?? 1}`
-      }
-    })
-
+  it('exits inline comparison when button is clicked again', async () => {
     render(<MediaReviewPage />)
 
     await waitFor(() => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Compare content' })).toBeInTheDocument()
@@ -654,9 +652,15 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Compare content' }))
 
     await waitFor(() => {
-      expect(mocks.messageError).toHaveBeenCalledWith('One or both selected items have no content to compare.')
+      expect(screen.getByTestId('comparison-split')).toBeInTheDocument()
     })
-    expect(screen.queryByTestId('compare-diff-modal')).not.toBeInTheDocument()
+
+    // Button text should now say "Exit compare"
+    fireEvent.click(screen.getByRole('button', { name: 'Exit compare' }))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('comparison-split')).not.toBeInTheDocument()
+    })
   })
 
   it('shows chat-about-selection action only when at least one item is selected', async () => {
@@ -669,7 +673,7 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       screen.queryByRole('button', { name: 'Chat about selection (1)' })
     ).not.toBeInTheDocument()
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
+    selectItemByCheckbox('Item 1')
 
     await waitFor(() => {
       expect(
@@ -686,8 +690,8 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
 
     await waitFor(() => {
       expect(
@@ -724,19 +728,19 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
+    selectItemByCheckbox('Item 1')
     await waitFor(() => {
       expect(screen.getByText('Single item view')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 2')
     await waitFor(() => {
       expect(screen.getByText('2 open')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 3'))
-    fireEvent.click(getResultRowByTitle('Item 4'))
-    fireEvent.click(getResultRowByTitle('Item 5'))
+    selectItemByCheckbox('Item 3')
+    selectItemByCheckbox('Item 4')
+    selectItemByCheckbox('Item 5')
     await waitFor(() => {
       expect(screen.getByText('All items (stacked)')).toBeInTheDocument()
     })
@@ -782,7 +786,7 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
+    selectItemByCheckbox('Item 1')
 
     const copyContentButton = await screen.findByRole('button', { name: 'Copy Content' })
     fireEvent.click(copyContentButton)
@@ -812,7 +816,7 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
+    selectItemByCheckbox('Item 1')
 
     await waitFor(() => {
       expect(screen.getByText('Content 1')).toBeInTheDocument()
@@ -865,15 +869,15 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
+    selectItemByCheckbox('Item 1')
 
     await waitFor(() => {
       expect(attempts.get(1)).toBe(1)
       expect(screen.getByText('Select items on the left to view here.')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 1'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 1')
 
     await waitFor(() => {
       expect(screen.getByText('Recovered Content 1')).toBeInTheDocument()
@@ -921,36 +925,46 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     expect(staleFetchAttempts).toBe(1)
   })
 
-  it('forces list mode and hides sidebar by default on mobile viewports', async () => {
+  it('forces list mode and shows tab switcher on mobile viewports', async () => {
     setMobileViewport(true)
     render(<MediaReviewPage />)
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument()
+      expect(screen.getByTestId('resizable-panels-collapsed')).toBeInTheDocument()
     })
-    expect(screen.getByText('Focus')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Compare' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Stack' })).not.toBeInTheDocument()
+    // Mobile shows tab bar with Filters, Results, Content
+    expect(screen.getByTestId('mobile-tab-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('mobile-tab-0')).toBeInTheDocument()
+    expect(screen.getByTestId('mobile-tab-1')).toBeInTheDocument()
+    expect(screen.getByTestId('mobile-tab-2')).toBeInTheDocument()
+    // Default tab is Results (index 1)
+    // Switch to Content tab to see reading pane
+    fireEvent.click(screen.getByTestId('mobile-tab-2'))
+    await waitFor(() => {
+      expect(screen.getByText('Focus')).toBeInTheDocument()
+    })
   })
 
   it('keeps mobile viewer in single-item mode for multi-selection', async () => {
     setMobileViewport(true)
     render(<MediaReviewPage />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Show sidebar' }))
-
     await waitFor(() => {
-      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+      expect(screen.getByTestId('resizable-panels-collapsed')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    // Switch to Results tab to select items
+    fireEvent.click(screen.getByTestId('mobile-tab-1'))
+
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
+
+    // Switch to Content tab to see viewer
+    fireEvent.click(screen.getByTestId('mobile-tab-2'))
 
     await waitFor(() => {
-      expect(screen.getByText('2 / 30 selected')).toBeInTheDocument()
       expect(screen.getByText('Single item view')).toBeInTheDocument()
     })
-    expect(screen.getAllByRole('button', { name: 'Copy Content' })).toHaveLength(1)
   })
 
   it('keeps list and viewer virtualization counts aligned with result/selection state', async () => {
@@ -971,8 +985,8 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       )
     ).toBe(true)
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
 
     await waitFor(() => {
       expect(screen.getByText('2 / 30 selected')).toBeInTheDocument()
@@ -991,7 +1005,7 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 31'))
+    selectItemByCheckbox('Item 31')
     await waitFor(() => {
       expect(screen.getByText('1 / 30 selected')).toBeInTheDocument()
     })
@@ -1032,8 +1046,8 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
 
     await waitFor(() => {
       expect(screen.getByText(/selected across pages: 2/i)).toBeInTheDocument()
@@ -1047,8 +1061,8 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
 
     await waitFor(() => {
       expect(screen.getByText('2 / 30 selected')).toBeInTheDocument()
@@ -1076,10 +1090,10 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     })
 
     expect(
-      screen.getByText(/search\/filter here, then click to stack/i)
+      screen.getByText(/click to preview\. use checkboxes to select/i)
     ).toBeInTheDocument()
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
+    selectItemByCheckbox('Item 1')
 
     await waitFor(() => {
       expect(
@@ -1095,11 +1109,11 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
-    fireEvent.click(getResultRowByTitle('Item 3'))
-    fireEvent.click(getResultRowByTitle('Item 4'))
-    fireEvent.click(getResultRowByTitle('Item 5'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
+    selectItemByCheckbox('Item 3')
+    selectItemByCheckbox('Item 4')
+    selectItemByCheckbox('Item 5')
 
     await waitFor(() => {
       expect(screen.getByText(/auto-switched to stack view/i)).toBeInTheDocument()
@@ -1113,8 +1127,8 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: 'Remove from selection' }).length).toBeGreaterThan(0)
@@ -1141,8 +1155,8 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
 
     const openItemsRow = await screen.findByTestId('media-review-open-items')
     expect(openItemsRow).not.toHaveClass('overflow-x-auto')
@@ -1162,8 +1176,8 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
       expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle('Item 1'))
-    fireEvent.click(getResultRowByTitle('Item 2'))
+    selectItemByCheckbox('Item 1')
+    selectItemByCheckbox('Item 2')
 
     await waitFor(() => {
       expect(screen.getByText(/selected across pages: 2/i)).toBeInTheDocument()

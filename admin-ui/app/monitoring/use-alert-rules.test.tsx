@@ -164,4 +164,5 @@ describe('useAlertRules', () => {
     expect(setSuccess).toHaveBeenCalledWith('Alert rule deleted');
     expect(setError).not.toHaveBeenCalledWith(expect.stringContaining('Failed to delete'));
   });
+
 });

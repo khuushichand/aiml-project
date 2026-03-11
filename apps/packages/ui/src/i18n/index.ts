@@ -18,6 +18,7 @@ const NAMESPACES = [
     "review",
     "dataTables",
     "collections",
+    "sources",
     "evaluations",
     "audiobook",
     "tutorials"
@@ -31,7 +32,8 @@ const BASE_NAMESPACES: Namespace[] = [
     "settings",
     "playground",
     "knowledge",
-    "audiobook"
+    "audiobook",
+    "sources"
 ]
 
 const LANGUAGE_ALIASES: Record<string, string> = {

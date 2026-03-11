@@ -175,6 +175,9 @@ const OptionWatchlists = lazy(() => import("./option-watchlists"))
 const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
+const OptionSources = lazy(() => import("./option-sources"))
+const OptionSourcesNew = lazy(() => import("./option-sources-new"))
+const OptionSourcesDetail = lazy(() => import("./option-sources-detail"))
 const OptionWritingPlayground = lazy(() => import("./option-writing-playground"))
 const OptionModerationPlayground = lazy(() => import("./option-moderation-playground"))
 const OptionFamilyGuardrailsWizard = lazy(
@@ -187,6 +190,7 @@ const OptionGuardianSettings = createSettingsRoute(
 const OptionWorkspacePlayground = lazy(
   () => import("./option-workspace-playground")
 )
+const OptionAdminSources = lazy(() => import("./option-admin-sources"))
 
 const ERROR_BOUNDARY_TEST_ENABLED = process.env.NODE_ENV !== "production"
 
@@ -560,6 +564,21 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       beta: true
     }
   },
+  {
+    kind: "options",
+    path: "/sources",
+    element: <OptionSources />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.sources",
+      icon: Layers,
+      order: 9.5,
+      beta: true
+    }
+  },
+  { kind: "options", path: "/sources/new", element: <OptionSourcesNew /> },
+  { kind: "options", path: "/sources/:sourceId", element: <OptionSourcesDetail /> },
+  { kind: "options", path: "/admin/sources", element: <OptionAdminSources /> },
   {
     kind: "options",
     path: "/media",

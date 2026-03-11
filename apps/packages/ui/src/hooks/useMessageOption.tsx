@@ -17,6 +17,7 @@ import { useServerChatLoader } from "@/hooks/chat/useServerChatLoader"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useCompareMode } from "@/hooks/chat/useCompareMode"
 import { useChatActions } from "@/hooks/chat/useChatActions"
+import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import type { Character } from "@/types/character"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useSetting } from "@/hooks/useSetting"
@@ -139,6 +140,12 @@ export const useMessageOption = (
     setServerChatTitle,
     serverChatCharacterId,
     setServerChatCharacterId,
+    serverChatAssistantKind,
+    setServerChatAssistantKind,
+    serverChatAssistantId,
+    setServerChatAssistantId,
+    serverChatPersonaMemoryMode,
+    setServerChatPersonaMemoryMode,
     serverChatMetaLoaded,
     setServerChatMetaLoaded,
     serverChatLoadState,
@@ -230,6 +237,7 @@ export const useMessageOption = (
   )
   const [selectedCharacter, setSelectedCharacter] =
     useSelectedCharacter<Character | null>(null)
+  const [selectedAssistant, setSelectedAssistant] = useSelectedAssistant(null)
   const [defaultInternetSearchOn] = useStorage("defaultInternetSearchOn", false)
   const [speechToTextLanguage, setSpeechToTextLanguage] = useStorage(
     "speechToTextLanguage",
@@ -285,16 +293,22 @@ export const useMessageOption = (
     setServerChatVersion(null)
     setServerChatTitle(null)
     setServerChatCharacterId(null)
+    setServerChatAssistantKind(null)
+    setServerChatAssistantId(null)
+    setServerChatPersonaMemoryMode(null)
     setServerChatMetaLoaded(false)
     setServerChatTopic(null)
     setServerChatClusterId(null)
     setServerChatSource(null)
     setServerChatExternalRef(null)
   }, [
+    setServerChatAssistantId,
+    setServerChatAssistantKind,
     setServerChatCharacterId,
     setServerChatClusterId,
     setServerChatExternalRef,
     setServerChatMetaLoaded,
+    setServerChatPersonaMemoryMode,
     setServerChatSource,
     setServerChatState,
     setServerChatTitle,
@@ -302,8 +316,10 @@ export const useMessageOption = (
     setServerChatVersion
   ])
 
-  const lastCharacterIdRef = React.useRef<string | null>(
-    selectedCharacter?.id ? String(selectedCharacter.id) : null
+  const lastAssistantKeyRef = React.useRef<string | null>(
+    selectedAssistant?.kind && selectedAssistant?.id
+      ? `${selectedAssistant.kind}:${selectedAssistant.id}`
+      : null
   )
 
   React.useEffect(() => {
@@ -327,11 +343,14 @@ export const useMessageOption = (
   ])
 
   React.useEffect(() => {
-    const nextId = selectedCharacter?.id ? String(selectedCharacter.id) : null
-    if (lastCharacterIdRef.current === nextId) {
+    const nextAssistantKey =
+      selectedAssistant?.kind && selectedAssistant?.id
+        ? `${selectedAssistant.kind}:${selectedAssistant.id}`
+        : null
+    if (lastAssistantKeyRef.current === nextAssistantKey) {
       return
     }
-    lastCharacterIdRef.current = nextId
+    lastAssistantKeyRef.current = nextAssistantKey
     setServerChatId(null)
     resetServerChatState()
     setMessages([])
@@ -339,7 +358,8 @@ export const useMessageOption = (
     setHistoryId(null)
   }, [
     resetServerChatState,
-    selectedCharacter?.id,
+    selectedAssistant?.id,
+    selectedAssistant?.kind,
     setHistory,
     setHistoryId,
     setMessages,
@@ -576,6 +596,9 @@ export const useMessageOption = (
     serverChatId,
     serverChatTitle,
     serverChatCharacterId,
+    serverChatAssistantKind,
+    serverChatAssistantId,
+    serverChatPersonaMemoryMode,
     serverChatState,
     serverChatTopic,
     serverChatClusterId,
@@ -584,6 +607,9 @@ export const useMessageOption = (
     setServerChatId,
     setServerChatTitle,
     setServerChatCharacterId,
+    setServerChatAssistantKind,
+    setServerChatAssistantId,
+    setServerChatPersonaMemoryMode,
     setServerChatMetaLoaded,
     setServerChatState,
     setServerChatVersion,
@@ -613,7 +639,8 @@ export const useMessageOption = (
     setSelectedQuickPrompt,
     setSelectedSystemPrompt,
     invalidateServerChatHistory,
-    selectedCharacter
+    selectedCharacter,
+    selectedAssistant
   })
   const onSubmit = React.useCallback(
     async (...args: Parameters<typeof submitChat>) => {
@@ -699,6 +726,12 @@ export const useMessageOption = (
     setServerChatTitle,
     serverChatCharacterId,
     setServerChatCharacterId,
+    serverChatAssistantKind,
+    setServerChatAssistantKind,
+    serverChatAssistantId,
+    setServerChatAssistantId,
+    serverChatPersonaMemoryMode,
+    setServerChatPersonaMemoryMode,
     serverChatMetaLoaded,
     setServerChatMetaLoaded,
     serverChatLoadState,
@@ -757,6 +790,8 @@ export const useMessageOption = (
     setCompareMaxModels,
     selectedCharacter,
     setSelectedCharacter,
+    selectedAssistant,
+    setSelectedAssistant,
     replyTarget,
     clearReplyTarget
   }

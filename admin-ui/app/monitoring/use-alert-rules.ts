@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   DEFAULT_ALERT_RULE_DRAFT,
   validateAlertRuleDraft,
@@ -82,7 +82,6 @@ export const useAlertRules = ({
   const [alertRuleDraft, setAlertRuleDraft] = useState<AlertRuleDraft>(DEFAULT_ALERT_RULE_DRAFT);
   const [alertRuleValidationErrors, setAlertRuleValidationErrors] = useState<AlertRuleValidationErrors>({});
   const [alertRulesSaving, setAlertRulesSaving] = useState(false);
-  const alertRulesHydratedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,7 +92,6 @@ export const useAlertRules = ({
         const payload = await apiClient.getAdminAlertRules();
         if (!cancelled) {
           setAlertRules(normalizeAlertRulesPayload(payload));
-          alertRulesHydratedRef.current = true;
         }
       } catch (error) {
         console.error('Failed to load alert rules:', error);

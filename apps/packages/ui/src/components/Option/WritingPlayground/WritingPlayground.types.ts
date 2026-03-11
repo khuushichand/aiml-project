@@ -6,10 +6,6 @@ export interface EssentialsStripProps {
   children: ReactNode
 }
 
-export interface WritingPlaygroundShellProps {
-  children: ReactNode
-}
-
 export interface WritingPlaygroundPanelProps {
   title?: ReactNode
   extra?: ReactNode

@@ -17,7 +17,7 @@ import {
   notification
 } from "antd"
 import type { DefaultOptionType } from "antd/es/select"
-import { ArrowRight, Copy, Lock, Mic, Pause, Play, Save, Star, Trash2, Unlock } from "lucide-react"
+import { ArrowRight, Copy, Lock, Mic, Pause, Play, Plus, Save, Star, Trash2, Unlock } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { PageShell } from "@/components/Common/PageShell"
 import WaveformCanvas from "@/components/Common/WaveformCanvas"
@@ -29,6 +29,7 @@ import {
 } from "@/services/tldw/audio-providers"
 import { useTtsPlayground, TTS_PRESETS, type TtsPresetKey } from "@/hooks/useTtsPlayground"
 import { useStreamingAudioPlayer } from "@/hooks/useStreamingAudioPlayer"
+import { useTranscriptionModelsCatalog } from "@/hooks/useTranscriptionModelsCatalog"
 import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
@@ -62,6 +63,9 @@ import { TtsVoiceTab } from "@/components/Option/Speech/TtsVoiceTab"
 import { TtsOutputTab } from "@/components/Option/Speech/TtsOutputTab"
 import { TtsAdvancedTab } from "@/components/Option/Speech/TtsAdvancedTab"
 import { VoiceCloningManager } from "@/components/Option/TTS/VoiceCloningManager"
+import { RenderStrip } from "@/components/Option/Speech/RenderStrip"
+import { VoicePickerModal, type VoiceSelection } from "@/components/Option/Speech/VoicePickerModal"
+import { useMultiRenderState } from "@/hooks/useMultiRenderState"
 
 const { Text, Title, Paragraph } = Typography
 
@@ -279,13 +283,18 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [sttSegEmbeddingsProvider] = useStorage("sttSegEmbeddingsProvider", "")
   const [sttSegEmbeddingsModel] = useStorage("sttSegEmbeddingsModel", "")
 
-  const [serverModels, setServerModels] = React.useState<string[]>([])
-  const [serverModelsLoading, setServerModelsLoading] = React.useState(false)
-  const [serverModelsError, setServerModelsError] = React.useState<string | null>(
-    null
-  )
-  const [modelsLoadAttempt, setModelsLoadAttempt] = React.useState(0)
   const [activeModel, setActiveModel] = React.useState<string | undefined>()
+  const {
+    serverModels,
+    serverModelsLoading,
+    serverModelsError,
+    retryServerModels
+  } = useTranscriptionModelsCatalog({
+    activeModel,
+    defaultModel: sttModel,
+    onInitialModel: setActiveModel,
+    warnLabel: "Speech Playground"
+  })
   const [isRecording, setIsRecording] = React.useState(false)
   const [isTranscribing, setIsTranscribing] = React.useState(false)
   const [useLongRunning, setUseLongRunning] = React.useState(false)
@@ -298,54 +307,6 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const chunksRef = React.useRef<BlobPart[]>([])
   const startedAtRef = React.useRef<number | null>(null)
   const liveTextRef = React.useRef<string>("")
-
-  React.useEffect(() => {
-    let cancelled = false
-    const fetchModels = async () => {
-      setServerModelsLoading(true)
-      setServerModelsError(null)
-      try {
-        const res = await tldwClient.getTranscriptionModels({
-          timeoutMs: 10_000
-        })
-        const all = Array.isArray(res?.all_models) ? (res.all_models as string[]) : []
-        if (!cancelled && all.length > 0) {
-          const unique = Array.from(new Set(all)).sort()
-          setServerModels(unique)
-          if (!activeModel) {
-            const initial = sttModel && unique.includes(sttModel) ? sttModel : unique[0]
-            setActiveModel(initial)
-          }
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setServerModelsError(
-            isTimeoutLikeError(e)
-              ? (t(
-                  "playground:stt.modelsTimeout",
-                  "Model list took longer than 10 seconds. Check server health and retry."
-                ) as string)
-              : (t(
-                  "playground:stt.modelsLoadError",
-                  "Unable to load transcription models. Retry or check server settings."
-                ) as string)
-          )
-        }
-        if ((import.meta as any)?.env?.DEV) {
-          // eslint-disable-next-line no-console
-          console.warn("Failed to load transcription models for Speech Playground", e)
-        }
-      } finally {
-        if (!cancelled) {
-          setServerModelsLoading(false)
-        }
-      }
-    }
-    fetchModels()
-    return () => {
-      cancelled = true
-    }
-  }, [activeModel, modelsLoadAttempt, sttModel, t])
 
   const appendLiveText = React.useCallback((textChunk: string) => {
     if (!textChunk) return
@@ -685,26 +646,10 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [voicePreviewCardId, setVoicePreviewCardId] = React.useState<string | null>(null)
   const [voicePreviewingId, setVoicePreviewingId] = React.useState<string | null>(null)
 
-  React.useEffect(() => {
-    return () => {
-      if (ttsJobAbortRef.current) {
-        try {
-          ttsJobAbortRef.current.abort()
-        } catch {}
-        ttsJobAbortRef.current = null
-      }
-    }
-  }, [])
-
-  React.useEffect(() => {
-    return () => {
-      if (voicePreviewUrl) {
-        try {
-          URL.revokeObjectURL(voicePreviewUrl)
-        } catch {}
-      }
-    }
-  }, [voicePreviewUrl])
+  // Compose & Compare: Multi-render strips + voice picker
+  const [voicePickerOpen, setVoicePickerOpen] = React.useState(false)
+  const [voicePickerTargetStripId, setVoicePickerTargetStripId] = React.useState<string | null>(null)
+  const multiRender = useMultiRenderState()
 
   const { data: ttsSettings } = useQuery({
     queryKey: ["fetchTTSSettings"],
@@ -755,6 +700,105 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     queryFn: listCustomVoices,
     enabled: isTldw && hasAudio
   })
+
+  const handleAddRenderStrip = React.useCallback(() => {
+    // Try to use last-used voice config from localStorage
+    let lastVoice: { provider?: string; voice?: string; model?: string } | null = null
+    try {
+      const stored = localStorage.getItem("tts-last-render-config")
+      if (stored) lastVoice = JSON.parse(stored)
+    } catch {}
+
+    const defaultConfig = {
+      provider: lastVoice?.provider || (provider === "browser" ? "tldw" : provider),
+      voice: lastVoice?.voice || tldwVoice || ttsSettings?.tldwTtsVoice || "af_heart",
+      model: lastVoice?.model || tldwModel || ttsSettings?.tldwTtsModel || "kokoro",
+      format: tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3",
+      speed: ttsSettings?.tldwTtsSpeed ?? 1
+    }
+    multiRender.addRender(defaultConfig)
+  }, [provider, tldwVoice, tldwModel, tldwFormat, ttsSettings, multiRender])
+
+  const handleVoicePickerSelect = React.useCallback(
+    (selection: VoiceSelection) => {
+      // Persist last-used voice config
+      try {
+        localStorage.setItem("tts-last-render-config", JSON.stringify(selection))
+      } catch {}
+
+      if (voicePickerTargetStripId) {
+        // Update existing strip config
+        const existing = multiRender.renders.find((r) => r.id === voicePickerTargetStripId)
+        if (existing) {
+          multiRender.updateConfig(voicePickerTargetStripId, {
+            ...existing.config,
+            provider: selection.provider,
+            voice: selection.voice,
+            // Only preserve old model if the provider didn't change; otherwise use selection.model
+            // (which is undefined for openai/elevenlabs/browser — that's intentional)
+            model: selection.provider === existing.config.provider
+              ? (selection.model ?? existing.config.model)
+              : selection.model
+          })
+        }
+        setVoicePickerTargetStripId(null)
+      } else {
+        // Add new render strip with the selected voice
+        multiRender.addRender({
+          provider: selection.provider,
+          voice: selection.voice,
+          model: selection.model,
+          format: tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3",
+          speed: ttsSettings?.tldwTtsSpeed ?? 1
+        })
+      }
+    },
+    [voicePickerTargetStripId, multiRender, tldwFormat, ttsSettings]
+  )
+
+  const handleRenderStripConfigTagClick = React.useCallback(
+    (stripId: string, field: string) => {
+      if (field === "voice" || field === "provider") {
+        setVoicePickerTargetStripId(stripId)
+        setVoicePickerOpen(true)
+      }
+      // format/speed tag clicks are handled after openInspectorAt is defined
+    },
+    []
+  )
+
+  const handleGenerateAllRenders = React.useCallback(
+    async (text: string) => {
+      if (!text.trim()) return
+      await multiRender.generateAll(text)
+    },
+    [multiRender]
+  )
+
+  const handlePlayAllRenders = React.useCallback(() => {
+    multiRender.playAllSequentially()
+  }, [multiRender])
+
+  React.useEffect(() => {
+    return () => {
+      if (ttsJobAbortRef.current) {
+        try {
+          ttsJobAbortRef.current.abort()
+        } catch {}
+        ttsJobAbortRef.current = null
+      }
+    }
+  }, [])
+
+  React.useEffect(() => {
+    return () => {
+      if (voicePreviewUrl) {
+        try {
+          URL.revokeObjectURL(voicePreviewUrl)
+        } catch {}
+      }
+    }
+  }, [voicePreviewUrl])
 
   React.useEffect(() => {
     if (!ttsSettings) return
@@ -1982,9 +2026,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                         action={
                           <Button
                             size="small"
-                            onClick={() =>
-                              setModelsLoadAttempt((prev) => prev + 1)
-                            }
+                            onClick={retryServerModels}
                             disabled={serverModelsLoading}
                           >
                             {t("common:retry", "Retry")}
@@ -2309,6 +2351,100 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                       {previewWordCount} words · {previewSegments.length} segments ({responseSplitting}) · Est. ~{formatDuration(estimatedDurationSeconds)}
                     </div>
 
+                    {/* Compose & Compare: Render Strips Zone */}
+                    {multiRender.renders.length > 0 && (
+                      <div className="space-y-2" role="region" aria-label="Render strips for A/B comparison">
+                        <div className="flex items-center justify-between">
+                          <Text strong className="text-sm">
+                            {t("playground:tts.renderStrips", "Render Strips")}
+                          </Text>
+                          <div className="flex items-center gap-1.5">
+                            {multiRender.hasReady && (
+                              <Button
+                                size="small"
+                                onClick={() => void handlePlayAllRenders()}
+                                icon={<Play className="h-3 w-3" />}
+                              >
+                                {t("playground:tts.playAll", "Play All")}
+                              </Button>
+                            )}
+                            {multiRender.hasIdle && (
+                              <Button
+                                size="small"
+                                type="primary"
+                                onClick={() => {
+                                  const effectiveText = useDraftEditor ? transcriptDraft : ttsText
+                                  void handleGenerateAllRenders(effectiveText)
+                                }}
+                                disabled={!(useDraftEditor ? transcriptDraft : ttsText).trim()}
+                              >
+                                {t("playground:tts.generateAll", "Generate All")}
+                              </Button>
+                            )}
+                            <Button
+                              size="small"
+                              type="text"
+                              danger
+                              onClick={multiRender.clearAll}
+                            >
+                              {t("playground:tts.clearStrips", "Clear")}
+                            </Button>
+                          </div>
+                        </div>
+                        {multiRender.renders.map((render) => (
+                          <RenderStrip
+                            key={render.id}
+                            id={render.id}
+                            state={render.state}
+                            config={render.config}
+                            audioUrl={render.audioUrl}
+                            audioBlob={render.audioBlob}
+                            errorMessage={render.errorMessage}
+                            progress={render.progress}
+                            isPlaying={multiRender.playingId === render.id}
+                            forcePaused={multiRender.playingId !== null && multiRender.playingId !== render.id}
+                            onGenerate={(id) => {
+                              const effectiveText = useDraftEditor ? transcriptDraft : ttsText
+                              void multiRender.generateRender(id, effectiveText)
+                            }}
+                            onRemove={multiRender.removeRender}
+                            onEdit={(id) => {
+                              setVoicePickerTargetStripId(id)
+                              setVoicePickerOpen(true)
+                            }}
+                            onPlay={multiRender.startPlaying}
+                            onPause={multiRender.stopPlaying}
+                            onEnd={multiRender.handleStripEnded}
+                            onRetry={(id) => {
+                              const effectiveText = useDraftEditor ? transcriptDraft : ttsText
+                              void multiRender.generateRender(id, effectiveText)
+                            }}
+                            onConfigTagClick={handleRenderStripConfigTagClick}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Add Render button */}
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="small"
+                        icon={<Plus className="h-3.5 w-3.5" />}
+                        onClick={handleAddRenderStrip}
+                      >
+                        {t("playground:tts.addRender", "Add Render")}
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setVoicePickerTargetStripId(null)
+                          setVoicePickerOpen(true)
+                        }}
+                      >
+                        {t("playground:tts.pickVoice", "Pick Voice")}
+                      </Button>
+                    </div>
+
                     {/* Streaming / Job status — when active */}
                     {canStream && streamStatus !== "idle" && (
                       <div className="flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
@@ -2462,6 +2598,10 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                     inspectorBadge={inspectorBadge}
                     segmentCount={segments.length}
                     provider={provider}
+                    onAddRender={handleAddRenderStrip}
+                    onPlayAllRenders={() => void handlePlayAllRenders()}
+                    renderStripCount={multiRender.renders.length}
+                    hasReadyRenders={multiRender.hasReady}
                   />
                 </div>
 
@@ -2832,6 +2972,16 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
           )}
         </Card>
       </div>
+      {/* Voice Picker Modal */}
+      <VoicePickerModal
+        open={voicePickerOpen}
+        onClose={() => {
+          setVoicePickerOpen(false)
+          setVoicePickerTargetStripId(null)
+        }}
+        onSelect={handleVoicePickerSelect}
+        providersInfo={providersInfo}
+      />
     </PageShell>
   )
 }

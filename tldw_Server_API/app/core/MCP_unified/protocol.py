@@ -86,6 +86,14 @@ class GovernanceDeniedError(PermissionError):
         self.governance = governance or {}
 
 
+class ApprovalRequiredError(PermissionError):
+    """Permission error carrying structured MCP Hub approval request details."""
+
+    def __init__(self, message: str, approval: Optional[dict[str, Any]] = None):
+        super().__init__(message)
+        self.approval = approval or {}
+
+
 _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
     asyncio.TimeoutError,
@@ -1146,6 +1154,8 @@ class MCPProtocol:
             error_data = None
             if isinstance(perr, GovernanceDeniedError):
                 error_data = {"governance": dict(perr.governance or {})}
+            elif isinstance(perr, ApprovalRequiredError):
+                error_data = {"approval": dict(perr.approval or {})}
             return self._error_response(
                 ErrorCode.AUTHORIZATION_ERROR,
                 msg,
@@ -1609,6 +1619,102 @@ class MCPProtocol:
             return True
         return any(self._matches_allowed_tool_pattern(tool_name, tool_args, pattern) for pattern in allowed_tools)
 
+    async def _resolve_effective_tool_policy(self, context: RequestContext) -> dict[str, Any] | None:
+        metadata = getattr(context, "metadata", None)
+        if not isinstance(metadata, dict):
+            return None
+        if not is_truthy(metadata.get("mcp_policy_context_enabled")):
+            return None
+        cached = metadata.get("_mcp_effective_tool_policy")
+        if isinstance(cached, dict):
+            return cached
+        try:
+            from tldw_Server_API.app.services.mcp_hub_policy_resolver import (
+                get_mcp_hub_policy_resolver,
+            )
+
+            resolver = await get_mcp_hub_policy_resolver()
+            policy = await resolver.resolve_for_context(
+                user_id=context.user_id,
+                metadata=metadata,
+            )
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning("Failed to resolve MCP Hub effective policy: {}", exc)
+            policy = {
+                "enabled": True,
+                "allowed_tools": [],
+                "denied_tools": [],
+                "capabilities": [],
+                "sources": [],
+                "resolution_error": "policy_resolution_failed",
+            }
+        if policy is not None:
+            metadata["_mcp_effective_tool_policy"] = policy
+        return policy
+
+    def _is_tool_allowed_by_effective_policy(
+        self,
+        tool_name: str,
+        tool_args: Any,
+        policy: dict[str, Any] | None,
+    ) -> bool:
+        if not isinstance(policy, dict) or not bool(policy.get("enabled", False)):
+            return True
+        if str(policy.get("resolution_error") or "").strip():
+            return False
+        denied_tools = [
+            str(pattern).strip()
+            for pattern in (policy.get("denied_tools") or [])
+            if str(pattern).strip()
+        ]
+        if any(self._matches_allowed_tool_pattern(tool_name, tool_args, pattern) for pattern in denied_tools):
+            return False
+        allowed_tools = [
+            str(pattern).strip()
+            for pattern in (policy.get("allowed_tools") or [])
+            if str(pattern).strip()
+        ]
+        if not allowed_tools:
+            return True
+        return any(self._matches_allowed_tool_pattern(tool_name, tool_args, pattern) for pattern in allowed_tools)
+
+    async def _evaluate_runtime_approval(
+        self,
+        *,
+        effective_policy: dict[str, Any] | None,
+        tool_name: str,
+        tool_args: Any,
+        context: RequestContext,
+        tool_def: dict[str, Any] | None,
+        is_write: bool | None,
+        within_effective_policy: bool,
+    ) -> dict[str, Any]:
+        policy = dict(effective_policy or {})
+        if not bool(policy.get("enabled", False)):
+            return {"status": "allow", "reason": "policy_disabled"}
+        if str(policy.get("resolution_error") or "").strip():
+            return {"status": "deny", "reason": "policy_unavailable"}
+        try:
+            from tldw_Server_API.app.services.mcp_hub_approval_service import (
+                get_mcp_hub_approval_service,
+            )
+
+            approval_service = await get_mcp_hub_approval_service()
+            return await approval_service.evaluate_tool_call(
+                effective_policy=policy,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                context=context,
+                tool_def=tool_def,
+                is_write=is_write,
+                within_effective_policy=within_effective_policy,
+            )
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Failed to evaluate MCP Hub runtime approval: {}", exc)
+            if policy.get("approval_policy_id") is not None or policy.get("approval_mode"):
+                return {"status": "deny", "reason": "approval_unavailable"}
+            return {"status": "allow" if within_effective_policy else "deny", "reason": "approval_not_configured"}
+
     async def _handle_tools_call(
         self,
         params: dict[str, Any],
@@ -1640,6 +1746,8 @@ class MCPProtocol:
         # Enforce allowed-tools constraints from context metadata (skill execution)
         if not self._is_tool_allowed_by_context(tool_name, tool_args, context):
             raise PermissionError(f"Tool '{tool_name}' not allowed by execution context")
+        effective_policy = await self._resolve_effective_tool_policy(context)
+        within_effective_policy = self._is_tool_allowed_by_effective_policy(tool_name, tool_args, effective_policy)
 
         # Find module for tool
         module = await self.module_registry.find_module_for_tool(tool_name)
@@ -1770,6 +1878,24 @@ class MCPProtocol:
             # Surface as JSON-RPC INVALID_PARAMS at the protocol layer
             # by raising a sentinel exception handled by process_request
             raise InvalidParamsException(str(ve)) from ve
+
+        approval_result = await self._evaluate_runtime_approval(
+            effective_policy=effective_policy,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            context=context,
+            tool_def=tool_def if isinstance(tool_def, dict) else None,
+            is_write=is_write,
+            within_effective_policy=within_effective_policy,
+        )
+        approval_status = str(approval_result.get("status") or "allow").strip().lower()
+        if approval_status == "approval_required":
+            raise ApprovalRequiredError(
+                "Approval required by MCP Hub policy",
+                approval=approval_result.get("approval") if isinstance(approval_result.get("approval"), dict) else None,
+            )
+        if approval_status != "allow":
+            raise PermissionError(f"Tool '{tool_name}' not allowed by MCP Hub policy")
 
         args_hash = self._hash_arguments(tool_args if isinstance(tool_args, dict) else {})
         await self._run_governance_preflight(

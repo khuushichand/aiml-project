@@ -46,6 +46,8 @@ _USER_DB_BASE_DIR_ALLOWED_ROOT_ENVS = (
     "USER_DB_BASE_DIR_ALLOWED_ROOTS",
     "TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS",
 )
+_INGESTION_SOURCE_ALLOWED_ROOTS_SECTION = "Files"
+_INGESTION_SOURCE_ALLOWED_ROOTS_KEY = "ingestion_source_allowed_roots"
 
 _remote_access_hook: Callable[[bool], None] | None = None
 
@@ -114,6 +116,7 @@ FIELD_HINTS: dict[tuple[str, str], str] = {
     ("AuthNZ", "single_user_api_key"): "Strong secret used for X-API-KEY requests in single-user mode.",
     ("AuthNZ", "auth_mode"): "Use 'single_user' for local setups or 'multi_user' for JWT-based auth.",
     ("Setup", "allow_remote_setup_access"): "Permit the setup API outside localhost. Only enable on trusted networks.",
+    ("Files", "ingestion_source_allowed_roots"): "Allowed base directories for local ingestion sources. Separate multiple roots with commas or your platform path separator.",
     ("API", "openai_api_key"): "Personal or organisational OpenAI key.",
     ("API", "anthropic_api_key"): "Anthropic Claude API key.",
     ("API", "google_api_key"): "Google Generative AI key.",
@@ -380,6 +383,14 @@ def _validate_user_db_base_dir_update(parser: ConfigParser, new_value: Any) -> N
         )
 
 
+def _validate_ingestion_source_allowed_roots_update(new_value: Any) -> None:
+    project_root = Path(get_project_root()).resolve()
+    for entry in _split_allowed_roots(str(new_value or "")):
+        normalized = _normalize_root_path(entry, project_root=project_root)
+        if normalized is None:
+            raise ValueError("Ingestion source allowed roots must not contain empty entries")
+
+
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower()
     return any(marker in lowered for marker in SENSITIVE_KEY_MARKERS)
@@ -638,14 +649,23 @@ def _validate_updates(parser: ConfigParser, updates: dict[str, dict[str, Any]]) 
         if not parser.has_section(section):
             raise ValueError(f"Unknown section '{section}' in updates")
         for key, new_value in items.items():
-            if not parser.has_option(section, key):
+            allows_new_ingestion_roots = (
+                section == _INGESTION_SOURCE_ALLOWED_ROOTS_SECTION
+                and key == _INGESTION_SOURCE_ALLOWED_ROOTS_KEY
+            )
+            if not parser.has_option(section, key) and not allows_new_ingestion_roots:
                 raise ValueError(f"Unknown key '{key}' in section '{section}'")
-
-            current_value = parser.get(section, key, fallback="")
-            expected_type = _infer_type(current_value)
 
             if section == _USER_DB_BASE_DIR_SECTION and key == _USER_DB_BASE_DIR_KEY:
                 _validate_user_db_base_dir_update(parser, new_value)
+            if section == _INGESTION_SOURCE_ALLOWED_ROOTS_SECTION and key == _INGESTION_SOURCE_ALLOWED_ROOTS_KEY:
+                _validate_ingestion_source_allowed_roots_update(new_value)
+
+            if allows_new_ingestion_roots and not parser.has_option(section, key):
+                continue
+
+            current_value = parser.get(section, key, fallback="")
+            expected_type = _infer_type(current_value)
 
             # Accept any string when expected type is string
             if expected_type == "string":

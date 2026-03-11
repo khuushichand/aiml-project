@@ -11,6 +11,15 @@ ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable
 class ConversationListItem(BaseModel):
     id: str = Field(..., description="Conversation ID")
     character_id: int | None = Field(None, description="Character ID associated with the conversation")
+    assistant_kind: Literal["character", "persona"] | None = Field(
+        None,
+        description="Normalized assistant identity kind for the conversation",
+    )
+    assistant_id: str | None = Field(None, description="Normalized assistant identity ID for the conversation")
+    persona_memory_mode: Literal["read_only", "read_write"] | None = Field(
+        None,
+        description="Persona durable memory behavior for the conversation",
+    )
     title: str | None = Field(None, description="Conversation title")
     state: str = Field("in-progress", description="Lifecycle state of the conversation")
     topic_label: str | None = Field(None, description="Primary topic label")
@@ -81,6 +90,16 @@ class ConversationUpdateRequest(BaseModel):
 
 class ConversationMetadata(BaseModel):
     id: str = Field(..., description="Conversation ID")
+    character_id: int | None = Field(None, description="Character ID associated with the conversation")
+    assistant_kind: Literal["character", "persona"] | None = Field(
+        None,
+        description="Normalized assistant identity kind for the conversation",
+    )
+    assistant_id: str | None = Field(None, description="Normalized assistant identity ID for the conversation")
+    persona_memory_mode: Literal["read_only", "read_write"] | None = Field(
+        None,
+        description="Persona durable memory behavior for the conversation",
+    )
     title: str | None = Field(None, description="Conversation title")
     state: str = Field("in-progress", description="Lifecycle state")
     topic_label: str | None = Field(None, description="Primary topic label")

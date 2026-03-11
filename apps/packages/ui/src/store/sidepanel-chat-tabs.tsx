@@ -44,6 +44,11 @@ export type ChatModelSettingsSnapshot = {
   apiProvider?: string
   extraHeaders?: string
   extraBody?: string
+  llamaThinkingBudgetTokens?: number
+  llamaGrammarMode?: "none" | "library" | "inline"
+  llamaGrammarId?: string
+  llamaGrammarInline?: string
+  llamaGrammarOverride?: string
 }
 
 export type SidepanelChatSnapshot = {
