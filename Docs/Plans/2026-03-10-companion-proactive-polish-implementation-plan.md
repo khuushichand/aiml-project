@@ -2,11 +2,41 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Status:** Completed on 2026-03-10
+
 **Goal:** Improve companion reflection delivery quality and add explicit follow-up prompts after reflection open and inside companion conversation, without adding ambient prompts or hidden capture.
 
 **Architecture:** Extend the existing Jobs-backed reflection flow with persisted delivery-policy metadata and deterministic follow-up prompt generation. Expose those prompts through reflection detail and a dedicated companion conversation prompt source, then wire the UI to render prompt chips only on the reflection surface and `/companion/conversation`.
 
 **Tech Stack:** FastAPI, Pydantic, SQLite/WAL (`PersonalizationDB`), Jobs/APScheduler, React, React Router, Vitest, Playwright, pytest.
+
+## Execution Outcome
+
+All six tasks in this plan are complete.
+
+Completed areas:
+
+- persisted reflection delivery metadata on companion reflection activity
+- deterministic suppression and delivery-policy classification
+- dedicated conversation prompt sourcing with explicit source precedence
+- reflection-detail follow-up prompt chips
+- companion conversation prompt chips that insert draft text without auto-send
+- route blocker compatibility for the sidepanel’s standard router
+
+Verification captured during execution:
+
+- backend proactive-polish suite: `34 passed`
+- frontend proactive-polish UI suite: `64 passed`
+- extension companion Playwright suite: `4 passed`
+- Bandit on `companion.py` plus `app/core/Personalization`: `0 findings`
+- `git diff --check`: clean
+
+Execution notes:
+
+- the built extension surfaced a real `useBlocker` incompatibility on the companion conversation route because the sidepanel uses a standard router rather than a data router
+- the milestone fix keeps real blocker behavior when a data router is present, and safely falls back to a no-op blocker under the extension router so the route does not crash
+- prompt insertion remains non-capturing; only sent messages and explicit saves/check-ins create companion activity
+- Playwright verification still has to run outside the filesystem sandbox because sandboxed Chromium cannot access its Crashpad path under `~/Library/Application Support`
 
 ---
 

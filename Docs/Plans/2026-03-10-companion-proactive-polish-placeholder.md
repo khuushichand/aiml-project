@@ -1,20 +1,20 @@
 Date: 2026-03-10
-Status: Activated
+Status: Implemented
 
 # Companion Proactive Polish Placeholder
 
 ## Purpose
 
-Reserve and now point to the active companion polish slice focused on proactive delivery quality rather than data capture breadth.
+Reserve and now record the delivered companion polish slice focused on proactive delivery quality rather than data capture breadth.
 
-## Activation
+## Implementation
 
-This placeholder is now activated by:
+This placeholder is now fulfilled by:
 
 - `Docs/Plans/2026-03-10-companion-proactive-polish-design.md`
 - `Docs/Plans/2026-03-10-companion-proactive-polish-implementation-plan.md`
 
-The proactive polish milestone now follows the completed quality and trust-controls milestone.
+The proactive polish milestone is now complete after the quality and trust-controls milestone.
 
 ## Intended Scope
 
@@ -28,4 +28,4 @@ Potential future work:
 
 ## Next Step
 
-Execute the implementation plan instead of treating this placeholder as backlog-only.
+Use the follow-on items above as the next backlog for deeper proactive behavior rather than re-opening this completed placeholder.

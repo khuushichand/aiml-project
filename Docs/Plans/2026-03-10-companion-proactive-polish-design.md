@@ -1,7 +1,28 @@
 Date: 2026-03-10
-Status: Approved
+Status: Completed
 
 # Companion Proactive Polish Design
+
+## Implementation Outcome
+
+This design is now implemented.
+
+Delivered in this milestone:
+
+- persisted reflection delivery metadata and follow-up prompt payloads
+- deterministic proactive delivery and suppression policy
+- dedicated companion conversation prompt sourcing
+- follow-up prompt chips on reflection detail
+- prompt chips inside `/companion/conversation`
+- sidepanel router compatibility fix so companion conversation works under the standard extension router
+
+Verification snapshot:
+
+- backend proactive-polish suite: `34 passed`
+- frontend proactive-polish UI suite: `64 passed`
+- extension companion Playwright suite: `4 passed`
+- Bandit on `companion.py` plus `app/core/Personalization`: `0 findings`
+- `git diff --check`: clean
 
 ## Summary
 
