@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 import tldw_Server_API.app.core.Sandbox.runners.seatbelt_runner as seatbelt_module
 from tldw_Server_API.app.core.Sandbox.models import RunPhase, RunSpec, RuntimeType, TrustLevel
+from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy
 from tldw_Server_API.app.core.Sandbox.runners.seatbelt_runner import SeatbeltRunner
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 
@@ -96,7 +99,9 @@ def test_seatbelt_start_run_executes_real_subprocess_and_collects_artifacts(monk
 
     class _FakePopen:
         def __init__(self, argv, cwd=None, env=None, stdout=None, stderr=None, stdin=None, start_new_session=None):
-            del stdout, stderr, stdin, start_new_session
+            assert stdout is not None
+            assert stderr is not None
+            del stdin, start_new_session
             assert argv[0] == "/usr/bin/sandbox-exec"
             assert argv[1] == "-f"
             profile_path = Path(argv[2])
@@ -107,12 +112,19 @@ def test_seatbelt_start_run_executes_real_subprocess_and_collects_artifacts(monk
             assert env["TMPDIR"] == str(temp_root)
             assert (workspace_root / "inputs" / "seed.txt").read_bytes() == b"seed"
             (workspace_root / "generated.txt").write_bytes(b"artifact-data")
+            external_artifact = run_root / "outside.txt"
+            external_artifact.write_bytes(b"outside-secret")
+            (workspace_root / "leak.txt").symlink_to(external_artifact)
+            stdout.write(b"stdout-line\n")
+            stderr.write(b"stderr-line\n")
+            stdout.flush()
+            stderr.flush()
             self.pid = 4242
             self.returncode = 0
 
-        def communicate(self, timeout=None):
+        def wait(self, timeout=None):
             assert timeout == 7
-            return (b"stdout-line\n", b"stderr-line\n")
+            return 0
 
     monkeypatch.setattr(seatbelt_module.subprocess, "Popen", _FakePopen)
 
@@ -132,14 +144,14 @@ def test_seatbelt_start_run_executes_real_subprocess_and_collects_artifacts(monk
             trust_level=TrustLevel.trusted,
             timeout_sec=7,
             files_inline=[("inputs/seed.txt", b"seed")],
-            capture_patterns=["generated.txt"],
+            capture_patterns=["*.txt"],
         ),
         session_workspace=None,
     )
 
     assert status.phase == RunPhase.completed
     assert status.exit_code == 0
-    assert status.artifacts == {"generated.txt": b"artifact-data"}
+    assert status.artifacts == {"generated.txt": b"artifact-data", "inputs/seed.txt": b"seed"}
     frames = list(hub._buffers.get(run_id, []))  # type: ignore[attr-defined]
     assert any(frame.get("type") == "stdout" and "stdout-line" in frame.get("data", "") for frame in frames)
     assert any(frame.get("type") == "stderr" and "stderr-line" in frame.get("data", "") for frame in frames)
@@ -159,23 +171,31 @@ def test_seatbelt_start_run_times_out_and_cleans_up(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(seatbelt_module.os, "killpg", lambda pid, sig: killpg_calls.append((pid, sig)))
 
     class _TimeoutPopen:
+        _timeout_seen = False
+
         def __init__(self, argv, cwd=None, env=None, stdout=None, stderr=None, stdin=None, start_new_session=None):
-            del argv, env, stdout, stderr, stdin, start_new_session
+            assert stdout is not None
+            assert stderr is not None
+            del argv, env, stdin, start_new_session
             assert cwd == str(workspace_root)
+            self._stdout = stdout
+            self._stderr = stderr
             self.pid = 2121
             self.returncode = None
 
-        def communicate(self, timeout=None):
-            raise seatbelt_module.subprocess.TimeoutExpired(
-                cmd=["/usr/bin/sandbox-exec"],
-                timeout=timeout,
-                output=b"partial-stdout\n",
-                stderr=b"partial-stderr\n",
-            )
-
         def wait(self, timeout=None):
-            del timeout
-            return 0
+            if not self._timeout_seen:
+                self._timeout_seen = True
+                self._stdout.write(b"partial-stdout\n")
+                self._stderr.write(b"partial-stderr\n")
+                self._stdout.flush()
+                self._stderr.flush()
+                raise seatbelt_module.subprocess.TimeoutExpired(
+                    cmd=["/usr/bin/sandbox-exec"],
+                    timeout=timeout,
+                )
+            self.returncode = 124
+            return 124
 
     monkeypatch.setattr(seatbelt_module.subprocess, "Popen", _TimeoutPopen)
 
@@ -212,7 +232,8 @@ def test_seatbelt_runner_docstring_covers_constraints() -> None:
     doc = SeatbeltRunner.__doc__ or ""
 
     assert "trusted" in doc
-    assert "fake" in doc
+    assert "best-effort" in doc
+    assert "sandbox-exec" in doc
 
 
 def test_seatbelt_fake_run_logs_publish_failures(monkeypatch) -> None:
@@ -241,3 +262,86 @@ def test_seatbelt_fake_run_logs_publish_failures(monkeypatch) -> None:
 
     assert status.phase == RunPhase.completed
     mock_logger.warning.assert_called()
+
+
+def test_seatbelt_start_run_raises_runtime_unavailable_when_launcher_missing(monkeypatch) -> None:
+    monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_FAKE_EXEC", raising=False)
+    monkeypatch.setattr(seatbelt_module, "_sandbox_exec_exists", lambda: False)
+
+    with pytest.raises(SandboxPolicy.RuntimeUnavailable) as exc_info:
+        SeatbeltRunner().start_run(
+            run_id="run-seatbelt-missing-launcher",
+            spec=RunSpec(
+                session_id=None,
+                runtime=RuntimeType.seatbelt,
+                base_image="host-local",
+                command=["/bin/echo", "ok"],
+                network_policy="deny_all",
+                trust_level=TrustLevel.trusted,
+            ),
+        )
+
+    assert exc_info.value.runtime == RuntimeType.seatbelt
+    assert exc_info.value.reasons == ["sandbox_exec_missing"]
+
+
+def test_seatbelt_start_run_rejects_symlinked_session_workspace(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_FAKE_EXEC", raising=False)
+    monkeypatch.setattr(seatbelt_module, "_sandbox_exec_exists", lambda: True)
+
+    run_root = tmp_path / "seatbelt-symlink-source"
+    run_root.mkdir()
+    monkeypatch.setattr(seatbelt_module.tempfile, "mkdtemp", lambda prefix: str(run_root))
+
+    session_workspace = tmp_path / "session-workspace"
+    session_workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    (session_workspace / "leak.txt").symlink_to(outside)
+
+    status = SeatbeltRunner().start_run(
+        run_id="run-seatbelt-symlink-session",
+        spec=RunSpec(
+            session_id=None,
+            runtime=RuntimeType.seatbelt,
+            base_image="host-local",
+            command=["/bin/echo", "ok"],
+            network_policy="deny_all",
+            trust_level=TrustLevel.trusted,
+        ),
+        session_workspace=str(session_workspace),
+    )
+
+    assert status.phase == RunPhase.failed
+    assert "Refusing symlink workspace entry" in (status.message or "")
+    assert not run_root.exists()
+
+
+def test_seatbelt_start_run_rejects_inline_file_escape_via_symlink(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_FAKE_EXEC", raising=False)
+    monkeypatch.setattr(seatbelt_module, "_sandbox_exec_exists", lambda: True)
+
+    run_root = tmp_path / "seatbelt-inline-escape"
+    workspace_root = run_root / "workspace"
+    workspace_root.mkdir(parents=True)
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (workspace_root / "escape").symlink_to(outside_dir, target_is_directory=True)
+    monkeypatch.setattr(seatbelt_module.tempfile, "mkdtemp", lambda prefix: str(run_root))
+
+    status = SeatbeltRunner().start_run(
+        run_id="run-seatbelt-inline-escape",
+        spec=RunSpec(
+            session_id=None,
+            runtime=RuntimeType.seatbelt,
+            base_image="host-local",
+            command=["/bin/echo", "ok"],
+            network_policy="deny_all",
+            trust_level=TrustLevel.trusted,
+            files_inline=[("escape/payload.txt", b"boom")],
+        ),
+    )
+
+    assert status.phase == RunPhase.failed
+    assert "escapes workspace" in (status.message or "")
+    assert not (outside_dir / "payload.txt").exists()

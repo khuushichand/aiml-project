@@ -17,7 +17,6 @@ def test_render_seatbelt_profile_limits_writes_to_workspace_and_temp() -> None:
         workspace_path="/tmp/workspace",
         home_path="/tmp/home",
         temp_path="/tmp/temp",
-        control_path="/tmp/control",
         network_policy="deny_all",
     )
 
@@ -39,7 +38,6 @@ def test_render_seatbelt_profile_rejects_allowlist_policy() -> None:
             workspace_path="/tmp/workspace",
             home_path="/tmp/home",
             temp_path="/tmp/temp",
-            control_path="/tmp/control",
             network_policy="allowlist",
         )
 
@@ -59,9 +57,34 @@ def test_build_seatbelt_env_does_not_inherit_unexpected_host_env(monkeypatch) ->
     assert env["TMP"] == "/tmp/temp"
     assert env["TEMP"] == "/tmp/temp"
     assert env["PWD"] == "/tmp/workspace"
+    assert env["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
     assert env["LANG"] == "C"
     assert env["CUSTOM"] == "1"
     assert "AWS_SECRET_ACCESS_KEY" not in env
+
+
+def test_build_seatbelt_env_does_not_allow_path_override() -> None:
+    env = build_seatbelt_env(
+        workspace_path="/tmp/workspace",
+        home_path="/tmp/home",
+        temp_path="/tmp/temp",
+        spec_env={"PATH": "/tmp/evil", "CUSTOM": "1"},
+    )
+
+    assert env["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
+    assert env["CUSTOM"] == "1"
+
+
+def test_render_seatbelt_profile_escapes_embedded_quotes_and_newlines() -> None:
+    profile = render_seatbelt_profile(
+        command_path='/tmp/evil"cmd\nnext',
+        workspace_path="/tmp/workspace",
+        home_path="/tmp/home",
+        temp_path="/tmp/temp",
+        network_policy="deny_all",
+    )
+
+    assert 'literal "/tmp/evil\\"cmd\\nnext"' in profile
 
 
 def test_resolve_command_argv_uses_controlled_path(tmp_path: Path) -> None:
@@ -74,4 +97,3 @@ def test_resolve_command_argv_uses_controlled_path(tmp_path: Path) -> None:
     argv = resolve_command_argv(["runner-tool", "--flag"], str(bin_dir))
 
     assert argv == [str(tool), "--flag"]
-

@@ -18,7 +18,9 @@ from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.testing import is_truthy
 
 from ..models import RunPhase, RunSpec, RunStatus, RuntimeType
+from ..policy import SandboxPolicy
 from ..runtime_capabilities import RuntimePreflightResult
+from ..snapshots import SnapshotManager
 from ..streams import get_hub
 from .seatbelt_policy import build_seatbelt_env, render_seatbelt_profile, resolve_command_argv
 from .vz_common import vz_host_facts
@@ -49,11 +51,11 @@ def _sandbox_exec_exists() -> bool:
 class SeatbeltRunner:
     """Host-local macOS runner for seatbelt-scoped trusted workloads.
 
-    `untrusted` is never allowed, `standard` requires explicit opt-in, and
-    best-effort deny-all networking is not equivalent to a VM boundary. Real
-    seatbelt execution is still pending; the current implementation only has a
-    fake execution path, and launch readiness depends on `sandbox-exec` being
-    present on the macOS host.
+    `untrusted` is never allowed, and `standard` requires explicit opt-in.
+    This runner executes commands on the host inside a `sandbox-exec` profile
+    with curated environment variables, isolated temporary directories, and
+    best-effort deny-all networking. It is not equivalent to a VM boundary and
+    depends on `sandbox-exec` being present on the macOS host.
     """
 
     runtime_type = RuntimeType.seatbelt
@@ -170,20 +172,39 @@ class SeatbeltRunner:
             return 10 * 1024 * 1024
 
     @staticmethod
+    def _path_within_root(root_path: Path, candidate: Path) -> bool:
+        try:
+            root = root_path.resolve()
+            resolved = candidate.resolve()
+        except _SEATBELT_NONCRITICAL_EXCEPTIONS:
+            return False
+        return resolved == root or root in resolved.parents
+
+    @staticmethod
     def _copy_tree(source: str, destination: str) -> None:
         if not source or not os.path.isdir(source):
             return
+        SnapshotManager._validate_workspace_tree_for_copy(Path(source))
         shutil.copytree(source, destination, dirs_exist_ok=True)
 
     @staticmethod
     def _write_inline_files(workspace: str, files_inline: list[tuple[str, bytes]] | None) -> None:
+        workspace_root = Path(workspace)
+        if workspace_root.is_symlink():
+            raise ValueError("workspace root must not be a symlink")
         for relative_path, data in files_inline or []:
             normalized = str(relative_path or "").replace("\\", "/").lstrip("/")
             parts = [part for part in normalized.split("/") if part]
             if not parts or any(part in {".", ".."} for part in parts):
                 raise ValueError(f"invalid inline file path: {relative_path}")
-            target = Path(workspace).joinpath(*parts)
+            target = workspace_root.joinpath(*parts)
+            if not SeatbeltRunner._path_within_root(workspace_root, target.parent):
+                raise ValueError(f"inline file path escapes workspace: {relative_path}")
             target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists() and target.is_symlink():
+                raise ValueError(f"inline file target must not be a symlink: {relative_path}")
+            if not SeatbeltRunner._path_within_root(workspace_root, target):
+                raise ValueError(f"inline file path escapes workspace: {relative_path}")
             target.write_bytes(data)
 
     @staticmethod
@@ -192,17 +213,41 @@ class SeatbeltRunner:
             return {}
 
         artifacts_map: dict[str, bytes] = {}
+        workspace_root = Path(workspace)
+        if workspace_root.is_symlink():
+            return {}
         try:
             for root, _dirs, files in os.walk(workspace):
+                root_path = Path(root)
+                if not SeatbeltRunner._path_within_root(workspace_root, root_path):
+                    continue
                 for file_name in files:
+                    full_path = root_path / file_name
+                    if full_path.is_symlink():
+                        continue
+                    if not SeatbeltRunner._path_within_root(workspace_root, full_path):
+                        continue
                     full = os.path.join(root, file_name)
                     rel = os.path.relpath(full, workspace)
                     rel_posix = rel.replace(os.sep, "/")
                     if any(fnmatch.fnmatchcase(rel_posix, pattern) for pattern in capture_patterns):
-                        artifacts_map[rel_posix] = Path(full).read_bytes()
+                        artifacts_map[rel_posix] = full_path.read_bytes()
         except _SEATBELT_NONCRITICAL_EXCEPTIONS:
             return {}
         return artifacts_map
+
+    @staticmethod
+    def _read_capped_output(path: Path, max_bytes: int) -> bytes:
+        if max_bytes <= 0 or not path.is_file():
+            return b""
+        try:
+            size = path.stat().st_size
+            with path.open("rb") as handle:
+                if size > max_bytes:
+                    handle.seek(size - max_bytes)
+                return handle.read(max_bytes)
+        except _SEATBELT_NONCRITICAL_EXCEPTIONS:
+            return b""
 
     @classmethod
     def _terminate_process_group(cls, proc: subprocess.Popen[bytes]) -> None:
@@ -243,7 +288,7 @@ class SeatbeltRunner:
         if _truthy(os.getenv("TLDW_SANDBOX_SEATBELT_FAKE_EXEC")):
             return self._run_fake(run_id)
         if not _sandbox_exec_exists():
-            raise RuntimeError("sandbox_exec_missing")
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.seatbelt, reasons=["sandbox_exec_missing"])
         return self._run_real(run_id, spec, session_workspace)
 
     def _run_real(
@@ -302,40 +347,43 @@ class SeatbeltRunner:
                 workspace_path=workspace,
                 home_path=home,
                 temp_path=temp_dir,
-                control_path=control,
                 network_policy=str(spec.network_policy or "deny_all"),
             )
             profile_path = os.path.join(control, "seatbelt.sb")
             Path(profile_path).write_text(profile_text, encoding="utf-8")
+            stdout_path = Path(control) / "stdout.log"
+            stderr_path = Path(control) / "stderr.log"
 
-            # The launcher is fixed to sandbox-exec and the command argv is resolved without a shell.
-            proc = subprocess.Popen(  # nosec B603
-                [_SANDBOX_EXEC_PATH, "-f", profile_path, *command_argv],
-                cwd=workspace,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            self._register_active_run(run_id, proc, run_dir)
-
-            try:
-                stdout_data, stderr_data = proc.communicate(timeout=max(1, int(spec.timeout_sec or 300)))
-            except subprocess.TimeoutExpired as exc:
-                stdout_data = bytes(exc.output or b"")
-                stderr_data = bytes(exc.stderr or b"")
-                self._terminate_process_group(proc)
-                phase = RunPhase.timed_out
-                message = "execution_timeout"
-            else:
-                exit_code = proc.returncode
-                phase = RunPhase.completed if exit_code == 0 else RunPhase.failed
-                message = (
-                    "seatbelt execution finished"
-                    if exit_code == 0
-                    else f"seatbelt execution failed (exit={exit_code})"
+            with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+                # The launcher is fixed to sandbox-exec and the command argv is resolved without a shell.
+                proc = subprocess.Popen(  # nosec B603
+                    [_SANDBOX_EXEC_PATH, "-f", profile_path, *command_argv],
+                    cwd=workspace,
+                    env=env,
+                    stdout=stdout_handle,
+                    stderr=stderr_handle,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
                 )
+                self._register_active_run(run_id, proc, run_dir)
+
+                try:
+                    wait_result = proc.wait(timeout=max(1, int(spec.timeout_sec or 300)))
+                except subprocess.TimeoutExpired:
+                    self._terminate_process_group(proc)
+                    phase = RunPhase.timed_out
+                    message = "execution_timeout"
+                else:
+                    exit_code = proc.returncode if proc.returncode is not None else int(wait_result)
+                    phase = RunPhase.completed if exit_code == 0 else RunPhase.failed
+                    message = (
+                        "seatbelt execution finished"
+                        if exit_code == 0
+                        else f"seatbelt execution failed (exit={exit_code})"
+                    )
+
+            stdout_data = self._read_capped_output(stdout_path, max_log_bytes)
+            stderr_data = self._read_capped_output(stderr_path, max_log_bytes)
 
             if stdout_data:
                 hub.publish_stdout(run_id, stdout_data, max_log_bytes=max_log_bytes)

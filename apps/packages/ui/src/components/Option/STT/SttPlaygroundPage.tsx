@@ -26,55 +26,14 @@ export const SttPlaygroundPage: React.FC = () => {
   const notification = useAntdNotification()
 
   // ── Server models (fetched on mount) ──────────────────────────────
-  const [serverModels, setServerModels] = useState<string[]>([])
-  const [serverModelsLoading, setServerModelsLoading] = useState(false)
-  const [serverModelsError, setServerModelsError] = useState<string | null>(null)
-  const [modelsLoadAttempt, setModelsLoadAttempt] = useState(0)
-
-  useEffect(() => {
-    let cancelled = false
-    const fetchModels = async () => {
-      setServerModelsLoading(true)
-      setServerModelsError(null)
-      try {
-        const res = await tldwClient.getTranscriptionModels({
-          timeoutMs: 10_000
-        })
-        const all = Array.isArray(res?.all_models)
-          ? (res.all_models as string[])
-          : []
-        if (!cancelled) {
-          const unique = Array.from(new Set(all)).sort()
-          setServerModels(unique)
-          setServerModelsError(null)
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setServerModelsError(
-            isTimeoutLikeError(e)
-              ? t(
-                  "playground:stt.modelsTimeout",
-                  "Model list took longer than 10 seconds. Check server health and retry."
-                )
-              : t(
-                  "playground:stt.modelsLoadErrorDesc",
-                  "Unable to load transcription models. Retry or check server settings."
-                )
-          )
-        }
-      } finally {
-        if (!cancelled) {
-          setServerModelsLoading(false)
-        }
-      }
-    }
-    fetchModels()
-    return () => {
-      cancelled = true
-    }
-    // Retry is explicit via modelsLoadAttempt; translation changes do not need a refetch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelsLoadAttempt])
+  const {
+    serverModels,
+    serverModelsLoading,
+    serverModelsError,
+    retryServerModels
+  } = useTranscriptionModelsCatalog({
+    warnLabel: "STT Playground"
+  })
 
   // ── Current blob from RecordingStrip ──────────────────────────────
   const [currentBlob, setCurrentBlob] = useState<Blob | null>(null)
