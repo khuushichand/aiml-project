@@ -755,7 +755,11 @@ const SidepanelPersona = ({
       }
 
       const sessionsResp = await tldwClient.fetchWithAuth(
-        `/api/v1/persona/sessions?persona_id=${encodeURIComponent(resolvedPersonaId)}&limit=50` as any,
+        `/api/v1/persona/sessions?persona_id=${encodeURIComponent(resolvedPersonaId)}${
+          isCompanionMode
+            ? `&surface=${encodeURIComponent("companion.conversation")}`
+            : ""
+        }&limit=50` as any,
         {
           method: "GET"
         }

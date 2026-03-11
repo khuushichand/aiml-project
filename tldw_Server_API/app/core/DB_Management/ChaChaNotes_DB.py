@@ -7094,6 +7094,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         user_id: str,
         persona_id: str | None = None,
+        activity_surface: str | None = None,
         status: str | None = None,
         include_deleted: bool = False,
         limit: int = 100,
@@ -7105,6 +7106,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if persona_id is not None:
             clauses.append("persona_id = ?")
             params.append(persona_id)
+        if activity_surface is not None:
+            clauses.append("activity_surface = ?")
+            params.append(self._normalize_persona_session_activity_surface(activity_surface))
         if status is not None:
             normalized_status = self._normalize_persona_session_status(status)
             clauses.append("status = ?")

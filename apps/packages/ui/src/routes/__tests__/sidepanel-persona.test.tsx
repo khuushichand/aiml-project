@@ -648,6 +648,53 @@ describe("SidepanelPersona", () => {
     })
   })
 
+  it("filters companion-mode session history to companion conversations", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ session_id: "sess-companion-only" }]
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-companion-only" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona mode="companion" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(
+        mocks.fetchWithAuth.mock.calls.some(([path]) =>
+          String(path).includes(
+            "/api/v1/persona/sessions?persona_id=research_assistant&surface=companion.conversation&limit=50"
+          )
+        )
+      ).toBe(true)
+    })
+  })
+
   it("prefers tool_result.output and falls back to legacy result alias", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",

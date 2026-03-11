@@ -123,6 +123,37 @@ def test_persona_sessions_list_and_detail_fall_back_to_persisted_preferences(
     fastapi_app.dependency_overrides.clear()
 
 
+def test_persona_sessions_list_filters_by_surface(monkeypatch, persona_db: CharactersRAGDB):
+    manager = SessionManager()
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+
+    with _client_for_user(1, persona_db) as client:
+        generic = client.post("/api/v1/persona/session", json={"persona_id": "research_assistant"})
+        assert generic.status_code == 200
+        generic_session_id = generic.json()["session_id"]
+
+        companion = client.post(
+            "/api/v1/persona/session",
+            json={
+                "persona_id": "research_assistant",
+                "surface": "companion.conversation",
+            },
+        )
+        assert companion.status_code == 200
+        companion_session_id = companion.json()["session_id"]
+
+        filtered = client.get(
+            "/api/v1/persona/sessions?persona_id=research_assistant&surface=companion.conversation"
+        )
+        assert filtered.status_code == 200
+        payload = filtered.json()
+        assert [item["session_id"] for item in payload] == [companion_session_id]
+        assert companion_session_id in {item["session_id"] for item in payload}
+        assert generic_session_id not in {item["session_id"] for item in payload}
+
+    fastapi_app.dependency_overrides.clear()
+
+
 def test_persona_session_resume_rejects_ownership_mismatch(monkeypatch, persona_db: CharactersRAGDB):
     manager = SessionManager()
     _ = manager.create(user_id="1", persona_id="research_assistant", resume_session_id="sess_owned_by_1")

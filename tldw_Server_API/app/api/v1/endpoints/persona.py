@@ -2252,6 +2252,7 @@ async def persona_session(
 @router.get("/sessions", response_model=list[PersonaSessionSummary], tags=["persona"], status_code=status.HTTP_200_OK)
 async def persona_sessions(
     persona_id: str | None = Query(default=None),
+    surface: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     _current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
@@ -2265,6 +2266,7 @@ async def persona_sessions(
         rows = db.list_persona_sessions(
             user_id=user_id,
             persona_id=persona_id,
+            activity_surface=surface,
             include_deleted=False,
             limit=limit,
             offset=0,
