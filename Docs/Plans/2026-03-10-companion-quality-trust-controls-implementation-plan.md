@@ -10,6 +10,8 @@
 
 **Tech Stack:** FastAPI, Pydantic, SQLite/WAL (`PersonalizationDB`), existing Jobs/APScheduler services, React/Next.js shared UI, Zustand, Vitest, Playwright, pytest.
 
+**Shell Convention:** Command snippets below assume `PROJECT_ROOT` points at the repository root. If it is not already set, run `PROJECT_ROOT="$(pwd)"` from the repo root before executing them.
+
 ## Execution Outcome
 
 All seven tasks in this plan are complete.
@@ -98,7 +100,7 @@ def test_companion_goal_round_trip_preserves_origin_and_progress_mode(personaliz
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v \
   tldw_Server_API/tests/Personalization/test_companion_profile_settings.py \
   tldw_Server_API/tests/Personalization/test_companion_goal_provenance.py
 ```
@@ -186,7 +188,7 @@ def test_rebuild_job_recomputes_cards_without_touching_manual_goals(companion_en
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v \
   tldw_Server_API/tests/Personalization/test_companion_lifecycle.py \
   tldw_Server_API/tests/Notifications/test_companion_reflection_notifications.py
 ```
@@ -266,7 +268,7 @@ def test_load_companion_context_falls_back_when_scores_are_weak(companion_contex
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v \
   tldw_Server_API/tests/Personalization/test_companion_relevance.py \
   tldw_Server_API/tests/Persona/test_companion_context_ranking.py
 ```
@@ -339,7 +341,7 @@ def test_reflection_payload_includes_goal_and_stale_work_signals(companion_refle
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v \
   tldw_Server_API/tests/Personalization/test_companion_derivations.py \
   tldw_Server_API/tests/Personalization/test_companion_reflection_jobs.py
 ```
@@ -416,7 +418,7 @@ def test_companion_knowledge_detail_returns_evidence_rows(client, companion_api_
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Personalization/test_companion_api.py
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v tldw_Server_API/tests/Personalization/test_companion_api.py
 ```
 
 Expected: FAIL because item detail endpoints do not exist yet.
@@ -543,7 +545,7 @@ git commit -m "feat: add companion settings provenance and lifecycle controls"
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v \
   tldw_Server_API/tests/Personalization/test_companion_profile_settings.py \
   tldw_Server_API/tests/Personalization/test_companion_goal_provenance.py \
   tldw_Server_API/tests/Personalization/test_companion_lifecycle.py \
@@ -576,7 +578,7 @@ Expected: PASS
 Run:
 
 ```bash
-source .venv/bin/activate && python -m bandit -r \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m bandit -r \
   tldw_Server_API/app/api/v1/endpoints/companion.py \
   tldw_Server_API/app/core/Personalization \
   -f json -o /tmp/bandit_companion_quality.json

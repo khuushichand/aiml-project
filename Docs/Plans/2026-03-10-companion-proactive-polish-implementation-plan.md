@@ -10,6 +10,8 @@
 
 **Tech Stack:** FastAPI, Pydantic, SQLite/WAL (`PersonalizationDB`), Jobs/APScheduler, React, React Router, Vitest, Playwright, pytest.
 
+**Shell Convention:** Command snippets below assume `PROJECT_ROOT` points at the repository root. If it is not already set, run `PROJECT_ROOT="$(pwd)"` from the repo root before executing them.
+
 ## Execution Outcome
 
 All six tasks in this plan are complete.
@@ -84,7 +86,7 @@ def test_companion_reflection_detail_exposes_delivery_metadata_and_prompt_payloa
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v \
   tldw_Server_API/tests/Personalization/test_companion_reflection_jobs.py \
   tldw_Server_API/tests/Personalization/test_companion_api.py -k "reflection_detail or delivery_metadata"
 ```
@@ -164,7 +166,7 @@ def test_companion_reflection_job_persists_suppressed_reflection_without_notific
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v \
   tldw_Server_API/tests/Personalization/test_companion_proactive_policy.py \
   tldw_Server_API/tests/Notifications/test_companion_reflection_notifications.py
 ```
@@ -242,7 +244,7 @@ def test_companion_conversation_prompts_endpoint_returns_at_most_three_prompts(c
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v \
   tldw_Server_API/tests/Personalization/test_companion_followups.py \
   tldw_Server_API/tests/Persona/test_companion_context_ranking.py \
   tldw_Server_API/tests/Personalization/test_companion_api.py -k "conversation_prompts"
@@ -440,7 +442,7 @@ git commit -m "feat: add companion conversation follow-up prompts"
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest -v \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m pytest -v \
   tldw_Server_API/tests/Personalization/test_companion_reflection_jobs.py \
   tldw_Server_API/tests/Personalization/test_companion_proactive_policy.py \
   tldw_Server_API/tests/Personalization/test_companion_followups.py \
@@ -476,7 +478,7 @@ Expected: PASS
 Run:
 
 ```bash
-source .venv/bin/activate && python -m bandit -r \
+source "$PROJECT_ROOT/.venv/bin/activate" && python -m bandit -r \
   tldw_Server_API/app/api/v1/endpoints/companion.py \
   tldw_Server_API/app/core/Personalization \
   -f json -o /tmp/bandit_companion_proactive_polish.json
