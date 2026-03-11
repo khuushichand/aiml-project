@@ -39,6 +39,8 @@ from tldw_Server_API.app.api.v1.schemas.workflows import (
     RunRequest,
     WorkflowDefinitionCreate,
     WorkflowDefinitionResponse,
+    WorkflowPreflightRequest,
+    WorkflowPreflightResponse,
     WorkflowRunInvestigationResponse,
     WorkflowRagSearchConfig,
     WorkflowRunListItem,
@@ -90,6 +92,7 @@ from tldw_Server_API.app.core.testing import (
 )
 from tldw_Server_API.app.core.Workflows import RunMode, WorkflowEngine, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
+from tldw_Server_API.app.core.Workflows.capabilities import get_step_capability
 from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
 from tldw_Server_API.app.core.Workflows.daily_ledger import (
     backfill_legacy_runs_to_ledger,
@@ -1135,6 +1138,48 @@ async def _record_workflow_run_usage(
         return
 
 
+def _build_preflight_issue(
+    *,
+    code: str,
+    message: str,
+    step_id: str | None = None,
+    step_type: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "message": message,
+        "step_id": step_id,
+        "step_type": step_type,
+    }
+
+
+def _collect_preflight_warnings(definition: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    steps = definition.get("steps") or []
+    if not isinstance(steps, list):
+        return warnings
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        step_id = str(step.get("id") or f"step_{idx+1}")
+        step_type = str(step.get("type") or "").strip()
+        if not step_type:
+            continue
+        capability = get_step_capability(step_type)
+        if not capability.replay_safe or capability.requires_human_review_for_rerun:
+            warnings.append(
+                _build_preflight_issue(
+                    code="unsafe_replay_step",
+                    message=(
+                        f"Step '{step_id}' ({step_type}) is not replay-safe and should be reviewed before rerun"
+                    ),
+                    step_id=step_id,
+                    step_type=step_type,
+                )
+            )
+    return warnings
+
+
 @router.post("", response_model=WorkflowDefinitionResponse, status_code=201)
 async def create_definition(
     body: WorkflowDefinitionCreate,
@@ -1208,6 +1253,41 @@ async def list_definitions(
         )
         for d in defs
     ]
+
+
+@router.post(
+    "/preflight",
+    response_model=WorkflowPreflightResponse,
+    dependencies=[Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ))],
+)
+async def preflight_definition(
+    body: WorkflowPreflightRequest,
+    current_user: User = Depends(get_request_user),
+):
+    _ = current_user
+    definition = body.definition.model_dump()
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    try:
+        _validate_definition_payload(definition)
+    except HTTPException as exc:
+        issue = _build_preflight_issue(
+            code="definition_invalid",
+            message=str(exc.detail),
+        )
+        if body.validation_mode == "non-block":
+            issue["code"] = "definition_validation_warning"
+            warnings.append(issue)
+        else:
+            errors.append(issue)
+
+    warnings.extend(_collect_preflight_warnings(definition))
+
+    return WorkflowPreflightResponse(
+        valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+    )
 
 
 ## get_definition moved below '/runs*' routes to avoid path shadowing

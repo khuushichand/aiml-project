@@ -266,3 +266,21 @@ class WorkflowRunInvestigationResponse(BaseModel):
     attempts: list[WorkflowStepAttemptResponse] = Field(default_factory=list)
     evidence: dict[str, Any] = Field(default_factory=dict)
     recommended_actions: list[str] = Field(default_factory=list)
+
+
+class WorkflowValidationIssue(BaseModel):
+    code: str
+    message: str
+    step_id: str | None = None
+    step_type: str | None = None
+
+
+class WorkflowPreflightRequest(BaseModel):
+    definition: WorkflowDefinitionCreate
+    validation_mode: Literal["block", "non-block"] = "block"
+
+
+class WorkflowPreflightResponse(BaseModel):
+    valid: bool
+    errors: list[WorkflowValidationIssue] = Field(default_factory=list)
+    warnings: list[WorkflowValidationIssue] = Field(default_factory=list)
