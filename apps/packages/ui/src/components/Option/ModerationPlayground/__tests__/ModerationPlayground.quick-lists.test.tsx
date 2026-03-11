@@ -2,12 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import * as moderationService from "@/services/moderation"
-import { ModerationPlayground } from "../index"
-
-const useQueryMock = vi.fn()
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: (options: unknown) => useQueryMock(options)
+  useQuery: () => ({ data: null, isFetching: false, error: null, refetch: vi.fn() })
 }))
 
 vi.mock("react-i18next", () => ({
@@ -20,164 +17,163 @@ vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
 }))
 
+vi.mock("@/services/moderation", () => ({
+  getModerationSettings: vi.fn(),
+  getEffectivePolicy: vi.fn(),
+  reloadModeration: vi.fn(),
+  listUserOverrides: vi.fn(),
+  testModeration: vi.fn(),
+  getUserOverride: vi.fn(),
+  setUserOverride: vi.fn(),
+  deleteUserOverride: vi.fn()
+}))
+
+import { ModerationPlaygroundShell } from "../ModerationPlaygroundShell"
+
 describe("ModerationPlayground quick phrase lists", () => {
-  const settingsQueryResult = {
-    data: {
-      pii_enabled: false,
-      categories_enabled: [] as string[],
-      effective: { categories_enabled: [] as string[] }
-    },
-    isFetching: false,
-    refetch: vi.fn().mockResolvedValue(undefined)
-  }
-
-  const policyQueryResult = {
-    data: {
-      enabled: true,
-      input_enabled: true,
-      output_enabled: true,
-      input_action: "warn",
-      output_action: "warn",
-      categories_enabled: [] as string[],
-      blocklist_count: 0
-    },
-    isFetching: false,
-    refetch: vi.fn().mockResolvedValue(undefined)
-  }
-
-  const overridesQueryResult = {
-    data: { overrides: {} as Record<string, unknown> },
-    isFetching: false,
-    refetch: vi.fn().mockResolvedValue(undefined)
-  }
-
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.setItem("moderation-playground-onboarded", "true")
 
-    useQueryMock.mockImplementation((options: { queryKey?: unknown[] } | undefined) => {
-      const firstKey = options?.queryKey?.[0]
-      const queryKey = typeof firstKey === "string" ? firstKey : ""
-      if (queryKey === "moderation-settings") {
-        return settingsQueryResult
-      }
-      if (queryKey === "moderation-policy") {
-        return policyQueryResult
-      }
-      if (queryKey === "moderation-overrides") {
-        return overridesQueryResult
-      }
-      return { data: null, isFetching: false, refetch: vi.fn().mockResolvedValue(undefined) }
-    })
-
-    vi.spyOn(moderationService, "getUserOverride").mockResolvedValue({})
+    vi.spyOn(moderationService, "getUserOverride").mockResolvedValue({
+      exists: true,
+      override: {}
+    } as any)
     vi.spyOn(moderationService, "setUserOverride").mockResolvedValue({ persisted: true } as any)
     vi.spyOn(moderationService, "deleteUserOverride").mockResolvedValue({ status: "deleted" })
   })
 
+  /**
+   * Navigate to User Overrides tab, switch scope to user, enter ID, and load.
+   * The context bar scope select + user ID input are always visible.
+   * After loading, we switch to the User Overrides tab to see phrase lists.
+   */
   const switchToUserScopeAndLoadUser = async () => {
-    fireEvent.click(screen.getByRole("radio", { name: "User (Individual)" }))
-    fireEvent.change(screen.getByPlaceholderText("Enter User ID"), {
-      target: { value: "alice" }
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Load user" }))
+    // Change scope to user via the context bar select
+    const scopeSelect = screen.getByRole("combobox") as HTMLSelectElement
+    fireEvent.change(scopeSelect, { target: { value: "user" } })
 
+    // Enter user ID in context bar input
+    const userInput = screen.getByPlaceholderText("Enter User ID")
+    fireEvent.change(userInput, { target: { value: "alice" } })
+
+    // Click Load button in context bar
+    fireEvent.click(screen.getByRole("button", { name: /^load$/i }))
+
+    // Navigate to User Overrides tab
+    fireEvent.click(screen.getByRole("tab", { name: /overrides/i }))
+
+    // Wait for the override to be loaded via the hook's useEffect
     await waitFor(() => {
       expect(moderationService.getUserOverride).toHaveBeenCalledWith("alice")
     })
+
+    // Wait for the lazy-loaded panel to render
+    await screen.findByText("User Override Editor")
   }
 
-  it("renders quick phrase composer in user scope without advanced mode", () => {
-    render(<ModerationPlayground />)
+  it("renders phrase composer in user overrides tab after loading a user", async () => {
+    render(<ModerationPlaygroundShell />)
+    await switchToUserScopeAndLoadUser()
 
-    fireEvent.click(screen.getByRole("radio", { name: "User (Individual)" }))
-
-    expect(screen.getByText("User Phrase Lists")).toBeInTheDocument()
-    expect(screen.getByPlaceholderText("Add a word or phrase")).toBeInTheDocument()
+    expect(screen.getByText("Add Phrase Rule")).toBeInTheDocument()
+    expect(screen.getByTestId("phrase-pattern-input")).toBeInTheDocument()
   })
 
   it("adds ban and notify items to separate lists", async () => {
-    render(<ModerationPlayground />)
+    render(<ModerationPlaygroundShell />)
     await switchToUserScopeAndLoadUser()
 
-    const phraseInput = screen.getByPlaceholderText("Add a word or phrase")
+    const phraseInput = screen.getByTestId("phrase-pattern-input")
 
+    // Add a banned phrase (default action is "block" = Ban)
     fireEvent.change(phraseInput, { target: { value: "danger phrase" } })
-    fireEvent.click(screen.getByRole("button", { name: "Add" }))
+    fireEvent.click(screen.getByRole("button", { name: /add rule/i }))
 
-    fireEvent.click(screen.getByRole("radio", { name: "Notify list" }))
+    // Switch to Notify action and add a notify phrase
+    fireEvent.click(screen.getByRole("button", { name: /notify/i }))
     fireEvent.change(phraseInput, { target: { value: "watch phrase" } })
-    fireEvent.click(screen.getByRole("button", { name: "Add" }))
+    fireEvent.click(screen.getByRole("button", { name: /add rule/i }))
 
-    expect(screen.getByText("Banned phrases")).toBeInTheDocument()
-    expect(screen.getByText("Notify phrases")).toBeInTheDocument()
+    expect(screen.getByText("Banned Phrases")).toBeInTheDocument()
+    expect(screen.getByText("Notify Phrases")).toBeInTheDocument()
     expect(screen.getByText("danger phrase")).toBeInTheDocument()
     expect(screen.getByText("watch phrase")).toBeInTheDocument()
   })
 
   it("prevents duplicate quick rules", async () => {
-    render(<ModerationPlayground />)
+    render(<ModerationPlaygroundShell />)
     await switchToUserScopeAndLoadUser()
 
-    const phraseInput = screen.getByPlaceholderText("Add a word or phrase")
+    const phraseInput = screen.getByTestId("phrase-pattern-input")
 
     fireEvent.change(phraseInput, { target: { value: "duplicate phrase" } })
-    fireEvent.click(screen.getByRole("button", { name: "Add" }))
+    fireEvent.click(screen.getByRole("button", { name: /add rule/i }))
 
     fireEvent.change(phraseInput, { target: { value: "duplicate phrase" } })
-    fireEvent.click(screen.getByRole("button", { name: "Add" }))
+    fireEvent.click(screen.getByRole("button", { name: /add rule/i }))
 
     expect(screen.getAllByText("duplicate phrase")).toHaveLength(1)
   })
 
   it("allows regex quick rule without browser syntax validation", async () => {
-    render(<ModerationPlayground />)
+    render(<ModerationPlaygroundShell />)
     await switchToUserScopeAndLoadUser()
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Regex" }))
-    fireEvent.change(screen.getByPlaceholderText("Add a word or phrase"), {
+    // Check the Regex checkbox
+    const regexCheckbox = screen.getByRole("checkbox", { name: /regex/i })
+    fireEvent.click(regexCheckbox)
+
+    fireEvent.change(screen.getByTestId("phrase-pattern-input"), {
       target: { value: "(" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Add" }))
+    fireEvent.click(screen.getByRole("button", { name: /add rule/i }))
 
     expect(screen.getByText("(")).toBeInTheDocument()
   })
 
   it("renders phase labels from loaded override rules", async () => {
     vi.spyOn(moderationService, "getUserOverride").mockResolvedValue({
-      rules: [
-        { id: "r1", pattern: "alpha", is_regex: false, action: "block", phase: "input" },
-        { id: "r2", pattern: "beta", is_regex: false, action: "warn", phase: "output" }
-      ]
+      exists: true,
+      override: {
+        rules: [
+          { id: "r1", pattern: "alpha", is_regex: false, action: "block", phase: "input" },
+          { id: "r2", pattern: "beta", is_regex: false, action: "warn", phase: "output" }
+        ]
+      }
     } as any)
 
-    render(<ModerationPlayground />)
+    render(<ModerationPlaygroundShell />)
     await switchToUserScopeAndLoadUser()
 
-    expect(screen.getByText("Input phase")).toBeInTheDocument()
-    expect(screen.getByText("Output phase")).toBeInTheDocument()
+    // Phase labels are displayed as the raw phase value in the new panel
+    expect(screen.getByText("input")).toBeInTheDocument()
+    expect(screen.getByText("output")).toBeInTheDocument()
   })
 
   it("drops loaded rules with non-boolean is_regex values", async () => {
     vi.spyOn(moderationService, "getUserOverride").mockResolvedValue({
-      rules: [{ id: "r1", pattern: "alpha", is_regex: "false", action: "block", phase: "both" }]
+      exists: true,
+      override: {
+        rules: [{ id: "r1", pattern: "alpha", is_regex: "false", action: "block", phase: "both" }]
+      }
     } as any)
 
-    render(<ModerationPlayground />)
+    render(<ModerationPlaygroundShell />)
     await switchToUserScopeAndLoadUser()
 
     expect(screen.queryByText("alpha")).not.toBeInTheDocument()
   })
 
   it("includes rules in setUserOverride payload on save", async () => {
-    render(<ModerationPlayground />)
+    render(<ModerationPlaygroundShell />)
     await switchToUserScopeAndLoadUser()
 
-    fireEvent.change(screen.getByPlaceholderText("Add a word or phrase"), {
+    fireEvent.change(screen.getByTestId("phrase-pattern-input"), {
       target: { value: "save me" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Add" }))
-    fireEvent.click(screen.getByRole("button", { name: "Save user override settings" }))
+    fireEvent.click(screen.getByRole("button", { name: /add rule/i }))
+    fireEvent.click(screen.getByRole("button", { name: /save override/i }))
 
     await waitFor(() => {
       expect(moderationService.setUserOverride).toHaveBeenCalled()
