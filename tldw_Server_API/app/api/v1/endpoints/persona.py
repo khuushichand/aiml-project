@@ -77,9 +77,15 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_tool_outcome,
     retrieve_top_memories,
 )
+from tldw_Server_API.app.core.Personalization.companion_activity import (
+    normalize_persona_activity_surface,
+    record_persona_session_started,
+    record_persona_session_summarized,
+    record_persona_tool_executed,
+)
+from tldw_Server_API.app.core.Personalization.companion_context import load_companion_context
 from tldw_Server_API.app.core.Persona.exemplar_runtime import (
     append_persona_exemplar_sections,
-    build_persona_rag_why_text,
     resolve_persona_exemplar_runtime_context,
 )
 from tldw_Server_API.app.core.Persona.exemplar_turn_classifier import classify_persona_turn
@@ -395,6 +401,51 @@ def _session_policy_rules_from_preferences(preferences: dict[str, Any] | None) -
     return _default_session_policy_rules()
 
 
+def _normalize_persisted_persona_session_preferences(preferences: Any) -> dict[str, Any]:
+    if not isinstance(preferences, dict):
+        return {}
+    normalized: dict[str, Any] = {}
+    if "use_memory_context" in preferences:
+        normalized["use_memory_context"] = _coerce_bool(preferences.get("use_memory_context"), default=True)
+    if "use_companion_context" in preferences:
+        normalized["use_companion_context"] = _coerce_bool(preferences.get("use_companion_context"), default=True)
+    if "use_persona_state_context" in preferences:
+        normalized["use_persona_state_context"] = _coerce_bool(
+            preferences.get("use_persona_state_context"),
+            default=True,
+        )
+    if "memory_top_k" in preferences:
+        try:
+            normalized_top_k = int(preferences.get("memory_top_k"))
+        except (TypeError, ValueError):
+            normalized_top_k = _get_persona_memory_top_k()
+        normalized["memory_top_k"] = max(1, normalized_top_k)
+    if "session_policy_rules" in preferences:
+        normalized["session_policy_rules"] = normalize_policy_rules(preferences.get("session_policy_rules"))
+    return normalized
+
+
+def _merge_persisted_persona_session_preferences(*payloads: Any) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for payload in payloads:
+        merged.update(_normalize_persisted_persona_session_preferences(payload))
+    return merged
+
+
+def _default_persisted_persona_session_preferences(profile: dict[str, Any] | None) -> dict[str, Any]:
+    return _merge_persisted_persona_session_preferences(
+        {
+            "use_memory_context": True,
+            "use_companion_context": True,
+            "use_persona_state_context": _coerce_bool(
+                (profile or {}).get("use_persona_state_context_default"),
+                default=True,
+            ),
+            "memory_top_k": _get_persona_memory_top_k(),
+        }
+    )
+
+
 def _resolve_step_action_name(
     *,
     step_type: str,
@@ -420,6 +471,8 @@ def _load_persona_policy_rules_for_session(
         "scope_snapshot_id": None,
         "policy_rules": normalize_policy_rules(_DEFAULT_PERSONA_POLICY_RULES),
         "persona_state_context_default": True,
+        "preferences": {},
+        "activity_surface": normalize_persona_activity_surface(None),
         "session_exists": False,
     }
     sid = str(session_id or "").strip()
@@ -449,6 +502,8 @@ def _load_persona_policy_rules_for_session(
             "scope_snapshot_id": scope_snapshot_id,
             "policy_rules": normalize_policy_rules(policy_rules),
             "persona_state_context_default": persona_state_context_default,
+            "preferences": _normalize_persisted_persona_session_preferences(session_row.get("preferences")),
+            "activity_surface": normalize_persona_activity_surface(session_row.get("activity_surface")),
             "session_exists": True,
         }
     except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
@@ -458,6 +513,77 @@ def _load_persona_policy_rules_for_session(
             exc,
         )
         return dict(default_payload)
+
+
+def _get_session_preferences_with_activity_surface(
+    *,
+    session_manager: Any,
+    session_id: str,
+    user_id: str,
+    persisted_preferences: Any = None,
+    persisted_activity_surface: Any = None,
+) -> tuple[dict[str, Any], str]:
+    runtime_preferences = dict(
+        session_manager.get_preferences(
+            session_id=session_id,
+            user_id=user_id,
+        )
+    )
+    merged_preferences = dict(runtime_preferences)
+    merged_preferences.update(
+        _normalize_persisted_persona_session_preferences(persisted_preferences)
+    )
+    activity_surface = normalize_persona_activity_surface(
+        runtime_preferences.get("companion_activity_surface", persisted_activity_surface)
+    )
+    merged_preferences["companion_activity_surface"] = activity_surface
+    if merged_preferences == runtime_preferences:
+        return merged_preferences, activity_surface
+
+    updated_preferences = merged_preferences
+    with contextlib.suppress(Exception):
+        updated_preferences = session_manager.update_preferences(
+            session_id=session_id,
+            user_id=user_id,
+            preferences=merged_preferences,
+        )
+    return dict(updated_preferences), activity_surface
+
+
+def _persist_persona_session_preferences(
+    db: CharactersRAGDB | None,
+    *,
+    session_id: str,
+    user_id: str,
+    base_preferences: Any = None,
+    patch_preferences: Any = None,
+) -> dict[str, Any]:
+    merged_preferences = _merge_persisted_persona_session_preferences(
+        base_preferences,
+        patch_preferences,
+    )
+    sid = str(session_id or "").strip()
+    uid = str(user_id or "").strip()
+    if db is None or not sid or not uid:
+        return merged_preferences
+
+    current_preferences = _normalize_persisted_persona_session_preferences(base_preferences)
+    if current_preferences == merged_preferences:
+        return merged_preferences
+
+    try:
+        _ = db.update_persona_session(
+            session_id=session_id,
+            user_id=user_id,
+            update_data={"preferences_json": merged_preferences},
+        )
+    except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
+        logger.debug(
+            "persona session preference persistence skipped for session_hash {}: {}",
+            _redacted_id_for_logs(sid),
+            exc,
+        )
+    return merged_preferences
 
 
 def _skill_policy_rules_for_step(
@@ -1056,6 +1182,17 @@ def _build_persona_state_hint_lines(state_hints: dict[str, str]) -> list[str]:
     return lines
 
 
+def _join_applied_context_labels(labels: list[str]) -> str:
+    compact = [str(label or "").strip() for label in labels if str(label or "").strip()]
+    if not compact:
+        return ""
+    if len(compact) == 1:
+        return compact[0]
+    if len(compact) == 2:
+        return f"{compact[0]} and {compact[1]}"
+    return f"{', '.join(compact[:-1])}, and {compact[-1]}"
+
+
 def _replace_persona_state_docs(
     db: CharactersRAGDB,
     *,
@@ -1228,6 +1365,10 @@ def _persona_session_summary_from_db(
     manager_row: dict[str, Any] | None = None,
 ) -> PersonaSessionSummary:
     scope_snapshot = row.get("scope_snapshot") or {}
+    preferences = dict(row.get("preferences") or {})
+    runtime_preferences = (manager_row or {}).get("preferences")
+    if isinstance(runtime_preferences, dict):
+        preferences.update(runtime_preferences)
     return PersonaSessionSummary(
         session_id=str(row.get("id") or ""),
         persona_id=str(row.get("persona_id") or ""),
@@ -1235,7 +1376,7 @@ def _persona_session_summary_from_db(
         updated_at=str(row.get("last_modified") or row.get("created_at") or _utc_now_iso()),
         turn_count=int((manager_row or {}).get("turn_count") or 0),
         pending_plan_count=int((manager_row or {}).get("pending_plan_count") or 0),
-        preferences=dict((manager_row or {}).get("preferences") or {}),
+        preferences=preferences,
         runtime_mode=str(row.get("mode") or "session_scoped"),
         status=str(row.get("status") or "active"),
         reuse_allowed=bool(row.get("reuse_allowed", False)),
@@ -1252,6 +1393,10 @@ def _persona_session_detail_from_db(
     scope_snapshot = row.get("scope_snapshot") or {}
     turns = list((manager_snapshot or {}).get("turns") or [])
     turn_count = int((manager_snapshot or {}).get("turn_count") or len(turns))
+    preferences = dict(row.get("preferences") or {})
+    runtime_preferences = (manager_snapshot or {}).get("preferences")
+    if isinstance(runtime_preferences, dict):
+        preferences.update(runtime_preferences)
     return PersonaSessionDetail(
         session_id=str(row.get("id") or ""),
         persona_id=str(row.get("persona_id") or ""),
@@ -1259,7 +1404,7 @@ def _persona_session_detail_from_db(
         updated_at=str(row.get("last_modified") or row.get("created_at") or _utc_now_iso()),
         turn_count=turn_count,
         pending_plan_count=int((manager_snapshot or {}).get("pending_plan_count") or 0),
-        preferences=dict((manager_snapshot or {}).get("preferences") or {}),
+        preferences=preferences,
         runtime_mode=str(row.get("mode") or "session_scoped"),
         status=str(row.get("status") or "active"),
         reuse_allowed=bool(row.get("reuse_allowed", False)),
@@ -2390,6 +2535,7 @@ async def persona_session(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     requested_persona_id = str(req.persona_id or "").strip() or _DEFAULT_PERSONA_ID
+    requested_activity_surface = normalize_persona_activity_surface(req.surface)
     session_manager = get_session_manager()
 
     try:
@@ -2427,6 +2573,7 @@ async def persona_session(
                         entity_id=str(req.resume_session_id),
                     )
 
+        created_new_session = session_row is None
         if session_row is None:
             scope_rules = db.list_persona_scope_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
             scope_snapshot, scope_audit = _build_scope_snapshot(scope_rules)
@@ -2436,6 +2583,8 @@ async def persona_session(
                 "conversation_id": req.project_id,
                 "mode": str(profile.get("mode") or "session_scoped"),
                 "scope_snapshot_json": scope_snapshot,
+                "preferences_json": _default_persisted_persona_session_preferences(profile),
+                "activity_surface": requested_activity_surface,
             }
             if req.resume_session_id:
                 create_data["id"] = str(req.resume_session_id)
@@ -2445,6 +2594,21 @@ async def persona_session(
                 raise HTTPException(status_code=500, detail="Failed to load created persona session")
         else:
             scope_audit = _scope_audit_from_snapshot(session_row.get("scope_snapshot") or {})
+            if req.surface is not None:
+                current_surface = normalize_persona_activity_surface(session_row.get("activity_surface"))
+                if current_surface != requested_activity_surface:
+                    _ = db.update_persona_session(
+                        session_id=str(session_row.get("id") or req.resume_session_id or ""),
+                        user_id=user_id,
+                        update_data={"activity_surface": requested_activity_surface},
+                    )
+                    refreshed_row = db.get_persona_session(
+                        str(session_row.get("id") or req.resume_session_id or ""),
+                        user_id=user_id,
+                        include_deleted=False,
+                    )
+                    if refreshed_row is not None:
+                        session_row = refreshed_row
 
         session_id = str(session_row.get("id") or req.resume_session_id or "").strip()
         if not session_id:
@@ -2457,13 +2621,26 @@ async def persona_session(
                 persona_id=persona_id,
                 resume_session_id=session_id,
             )
+            if created_new_session or req.surface is not None:
+                session_manager.update_preferences(
+                    session_id=session_id,
+                    user_id=user_id,
+                    preferences={"companion_activity_surface": requested_activity_surface},
+                )
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        _session_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+            session_manager=session_manager,
+            session_id=session_id,
+            user_id=user_id,
+            persisted_preferences=session_row.get("preferences"),
+            persisted_activity_surface=session_row.get("activity_surface"),
+        )
 
         allow_export, allow_delete = _get_persona_rbac_flags()
         scopes = sorted(_get_persona_session_scopes(allow_export=allow_export, allow_delete=allow_delete))
         scope_snapshot = session_row.get("scope_snapshot") or {}
-        return PersonaSessionResponse(
+        response = PersonaSessionResponse(
             session_id=session_id,
             persona=persona,
             scopes=scopes,
@@ -2471,6 +2648,16 @@ async def persona_session(
             scope_snapshot_id=_scope_snapshot_id_from_snapshot(scope_snapshot),
             scope_audit=scope_audit,
         )
+        if created_new_session:
+            record_persona_session_started(
+                user_id=_current_user.id,
+                session_id=response.session_id,
+                persona_id=response.persona.id,
+                runtime_mode=response.runtime_mode,
+                scope_snapshot_id=response.scope_snapshot_id,
+                surface=activity_surface,
+            )
+        return response
     except HTTPException:
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
@@ -2480,6 +2667,7 @@ async def persona_session(
 @router.get("/sessions", response_model=list[PersonaSessionSummary], tags=["persona"], status_code=status.HTTP_200_OK)
 async def persona_sessions(
     persona_id: str | None = Query(default=None),
+    surface: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     _current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
@@ -2493,6 +2681,7 @@ async def persona_sessions(
         rows = db.list_persona_sessions(
             user_id=user_id,
             persona_id=persona_id,
+            activity_surface=surface,
             include_deleted=False,
             limit=limit,
             offset=0,
@@ -2733,6 +2922,7 @@ async def persona_stream(
             plan_id: str,
             steps: list[dict[str, Any]],
             memory: dict[str, Any],
+            companion: dict[str, Any],
             persona_id_value: str,
         ) -> None:
             payload: dict[str, Any] = {
@@ -2741,6 +2931,7 @@ async def persona_stream(
                 "plan_id": str(plan_id or ""),
                 "steps": list(steps),
                 "memory": dict(memory or {}),
+                "companion": dict(companion or {}),
                 "persona_id": str(persona_id_value or ""),
             }
             await stream.send_json(payload)
@@ -3318,6 +3509,7 @@ async def persona_stream(
             text: str,
             memory_context: list[str] | None = None,
             persona_state_hints: dict[str, str] | None = None,
+            companion_context: dict[str, Any] | None = None,
             persona_exemplar_sections: list[tuple[str, str, int]] | None = None,
         ) -> dict:
             steps = []
@@ -3381,18 +3573,53 @@ async def persona_stream(
                 query_text = text
                 compact_memories = [m.strip() for m in (memory_context or []) if str(m or "").strip()]
                 compact_state_lines = _build_persona_state_hint_lines(compact_state_hints)
+                companion_payload = dict(companion_context or {})
+                companion_knowledge_lines = [
+                    str(line).strip()
+                    for line in companion_payload.get("knowledge_lines", [])
+                    if str(line or "").strip()
+                ]
+                companion_activity_lines = [
+                    str(line).strip()
+                    for line in companion_payload.get("activity_lines", [])
+                    if str(line or "").strip()
+                ]
                 if compact_state_lines:
                     query_text = f"{query_text}\n\nPersistent persona state hints:\n" + "\n".join(compact_state_lines)
                 if compact_memories:
                     memory_lines = "\n".join(f"- {m}" for m in compact_memories[: _get_persona_memory_top_k()])
                     query_text = f"{query_text}\n\nPersona memory hints:\n{memory_lines}"
+                if companion_knowledge_lines:
+                    query_text = (
+                        f"{query_text}\n\nCompanion knowledge:\n"
+                        + "\n".join(companion_knowledge_lines)
+                    )
+                if companion_activity_lines:
+                    query_text = (
+                        f"{query_text}\n\nRecent explicit companion activity:\n"
+                        + "\n".join(companion_activity_lines)
+                    )
+                applied_context_labels: list[str] = []
+                if compact_state_lines:
+                    applied_context_labels.append("persistent persona state")
+                if compact_memories:
+                    applied_context_labels.append("personalization memories")
+                if companion_knowledge_lines or companion_activity_lines:
+                    applied_context_labels.append("companion context")
                 query_text = append_persona_exemplar_sections(query_text, persona_exemplar_sections)
-                has_exemplar_guidance = any(str(content or "").strip() for _, content, _ in list(persona_exemplar_sections or []))
-                why_text = build_persona_rag_why_text(
-                    has_state_context=bool(compact_state_lines),
-                    has_memory_context=bool(compact_memories),
-                    has_exemplar_guidance=has_exemplar_guidance,
+                has_exemplar_guidance = any(
+                    str(content or "").strip()
+                    for _, content, _ in list(persona_exemplar_sections or [])
                 )
+                if has_exemplar_guidance:
+                    applied_context_labels.append("persona exemplar guidance")
+                if applied_context_labels:
+                    why_text = (
+                        "Input appears to be a knowledge query with applied "
+                        f"{_join_applied_context_labels(applied_context_labels)}."
+                    )
+                else:
+                    why_text = "Input appears to be a knowledge query."
                 steps.append(
                     {
                         "idx": 0,
@@ -3461,9 +3688,12 @@ async def persona_stream(
                     persona_id=runtime_persona_id,
                     resume_session_id=session_id,
                 )
-                existing_preferences = session_manager.get_preferences(
+                existing_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+                    session_manager=session_manager,
                     session_id=session_id,
                     user_id=connection_user_id,
+                    persisted_preferences=runtime_context.get("preferences"),
+                    persisted_activity_surface=runtime_context.get("activity_surface"),
                 )
                 configured_top_k = _get_persona_memory_top_k()
                 default_use_memory = _coerce_bool(
@@ -3475,6 +3705,15 @@ async def persona_stream(
                     default=default_use_memory,
                 )
                 use_memory_context = requested_use_memory_context
+                default_use_companion_context = _coerce_bool(
+                    existing_preferences.get("use_companion_context"),
+                    default=True,
+                )
+                requested_use_companion_context = _coerce_bool(
+                    msg.get("use_companion_context"),
+                    default=default_use_companion_context,
+                )
+                use_companion_context = requested_use_companion_context
                 runtime_persona_state_context_default = _coerce_bool(
                     runtime_context.get("persona_state_context_default"),
                     default=True,
@@ -3515,6 +3754,7 @@ async def persona_stream(
                     session_policy_rules = _session_policy_rules_from_preferences(existing_preferences)
                 preferences_patch: dict[str, Any] = {
                     "use_memory_context": use_memory_context,
+                    "use_companion_context": use_companion_context,
                     "use_persona_state_context": use_persona_state_context,
                     "memory_top_k": memory_top_k,
                 }
@@ -3526,6 +3766,13 @@ async def persona_stream(
                         user_id=connection_user_id,
                         preferences=preferences_patch,
                     )
+                _ = _persist_persona_session_preferences(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                    base_preferences=runtime_context.get("preferences"),
+                    patch_preferences=preferences_patch,
+                )
                 persona_turn_classifier = classify_persona_turn(text)
                 persona_exemplar_context = await resolve_persona_exemplar_runtime_context(
                     persona_scope_db=persona_scope_db,
@@ -3545,6 +3792,7 @@ async def persona_stream(
                     metadata={
                         "source": "ws",
                         "use_memory_context": use_memory_context,
+                        "use_companion_context": use_companion_context,
                         "use_persona_state_context": use_persona_state_context,
                         "memory_top_k": memory_top_k,
                         "session_policy_rule_count": len(session_policy_rules),
@@ -3569,6 +3817,17 @@ async def persona_stream(
                         session_id=session_id,
                     )
                     memory_context = [m.content for m in memories]
+                companion_context = {
+                    "knowledge_lines": [],
+                    "activity_lines": [],
+                    "card_count": 0,
+                    "activity_count": 0,
+                }
+                if use_companion_context:
+                    companion_context = await asyncio.to_thread(
+                        load_companion_context,
+                        user_id=authenticated_user_id,
+                    )
                 persona_state_hints: dict[str, str] = {}
                 if use_persona_state_context and state_context_allowed_by_mode:
                     persona_state_hints = _load_persona_state_hints_for_runtime(
@@ -3591,6 +3850,12 @@ async def persona_stream(
                     "persona_state_applied_count": len(persona_state_fields),
                     "persona_state_fields": persona_state_fields,
                 }
+                companion_usage = {
+                    "enabled": use_companion_context,
+                    "requested_enabled": requested_use_companion_context,
+                    "applied_card_count": int(companion_context.get("card_count", 0) or 0),
+                    "applied_activity_count": int(companion_context.get("activity_count", 0) or 0),
+                }
                 if use_memory_context and memory_context:
                     await _emit_notice(
                         session_id=session_id,
@@ -3611,6 +3876,26 @@ async def persona_stream(
                         level="info",
                         reason_code="MEMORY_CONTEXT_DISABLED",
                         message="Memory context disabled for this message",
+                    )
+                if use_companion_context and (
+                    companion_usage["applied_card_count"] or companion_usage["applied_activity_count"]
+                ):
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="COMPANION_CONTEXT_APPLIED",
+                        message=(
+                            "Applied companion context from "
+                            f"{companion_usage['applied_card_count']} knowledge cards and "
+                            f"{companion_usage['applied_activity_count']} recent activities"
+                        ),
+                    )
+                elif not use_companion_context:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="COMPANION_CONTEXT_DISABLED",
+                        message="Companion context disabled for this message",
                     )
                 if persona_state_fields:
                     await _emit_notice(
@@ -3637,6 +3922,7 @@ async def persona_stream(
                     text,
                     memory_context=memory_context,
                     persona_state_hints=persona_state_hints,
+                    companion_context=companion_context,
                     persona_exemplar_sections=persona_exemplar_assembly.sections,
                 )
                 plan_id = uuid.uuid4().hex
@@ -3703,6 +3989,7 @@ async def persona_stream(
                     plan_id=plan_id,
                     steps=stored_steps,
                     memory=memory_usage,
+                    companion=companion_usage,
                     persona_id_value=runtime_persona_id,
                 )
             elif mtype == "audio_chunk":
@@ -3941,9 +4228,12 @@ async def persona_stream(
                 )
                 runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
                 persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
-                current_preferences = session_manager.get_preferences(
+                current_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+                    session_manager=session_manager,
                     session_id=session_id,
                     user_id=connection_user_id,
+                    persisted_preferences=runtime_context.get("preferences"),
+                    persisted_activity_surface=runtime_context.get("activity_surface"),
                 )
                 if "session_policy_rules" in msg:
                     session_policy_rules = normalize_policy_rules(msg.get("session_policy_rules"))
@@ -3953,6 +4243,13 @@ async def persona_stream(
                             user_id=connection_user_id,
                             preferences={"session_policy_rules": session_policy_rules},
                         )
+                    _ = _persist_persona_session_preferences(
+                        persona_scope_db,
+                        session_id=session_id,
+                        user_id=authenticated_user_id,
+                        base_preferences=runtime_context.get("preferences"),
+                        patch_preferences={"session_policy_rules": session_policy_rules},
+                    )
                 else:
                     session_policy_rules = _session_policy_rules_from_preferences(current_preferences)
 
@@ -3993,6 +4290,18 @@ async def persona_stream(
                             or step.description
                             or "Final answer step executed."
                         )
+                        _ = await asyncio.to_thread(
+                            record_persona_session_summarized,
+                            user_id=authenticated_user_id,
+                            session_id=session_id,
+                            persona_id=runtime_persona_id,
+                            plan_id=plan_id,
+                            step_idx=step.idx,
+                            runtime_mode=runtime_mode,
+                            scope_snapshot_id=runtime_scope_snapshot_id,
+                            summary_text=assistant_text,
+                            surface=activity_surface,
+                        )
                         await _emit_assistant_delta(
                             session_id=session_id,
                             step_idx=step.idx,
@@ -4013,7 +4322,7 @@ async def persona_stream(
                         continue
 
                     executed_steps += 1
-                    await _execute_persona_tool_step(
+                    result = await _execute_persona_tool_step(
                         session_id=session_id,
                         plan_id=plan_id,
                         step_idx=step.idx,
@@ -4026,6 +4335,20 @@ async def persona_stream(
                         persona_id=runtime_persona_id,
                         runtime_mode_value=runtime_mode,
                         scope_snapshot_id=runtime_scope_snapshot_id,
+                    )
+                    _ = await asyncio.to_thread(
+                        record_persona_tool_executed,
+                        user_id=authenticated_user_id,
+                        session_id=session_id,
+                        persona_id=runtime_persona_id,
+                        plan_id=plan_id,
+                        step_idx=step.idx,
+                        step_type=step_type,
+                        tool_name=step.tool,
+                        runtime_mode=runtime_mode,
+                        scope_snapshot_id=runtime_scope_snapshot_id,
+                        outcome=result,
+                        surface=activity_surface,
                     )
                 if executed_steps == 0:
                     await _emit_notice(

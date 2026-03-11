@@ -68,6 +68,7 @@ def _seed_persona_session(
     mode: str,
     use_persona_state_context_default: bool = True,
     scope_snapshot_json: dict | None = None,
+    preferences_json: dict | None = None,
 ) -> None:
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
@@ -96,6 +97,7 @@ def _seed_persona_session(
                 "reuse_allowed": mode == "persistent_scoped",
                 "status": "active",
                 "scope_snapshot_json": dict(scope_snapshot_json or {}),
+                "preferences_json": dict(preferences_json or {}),
             }
         )
     finally:
@@ -292,6 +294,42 @@ def test_persona_ws_persistence_offloads_to_thread(monkeypatch):
 
     assert any("persist_persona_turn" in name for name in offloaded_calls)
     assert any("persist_tool_outcome" in name for name in offloaded_calls)
+
+
+def test_persona_ws_companion_context_load_offloads_to_thread(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    user_id = "905"
+    _seed_personalization_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+
+    async def _fake_resolve(*args, **kwargs):
+        return user_id, True, True
+
+    offloaded_calls: list[str] = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        offloaded_calls.append(getattr(func, "__name__", str(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+    monkeypatch.setattr(persona_ep.asyncio, "to_thread", _fake_to_thread)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_companion_offload",
+                        "text": "find notes about pytest",
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    assert any("load_companion_context" in name for name in offloaded_calls)
 
 
 def test_persona_ws_user_message_applies_exemplar_guidance_and_persists_compact_metadata(
@@ -2064,6 +2102,261 @@ def test_persona_memory_context_can_be_disabled_per_message(tmp_path, monkeypatc
     assert memory_payload.get("applied_count") == 0
     query_value = str(plan["steps"][0]["args"]["query"])
     assert "Do not include me when disabled." not in query_value
+
+
+def test_persona_companion_context_applied_when_available(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    user_id = "902"
+    db = _seed_personalization_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+    _ = db.insert_companion_activity_event(
+        user_id=user_id,
+        event_type="reading_item_saved",
+        source_type="reading_item",
+        source_id="42",
+        surface="api.reading",
+        dedupe_key="reading.save:42",
+        tags=["python", "research"],
+        provenance={
+            "capture_mode": "explicit",
+            "route": "/api/v1/reading/save",
+            "action": "save",
+        },
+        metadata={
+            "title": "FastAPI Testing Guide",
+            "url": "https://example.com/fastapi-testing",
+        },
+    )
+    _ = db.upsert_companion_knowledge_card(
+        user_id=user_id,
+        card_type="project_focus",
+        title="Current focus",
+        summary="Recent explicit activity clusters around 'python'.",
+        evidence=[{"source_id": "42"}],
+        score=0.8,
+        status="active",
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return user_id, True, True
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_companion_on",
+                        "text": "find notes about pytest",
+                    }
+                )
+            )
+            notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "COMPANION_CONTEXT_APPLIED",
+            )
+            assert "companion context" in str(notice.get("message")).lower()
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    companion_payload = plan.get("companion") or {}
+    assert companion_payload.get("enabled") is True
+    assert companion_payload.get("applied_card_count") == 1
+    assert companion_payload.get("applied_activity_count") == 1
+    query_value = str(plan["steps"][0]["args"]["query"])
+    assert "Current focus" in query_value
+    assert "FastAPI Testing Guide" in query_value
+
+
+def test_persona_companion_context_can_be_disabled_per_message(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    user_id = "903"
+    db = _seed_personalization_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+    _ = db.insert_companion_activity_event(
+        user_id=user_id,
+        event_type="reading_item_saved",
+        source_type="reading_item",
+        source_id="43",
+        surface="api.reading",
+        dedupe_key="reading.save:43",
+        tags=["pytest"],
+        provenance={
+            "capture_mode": "explicit",
+            "route": "/api/v1/reading/save",
+            "action": "save",
+        },
+        metadata={"title": "Pytest Reference"},
+    )
+    _ = db.upsert_companion_knowledge_card(
+        user_id=user_id,
+        card_type="project_focus",
+        title="Current focus",
+        summary="Recent explicit activity clusters around 'pytest'.",
+        evidence=[{"source_id": "43"}],
+        score=0.7,
+        status="active",
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return user_id, True, True
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_companion_off",
+                        "text": "find notes about pytest",
+                        "use_companion_context": False,
+                    }
+                )
+            )
+            disabled_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "COMPANION_CONTEXT_DISABLED",
+            )
+            assert "disabled" in str(disabled_notice.get("message")).lower()
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    companion_payload = plan.get("companion") or {}
+    assert companion_payload.get("enabled") is False
+    assert companion_payload.get("requested_enabled") is False
+    assert companion_payload.get("applied_card_count") == 0
+    assert companion_payload.get("applied_activity_count") == 0
+    query_value = str(plan["steps"][0]["args"]["query"])
+    assert "Current focus" not in query_value
+    assert "Pytest Reference" not in query_value
+
+
+def test_persona_companion_context_disable_persists_across_restart(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    user_id = "904"
+    db = _seed_personalization_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+    _ = db.insert_companion_activity_event(
+        user_id=user_id,
+        event_type="reading_item_saved",
+        source_type="reading_item",
+        source_id="44",
+        surface="api.reading",
+        dedupe_key="reading.save:44",
+        tags=["pytest"],
+        provenance={
+            "capture_mode": "explicit",
+            "route": "/api/v1/reading/save",
+            "action": "save",
+        },
+        metadata={"title": "Pytest Companion"},
+    )
+    _ = db.upsert_companion_knowledge_card(
+        user_id=user_id,
+        card_type="project_focus",
+        title="Current focus",
+        summary="Recent explicit activity clusters around 'pytest'.",
+        evidence=[{"source_id": "44"}],
+        score=0.7,
+        status="active",
+    )
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id=user_id,
+        session_id="sess_companion_pref_restart",
+        mode="session_scoped",
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return user_id, True, True
+
+    first_manager = SessionManager()
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: first_manager)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_companion_pref_restart",
+                        "text": "find notes about pytest",
+                        "use_companion_context": False,
+                    }
+                )
+            )
+            disabled_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "COMPANION_CONTEXT_DISABLED",
+            )
+            assert "disabled" in str(disabled_notice.get("message")).lower()
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    first_companion_payload = plan.get("companion") or {}
+    assert first_companion_payload.get("enabled") is False
+    assert first_companion_payload.get("requested_enabled") is False
+    assert first_companion_payload.get("applied_card_count") == 0
+    assert first_companion_payload.get("applied_activity_count") == 0
+    first_query_value = str(plan["steps"][0]["args"]["query"])
+    assert "Current focus" not in first_query_value
+    assert "Pytest Companion" not in first_query_value
+
+    chacha_db = CharactersRAGDB(
+        str(DatabasePaths.get_chacha_db_path(int(user_id))),
+        client_id="persona-ws-restart-verification",
+    )
+    try:
+        session_row = chacha_db.get_persona_session(
+            "sess_companion_pref_restart",
+            user_id=user_id,
+            include_deleted=False,
+        )
+    finally:
+        chacha_db.close_connection()
+    assert session_row is not None
+    assert session_row["preferences"]["use_companion_context"] is False
+
+    restarted_manager = SessionManager()
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: restarted_manager)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_companion_pref_restart",
+                        "text": "find notes about pytest",
+                    }
+                )
+            )
+            disabled_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "COMPANION_CONTEXT_DISABLED",
+            )
+            assert "disabled" in str(disabled_notice.get("message")).lower()
+            restarted_plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    restarted_companion_payload = restarted_plan.get("companion") or {}
+    assert restarted_companion_payload.get("enabled") is False
+    assert restarted_companion_payload.get("applied_card_count") == 0
+    assert restarted_companion_payload.get("applied_activity_count") == 0
+    restarted_query_value = str(restarted_plan["steps"][0]["args"]["query"])
+    assert "Current focus" not in restarted_query_value
+    assert "Pytest Companion" not in restarted_query_value
 
 
 def test_persona_memory_top_k_override_used(monkeypatch):

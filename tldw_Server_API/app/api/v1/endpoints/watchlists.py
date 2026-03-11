@@ -63,6 +63,13 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.exceptions import TemplateValidationError
+from tldw_Server_API.app.core.Personalization.companion_activity import (
+    record_watchlist_item_updated,
+    record_watchlist_source_created,
+    record_watchlist_source_deleted,
+    record_watchlist_source_restored,
+    record_watchlist_source_updated,
+)
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime as _is_explicit_pytest_runtime
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
@@ -469,6 +476,32 @@ def _get_group_ids(db, source_id: int) -> list[int]:
         return db.get_source_group_ids(source_id)
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
         return []
+
+
+def _source_response_from_row(db: WatchlistsDatabase, row: Any) -> Source:
+    settings = None
+    try:
+        settings = json.loads(row.settings_json) if getattr(row, "settings_json", None) else None
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        settings = None
+    return Source(
+        id=row.id,
+        name=row.name,
+        url=row.url,
+        source_type=row.source_type,  # type: ignore[assignment]
+        active=bool(row.active),
+        tags=list(getattr(row, "tags", []) or []),
+        group_ids=_get_group_ids(db, row.id),
+        settings=settings,
+        last_scraped_at=row.last_scraped_at,
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _watchlists_event_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _is_truthy_env(raw: str | None) -> bool:
@@ -1468,20 +1501,9 @@ async def create_source(
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"create_source failed: {e}")
         raise HTTPException(status_code=400, detail="source_create_failed") from e
-    return Source(
-        id=row.id,
-        name=row.name,
-        url=row.url,
-        source_type=row.source_type,  # type: ignore[assignment]
-        active=bool(row.active),
-        tags=row.tags,
-        group_ids=_get_group_ids(db, row.id),
-        settings=(json.loads(row.settings_json) if row.settings_json else None),
-        last_scraped_at=row.last_scraped_at,
-        status=row.status,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+    source = _source_response_from_row(db, row)
+    record_watchlist_source_created(user_id=current_user.id, source=source)
+    return source
 
 
 @router.get("/sources", response_model=SourcesListResponse, summary="List sources")
@@ -1711,6 +1733,8 @@ async def check_sources_now(
                 int(current_user.id),
                 manual_job_id,
                 source_ids_override=active_source_ids,
+                capture_companion_activity=True,
+                companion_route="/api/v1/watchlists/sources/check-now",
             )
             raw_run_id = run_result.get("run_id") if isinstance(run_result, dict) else None
             run_id = int(raw_run_id) if raw_run_id is not None else None
@@ -2096,7 +2120,8 @@ async def update_source(
                 logger.debug(f"watchlists.update_source: normalized YouTube URL {orig_url_for_log} -> {target_url}")
         else:
             _validate_youtube_feed_or_raise(target_url, target_type)
-    patch = payload.model_dump(exclude_unset=True)
+    activity_patch = payload.model_dump(exclude_unset=True)
+    patch = dict(activity_patch)
     group_ids = patch.pop("group_ids", None)
     if group_ids is not None:
         group_ids = _validate_group_ids(db, group_ids)
@@ -2122,20 +2147,15 @@ async def update_source(
                 "watchlists.update_source: failed to set source groups "
                 f"(source_id={source_id}, group_ids={group_ids})"
             )
-    return Source(
-        id=row.id,
-        name=row.name,
-        url=row.url,
-        source_type=row.source_type,  # type: ignore[assignment]
-        active=bool(row.active),
-        tags=getattr(row, "tags", []),
-        group_ids=_get_group_ids(db, row.id),
-        settings=(json.loads(row.settings_json) if row.settings_json else None),
-        last_scraped_at=row.last_scraped_at,
-        status=row.status,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+    source = _source_response_from_row(db, row)
+    if activity_patch:
+        record_watchlist_source_updated(
+            user_id=current_user.id,
+            source=source,
+            patch=activity_patch,
+            event_timestamp=_watchlists_event_timestamp(),
+        )
+    return source
 
 
 @router.delete(
@@ -2148,12 +2168,24 @@ async def delete_source(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    existing_source = None
+    try:
+        existing_source = _source_response_from_row(db, db.get_source(source_id))
+    except KeyError:
+        existing_source = None
     ok, restore_expires_at = db.delete_source_reversible(
         source_id,
         undo_window_seconds=WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS,
     )
     if not ok or not restore_expires_at:
         raise HTTPException(status_code=404, detail="source_not_found")
+    if existing_source is not None:
+        record_watchlist_source_deleted(
+            user_id=current_user.id,
+            source=existing_source,
+            event_timestamp=_watchlists_event_timestamp(),
+            restore_window_seconds=WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS,
+        )
     return SourceDeleteResponse(
         success=True,
         source_id=int(source_id),
@@ -2177,20 +2209,13 @@ async def restore_source(
         raise HTTPException(status_code=404, detail=code) from None
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc) or "source_restore_conflict") from exc
-    return Source(
-        id=row.id,
-        name=row.name,
-        url=row.url,
-        source_type=row.source_type,  # type: ignore[assignment]
-        active=bool(row.active),
-        tags=row.tags,
-        group_ids=_get_group_ids(db, row.id),
-        settings=(json.loads(row.settings_json) if row.settings_json else None),
-        last_scraped_at=row.last_scraped_at,
-        status=row.status,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+    source = _source_response_from_row(db, row)
+    record_watchlist_source_restored(
+        user_id=current_user.id,
+        source=source,
+        event_timestamp=_watchlists_event_timestamp(),
     )
+    return source
 
 
 @router.post(
@@ -3473,7 +3498,12 @@ async def trigger_run(
         raise HTTPException(status_code=404, detail="job_not_found") from None
 
     try:
-        result = await run_watchlist_job(int(current_user.id), job_id)
+        result = await run_watchlist_job(
+            int(current_user.id),
+            job_id,
+            capture_companion_activity=True,
+            companion_route=f"/api/v1/watchlists/jobs/{job_id}/run",
+        )
         run_id = int(result.get("run_id"))
         run = db.get_run(run_id)
     except KeyError:
@@ -4464,6 +4494,11 @@ async def update_scraped_item(
     db = Depends(get_watchlists_db_for_user),
 ):
     try:
+        before = db.get_item(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="item_not_found") from None
+
+    try:
         row = db.update_item_flags(
             item_id,
             reviewed=payload.reviewed,
@@ -4472,6 +4507,25 @@ async def update_scraped_item(
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="item_not_found") from None
+
+    changed_patch: dict[str, Any] = {}
+    if payload.reviewed is not None and bool(getattr(before, "reviewed", 0)) != bool(getattr(row, "reviewed", 0)):
+        changed_patch["reviewed"] = bool(getattr(row, "reviewed", 0))
+    if payload.status is not None and getattr(before, "status", None) != getattr(row, "status", None):
+        changed_patch["status"] = getattr(row, "status", None)
+    if (
+        payload.queued_for_briefing is not None
+        and bool(getattr(before, "queued_for_briefing", 0)) != bool(getattr(row, "queued_for_briefing", 0))
+    ):
+        changed_patch["queued_for_briefing"] = bool(getattr(row, "queued_for_briefing", 0))
+
+    if changed_patch:
+        record_watchlist_item_updated(
+            user_id=current_user.id,
+            item=row,
+            patch=changed_patch,
+            event_timestamp=_utcnow_iso(),
+        )
     return _row_to_scraped_item(row)
 
 

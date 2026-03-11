@@ -108,5 +108,6 @@ def test_postgres_initializer_uses_postgres_safe_v33_migration(monkeypatch):
 
     db._initialize_schema_postgres()
 
-    assert applied_scripts[-1] == CharactersRAGDB._MIGRATION_SQL_V32_TO_V33_POSTGRES
-    assert "PRAGMA foreign_keys" not in applied_scripts[-1]
+    assert CharactersRAGDB._MIGRATION_SQL_V32_TO_V33_POSTGRES in applied_scripts
+    assert applied_scripts[-1] == CharactersRAGDB._MIGRATION_SQL_V34_TO_V35
+    assert "PRAGMA foreign_keys" not in CharactersRAGDB._MIGRATION_SQL_V32_TO_V33_POSTGRES

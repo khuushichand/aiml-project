@@ -15,6 +15,7 @@ import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { isCompanionConsentRequiredResponse } from "@/services/companion"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { buildPersonaWebSocketUrl } from "@/services/persona-stream"
 import {
@@ -43,6 +44,7 @@ type PendingPlan = {
   planId: string
   steps: PersonaPlanStep[]
   memory?: PersonaMemoryUsage
+  companion?: PersonaCompanionUsage
 }
 
 type PersonaLogEntry = {
@@ -64,6 +66,13 @@ type PersonaMemoryUsage = {
   enabled?: boolean
   requested_top_k?: number
   applied_count?: number
+}
+
+type PersonaCompanionUsage = {
+  enabled?: boolean
+  requested_enabled?: boolean
+  applied_card_count?: number
+  applied_activity_count?: number
 }
 
 type PersonaRuntimeApprovalPayload = {
@@ -111,6 +120,18 @@ type PersonaSessionSummary = {
   pending_plan_count?: number
 }
 
+type PersonaSessionPreferences = {
+  use_memory_context?: boolean
+  use_companion_context?: boolean
+  use_persona_state_context?: boolean
+  memory_top_k?: number
+}
+
+type PersonaSessionDetailResponse = {
+  preferences?: PersonaSessionPreferences
+  turns?: Array<Record<string, unknown>>
+}
+
 type PersonaProfileResponse = {
   id?: string
   use_persona_state_context_default?: boolean
@@ -151,6 +172,16 @@ type UnsavedStateDiscardReason =
   | "before_unload"
 
 const formatMemoryResultsLabel = (count: number) => `Memory results: ${count}`
+const MAX_MEMORY_TOP_K = 10
+const MEMORY_TOP_K_OPTIONS = Array.from(
+  { length: MAX_MEMORY_TOP_K },
+  (_, index) => index + 1
+)
+const _normalizeMemoryTopK = (value: unknown, fallback: number): number => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(1, Math.min(MAX_MEMORY_TOP_K, Math.trunc(parsed)))
+}
 const _historyEntrySortEpoch = (entry: PersonaStateHistoryEntry): number => {
   const candidate = String(entry.created_at || entry.last_modified || "").trim()
   if (!candidate) return 0
@@ -227,29 +258,51 @@ const _confirmWithBrowserPrompt = (message: string): boolean => {
   }
 }
 
-const SidepanelPersona = () => {
-  const { t } = useTranslation(["sidepanel", "common"])
+type PersonaRouteMode = "persona" | "companion"
+type PersonaRouteShell = "sidepanel" | "options"
+
+type SidepanelPersonaProps = {
+  mode?: PersonaRouteMode
+  shell?: PersonaRouteShell
+}
+
+const DEFAULT_PERSONA_ID = "research_assistant"
+
+const SidepanelPersona = ({
+  mode = "persona",
+  shell = "sidepanel"
+}: SidepanelPersonaProps) => {
+  const { t } = useTranslation(["sidepanel", "common", "option"])
   const navigate = useNavigate()
   const location = useLocation()
   const isOnline = useServerOnline()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
+  const isCompanionMode = mode === "companion"
+  const routeTitle = isCompanionMode
+    ? t("option:header.companion", "Companion")
+    : t("sidepanel:persona.title", "Persona Garden")
+  const routeRootClassName =
+    shell === "sidepanel"
+      ? "flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
+      : "flex bg-bg flex-col gap-3 mx-auto max-w-7xl"
 
   const wsRef = React.useRef<WebSocket | null>(null)
   const manuallyClosingRef = React.useRef(false)
 
   const [catalog, setCatalog] = React.useState<PersonaInfo[]>([])
   const [selectedPersonaId, setSelectedPersonaId] =
-    React.useState<string>("research_assistant")
+    React.useState<string>(DEFAULT_PERSONA_ID)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
   const [sessionId, setSessionId] = React.useState<string | null>(null)
   const [sessionHistory, setSessionHistory] = React.useState<PersonaSessionSummary[]>([])
   const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
   const [memoryEnabled, setMemoryEnabled] = React.useState(true)
   const [memoryTopK, setMemoryTopK] = React.useState<number>(3)
+  const [companionContextEnabled, setCompanionContextEnabled] = React.useState(true)
   const [personaStateContextEnabled, setPersonaStateContextEnabled] =
-    React.useState(true)
+    React.useState(!isCompanionMode)
   const [personaStateContextProfileDefault, setPersonaStateContextProfileDefault] =
-    React.useState(true)
+    React.useState(!isCompanionMode)
   const [updatingPersonaStateContextDefault, setUpdatingPersonaStateContextDefault] =
     React.useState(false)
   const [soulMd, setSoulMd] = React.useState("")
@@ -279,6 +332,7 @@ const SidepanelPersona = () => {
   >(null)
   const [connected, setConnected] = React.useState(false)
   const [connecting, setConnecting] = React.useState(false)
+  const [savingCompanionCheckIn, setSavingCompanionCheckIn] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [input, setInput] = React.useState("")
   const [logs, setLogs] = React.useState<PersonaLogEntry[]>([])
@@ -300,6 +354,37 @@ const SidepanelPersona = () => {
     setActiveTab,
     setSelectedPersonaId
   })
+
+  React.useEffect(() => {
+    if (!isCompanionMode) return
+    setCompanionContextEnabled(true)
+    setPersonaStateContextEnabled(false)
+    setPersonaStateContextProfileDefault(false)
+  }, [isCompanionMode])
+
+  const applySessionPreferences = React.useCallback(
+    (preferences?: PersonaSessionPreferences | null) => {
+      if (!preferences || typeof preferences !== "object") return
+      if (typeof preferences.use_memory_context === "boolean") {
+        setMemoryEnabled(preferences.use_memory_context)
+      }
+      if (typeof preferences.memory_top_k !== "undefined") {
+        setMemoryTopK((current) =>
+          _normalizeMemoryTopK(preferences.memory_top_k, current)
+        )
+      }
+      if (!isCompanionMode && typeof preferences.use_companion_context === "boolean") {
+        setCompanionContextEnabled(preferences.use_companion_context)
+      }
+      if (
+        !isCompanionMode &&
+        typeof preferences.use_persona_state_context === "boolean"
+      ) {
+        setPersonaStateContextEnabled(preferences.use_persona_state_context)
+      }
+    },
+    [isCompanionMode]
+  )
 
   const getUnsavedStateDiscardPrompt = React.useCallback(
     (reason: UnsavedStateDiscardReason): string => {
@@ -448,7 +533,16 @@ const SidepanelPersona = () => {
           payload?.memory && typeof payload.memory === "object"
             ? (payload.memory as PersonaMemoryUsage)
             : undefined
-        setPendingPlan({ planId, steps, memory: memoryPayload })
+        const companionPayload =
+          payload?.companion && typeof payload.companion === "object"
+            ? (payload.companion as PersonaCompanionUsage)
+            : undefined
+        setPendingPlan({
+          planId,
+          steps,
+          memory: memoryPayload,
+          companion: companionPayload
+        })
         appendLog("tool", `Plan proposed (${steps.length} step${steps.length === 1 ? "" : "s"})`)
         return
       }
@@ -775,38 +869,50 @@ const SidepanelPersona = () => {
         : []
       setCatalog(personas)
 
-      const preferredPersonaId = routeBootstrap.personaId || selectedPersonaId
+      const preferredPersonaId = isCompanionMode
+        ? DEFAULT_PERSONA_ID
+        : routeBootstrap.personaId || selectedPersonaId
       const selectedPersonaIsValid = personas.some(
         (persona) => String(persona.id || "") === preferredPersonaId
       )
       const resolvedPersonaId =
         (selectedPersonaIsValid ? preferredPersonaId : personas[0]?.id) ||
         preferredPersonaId ||
-        "research_assistant"
+        DEFAULT_PERSONA_ID
       if (resolvedPersonaId && resolvedPersonaId !== selectedPersonaId) {
         setSelectedPersonaId(resolvedPersonaId)
       }
-      setPersonaStateContextEnabled(true)
-      setPersonaStateContextProfileDefault(true)
-      try {
-        const profileResp = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(resolvedPersonaId)}` as any,
-          { method: "GET" }
-        )
-        if (profileResp.ok) {
-          const profilePayload = (await profileResp.json()) as PersonaProfileResponse
-          const stateContextDefault =
-            profilePayload?.use_persona_state_context_default !== false
-          setPersonaStateContextEnabled(stateContextDefault)
-          setPersonaStateContextProfileDefault(stateContextDefault)
+      if (isCompanionMode) {
+        setCompanionContextEnabled(true)
+        setPersonaStateContextEnabled(false)
+        setPersonaStateContextProfileDefault(false)
+      } else {
+        setPersonaStateContextEnabled(true)
+        setPersonaStateContextProfileDefault(true)
+        try {
+          const profileResp = await tldwClient.fetchWithAuth(
+            `/api/v1/persona/profiles/${encodeURIComponent(resolvedPersonaId)}` as any,
+            { method: "GET" }
+          )
+          if (profileResp.ok) {
+            const profilePayload = (await profileResp.json()) as PersonaProfileResponse
+            const stateContextDefault =
+              profilePayload?.use_persona_state_context_default !== false
+            setPersonaStateContextEnabled(stateContextDefault)
+            setPersonaStateContextProfileDefault(stateContextDefault)
+          }
+        } catch {
+          // profile fetch is optional for route initialization
         }
-      } catch {
-        // profile fetch is optional for route initialization
+        void loadPersonaStateDocs(resolvedPersonaId, { silent: true })
       }
-      void loadPersonaStateDocs(resolvedPersonaId, { silent: true })
 
       const sessionsResp = await tldwClient.fetchWithAuth(
-        `/api/v1/persona/sessions?persona_id=${encodeURIComponent(resolvedPersonaId)}&limit=50` as any,
+        `/api/v1/persona/sessions?persona_id=${encodeURIComponent(resolvedPersonaId)}${
+          isCompanionMode
+            ? `&surface=${encodeURIComponent("companion.conversation")}`
+            : ""
+        }&limit=50` as any,
         {
           method: "GET"
         }
@@ -824,7 +930,8 @@ const SidepanelPersona = () => {
         method: "POST",
         body: {
           persona_id: resolvedPersonaId,
-          resume_session_id: resumeSessionId || undefined
+          resume_session_id: resumeSessionId || undefined,
+          surface: isCompanionMode ? "companion.conversation" : undefined
         }
       })
       if (!sessionResp.ok) {
@@ -844,6 +951,19 @@ const SidepanelPersona = () => {
       }
       setSessionId(nextSessionId)
       setResumeSessionId(nextSessionId)
+      try {
+        const sessionDetailResp = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/sessions/${encodeURIComponent(nextSessionId)}?limit_turns=0` as any,
+          { method: "GET" }
+        )
+        if (sessionDetailResp.ok) {
+          const sessionDetailPayload =
+            (await sessionDetailResp.json()) as PersonaSessionDetailResponse
+          applySessionPreferences(sessionDetailPayload?.preferences)
+        }
+      } catch {
+        // session detail hydration is best-effort during connect
+      }
       if (!sessionsPayload.some((item) => item.session_id === nextSessionId)) {
         setSessionHistory((prev) => [{ session_id: nextSessionId }, ...prev])
       }
@@ -898,7 +1018,9 @@ const SidepanelPersona = () => {
     connecting,
     disconnect,
     handleIncomingPayload,
+    isCompanionMode,
     loadPersonaStateDocs,
+    applySessionPreferences,
     resumeSessionId,
     routeBootstrap.personaId,
     selectedPersonaId
@@ -919,6 +1041,10 @@ const SidepanelPersona = () => {
   }, [])
 
   const canSend = connected && Boolean(sessionId) && Boolean(input.trim())
+  const canSaveCompanionCheckIn =
+    Boolean(input.trim()) &&
+    Boolean(capabilities?.hasPersonalization) &&
+    !savingCompanionCheckIn
   const hasUnsavedPersonaStateChanges =
     soulMd !== savedSoulMd ||
     identityMd !== savedIdentityMd ||
@@ -1069,6 +1195,7 @@ const SidepanelPersona = () => {
           session_id: sessionId,
           text: trimmed,
           use_memory_context: memoryEnabled,
+          use_companion_context: companionContextEnabled,
           use_persona_state_context: personaStateContextEnabled,
           memory_top_k: memoryTopK
         })
@@ -1081,11 +1208,45 @@ const SidepanelPersona = () => {
   }, [
     appendLog,
     canSend,
+    companionContextEnabled,
     input,
     memoryEnabled,
     memoryTopK,
     personaStateContextEnabled,
     sessionId
+  ])
+
+  const saveCompanionCheckIn = React.useCallback(async () => {
+    const trimmed = input.trim()
+    if (!trimmed || savingCompanionCheckIn || !capabilities?.hasPersonalization) return
+    setSavingCompanionCheckIn(true)
+    setError(null)
+    try {
+      const response = await tldwClient.fetchWithAuth("/api/v1/companion/check-ins" as any, {
+        method: "POST",
+        body: {
+          summary: trimmed,
+          surface: isCompanionMode ? "companion.conversation" : "persona.sidepanel"
+        }
+      })
+      if (!response.ok) {
+        if (isCompanionConsentRequiredResponse(response)) {
+          throw new Error("Enable personalization before saving to companion.")
+        }
+        throw new Error(response.error || "Failed to save companion check-in")
+      }
+      appendLog("notice", "Saved draft to companion")
+    } catch (err: any) {
+      setError(String(err?.message || "Failed to save companion check-in"))
+    } finally {
+      setSavingCompanionCheckIn(false)
+    }
+  }, [
+    appendLog,
+    capabilities?.hasPersonalization,
+    input,
+    isCompanionMode,
+    savingCompanionCheckIn
   ])
 
   const loadSessionHistory = React.useCallback(async () => {
@@ -1231,27 +1392,47 @@ const SidepanelPersona = () => {
     },
     [appendLog, connected, sessionId]
   )
-
-  const personaUnsupported = !capsLoading && capabilities && !capabilities.hasPersona
+  const personaUnsupported =
+    !capsLoading &&
+    capabilities &&
+    (!capabilities.hasPersona ||
+      (isCompanionMode && !capabilities.hasPersonalization))
+  const routeHeader =
+    shell === "sidepanel" ? (
+      <div className="sticky bg-surface top-0 z-10">
+        <SidepanelHeaderSimple activeTitle={routeTitle} />
+      </div>
+    ) : (
+      <div className="rounded-lg border border-border bg-surface px-4 py-3">
+        <Typography.Text strong>{routeTitle}</Typography.Text>
+        <Typography.Text type="secondary" className="mt-1 block text-sm">
+          {isCompanionMode
+            ? "A dedicated conversation surface that keeps companion context in the loop."
+            : "Live persona sessions run against your connected tldw server."}
+        </Typography.Text>
+      </div>
+    )
   const selectedPersonaName =
     catalog.find((persona) => String(persona.id || "") === selectedPersonaId)?.name ||
     selectedPersonaId
 
   const liveSessionControls = (
     <div className="flex flex-wrap items-center gap-2">
-      <Select
-        size="small"
-        className="min-w-[180px]"
-        value={selectedPersonaId}
-        disabled={connected}
-        aria-label={t("sidepanel:persona.select", "Select persona")}
-        onChange={(value) => handlePersonaSelectionChange(String(value))}
-        options={catalog.map((persona) => ({
-          label: persona.name || persona.id,
-          value: persona.id
-        }))}
-        placeholder={t("sidepanel:persona.select", "Select persona")}
-      />
+      {!isCompanionMode ? (
+        <Select
+          size="small"
+          className="min-w-[180px]"
+          value={selectedPersonaId}
+          disabled={connected}
+          aria-label={t("sidepanel:persona.select", "Select persona")}
+          onChange={(value) => handlePersonaSelectionChange(String(value))}
+          options={catalog.map((persona) => ({
+            label: persona.name || persona.id,
+            value: persona.id
+          }))}
+          placeholder={t("sidepanel:persona.select", "Select persona")}
+        />
+      ) : null}
       <Select
         data-testid="persona-resume-session-select"
         size="small"
@@ -1276,23 +1457,36 @@ const SidepanelPersona = () => {
       >
         {t("sidepanel:persona.memoryToggle", "Memory")}
       </Checkbox>
-      <Checkbox
-        data-testid="persona-state-context-toggle"
-        checked={personaStateContextEnabled}
-        onChange={(event) => setPersonaStateContextEnabled(event.target.checked)}
-      >
-        {t("sidepanel:persona.stateContextToggle", "State context")}
-      </Checkbox>
-      <Checkbox
-        data-testid="persona-state-context-default-toggle"
-        checked={personaStateContextProfileDefault}
-        disabled={!connected || updatingPersonaStateContextDefault}
-        onChange={(event) => {
-          void updatePersonaStateContextDefault(event.target.checked)
-        }}
-      >
-        {t("sidepanel:persona.stateContextDefaultToggle", "Profile default")}
-      </Checkbox>
+      {!isCompanionMode ? (
+        <Checkbox
+          data-testid="persona-state-context-toggle"
+          checked={personaStateContextEnabled}
+          onChange={(event) => setPersonaStateContextEnabled(event.target.checked)}
+        >
+          {t("sidepanel:persona.stateContextToggle", "State context")}
+        </Checkbox>
+      ) : null}
+      {!isCompanionMode ? (
+        <Checkbox
+          data-testid="persona-companion-context-toggle"
+          checked={companionContextEnabled}
+          onChange={(event) => setCompanionContextEnabled(event.target.checked)}
+        >
+          {t("sidepanel:persona.companionContextToggle", "Companion context")}
+        </Checkbox>
+      ) : null}
+      {!isCompanionMode ? (
+        <Checkbox
+          data-testid="persona-state-context-default-toggle"
+          checked={personaStateContextProfileDefault}
+          disabled={!connected || updatingPersonaStateContextDefault}
+          onChange={(event) => {
+            void updatePersonaStateContextDefault(event.target.checked)
+          }}
+        >
+          {t("sidepanel:persona.stateContextDefaultToggle", "Profile default")}
+        </Checkbox>
+      ) : null}
       <Select
         data-testid="persona-memory-topk-select"
         size="small"
@@ -1301,7 +1495,7 @@ const SidepanelPersona = () => {
         aria-label={t("sidepanel:persona.memoryTopK", "Memory results")}
         disabled={!memoryEnabled}
         onChange={(value) => setMemoryTopK(Number(value))}
-        options={[1, 2, 3, 4, 5].map((k) => ({
+        options={MEMORY_TOP_K_OPTIONS.map((k) => ({
           label: formatMemoryResultsLabel(k),
           value: k
         }))}
@@ -1416,7 +1610,9 @@ const SidepanelPersona = () => {
   const liveSessionStatusPanels = (
     <>
       {errorBanner}
-      <PersonaPolicySummary personaId={selectedPersonaId || null} />
+      {!isCompanionMode ? (
+        <PersonaPolicySummary personaId={selectedPersonaId || null} />
+      ) : null}
       {runtimeApprovalCard}
     </>
   )
@@ -1441,6 +1637,23 @@ const SidepanelPersona = () => {
           {typeof pendingPlan.memory.applied_count === "number" ? (
             <Tag color="purple">
               {`applied results: ${pendingPlan.memory.applied_count}`}
+            </Tag>
+          ) : null}
+        </div>
+      ) : null}
+      {pendingPlan.companion ? (
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <Tag color={pendingPlan.companion.enabled ? "green" : "default"}>
+            {pendingPlan.companion.enabled ? "companion on" : "companion off"}
+          </Tag>
+          {typeof pendingPlan.companion.applied_card_count === "number" ? (
+            <Tag color="cyan">
+              {`applied cards: ${pendingPlan.companion.applied_card_count}`}
+            </Tag>
+          ) : null}
+          {typeof pendingPlan.companion.applied_activity_count === "number" ? (
+            <Tag color="geekblue">
+              {`applied activity: ${pendingPlan.companion.applied_activity_count}`}
             </Tag>
           ) : null}
         </div>
@@ -1703,10 +1916,12 @@ const SidepanelPersona = () => {
       <div className="space-y-2">
         {logs.length === 0 ? (
           <Typography.Text type="secondary" className="text-xs">
-            {t(
-              "sidepanel:persona.empty",
-              "Connect to persona and send a message to start."
-            )}
+            {isCompanionMode
+              ? "Connect to companion and send a message to start."
+              : t(
+                  "sidepanel:persona.empty",
+                  "Connect to persona and send a message to start."
+                )}
           </Typography.Text>
         ) : (
           logs.map((entry) => (
@@ -1731,13 +1946,29 @@ const SidepanelPersona = () => {
         value={input}
         autoSize={{ minRows: 2, maxRows: 4 }}
         onChange={(event) => setInput(event.target.value)}
-        placeholder={t("sidepanel:persona.inputPlaceholder", "Ask Persona...")}
+        placeholder={
+          isCompanionMode
+            ? "Ask Companion..."
+            : t("sidepanel:persona.inputPlaceholder", "Ask Persona...")
+        }
         onPressEnter={(event) => {
           if (event.shiftKey) return
           event.preventDefault()
           sendUserMessage()
         }}
       />
+      {capabilities?.hasPersonalization ? (
+        <Button
+          data-testid="persona-save-checkin-button"
+          disabled={!canSaveCompanionCheckIn}
+          loading={savingCompanionCheckIn}
+          onClick={() => {
+            void saveCompanionCheckIn()
+          }}
+        >
+          {t("sidepanel:persona.saveCheckIn", "Save check-in")}
+        </Button>
+      ) : null}
       <Button
         type="primary"
         icon={<Send className="h-4 w-4" />}
@@ -1803,23 +2034,28 @@ const SidepanelPersona = () => {
       content: <PoliciesPanel hasPendingPlan={Boolean(pendingPlan)} />
     }
   ]
-
   if (!isOnline) {
     return (
       <div
         data-testid="persona-route-root"
-        className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
+        className={routeRootClassName}
       >
-        <div className="sticky bg-surface top-0 z-10">
-          <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona Garden")} />
-        </div>
+        {routeHeader}
         <div className="p-4">
           <FeatureEmptyState
-            title={t("sidepanel:persona.connectTitle", "Connect to use Persona")}
-            description={t(
-              "sidepanel:persona.connectDescription",
-              "Persona streaming runs on your tldw server. Connect to a server to start a session."
-            )}
+            title={
+              isCompanionMode
+                ? "Connect to use Companion"
+                : t("sidepanel:persona.connectTitle", "Connect to use Persona")
+            }
+            description={
+              isCompanionMode
+                ? "Companion conversation runs on your tldw server. Connect to start a session."
+                : t(
+                    "sidepanel:persona.connectDescription",
+                    "Persona streaming runs on your tldw server. Connect to a server to start a session."
+                  )
+            }
             primaryActionLabel={t("sidepanel:header.settingsShortLabel", "Settings")}
             onPrimaryAction={() => navigate("/settings")}
           />
@@ -1832,18 +2068,24 @@ const SidepanelPersona = () => {
     return (
       <div
         data-testid="persona-route-root"
-        className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
+        className={routeRootClassName}
       >
-        <div className="sticky bg-surface top-0 z-10">
-          <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona Garden")} />
-        </div>
+        {routeHeader}
         <div className="p-4">
           <FeatureEmptyState
-            title={t("sidepanel:persona.unavailableTitle", "Persona unavailable")}
-            description={t(
-              "sidepanel:persona.unavailableDescription",
-              "This server does not currently advertise persona support."
-            )}
+            title={
+              isCompanionMode
+                ? "Companion unavailable"
+                : t("sidepanel:persona.unavailableTitle", "Persona unavailable")
+            }
+            description={
+              isCompanionMode
+                ? "This server does not currently advertise persona support for companion conversation."
+                : t(
+                    "sidepanel:persona.unavailableDescription",
+                    "This server does not currently advertise persona support."
+                  )
+            }
             primaryActionLabel={t("sidepanel:header.settingsShortLabel", "Settings")}
             onPrimaryAction={() => navigate("/settings")}
           />
@@ -1855,464 +2097,18 @@ const SidepanelPersona = () => {
   return (
     <div
       data-testid="persona-route-root"
-      className="flex bg-bg flex-col min-h-screen mx-auto max-w-7xl"
+      className={routeRootClassName}
     >
-      <div className="sticky bg-surface top-0 z-10">
-        <SidepanelHeaderSimple activeTitle={t("sidepanel:persona.title", "Persona Garden")} />
-      </div>
-
-      {false && (
+      {routeHeader}
+      {isCompanionMode ? (
         <div className="flex flex-1 flex-col gap-3 p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Select
-            size="small"
-            className="min-w-[180px]"
-            value={selectedPersonaId}
-            disabled={connected}
-            aria-label={t("sidepanel:persona.select", "Select persona")}
-            onChange={(value) => handlePersonaSelectionChange(String(value))}
-            options={catalog.map((persona) => ({
-              label: persona.name || persona.id,
-              value: persona.id
-            }))}
-            placeholder={t("sidepanel:persona.select", "Select persona")}
-          />
-          <Select
-            data-testid="persona-resume-session-select"
-            size="small"
-            className="min-w-[180px]"
-            value={resumeSessionId || "__new__"}
-            aria-label={t("sidepanel:persona.resume", "Resume session")}
-            disabled={connected}
-            onChange={(value) => handleResumeSessionSelectionChange(String(value))}
-            options={[
-              { label: t("sidepanel:persona.newSession", "New session"), value: "__new__" },
-              ...sessionHistory.map((session) => ({
-                label: session.session_id,
-                value: session.session_id
-              }))
-            ]}
-            placeholder={t("sidepanel:persona.resume", "Resume session")}
-          />
-          <Checkbox
-            data-testid="persona-memory-toggle"
-            checked={memoryEnabled}
-            onChange={(event) => setMemoryEnabled(event.target.checked)}
-          >
-            {t("sidepanel:persona.memoryToggle", "Memory")}
-          </Checkbox>
-          <Checkbox
-            data-testid="persona-state-context-toggle"
-            checked={personaStateContextEnabled}
-            onChange={(event) => setPersonaStateContextEnabled(event.target.checked)}
-          >
-            {t("sidepanel:persona.stateContextToggle", "State context")}
-          </Checkbox>
-          <Checkbox
-            data-testid="persona-state-context-default-toggle"
-            checked={personaStateContextProfileDefault}
-            disabled={!connected || updatingPersonaStateContextDefault}
-            onChange={(event) => {
-              void updatePersonaStateContextDefault(event.target.checked)
-            }}
-          >
-            {t("sidepanel:persona.stateContextDefaultToggle", "Profile default")}
-          </Checkbox>
-          <Select
-            data-testid="persona-memory-topk-select"
-            size="small"
-            className="w-[150px]"
-            value={memoryTopK}
-            aria-label={t("sidepanel:persona.memoryTopK", "Memory results")}
-            disabled={!memoryEnabled}
-            onChange={(value) => setMemoryTopK(Number(value))}
-            options={[1, 2, 3, 4, 5].map((k) => ({
-              label: formatMemoryResultsLabel(k),
-              value: k
-            }))}
-            placeholder={t("sidepanel:persona.memoryTopK", "Memory results")}
-          />
-          {!connected ? (
-            <Button
-              size="small"
-              type="primary"
-              loading={connecting}
-              onClick={() => {
-                void connect()
-              }}
-            >
-              {t("sidepanel:persona.connect", "Connect")}
-            </Button>
-          ) : (
-            <Button size="small" onClick={disconnect}>
-              {t("sidepanel:persona.disconnect", "Disconnect")}
-            </Button>
-          )}
-          {sessionId ? <Tag color="blue">{`session: ${sessionId.slice(0, 8)}`}</Tag> : null}
-          {sessionId ? (
-            <Button size="small" onClick={() => void loadSessionHistory()}>
-              {t("sidepanel:persona.loadHistory", "Load history")}
-            </Button>
-          ) : null}
+          {liveSessionControls}
+          {liveSessionStatusPanels}
+          {pendingPlanCard}
+          {transcriptPanel}
+          {composerPanel}
         </div>
-
-        {error ? (
-          <div className="rounded-md border border-danger/30 bg-danger/10 p-2 text-xs text-danger">
-            {error}
-          </div>
-        ) : null}
-
-        <PersonaPolicySummary personaId={selectedPersonaId || null} />
-
-        {pendingApprovals.length ? (
-          <div className="rounded-lg border border-warning/40 bg-warning/5 p-3">
-            <Typography.Text strong>
-              {t("sidepanel:persona.runtimeApproval", "Runtime approval required")}
-            </Typography.Text>
-            <div className="mt-2 space-y-3">
-              {pendingApprovals.map((approval) => {
-                const isSubmitting = submittingApprovalKey === approval.key
-                return (
-                  <div
-                    key={approval.key}
-                    className="rounded-md border border-warning/30 bg-surface p-3"
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Tag color="gold">{approval.tool_name}</Tag>
-                      {approval.mode ? <Tag color="blue">{approval.mode}</Tag> : null}
-                      {approval.reason ? <Tag color="red">{approval.reason}</Tag> : null}
-                    </div>
-                    {Object.keys(approval.arguments_summary).length ? (
-                      <pre className="mt-2 overflow-auto rounded bg-bg p-2 text-[11px] text-text">
-                        {JSON.stringify(approval.arguments_summary, null, 2)}
-                      </pre>
-                    ) : null}
-                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted">
-                      <label htmlFor={`persona-approval-duration-${approval.key}`}>
-                        {t("sidepanel:persona.approvalDuration", "Approval duration")}
-                      </label>
-                      <select
-                        id={`persona-approval-duration-${approval.key}`}
-                        className="rounded border border-border bg-bg px-2 py-1 text-xs text-text"
-                        value={approval.selected_duration}
-                        disabled={isSubmitting}
-                        onChange={(event) =>
-                          updateApprovalDuration(
-                            approval.key,
-                            event.target.value as PersonaRuntimeApprovalDuration
-                          )
-                        }
-                      >
-                        {approval.duration_options.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="mt-3 flex items-center gap-2">
-                      <Button
-                        size="small"
-                        type="primary"
-                        loading={isSubmitting}
-                        onClick={() => {
-                          void submitApprovalDecision(approval, "approved")
-                        }}
-                      >
-                        {t("sidepanel:persona.approveAndRetry", "Approve and retry")}
-                      </Button>
-                      <Button
-                        size="small"
-                        danger
-                        disabled={isSubmitting}
-                        onClick={() => {
-                          void submitApprovalDecision(approval, "denied")
-                        }}
-                      >
-                        {t("sidepanel:persona.denyApproval", "Deny")}
-                      </Button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        {pendingPlan ? (
-          <div className="rounded-lg border border-border bg-surface p-3">
-            <Typography.Text strong>
-              {t("sidepanel:persona.pendingPlan", "Pending tool plan")}
-            </Typography.Text>
-            {pendingPlan.memory ? (
-              <div className="mt-1 flex flex-wrap items-center gap-1">
-                <Tag color={pendingPlan.memory.enabled ? "green" : "default"}>
-                  {pendingPlan.memory.enabled ? "memory on" : "memory off"}
-                </Tag>
-                {typeof pendingPlan.memory.requested_top_k === "number" ? (
-                  <Tag color="blue">
-                    {`requested ${formatMemoryResultsLabel(
-                      pendingPlan.memory.requested_top_k
-                    ).toLowerCase()}`}
-                  </Tag>
-                ) : null}
-                {typeof pendingPlan.memory.applied_count === "number" ? (
-                  <Tag color="purple">
-                    {`applied results: ${pendingPlan.memory.applied_count}`}
-                  </Tag>
-                ) : null}
-              </div>
-            ) : null}
-            <div className="mt-2 space-y-1">
-              {pendingPlan.steps.map((step) => (
-                <label key={step.idx} className="flex items-start gap-2 text-xs text-text">
-                  <Checkbox
-                    checked={approvedStepMap[step.idx] !== false}
-                    disabled={step.policy?.allow === false}
-                    onChange={(event) => {
-                      const nextChecked = event.target.checked
-                      setApprovedStepMap((prev) => ({
-                        ...prev,
-                        [step.idx]: nextChecked
-                      }))
-                    }}
-                  />
-                  <span>
-                    <span className="font-semibold">{`${step.idx}. ${step.tool}`}</span>
-                    {step.description ? ` - ${step.description}` : ""}
-                    <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
-                      {step.policy?.required_scope ? (
-                        <Tag color="blue">{`scope: ${step.policy.required_scope}`}</Tag>
-                      ) : null}
-                      {step.policy?.requires_confirmation ? (
-                        <Tag color="gold">confirm</Tag>
-                      ) : null}
-                      {step.policy?.allow === false ? (
-                        <Tag color="red">{`blocked${step.policy.reason_code ? `: ${step.policy.reason_code}` : ""}`}</Tag>
-                      ) : null}
-                    </span>
-                    {step.policy?.allow === false && step.policy.reason ? (
-                      <div className="mt-1 text-[11px] text-danger">
-                        {step.policy.reason}
-                      </div>
-                    ) : null}
-                  </span>
-                </label>
-              ))}
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <Button
-                size="small"
-                type="primary"
-                icon={<CheckCircle2 className="h-3.5 w-3.5" />}
-                onClick={confirmPlan}
-              >
-                {t("sidepanel:persona.confirmPlan", "Confirm plan")}
-              </Button>
-              <Button
-                size="small"
-                icon={<XCircle className="h-3.5 w-3.5" />}
-                onClick={cancelPlan}
-              >
-                {t("sidepanel:persona.cancelPlan", "Cancel")}
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="rounded-lg border border-border bg-surface p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Typography.Text strong>
-              {t("sidepanel:persona.stateDocs", "Persistent state docs")}
-            </Typography.Text>
-            <div className="flex flex-wrap items-center gap-1">
-              <Tag
-                data-testid="persona-state-dirty-tag"
-                color={hasUnsavedPersonaStateChanges ? "gold" : "green"}
-              >
-                {stateDirtyLabel}
-              </Tag>
-              {stateLastModified ? (
-                <Typography.Text type="secondary" className="text-xs">
-                  {`${t("sidepanel:persona.stateUpdatedPrefix", "updated")} ${stateLastModified}`}
-                </Typography.Text>
-              ) : null}
-              <Button
-                data-testid="persona-state-editor-toggle-button"
-                size="small"
-                onClick={() => {
-                  setPersonaStateEditorExpanded((prev) => !prev)
-                }}
-              >
-                {stateEditorToggleLabel}
-              </Button>
-            </div>
-          </div>
-          {personaStateEditorExpanded ? (
-            <>
-              <div className="mt-2 grid gap-2">
-                <Input.TextArea
-                  data-testid="persona-state-soul-input"
-                  value={soulMd}
-                  autoSize={{ minRows: 2, maxRows: 4 }}
-                  onChange={(event) => setSoulMd(event.target.value)}
-                  placeholder={t("sidepanel:persona.stateSoulPlaceholder", "soul.md")}
-                />
-                <Input.TextArea
-                  data-testid="persona-state-identity-input"
-                  value={identityMd}
-                  autoSize={{ minRows: 2, maxRows: 4 }}
-                  onChange={(event) => setIdentityMd(event.target.value)}
-                  placeholder={t("sidepanel:persona.stateIdentityPlaceholder", "identity.md")}
-                />
-                <Input.TextArea
-                  data-testid="persona-state-heartbeat-input"
-                  value={heartbeatMd}
-                  autoSize={{ minRows: 2, maxRows: 4 }}
-                  onChange={(event) => setHeartbeatMd(event.target.value)}
-                  placeholder={t("sidepanel:persona.stateHeartbeatPlaceholder", "heartbeat.md")}
-                />
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Button
-                  data-testid="persona-state-load-button"
-                  size="small"
-                  loading={personaStateLoading}
-                  disabled={!connected || personaStateSaving}
-                  onClick={() => {
-                    void loadPersonaStateDocs()
-                  }}
-                >
-                  {t("sidepanel:persona.stateLoad", "Load state")}
-                </Button>
-                <Button
-                  data-testid="persona-state-save-button"
-                  size="small"
-                  type="primary"
-                  loading={personaStateSaving}
-                  disabled={!connected || !hasUnsavedPersonaStateChanges}
-                  onClick={() => {
-                    void savePersonaStateDocs()
-                  }}
-                >
-                  {t("sidepanel:persona.stateSave", "Save state")}
-                </Button>
-                <Button
-                  data-testid="persona-state-revert-button"
-                  size="small"
-                  disabled={!hasUnsavedPersonaStateChanges || personaStateSaving}
-                  onClick={revertPersonaStateDraft}
-                >
-                  {t("sidepanel:persona.stateRevert", "Revert")}
-                </Button>
-                <Button
-                  data-testid="persona-state-history-button"
-                  size="small"
-                  loading={personaStateHistoryLoading}
-                  disabled={!connected}
-                  onClick={() => {
-                    void loadPersonaStateHistory()
-                  }}
-                >
-                  {t("sidepanel:persona.stateHistory", "Load history")}
-                </Button>
-              </div>
-              {personaStateHistory.length > 0 ? (
-                <div className="mt-3 space-y-2">
-                  {personaStateHistory.length > 1 ? (
-                    <div className="mb-1 flex items-center gap-2 text-xs">
-                      <Typography.Text type="secondary" className="text-xs">
-                        {t("sidepanel:persona.stateHistoryOrderLabel", "Order")}
-                      </Typography.Text>
-                      <Button
-                        data-testid="persona-state-history-order-newest-button"
-                        size="small"
-                        type={personaStateHistoryOrder === "newest" ? "primary" : "default"}
-                        onClick={() => {
-                          setPersonaStateHistoryOrder("newest")
-                        }}
-                      >
-                        {t("sidepanel:persona.stateHistoryOrderNewest", "Newest")}
-                      </Button>
-                      <Button
-                        data-testid="persona-state-history-order-oldest-button"
-                        size="small"
-                        type={personaStateHistoryOrder === "oldest" ? "primary" : "default"}
-                        onClick={() => {
-                          setPersonaStateHistoryOrder("oldest")
-                        }}
-                      >
-                        {t("sidepanel:persona.stateHistoryOrderOldest", "Oldest")}
-                      </Button>
-                    </div>
-                  ) : null}
-                  {orderedPersonaStateHistory.map((entry) => (
-                    <div
-                      data-testid={`persona-state-history-entry-${entry.entry_id}`}
-                      key={entry.entry_id}
-                      className="rounded border border-border bg-surface2 px-2 py-1.5 text-xs"
-                    >
-                      <div className="flex flex-wrap items-center gap-1">
-                        <Tag color={entry.is_active ? "green" : "default"}>
-                          {entry.is_active
-                            ? t("sidepanel:persona.stateHistoryActive", "active")
-                            : t("sidepanel:persona.stateHistoryArchived", "archived")}
-                        </Tag>
-                        <Tag color="blue">{entry.field}</Tag>
-                        {typeof entry.version === "number" ? (
-                          <Tag color="purple">{`v${entry.version}`}</Tag>
-                        ) : null}
-                        <Button
-                          data-testid={`persona-state-restore-${entry.entry_id}`}
-                          size="small"
-                          disabled={entry.is_active === true}
-                          loading={restoringStateEntryId === entry.entry_id}
-                          onClick={() => {
-                            void restorePersonaStateHistoryEntry(entry.entry_id)
-                          }}
-                        >
-                          {t("sidepanel:persona.stateRestore", "Restore")}
-                        </Button>
-                      </div>
-                      <div className="mt-1 whitespace-pre-wrap text-text">
-                        {String(entry.content || "")}
-                      </div>
-                      {entry.created_at || entry.last_modified ? (
-                        <Typography.Text
-                          data-testid={`persona-state-history-meta-${entry.entry_id}`}
-                          type="secondary"
-                          className="mt-1 block text-[11px]"
-                        >
-                          {[
-                            entry.created_at
-                              ? `${t("sidepanel:persona.stateHistoryCreated", "created")} ${entry.created_at}`
-                              : null,
-                            entry.last_modified
-                              ? `${t("sidepanel:persona.stateHistoryUpdated", "updated")} ${entry.last_modified}`
-                              : null
-                          ]
-                            .filter((item): item is string => Boolean(item))
-                            .join(" · ")}
-                        </Typography.Text>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              ) : personaStateHistoryLoaded ? (
-                <Typography.Text
-                  data-testid="persona-state-history-empty"
-                  type="secondary"
-                  className="mt-3 block text-xs"
-                >
-                  {t(
-                    "sidepanel:persona.stateHistoryEmpty",
-                    "No state history entries yet."
-                  )}
-                </Typography.Text>
-              ) : null}
-            </>
-          ) : null}
-        </div>
+      ) : (
         <div className="flex flex-1 flex-col p-3">
           <PersonaGardenTabs
             activeKey={activeTab}
@@ -2320,16 +2116,7 @@ const SidepanelPersona = () => {
             items={tabItems}
           />
         </div>
-      </div>
       )}
-
-      <div className="flex flex-1 flex-col p-3">
-        <PersonaGardenTabs
-          activeKey={activeTab}
-          onChange={(key) => setActiveTab(key as PersonaGardenTabKey)}
-          items={tabItems}
-        />
-      </div>
     </div>
   )
 }

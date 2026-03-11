@@ -435,7 +435,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 33  # Schema v33 adds persona exemplar persistence
+    _CURRENT_SCHEMA_VERSION = 35  # Schema v35 includes restart-safe persona session persistence
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -895,7 +895,8 @@ END;
 CREATE TRIGGER notes_au
 AFTER UPDATE ON notes BEGIN
   INSERT INTO notes_fts(notes_fts,rowid,title,content)
-  VALUES('delete',old.rowid,old.title,old.content);
+  SELECT 'delete',old.rowid,old.title,old.content
+  WHERE old.deleted = 0;
 
   INSERT INTO notes_fts(rowid,title,content)
   SELECT new.rowid,new.title,new.content
@@ -905,7 +906,8 @@ END;
 CREATE TRIGGER notes_ad
 AFTER DELETE ON notes BEGIN
   INSERT INTO notes_fts(notes_fts,rowid,title,content)
-  VALUES('delete',old.rowid,old.title,old.content);
+  SELECT 'delete',old.rowid,old.title,old.content
+  WHERE old.deleted = 0;
 END;
 
 /*----------------------------------------------------------------
@@ -3017,6 +3019,31 @@ UPDATE db_schema_version
         "",
     )
 
+    _MIGRATION_SQL_V33_TO_V34 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 34 - Persona session activity surfaces (2026-03-10)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_sessions
+  ADD COLUMN IF NOT EXISTS activity_surface TEXT NOT NULL DEFAULT 'api.persona';
+
+UPDATE db_schema_version
+   SET version = 34
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 34;
+"""
+
+    _MIGRATION_SQL_V34_TO_V35 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 35 - Persona session preferences (2026-03-10)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_sessions
+  ADD COLUMN IF NOT EXISTS preferences_json TEXT NOT NULL DEFAULT '{}';
+
+UPDATE db_schema_version
+   SET version = 35
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 35;
+"""
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4628,6 +4655,147 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V32->V33: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V33 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v33_to_v34(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V33 to V34 (persona session activity surfaces)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V33 to V34 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
+            if "activity_surface" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE persona_sessions ADD COLUMN activity_surface TEXT NOT NULL DEFAULT 'api.persona'"
+                )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 34
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 34;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 34:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V33->V34 failed version check. Expected 34, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V34 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V33->V34 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V33->V34 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V33->V34: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V34 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v34_to_v35(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V34 to V35 (persona session preferences)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V34 to V35 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
+            if "preferences_json" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE persona_sessions ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 35
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 35;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 35:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V34->V35 failed version check. Expected 35, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V35 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V34->V35 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V34->V35 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V34->V35: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V35 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Backfill recent persona schema columns after version-number collisions."""
+        profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+        if "origin_character_id" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_id INTEGER")
+        if "origin_character_name" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_name TEXT")
+        if "origin_character_snapshot_at" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_snapshot_at TEXT")
+
+        conversation_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
+        if "assistant_kind" not in conversation_cols:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN assistant_kind TEXT CHECK(assistant_kind IN ('character','persona'))"
+            )
+        if "assistant_id" not in conversation_cols:
+            conn.execute("ALTER TABLE conversations ADD COLUMN assistant_id TEXT")
+        if "persona_memory_mode" not in conversation_cols:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN persona_memory_mode TEXT CHECK(persona_memory_mode IN ('read_only','read_write'))"
+            )
+        conn.execute(
+            """
+            UPDATE conversations
+               SET assistant_kind = 'character'
+             WHERE character_id IS NOT NULL
+               AND COALESCE(TRIM(assistant_kind), '') = ''
+            """
+        )
+        conn.execute(
+            """
+            UPDATE conversations
+               SET assistant_id = CAST(character_id AS TEXT)
+             WHERE character_id IS NOT NULL
+               AND COALESCE(TRIM(assistant_id), '') = ''
+            """
+        )
+
+        session_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
+        if "activity_surface" not in session_cols:
+            conn.execute(
+                "ALTER TABLE persona_sessions ADD COLUMN activity_surface TEXT NOT NULL DEFAULT 'api.persona'"
+            )
+        if "preferences_json" not in session_cols:
+            conn.execute(
+                "ALTER TABLE persona_sessions ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
+            )
+
+    def _ensure_recent_persona_schema_postgres(self, conn: Any) -> None:
+        """Backfill recent persona schema columns for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_id INTEGER",
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_name TEXT",
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_snapshot_at TEXT",
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS assistant_kind TEXT CHECK (assistant_kind IN ('character', 'persona'))",
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS assistant_id TEXT",
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS persona_memory_mode TEXT CHECK (persona_memory_mode IN ('read_only', 'read_write'))",
+            """
+            UPDATE conversations
+               SET assistant_kind = 'character'
+             WHERE character_id IS NOT NULL
+               AND COALESCE(TRIM(assistant_kind), '') = ''
+            """,
+            """
+            UPDATE conversations
+               SET assistant_id = CAST(character_id AS TEXT)
+             WHERE character_id IS NOT NULL
+               AND COALESCE(TRIM(assistant_id), '') = ''
+            """,
+            "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS activity_surface TEXT NOT NULL DEFAULT 'api.persona'",
+            "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS preferences_json TEXT NOT NULL DEFAULT '{}'",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4766,6 +4934,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     # Verify core FTS tables exist to avoid silent search failures
                     self._verify_required_fts_tables_sqlite(conn)
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
+                    self._ensure_notes_fts_triggers_sqlite(conn)
+                    self._ensure_recent_persona_schema_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
                     self._self_heal_character_cards_fts_sqlite(conn)
@@ -4864,6 +5034,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 33 and current_db_version == 32:
                         self._migrate_from_v32_to_v33(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 34 and current_db_version == 33:
+                        self._migrate_from_v33_to_v34(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 35 and current_db_version == 34:
+                        self._migrate_from_v34_to_v35(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -5173,6 +5349,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v31_to_v32(conn)
                             elif fallback_version == 32:
                                 self._migrate_from_v32_to_v33(conn)
+                            elif fallback_version == 33:
+                                self._migrate_from_v33_to_v34(conn)
+                            elif fallback_version == 34:
+                                self._migrate_from_v34_to_v35(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5248,6 +5428,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 33 and current_db_version == 32:
                     self._migrate_from_v32_to_v33(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 34 and current_db_version == 33:
+                    self._migrate_from_v33_to_v34(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 35 and current_db_version == 34:
+                    self._migrate_from_v34_to_v35(conn)
+                    current_db_version = self._get_db_version(conn)
+
+                self._ensure_recent_persona_schema_sqlite(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -5256,6 +5444,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
+                self._ensure_notes_fts_triggers_sqlite(conn)
                 # Seed/heal character_cards_fts before request traffic. Schema V4
                 # inserts "Default Assistant" before FTS triggers are created.
                 self._self_heal_character_cards_fts_sqlite(conn)
@@ -5373,6 +5562,52 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring character_cards FTS triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_notes_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Normalize notes FTS triggers to avoid invalid delete operations.
+
+        When restoring a soft-deleted note (`deleted: 1 -> 0`), the old trigger
+        shape always issued an FTS `delete` against the previous row snapshot.
+        If the row was already absent from FTS because of the earlier soft-delete,
+        SQLite could surface `database disk image is malformed` from FTS internals.
+        We guard this by deleting from FTS only when `old.deleted = 0`.
+        """
+
+        try:
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS notes_ai;
+                DROP TRIGGER IF EXISTS notes_au;
+                DROP TRIGGER IF EXISTS notes_ad;
+
+                CREATE TRIGGER notes_ai
+                AFTER INSERT ON notes BEGIN
+                  INSERT INTO notes_fts(rowid,title,content)
+                  SELECT new.rowid,new.title,new.content
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER notes_au
+                AFTER UPDATE ON notes BEGIN
+                  INSERT INTO notes_fts(notes_fts,rowid,title,content)
+                  SELECT 'delete',old.rowid,old.title,old.content
+                  WHERE old.deleted = 0;
+
+                  INSERT INTO notes_fts(rowid,title,content)
+                  SELECT new.rowid,new.title,new.content
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER notes_ad
+                AFTER DELETE ON notes BEGIN
+                  INSERT INTO notes_fts(notes_fts,rowid,title,content)
+                  SELECT 'delete',old.rowid,old.title,old.content
+                  WHERE old.deleted = 0;
+                END;
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring notes FTS triggers: {exc}") from exc  # noqa: TRY003
 
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
@@ -5539,11 +5774,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     expected_version=33,
                 )
                 current_version = 33
+            if current_version < 34:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V33_TO_V34, conn, expected_version=34)
+                current_version = 34
+            if current_version < 35:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V34_TO_V35, conn, expected_version=35)
+                current_version = 35
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
                     f"Database schema version ({current_version}) is newer than supported by code ({target_version})."
                 )
+
+            self._ensure_recent_persona_schema_postgres(conn)
 
             if current_version < target_version:
                 logger.warning(
@@ -7207,6 +7450,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         item = dict(row)
         item["reuse_allowed"] = self._as_bool(item.get("reuse_allowed"))
         item["deleted"] = self._as_bool(item.get("deleted"))
+        item["activity_surface"] = self._normalize_persona_session_activity_surface(item.get("activity_surface"))
+        raw_preferences = item.get("preferences_json")
+        if isinstance(raw_preferences, str):
+            try:
+                decoded_preferences = json.loads(raw_preferences)
+            except json.JSONDecodeError:
+                decoded_preferences = {}
+            item["preferences"] = decoded_preferences if isinstance(decoded_preferences, dict) else {}
+        elif isinstance(raw_preferences, dict):
+            item["preferences"] = raw_preferences
+        else:
+            item["preferences"] = {}
         raw_snapshot = item.get("scope_snapshot_json")
         if isinstance(raw_snapshot, str):
             try:
@@ -7218,6 +7473,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             item["scope_snapshot"] = {}
         return item
+
+    @staticmethod
+    def _normalize_persona_session_activity_surface(value: Any) -> str:
+        from tldw_Server_API.app.core.Personalization.companion_activity import (
+            normalize_persona_activity_surface,
+        )
+
+        return normalize_persona_activity_surface(value)
 
     def _persona_memory_row_to_dict(self, row: Any) -> dict[str, Any] | None:
         """Convert a persona memory DB `row: Any` to an API-safe dict.
@@ -8028,9 +8291,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             scope_snapshot_json = scope_snapshot.strip() or "{}"
         else:
             scope_snapshot_json = self._ensure_json_string(scope_snapshot) or "{}"
+        raw_preferences = session_data.get("preferences_json")
+        if isinstance(raw_preferences, str):
+            preferences_json = raw_preferences.strip() or "{}"
+        else:
+            preferences_json = self._ensure_json_string(raw_preferences) or "{}"
 
         now = self._get_current_utc_timestamp_iso()
         bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        activity_surface = self._normalize_persona_session_activity_surface(session_data.get("activity_surface"))
 
         with self.transaction() as conn:
             persona_row = self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
@@ -8045,8 +8314,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             query = (
                 "INSERT INTO persona_sessions("
                 "id, persona_id, user_id, conversation_id, mode, reuse_allowed, status, "
-                "scope_snapshot_json, created_at, last_modified, deleted, version"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "scope_snapshot_json, preferences_json, activity_surface, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             params = (
                 session_id,
@@ -8057,6 +8326,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 bool_cast(reuse_allowed),
                 status,
                 scope_snapshot_json,
+                preferences_json,
+                activity_surface,
                 session_data.get("created_at") or now,
                 session_data.get("last_modified") or now,
                 bool_cast(deleted_value),
@@ -8086,6 +8357,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         user_id: str,
         persona_id: str | None = None,
+        activity_surface: str | None = None,
         status: str | None = None,
         include_deleted: bool = False,
         limit: int = 100,
@@ -8097,6 +8369,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if persona_id is not None:
             clauses.append("persona_id = ?")
             params.append(persona_id)
+        if activity_surface is not None:
+            clauses.append("activity_surface = ?")
+            params.append(self._normalize_persona_session_activity_surface(activity_surface))
         if status is not None:
             normalized_status = self._normalize_persona_session_status(status)
             clauses.append("status = ?")
@@ -8124,7 +8399,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Update persona session fields for an owned session."""
         if not update_data:
             raise InputError("No session fields provided for update.")  # noqa: TRY003
-        allowed_fields = {"conversation_id", "mode", "reuse_allowed", "status", "scope_snapshot_json", "deleted"}
+        allowed_fields = {
+            "conversation_id",
+            "mode",
+            "reuse_allowed",
+            "status",
+            "scope_snapshot_json",
+            "preferences_json",
+            "activity_surface",
+            "deleted",
+        }
         bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
         set_parts: list[str] = []
         params: list[Any] = []
@@ -8147,6 +8431,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 else:
                     params.append(self._ensure_json_string(value) or "{}")
                 set_parts.append("scope_snapshot_json = ?")
+            elif key == "preferences_json":
+                if isinstance(value, str):
+                    params.append(value.strip() or "{}")
+                else:
+                    params.append(self._ensure_json_string(value) or "{}")
+                set_parts.append("preferences_json = ?")
+            elif key == "activity_surface":
+                params.append(self._normalize_persona_session_activity_surface(value))
+                set_parts.append("activity_surface = ?")
             else:
                 params.append(value)
                 set_parts.append("conversation_id = ?")
@@ -14409,9 +14702,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error adding note '{title.strip()}': {e}")
             raise
 
-    def get_note_by_id(self, note_id: str) -> dict[str, Any] | None:
-        query = "SELECT * FROM notes WHERE id = ? AND deleted = 0"
-        cursor = self.execute_query(query, (note_id,))
+    def get_note_by_id(self, note_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
+        query = "SELECT * FROM notes WHERE id = ?"
+        params: list[Any] = [note_id]
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        cursor = self.execute_query(query, tuple(params))
         row = cursor.fetchone()
         return dict(row) if row else None
 

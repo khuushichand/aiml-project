@@ -5,9 +5,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const mocks = vi.hoisted(() => ({
   isOnline: true,
   capabilitiesState: {
-    capabilities: { hasPersona: true },
+    capabilities: { hasPersona: true, hasPersonalization: true },
     loading: false
-  } as { capabilities: { hasPersona: boolean } | null; loading: boolean },
+  } as {
+    capabilities:
+      | { hasPersona: boolean; hasPersonalization?: boolean }
+      | null
+    loading: boolean
+  },
   navigate: vi.fn(),
   location: {
     pathname: "/persona",
@@ -209,7 +214,10 @@ describe("SidepanelPersona", () => {
     MockWebSocket.instances = []
     window.localStorage.clear()
     mocks.isOnline = true
-    mocks.capabilitiesState.capabilities = { hasPersona: true }
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true
+    }
     mocks.capabilitiesState.loading = false
     mocks.navigate.mockReset()
     mocks.location.pathname = "/persona"
@@ -241,7 +249,10 @@ describe("SidepanelPersona", () => {
   })
 
   it("shows unavailable state when persona capability is missing", () => {
-    mocks.capabilitiesState.capabilities = { hasPersona: false }
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: false,
+      hasPersonalization: true
+    }
     render(<SidepanelPersona />)
 
     expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
@@ -343,6 +354,157 @@ describe("SidepanelPersona", () => {
         })
       })
     )
+  })
+
+  it("renders a dedicated companion conversation mode", () => {
+    render(<SidepanelPersona mode="companion" />)
+
+    expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Companion")
+    expect(screen.getByPlaceholderText("Ask Companion...")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Select persona")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("persona-companion-context-toggle")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("persona-state-context-toggle")).not.toBeInTheDocument()
+    expect(
+      screen.queryByTestId("persona-state-editor-toggle-button")
+    ).not.toBeInTheDocument()
+  })
+
+  it("records the current draft as a companion check-in", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/api/v1/companion/check-ins")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "activity-checkin-1",
+            event_type: "companion_check_in_recorded",
+            source_type: "companion_check_in",
+            source_id: "checkin-1",
+            surface: String(init?.body?.surface || "companion.workspace"),
+            tags: [],
+            provenance: {
+              capture_mode: "explicit",
+              route: "/api/v1/companion/check-ins",
+              action: "manual_check_in"
+            },
+            metadata: {
+              summary: String(init?.body?.summary || "")
+            },
+            created_at: "2026-03-10T12:30:00Z"
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    const draft = "Log this as an explicit companion check-in from persona."
+    fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
+      target: { value: draft }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save check-in" }))
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/companion/check-ins",
+        {
+          method: "POST",
+          body: {
+            summary: draft,
+            surface: "persona.sidepanel"
+          }
+        }
+      )
+    })
+    expect(screen.getByText("Saved draft to companion")).toBeInTheDocument()
+    expect(screen.getByPlaceholderText("Ask Persona...")).toHaveValue(draft)
+  })
+
+  it("records companion-mode drafts with the companion conversation surface", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/api/v1/companion/check-ins")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "activity-checkin-2",
+            event_type: "companion_check_in_recorded",
+            source_type: "companion_check_in",
+            source_id: "checkin-2",
+            surface: String(init?.body?.surface || "companion.workspace"),
+            tags: [],
+            provenance: {
+              capture_mode: "explicit",
+              route: "/api/v1/companion/check-ins",
+              action: "manual_check_in"
+            },
+            metadata: {
+              summary: String(init?.body?.summary || "")
+            },
+            created_at: "2026-03-10T12:45:00Z"
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona mode="companion" />)
+
+    const draft = "Capture this from the dedicated companion conversation."
+    fireEvent.change(screen.getByPlaceholderText("Ask Companion..."), {
+      target: { value: draft }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save check-in" }))
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/companion/check-ins",
+        {
+          method: "POST",
+          body: {
+            summary: draft,
+            surface: "companion.conversation"
+          }
+        }
+      )
+    })
+    expect(screen.getByText("Saved draft to companion")).toBeInTheDocument()
+  })
+
+  it("shows a consent-required error when saving a companion check-in without opt-in", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/api/v1/companion/check-ins")) {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          error: "Enable personalization before using companion.",
+          json: async () => ({ detail: "Enable personalization before using companion." })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
+      target: { value: "Do not save this silently." }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save check-in" }))
+
+    expect(
+      await screen.findByText("Enable personalization before saving to companion.")
+    ).toBeInTheDocument()
   })
 
   it.each([390, 1280])(
@@ -487,6 +649,194 @@ describe("SidepanelPersona", () => {
             payload.type === "cancel" &&
             payload.session_id === "sess-12345" &&
             payload.reason === "user_cancelled"
+        )
+      ).toBe(true)
+    })
+  })
+
+  it("hydrates persisted session preferences when connecting to a resumed session", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: null,
+            identity_md: null,
+            heartbeat_md: null
+          })
+        })
+      }
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions/sess-pref-hydrated")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-pref-hydrated",
+            preferences: {
+              use_memory_context: false,
+              use_companion_context: false,
+              use_persona_state_context: false,
+              memory_top_k: 7
+            },
+            turns: []
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ session_id: "sess-pref-hydrated" }]
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-pref-hydrated" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    await screen.findByText("Persona stream connected")
+    await screen.findByText("Memory results: 7")
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("persona-memory-toggle") as HTMLInputElement
+      ).not.toBeChecked()
+      expect(
+        screen.getByTestId("persona-companion-context-toggle") as HTMLInputElement
+      ).not.toBeChecked()
+      expect(
+        screen.getByTestId("persona-state-context-toggle") as HTMLInputElement
+      ).not.toBeChecked()
+    })
+  })
+
+  it("creates companion-mode persona sessions with the companion conversation surface", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-companion" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona mode="companion" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith("/api/v1/persona/session", {
+        method: "POST",
+        body: {
+          persona_id: "research_assistant",
+          resume_session_id: undefined,
+          surface: "companion.conversation"
+        }
+      })
+    })
+  })
+
+  it("filters companion-mode session history to companion conversations", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ session_id: "sess-companion-only" }]
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-companion-only" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona mode="companion" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(
+        mocks.fetchWithAuth.mock.calls.some(([path]) =>
+          String(path).includes(
+            "/api/v1/persona/sessions?persona_id=research_assistant&surface=companion.conversation&limit=50"
+          )
         )
       ).toBe(true)
     })
@@ -945,14 +1295,24 @@ describe("SidepanelPersona", () => {
           requested_top_k: 4,
           applied_count: 2
         },
+        companion: {
+          enabled: true,
+          requested_enabled: true,
+          applied_card_count: 1,
+          applied_activity_count: 2
+        },
         steps: [{ idx: 0, tool: "rag_search", description: "search" }]
       })
     )
     await screen.findByText("requested memory results: 4")
     await screen.findByText("applied results: 2")
+    await screen.findByText("companion on")
+    await screen.findByText("applied cards: 1")
+    await screen.findByText("applied activity: 2")
 
     fireEvent.click(screen.getByTestId("persona-memory-toggle"))
     fireEvent.click(screen.getByTestId("persona-state-context-toggle"))
+    fireEvent.click(screen.getByTestId("persona-companion-context-toggle"))
     fireEvent.change(screen.getByPlaceholderText("Ask Persona..."), {
       target: { value: "memory toggle payload" }
     })
@@ -964,6 +1324,7 @@ describe("SidepanelPersona", () => {
       expect(userMessage).toBeTruthy()
       expect(userMessage?.use_memory_context).toBe(false)
       expect(userMessage?.use_persona_state_context).toBe(false)
+      expect(userMessage?.use_companion_context).toBe(false)
       expect(userMessage?.memory_top_k).toBe(3)
     })
   })

@@ -131,6 +131,13 @@ test.describe("Extension page review", () => {
       ).toBeVisible({ timeout: ELEMENT_TIMEOUT })
     }
 
+    if (routePath === "/companion") {
+      await expect(
+        page.getByTestId("sidepanel-companion-root"),
+        "Companion route marker should render on /companion"
+      ).toBeVisible({ timeout: ELEMENT_TIMEOUT })
+    }
+
     if (CAPTURE) {
       const slug = slugify(routePath === "/" ? "root" : routePath)
       const fileName = `${label}-${slug || "root"}.png`

@@ -1,13 +1,13 @@
-import os
 import json
 import time
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 
 
@@ -158,6 +158,60 @@ async def test_pipeline_origin_override_feed():
     items, total = collections_db.list_content_items(origin="feed", page=1, size=10)
     assert total >= 1
     assert all(item.origin == "feed" for item in items)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_batches_companion_activity_writes(monkeypatch):
+    user_id = 781
+    db = WatchlistsDatabase.for_user(user_id)
+    personalization_db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    personalization_db.update_profile(str(user_id), enabled=1)
+
+    rss = db.create_source(
+        name="Feed",
+        url="https://example.com/feed.xml",
+        source_type="rss",
+        active=True,
+        settings_json=json.dumps({"limit": 1}),
+        tags=["news"],
+        group_ids=[],
+    )
+
+    job = db.create_job(
+        name="Feed Job",
+        description=None,
+        scope_json=json.dumps({"sources": [rss.id]}),
+        schedule_expr=None,
+        schedule_timezone="UTC",
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+
+    bulk_calls: list[int] = []
+
+    def _fake_bulk_insert(self, *, user_id, events):
+        bulk_calls.append(len(events))
+        return [f"evt-{index}" for index, _event in enumerate(events, start=1)]
+
+    monkeypatch.setattr(
+        PersonalizationDB,
+        "insert_companion_activity_events_bulk",
+        _fake_bulk_insert,
+        raising=False,
+    )
+
+    await run_watchlist_job(
+        user_id,
+        job.id,
+        capture_companion_activity=True,
+        companion_route=f"/api/v1/watchlists/jobs/{job.id}/run",
+    )
+
+    assert bulk_calls
+    assert sum(bulk_calls) >= 1
 
 
 @pytest.mark.asyncio
