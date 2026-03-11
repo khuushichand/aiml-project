@@ -100,6 +100,11 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
               {`Allowed paths: ${getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes)}`}
             </Typography.Text>
           ) : null}
+          {policy.selected_assignment_workspace_ids?.length ? (
+            <Typography.Text type="secondary">
+              {`Allowed workspaces: ${policy.selected_assignment_workspace_ids.join(", ")}`}
+            </Typography.Text>
+          ) : null}
           <Space wrap>
             {policy.capabilities.map((capability) => (
               <Tag key={capability}>{capability}</Tag>
@@ -116,6 +121,9 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
             ) : null}
             {policy.provenance.some((entry) => entry.source_kind === "assignment_override") ? (
               <Tag color="cyan">Override active</Tag>
+            ) : null}
+            {policy.provenance.some((entry) => entry.source_kind === "assignment_path_scope_object") ? (
+              <Tag color="purple">Named path scope</Tag>
             ) : null}
           </Space>
           <Space wrap>

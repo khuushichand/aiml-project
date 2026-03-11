@@ -1830,6 +1830,76 @@ def migration_060_add_mcp_external_credential_slots(conn: sqlite3.Connection) ->
     logger.info("Migration 060: Added MCP external credential slot schema")
 
 
+def migration_061_add_mcp_path_scope_objects_and_assignment_workspaces(conn: sqlite3.Connection) -> None:
+    """Add reusable path-scope objects and assignment workspace membership tables."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_path_scope_objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            path_scope_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_path_scope_objects_scope "
+        "ON mcp_path_scope_objects(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_path_scope_objects_scope "
+        "ON mcp_path_scope_objects(name, owner_scope_type, owner_scope_id)"
+    )
+
+    profile_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_permission_profiles)").fetchall()
+    }
+    if "path_scope_object_id" not in profile_columns:
+        conn.execute("ALTER TABLE mcp_permission_profiles ADD COLUMN path_scope_object_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_path_scope_object "
+        "ON mcp_permission_profiles(path_scope_object_id)"
+    )
+
+    assignment_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_assignments)").fetchall()
+    }
+    if "path_scope_object_id" not in assignment_columns:
+        conn.execute("ALTER TABLE mcp_policy_assignments ADD COLUMN path_scope_object_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_path_scope_object "
+        "ON mcp_policy_assignments(path_scope_object_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignment_workspaces (
+            assignment_id INTEGER NOT NULL,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (assignment_id, workspace_id),
+            FOREIGN KEY (assignment_id) REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignment_workspaces_assignment "
+        "ON mcp_policy_assignment_workspaces(assignment_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 061: Added MCP path scope object schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -3287,6 +3357,11 @@ def get_authnz_migrations() -> list[Migration]:
             60,
             "Add MCP external credential slots",
             migration_060_add_mcp_external_credential_slots,
+        ),
+        Migration(
+            61,
+            "Add MCP path scope objects and assignment workspaces",
+            migration_061_add_mcp_path_scope_objects_and_assignment_workspaces,
         ),
     ]
 

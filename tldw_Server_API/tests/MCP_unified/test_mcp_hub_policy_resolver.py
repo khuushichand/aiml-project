@@ -16,6 +16,7 @@ class _FakeRepo:
                     "path_scope_enforcement": "approval_required_when_unenforceable",
                     "path_allowlist_prefixes": ["src"],
                 },
+                "path_scope_object_id": None,
             },
             2: {
                 "id": 2,
@@ -24,6 +25,28 @@ class _FakeRepo:
                     "allowed_tools": ["external.servers.list"],
                     "capabilities": ["network.external"],
                 },
+                "path_scope_object_id": None,
+            },
+        }
+        self.path_scope_objects = {
+            100: {
+                "id": 100,
+                "name": "Profile Docs",
+                "path_scope_document": {
+                    "path_scope_mode": "workspace_root",
+                    "path_scope_enforcement": "approval_required_when_unenforceable",
+                    "path_allowlist_prefixes": ["docs"],
+                },
+                "is_active": True,
+            },
+            101: {
+                "id": 101,
+                "name": "Assignment Current Folder",
+                "path_scope_document": {
+                    "path_scope_mode": "cwd_descendants",
+                    "path_scope_enforcement": "approval_required_when_unenforceable",
+                },
+                "is_active": True,
             },
         }
         self.assignments = [
@@ -34,6 +57,7 @@ class _FakeRepo:
                 "owner_scope_type": "global",
                 "owner_scope_id": None,
                 "profile_id": 1,
+                "path_scope_object_id": None,
                 "inline_policy_document": {},
                 "is_active": True,
             },
@@ -44,6 +68,7 @@ class _FakeRepo:
                 "owner_scope_type": "user",
                 "owner_scope_id": 7,
                 "profile_id": 2,
+                "path_scope_object_id": None,
                 "inline_policy_document": {"denied_tools": ["external.tools.refresh"]},
                 "is_active": True,
             },
@@ -54,6 +79,7 @@ class _FakeRepo:
                 "owner_scope_type": "user",
                 "owner_scope_id": 7,
                 "profile_id": None,
+                "path_scope_object_id": None,
                 "inline_policy_document": {
                     "allowed_tools": ["Bash(git *)"],
                     "approval_mode": "ask_every_time",
@@ -63,6 +89,7 @@ class _FakeRepo:
             },
         ]
         self.overrides: dict[int, dict] = {}
+        self.assignment_workspaces: dict[int, list[str]] = {}
 
     async def list_policy_assignments(
         self,
@@ -88,6 +115,15 @@ class _FakeRepo:
 
     async def get_policy_override_by_assignment(self, assignment_id: int) -> dict | None:
         return self.overrides.get(assignment_id)
+
+    async def get_path_scope_object(self, path_scope_object_id: int) -> dict | None:
+        return self.path_scope_objects.get(path_scope_object_id)
+
+    async def list_policy_assignment_workspaces(self, assignment_id: int) -> list[dict]:
+        return [
+            {"assignment_id": assignment_id, "workspace_id": workspace_id}
+            for workspace_id in self.assignment_workspaces.get(assignment_id, [])
+        ]
 
 
 @pytest.mark.asyncio
@@ -196,5 +232,41 @@ async def test_policy_resolver_replaces_path_allowlist_prefixes_in_assignment_ov
         entry["field"] == "path_allowlist_prefixes"
         and entry["source_kind"] == "assignment_override"
         and entry["effect"] == "replaced"
+        for entry in policy["provenance"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_resolver_applies_path_scope_object_layers_before_inline_and_override() -> None:
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = _FakeRepo()
+    repo.profiles[1]["policy_document"] = {
+        "allowed_tools": ["notes.search"],
+        "capabilities": ["filesystem.read"],
+    }
+    repo.profiles[1]["path_scope_object_id"] = 100
+    repo.assignments[2]["path_scope_object_id"] = 101
+    repo.assignments[2]["inline_policy_document"] = {
+        "allowed_tools": ["Bash(git *)"],
+        "approval_mode": "ask_every_time",
+        "path_allowlist_prefixes": ["persona"],
+    }
+    resolver = McpHubPolicyResolver(repo=repo)
+
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={
+            "mcp_policy_context_enabled": True,
+            "group_id": "ops",
+            "persona_id": "researcher",
+        },
+    )
+
+    assert policy["policy_document"]["path_scope_mode"] == "cwd_descendants"
+    assert policy["policy_document"]["path_allowlist_prefixes"] == ["persona"]
+    assert any(
+        entry["field"] == "path_scope_mode"
+        and entry["source_kind"] == "assignment_path_scope_object"
         for entry in policy["provenance"]
     )

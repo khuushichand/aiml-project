@@ -225,6 +225,40 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        "ALTER TABLE mcp_permission_profiles "
+        "ADD COLUMN IF NOT EXISTS path_scope_object_id INTEGER",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_path_scope_object "
+        "ON mcp_permission_profiles(path_scope_object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_path_scope_objects (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            path_scope_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_path_scope_objects_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_path_scope_objects_scope "
+        "ON mcp_path_scope_objects(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
         """
         CREATE TABLE IF NOT EXISTS mcp_policy_assignments (
             id SERIAL PRIMARY KEY,
@@ -252,6 +286,33 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_target "
         "ON mcp_policy_assignments(target_type, target_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS path_scope_object_id INTEGER",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_path_scope_object "
+        "ON mcp_policy_assignments(path_scope_object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignment_workspaces (
+            assignment_id INTEGER NOT NULL REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_policy_assignment_workspaces UNIQUE (assignment_id, workspace_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignment_workspaces_assignment "
+        "ON mcp_policy_assignment_workspaces(assignment_id)",
         (),
     ),
     (

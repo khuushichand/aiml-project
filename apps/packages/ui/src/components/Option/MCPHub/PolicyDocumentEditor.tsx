@@ -31,6 +31,7 @@ type PolicyDocumentEditorProps = {
   onChange: (next: McpHubPermissionPolicyDocument) => void
   registryEntries: McpHubToolRegistryEntry[]
   registryModules: McpHubToolRegistryModule[]
+  pathScopeOnly?: boolean
 }
 
 const PRESET_OPTIONS = [
@@ -46,7 +47,8 @@ export const PolicyDocumentEditor = ({
   policy,
   onChange,
   registryEntries,
-  registryModules
+  registryModules,
+  pathScopeOnly = false
 }: PolicyDocumentEditorProps) => {
   const [editorMode, setEditorMode] = useState<EditorMode>("simple")
   const [advancedText, setAdvancedText] = useState("{}")
@@ -84,6 +86,7 @@ export const PolicyDocumentEditor = ({
     [selectedRegistryTools]
   )
   const showPathScopeControls =
+    pathScopeOnly ||
     localFilesystemTools.length > 0 ||
     derivedCapabilities.some((capability) => capability.startsWith("filesystem.")) ||
     pathScopeMode !== "none"
@@ -209,39 +212,44 @@ export const PolicyDocumentEditor = ({
             />
           ) : null}
 
-          <Card size="small" title="Presets">
-            <Space wrap>
-              {PRESET_OPTIONS.map((preset) => (
-                <Button key={preset.key} size="small" onClick={() => handlePreset(preset.key)}>
-                  {preset.label}
-                </Button>
-              ))}
-            </Space>
-          </Card>
+          {!pathScopeOnly ? (
+            <>
+              <Card size="small" title="Presets">
+                <Space wrap>
+                  {PRESET_OPTIONS.map((preset) => (
+                    <Button key={preset.key} size="small" onClick={() => handlePreset(preset.key)}>
+                      {preset.label}
+                    </Button>
+                  ))}
+                </Space>
+              </Card>
 
-          <Card size="small" title="Derived Capabilities">
-            {derivedCapabilities.length > 0 ? (
-              <Space wrap>
-                {derivedCapabilities.map((capability) => (
-                  <Tag key={capability} color={knownCapabilities.includes(capability) ? "blue" : "default"}>
-                    {capability}
-                  </Tag>
-                ))}
-              </Space>
-            ) : (
-              <Typography.Text type="secondary">
-                No additional capability metadata will be written. With no allowed tools selected, the
-                resulting policy does not add MCP Hub allowlist restrictions.
-              </Typography.Text>
-            )}
-          </Card>
+              <Card size="small" title="Derived Capabilities">
+                {derivedCapabilities.length > 0 ? (
+                  <Space wrap>
+                    {derivedCapabilities.map((capability) => (
+                      <Tag key={capability} color={knownCapabilities.includes(capability) ? "blue" : "default"}>
+                        {capability}
+                      </Tag>
+                    ))}
+                  </Space>
+                ) : (
+                  <Typography.Text type="secondary">
+                    No additional capability metadata will be written. With no allowed tools selected, the
+                    resulting policy does not add MCP Hub allowlist restrictions.
+                  </Typography.Text>
+                )}
+              </Card>
+            </>
+          ) : null}
 
           {showPathScopeControls ? (
             <Card size="small" title="Local File Scope">
               <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
                 <Typography.Text type="secondary">
-                  Restrict local file access to the selected workspace boundary. Tools that cannot be
-                  path-scoped safely will require approval instead of bypassing the policy.
+                  {pathScopeOnly
+                    ? "Define reusable relative path rules. These rules are applied against the active trusted workspace at runtime."
+                    : "Restrict local file access to the selected workspace boundary. Tools that cannot be path-scoped safely will require approval instead of bypassing the policy."}
                 </Typography.Text>
                 <Radio.Group
                   aria-label="Local File Scope"
@@ -283,7 +291,7 @@ export const PolicyDocumentEditor = ({
                     ) : null}
                   </Space>
                 ) : null}
-                {approvalFallbackTools.length > 0 && pathScopeMode !== "none" ? (
+                {!pathScopeOnly && approvalFallbackTools.length > 0 && pathScopeMode !== "none" ? (
                   <Alert
                     type="warning"
                     showIcon
@@ -297,77 +305,81 @@ export const PolicyDocumentEditor = ({
             </Card>
           ) : null}
 
-          <Card size="small" title="Allowed Modules And Tools">
-            {modules.length > 0 ? (
-              <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-                {modules.map((moduleGroup) => {
-                  const moduleToolNames = moduleGroup.tools.map((tool) => tool.tool_name)
-                  const allSelected =
-                    moduleToolNames.length > 0 &&
-                    moduleToolNames.every((toolName) => selection.selectedTools.includes(toolName))
-                  return (
-                    <Card
-                      key={moduleGroup.module}
-                      size="small"
-                      title={
-                        <Space wrap>
-                          <Checkbox
-                            checked={allSelected}
-                            onChange={(event) => toggleModule(moduleToolNames, event.target.checked)}
-                          >
-                            {moduleGroup.display_name}
-                          </Checkbox>
-                          <Tag>{`${moduleGroup.tool_count} tools`}</Tag>
-                          {Object.entries(moduleGroup.risk_summary)
-                            .filter(([, count]) => Number(count) > 0)
-                            .map(([riskClass, count]) => (
-                              <Tag key={`${moduleGroup.module}-${riskClass}`}>{`${riskClass}:${count}`}</Tag>
-                            ))}
-                        </Space>
-                      }
-                    >
-                      <Space wrap>
-                        {moduleGroup.tools.map((tool) => (
-                          <Checkbox
-                            key={tool.tool_name}
-                            checked={selection.selectedTools.includes(tool.tool_name)}
-                            onChange={(event) => toggleTool(tool.tool_name, event.target.checked)}
-                          >
-                            <Space size={4}>
-                              <span>{tool.display_name}</span>
-                              <Tag>{tool.category}</Tag>
-                              <Tag color={tool.risk_class === "high" ? "red" : tool.risk_class === "medium" ? "gold" : "green"}>
-                                {tool.risk_class}
-                              </Tag>
-                              {tool.uses_filesystem && tool.path_boundable ? (
-                                <Tag color="cyan">path-enforceable</Tag>
-                              ) : null}
-                              {tool.uses_filesystem && !tool.path_boundable ? (
-                                <Tag color="orange">approval fallback</Tag>
-                              ) : null}
+          {!pathScopeOnly ? (
+            <>
+              <Card size="small" title="Allowed Modules And Tools">
+                {modules.length > 0 ? (
+                  <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                    {modules.map((moduleGroup) => {
+                      const moduleToolNames = moduleGroup.tools.map((tool) => tool.tool_name)
+                      const allSelected =
+                        moduleToolNames.length > 0 &&
+                        moduleToolNames.every((toolName) => selection.selectedTools.includes(toolName))
+                      return (
+                        <Card
+                          key={moduleGroup.module}
+                          size="small"
+                          title={
+                            <Space wrap>
+                              <Checkbox
+                                checked={allSelected}
+                                onChange={(event) => toggleModule(moduleToolNames, event.target.checked)}
+                              >
+                                {moduleGroup.display_name}
+                              </Checkbox>
+                              <Tag>{`${moduleGroup.tool_count} tools`}</Tag>
+                              {Object.entries(moduleGroup.risk_summary)
+                                .filter(([, count]) => Number(count) > 0)
+                                .map(([riskClass, count]) => (
+                                  <Tag key={`${moduleGroup.module}-${riskClass}`}>{`${riskClass}:${count}`}</Tag>
+                                ))}
                             </Space>
-                          </Checkbox>
-                        ))}
-                      </Space>
-                    </Card>
-                  )
-                })}
-              </Space>
-            ) : (
-              <Empty description="No registry metadata available yet" />
-            )}
-          </Card>
+                          }
+                        >
+                          <Space wrap>
+                            {moduleGroup.tools.map((tool) => (
+                              <Checkbox
+                                key={tool.tool_name}
+                                checked={selection.selectedTools.includes(tool.tool_name)}
+                                onChange={(event) => toggleTool(tool.tool_name, event.target.checked)}
+                              >
+                                <Space size={4}>
+                                  <span>{tool.display_name}</span>
+                                  <Tag>{tool.category}</Tag>
+                                  <Tag color={tool.risk_class === "high" ? "red" : tool.risk_class === "medium" ? "gold" : "green"}>
+                                    {tool.risk_class}
+                                  </Tag>
+                                  {tool.uses_filesystem && tool.path_boundable ? (
+                                    <Tag color="cyan">path-enforceable</Tag>
+                                  ) : null}
+                                  {tool.uses_filesystem && !tool.path_boundable ? (
+                                    <Tag color="orange">approval fallback</Tag>
+                                  ) : null}
+                                </Space>
+                              </Checkbox>
+                            ))}
+                          </Space>
+                        </Card>
+                      )
+                    })}
+                  </Space>
+                ) : (
+                  <Empty description="No registry metadata available yet" />
+                )}
+              </Card>
 
-          <Space orientation="vertical" style={{ width: "100%" }}>
-            <label htmlFor={`${formId}-denied-tools`}>Denied Tools</label>
-            <textarea
-              id={`${formId}-denied-tools`}
-              aria-label="Denied Tools"
-              value={deniedToolsText}
-              onChange={(event) => handleDeniedToolsChange(event.target.value)}
-              rows={4}
-            />
-          </Space>
+              <Space orientation="vertical" style={{ width: "100%" }}>
+                <label htmlFor={`${formId}-denied-tools`}>Denied Tools</label>
+                <textarea
+                  id={`${formId}-denied-tools`}
+                  aria-label="Denied Tools"
+                  value={deniedToolsText}
+                  onChange={(event) => handleDeniedToolsChange(event.target.value)}
+                  rows={4}
+                />
+              </Space>
+            </>
+          ) : null}
         </Space>
       ) : (
         <Space orientation="vertical" style={{ width: "100%" }}>

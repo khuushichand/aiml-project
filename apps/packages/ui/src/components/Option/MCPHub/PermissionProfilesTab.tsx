@@ -5,6 +5,7 @@ import {
   createPermissionProfile,
   deletePermissionProfile,
   getToolRegistrySummary,
+  listPathScopeObjects,
   listExternalServers,
   listProfileCredentialBindings,
   listPermissionProfiles,
@@ -13,6 +14,7 @@ import {
   updatePermissionProfile,
   type McpHubCredentialBinding,
   type McpHubExternalServer,
+  type McpHubPathScopeObject,
   type McpHubPermissionPolicyDocument,
   type McpHubPermissionProfile,
   type McpHubToolRegistryEntry,
@@ -23,6 +25,8 @@ import {
   getCredentialBindingKey,
   getManagedExternalServers,
   getManagedExternalServerSlots,
+  getPathAllowlistSummary,
+  getPathScopeLabel,
   MCP_HUB_PROFILE_MODE_OPTIONS,
   MCP_HUB_SCOPE_OPTIONS
 } from "./policyHelpers"
@@ -39,11 +43,14 @@ export const PermissionProfilesTab = () => {
   const [description, setDescription] = useState("")
   const [ownerScopeType, setOwnerScopeType] = useState<"global" | "org" | "team" | "user">("global")
   const [mode, setMode] = useState<"custom" | "preset">("custom")
+  const [pathScopeSource, setPathScopeSource] = useState<"inline" | "named">("inline")
+  const [pathScopeObjectId, setPathScopeObjectId] = useState("")
   const [policyDocument, setPolicyDocument] = useState<McpHubPermissionPolicyDocument>({})
   const [isActive, setIsActive] = useState(true)
   const [registryEntries, setRegistryEntries] = useState<McpHubToolRegistryEntry[]>([])
   const [registryModules, setRegistryModules] = useState<McpHubToolRegistryModule[]>([])
   const [externalServers, setExternalServers] = useState<McpHubExternalServer[]>([])
+  const [pathScopeObjects, setPathScopeObjects] = useState<McpHubPathScopeObject[]>([])
   const [profileBindings, setProfileBindings] = useState<McpHubCredentialBinding[]>([])
   const [bindingsLoading, setBindingsLoading] = useState(false)
   const [bindingServerId, setBindingServerId] = useState<string | null>(null)
@@ -85,20 +92,23 @@ export const PermissionProfilesTab = () => {
     let cancelled = false
     const loadRegistryAndServers = async () => {
       try {
-        const [summary, serverRows] = await Promise.all([
+        const [summary, serverRows, pathScopeRows] = await Promise.all([
           getToolRegistrySummary(),
-          listExternalServers()
+          listExternalServers(),
+          listPathScopeObjects()
         ])
         if (!cancelled) {
           setRegistryEntries(Array.isArray(summary?.entries) ? summary.entries : [])
           setRegistryModules(Array.isArray(summary?.modules) ? summary.modules : [])
           setExternalServers(Array.isArray(serverRows) ? serverRows : [])
+          setPathScopeObjects(Array.isArray(pathScopeRows) ? pathScopeRows : [])
         }
       } catch {
         if (!cancelled) {
           setRegistryEntries([])
           setRegistryModules([])
           setExternalServers([])
+          setPathScopeObjects([])
         }
       }
     }
@@ -115,6 +125,8 @@ export const PermissionProfilesTab = () => {
     setDescription("")
     setOwnerScopeType("global")
     setMode("custom")
+    setPathScopeSource("inline")
+    setPathScopeObjectId("")
     setPolicyDocument({})
     setIsActive(true)
     setProfileBindings([])
@@ -142,6 +154,8 @@ export const PermissionProfilesTab = () => {
     setDescription(String(profile.description || ""))
     setOwnerScopeType(profile.owner_scope_type)
     setMode(profile.mode)
+    setPathScopeSource(profile.path_scope_object_id ? "named" : "inline")
+    setPathScopeObjectId(profile.path_scope_object_id ? String(profile.path_scope_object_id) : "")
     setPolicyDocument(profile.policy_document || {})
     setIsActive(profile.is_active)
     setProfileBindings([])
@@ -158,6 +172,8 @@ export const PermissionProfilesTab = () => {
         description: description.trim() || null,
         owner_scope_type: ownerScopeType,
         mode,
+        path_scope_object_id:
+          pathScopeSource === "named" && pathScopeObjectId ? Number(pathScopeObjectId) : null,
         policy_document: policyDocument,
         is_active: isActive
       }
@@ -286,6 +302,53 @@ export const PermissionProfilesTab = () => {
               </Space>
             </Space>
 
+            <Card size="small" title="Path Scope Source">
+              <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                <Typography.Text type="secondary">
+                  Named path scopes provide reusable relative file rules. Inline path fields below stay
+                  preserved and can still replace object values.
+                </Typography.Text>
+                <Space wrap>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mcp-profile-path-scope-source"
+                      checked={pathScopeSource === "inline"}
+                      onChange={() => setPathScopeSource("inline")}
+                    />
+                    <span style={{ marginLeft: 8 }}>Use inline rules</span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mcp-profile-path-scope-source"
+                      checked={pathScopeSource === "named"}
+                      onChange={() => setPathScopeSource("named")}
+                    />
+                    <span style={{ marginLeft: 8 }}>Use named path scope</span>
+                  </label>
+                </Space>
+                {pathScopeSource === "named" ? (
+                  <Space orientation="vertical" style={{ width: "100%" }}>
+                    <label htmlFor="mcp-profile-path-scope-object">Named path scope</label>
+                    <select
+                      id="mcp-profile-path-scope-object"
+                      aria-label="Named path scope"
+                      value={pathScopeObjectId}
+                      onChange={(event) => setPathScopeObjectId(event.target.value)}
+                    >
+                      <option value="">Select a path scope</option>
+                      {pathScopeObjects.map((pathScopeObject) => (
+                        <option key={pathScopeObject.id} value={pathScopeObject.id}>
+                          {pathScopeObject.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Space>
+                ) : null}
+              </Space>
+            </Card>
+
             <PolicyDocumentEditor
               formId="mcp-permission-profile"
               policy={policyDocument}
@@ -394,6 +457,14 @@ export const PermissionProfilesTab = () => {
                 <Tag>{profile.owner_scope_type}</Tag>
                 <Tag color="blue">{profile.mode}</Tag>
                 {profile.is_active ? <Tag color="green">active</Tag> : <Tag>inactive</Tag>}
+                {profile.path_scope_object_id ? (
+                  <Tag color="purple">
+                    {`path scope ${
+                      pathScopeObjects.find((row) => row.id === profile.path_scope_object_id)?.name ||
+                      profile.path_scope_object_id
+                    }`}
+                  </Tag>
+                ) : null}
                 <Button size="small" onClick={() => openForEdit(profile)}>
                   Edit
                 </Button>
@@ -418,6 +489,14 @@ export const PermissionProfilesTab = () => {
                     {tool}
                   </Tag>
                 ))}
+                {getPathScopeLabel(profile.policy_document.path_scope_mode) ? (
+                  <Tag color="cyan">{getPathScopeLabel(profile.policy_document.path_scope_mode)}</Tag>
+                ) : null}
+                {getPathAllowlistSummary(profile.policy_document.path_allowlist_prefixes) ? (
+                  <Tag color="blue">
+                    {`paths ${getPathAllowlistSummary(profile.policy_document.path_allowlist_prefixes)}`}
+                  </Tag>
+                ) : null}
               </Space>
             </Space>
           </List.Item>

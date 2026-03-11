@@ -3,13 +3,17 @@ import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } fr
 
 import {
   createPolicyAssignment,
+  addPolicyAssignmentWorkspace,
   deletePolicyAssignmentOverride,
   deletePolicyAssignment,
   deleteAssignmentCredentialBinding,
+  deletePolicyAssignmentWorkspace,
   getAssignmentExternalAccess,
   getToolRegistrySummary,
   getEffectivePolicy,
   getPolicyAssignmentOverride,
+  listPathScopeObjects,
+  listPolicyAssignmentWorkspaces,
   listAssignmentCredentialBindings,
   listApprovalPolicies,
   listExternalServers,
@@ -23,9 +27,11 @@ import {
   type McpHubEffectivePolicy,
   type McpHubEffectiveExternalAccess,
   type McpHubExternalServer,
+  type McpHubPathScopeObject,
   type McpHubPermissionPolicyDocument,
   type McpHubPermissionProfile,
   type McpHubPolicyAssignment,
+  type McpHubPolicyAssignmentWorkspace,
   type McpHubPolicyOverride,
   type McpHubToolRegistryEntry,
   type McpHubToolRegistryModule
@@ -38,13 +44,16 @@ import {
   getPathAllowlistSummary,
   getPathScopeLabel,
   MCP_HUB_SCOPE_OPTIONS,
-  MCP_HUB_TARGET_OPTIONS
+  MCP_HUB_TARGET_OPTIONS,
+  parseLineList
 } from "./policyHelpers"
 import { ExternalAccessSummary } from "./ExternalAccessSummary"
 import { PolicyDocumentEditor } from "./PolicyDocumentEditor"
 
 const PROVENANCE_LABELS = {
   profile: "profile",
+  profile_path_scope_object: "profile path scope",
+  assignment_path_scope_object: "assignment path scope",
   assignment_inline: "assignment",
   assignment_override: "assignment override"
 } as const
@@ -63,6 +72,9 @@ export const PolicyAssignmentsTab = () => {
   const [targetId, setTargetId] = useState("")
   const [ownerScopeType, setOwnerScopeType] = useState<"global" | "org" | "team" | "user">("user")
   const [profileId, setProfileId] = useState<string>("")
+  const [pathScopeSource, setPathScopeSource] = useState<"inline" | "named">("inline")
+  const [pathScopeObjectId, setPathScopeObjectId] = useState("")
+  const [workspaceIdsText, setWorkspaceIdsText] = useState("")
   const [approvalPolicyId, setApprovalPolicyId] = useState<string>("")
   const [policyDocument, setPolicyDocument] = useState<McpHubPermissionPolicyDocument>({})
   const [isActive, setIsActive] = useState(true)
@@ -76,6 +88,8 @@ export const PolicyAssignmentsTab = () => {
   const [registryEntries, setRegistryEntries] = useState<McpHubToolRegistryEntry[]>([])
   const [registryModules, setRegistryModules] = useState<McpHubToolRegistryModule[]>([])
   const [externalServers, setExternalServers] = useState<McpHubExternalServer[]>([])
+  const [pathScopeObjects, setPathScopeObjects] = useState<McpHubPathScopeObject[]>([])
+  const [assignmentWorkspaces, setAssignmentWorkspaces] = useState<McpHubPolicyAssignmentWorkspace[]>([])
   const [assignmentBindings, setAssignmentBindings] = useState<McpHubCredentialBinding[]>([])
   const [externalAccess, setExternalAccess] = useState<McpHubEffectiveExternalAccess | null>(null)
   const [bindingsLoading, setBindingsLoading] = useState(false)
@@ -143,20 +157,23 @@ export const PolicyAssignmentsTab = () => {
     let cancelled = false
     const loadRegistryAndServers = async () => {
       try {
-        const [summary, serverRows] = await Promise.all([
+        const [summary, serverRows, pathScopeRows] = await Promise.all([
           getToolRegistrySummary(),
-          listExternalServers()
+          listExternalServers(),
+          listPathScopeObjects()
         ])
         if (!cancelled) {
           setRegistryEntries(Array.isArray(summary?.entries) ? summary.entries : [])
           setRegistryModules(Array.isArray(summary?.modules) ? summary.modules : [])
           setExternalServers(Array.isArray(serverRows) ? serverRows : [])
+          setPathScopeObjects(Array.isArray(pathScopeRows) ? pathScopeRows : [])
         }
       } catch {
         if (!cancelled) {
           setRegistryEntries([])
           setRegistryModules([])
           setExternalServers([])
+          setPathScopeObjects([])
         }
       }
     }
@@ -173,6 +190,9 @@ export const PolicyAssignmentsTab = () => {
     setTargetId("")
     setOwnerScopeType("user")
     setProfileId("")
+    setPathScopeSource("inline")
+    setPathScopeObjectId("")
+    setWorkspaceIdsText("")
     setApprovalPolicyId("")
     setPolicyDocument({})
     setIsActive(true)
@@ -185,6 +205,7 @@ export const PolicyAssignmentsTab = () => {
     setExternalAccess(null)
     setBindingsLoading(false)
     setBindingServerId(null)
+    setAssignmentWorkspaces([])
   }
 
   const loadOverride = async (assignmentId: number) => {
@@ -224,6 +245,19 @@ export const PolicyAssignmentsTab = () => {
     }
   }
 
+  const loadAssignmentWorkspaces = async (assignmentId: number) => {
+    try {
+      const rows = await listPolicyAssignmentWorkspaces(assignmentId)
+      const nextRows = Array.isArray(rows) ? rows : []
+      setAssignmentWorkspaces(nextRows)
+      setWorkspaceIdsText(nextRows.map((row) => row.workspace_id).join("\n"))
+    } catch {
+      setAssignmentWorkspaces([])
+      setWorkspaceIdsText("")
+      setErrorMessage("Failed to load assignment workspace access.")
+    }
+  }
+
   const openForEdit = (assignment: McpHubPolicyAssignment) => {
     setCreateOpen(true)
     setEditingId(assignment.id)
@@ -231,6 +265,8 @@ export const PolicyAssignmentsTab = () => {
     setTargetId(String(assignment.target_id || ""))
     setOwnerScopeType(assignment.owner_scope_type)
     setProfileId(assignment.profile_id ? String(assignment.profile_id) : "")
+    setPathScopeSource(assignment.path_scope_object_id ? "named" : "inline")
+    setPathScopeObjectId(assignment.path_scope_object_id ? String(assignment.path_scope_object_id) : "")
     setApprovalPolicyId(assignment.approval_policy_id ? String(assignment.approval_policy_id) : "")
     setPolicyDocument(assignment.inline_policy_document || {})
     setIsActive(assignment.is_active)
@@ -241,6 +277,24 @@ export const PolicyAssignmentsTab = () => {
       void loadOverride(assignment.id)
     }
     void loadAssignmentExternalState(assignment.id)
+    void loadAssignmentWorkspaces(assignment.id)
+  }
+
+  const syncAssignmentWorkspaces = async (assignmentId: number) => {
+    const desiredWorkspaceIds = Array.from(new Set(parseLineList(workspaceIdsText)))
+    const currentWorkspaceIds = assignmentWorkspaces.map((row) => row.workspace_id)
+    const toAdd = desiredWorkspaceIds.filter((workspaceId) => !currentWorkspaceIds.includes(workspaceId))
+    const toDelete = currentWorkspaceIds.filter((workspaceId) => !desiredWorkspaceIds.includes(workspaceId))
+
+    await Promise.all([
+      ...toAdd.map((workspaceId) => addPolicyAssignmentWorkspace(assignmentId, workspaceId)),
+      ...toDelete.map((workspaceId) => deletePolicyAssignmentWorkspace(assignmentId, workspaceId))
+    ])
+
+    const nextRows = await listPolicyAssignmentWorkspaces(assignmentId)
+    const normalizedRows = Array.isArray(nextRows) ? nextRows : []
+    setAssignmentWorkspaces(normalizedRows)
+    setWorkspaceIdsText(normalizedRows.map((row) => row.workspace_id).join("\n"))
   }
 
   const handleSave = async () => {
@@ -253,14 +307,21 @@ export const PolicyAssignmentsTab = () => {
         target_id: targetType === "default" ? null : targetId.trim(),
         owner_scope_type: ownerScopeType,
         profile_id: profileId ? Number(profileId) : null,
+        path_scope_object_id:
+          pathScopeSource === "named" && pathScopeObjectId ? Number(pathScopeObjectId) : null,
         approval_policy_id: approvalPolicyId ? Number(approvalPolicyId) : null,
         inline_policy_document: policyDocument,
         is_active: isActive
       }
+      let savedAssignmentId = editingId
       if (editingId) {
         await updatePolicyAssignment(editingId, payload)
       } else {
-        await createPolicyAssignment(payload)
+        const created = await createPolicyAssignment(payload)
+        savedAssignmentId = created.id
+      }
+      if (savedAssignmentId) {
+        await syncAssignmentWorkspaces(savedAssignmentId)
       }
       resetForm()
       await loadAll()
@@ -448,6 +509,69 @@ export const PolicyAssignmentsTab = () => {
                 </select>
               </Space>
             </Space>
+
+            <Card size="small" title="Path Scope Source">
+              <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                <Typography.Text type="secondary">
+                  Named path scopes provide reusable relative file rules. Inline path fields below stay
+                  preserved and can still replace the object values for this assignment.
+                </Typography.Text>
+                <Space wrap>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mcp-assignment-path-scope-source"
+                      checked={pathScopeSource === "inline"}
+                      onChange={() => setPathScopeSource("inline")}
+                    />
+                    <span style={{ marginLeft: 8 }}>Use inline rules</span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="mcp-assignment-path-scope-source"
+                      checked={pathScopeSource === "named"}
+                      onChange={() => setPathScopeSource("named")}
+                    />
+                    <span style={{ marginLeft: 8 }}>Use named path scope</span>
+                  </label>
+                </Space>
+                {pathScopeSource === "named" ? (
+                  <Space orientation="vertical" style={{ width: "100%" }}>
+                    <label htmlFor="mcp-assignment-path-scope-object">Named path scope</label>
+                    <select
+                      id="mcp-assignment-path-scope-object"
+                      aria-label="Assignment named path scope"
+                      value={pathScopeObjectId}
+                      onChange={(event) => setPathScopeObjectId(event.target.value)}
+                    >
+                      <option value="">Select a path scope</option>
+                      {pathScopeObjects.map((pathScopeObject) => (
+                        <option key={pathScopeObject.id} value={pathScopeObject.id}>
+                          {pathScopeObject.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Space>
+                ) : null}
+              </Space>
+            </Card>
+
+            <Card size="small" title="Workspace Access">
+              <Space orientation="vertical" style={{ width: "100%" }}>
+                <label htmlFor="mcp-assignment-workspace-ids">Allowed workspace ids</label>
+                <textarea
+                  id="mcp-assignment-workspace-ids"
+                  aria-label="Allowed workspace ids"
+                  value={workspaceIdsText}
+                  onChange={(event) => setWorkspaceIdsText(event.target.value)}
+                  rows={4}
+                />
+                <Typography.Text type="secondary">
+                  One workspace id per line. If this list is empty, current behavior stays unchanged.
+                </Typography.Text>
+              </Space>
+            </Card>
 
             <Card size="small" title="Base Assignment Policy">
               <PolicyDocumentEditor
@@ -643,6 +767,11 @@ export const PolicyAssignmentsTab = () => {
                   {`paths ${getPathAllowlistSummary(effectivePolicy.policy_document?.path_allowlist_prefixes)}`}
                 </Tag>
               ) : null}
+              {effectivePolicy.selected_assignment_workspace_ids?.length ? (
+                <Tag color="purple">
+                  {`workspaces ${effectivePolicy.selected_assignment_workspace_ids.join(", ")}`}
+                </Tag>
+              ) : null}
             </Space>
             {effectivePolicy.provenance.length > 0 ? (
               <Space orientation="vertical" size={4} style={{ width: "100%" }}>
@@ -673,6 +802,14 @@ export const PolicyAssignmentsTab = () => {
                 <Tag>{assignment.target_type}</Tag>
                 <Tag>{assignment.owner_scope_type}</Tag>
                 {assignment.profile_id ? <Tag color="blue">{`profile ${assignment.profile_id}`}</Tag> : null}
+                {assignment.path_scope_object_id ? (
+                  <Tag color="purple">
+                    {`path scope ${
+                      pathScopeObjects.find((row) => row.id === assignment.path_scope_object_id)?.name ||
+                      assignment.path_scope_object_id
+                    }`}
+                  </Tag>
+                ) : null}
                 {assignment.approval_policy_id ? (
                   <Tag color="gold">{`approval ${assignment.approval_policy_id}`}</Tag>
                 ) : null}
@@ -704,6 +841,11 @@ export const PolicyAssignmentsTab = () => {
                 {getPathAllowlistSummary(assignment.inline_policy_document.path_allowlist_prefixes) ? (
                   <Tag color="blue">
                     {`paths ${getPathAllowlistSummary(assignment.inline_policy_document.path_allowlist_prefixes)}`}
+                  </Tag>
+                ) : null}
+                {assignmentWorkspaces.length > 0 && editingId === assignment.id ? (
+                  <Tag color="purple">
+                    {`workspaces ${assignmentWorkspaces.map((row) => row.workspace_id).join(", ")}`}
                   </Tag>
                 ) : null}
               </Space>

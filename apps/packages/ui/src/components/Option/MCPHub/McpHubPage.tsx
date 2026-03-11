@@ -2,6 +2,7 @@ import { useState } from "react"
 import { Tabs, Typography } from "antd"
 
 import { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
+import { PathScopesTab } from "./PathScopesTab"
 import { PermissionProfilesTab } from "./PermissionProfilesTab"
 import { PolicyAssignmentsTab } from "./PolicyAssignmentsTab"
 import { ToolCatalogsTab } from "./ToolCatalogsTab"
@@ -28,6 +29,11 @@ export const McpHubPage = () => {
             key: "assignments",
             label: "Assignments",
             children: <PolicyAssignmentsTab />
+          },
+          {
+            key: "path-scopes",
+            label: "Path Scopes",
+            children: <PathScopesTab />
           },
           {
             key: "approvals",

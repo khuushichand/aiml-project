@@ -35,11 +35,16 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ExternalServerResponse,
     ExternalServerUpdateRequest,
     MCPHubDeleteResponse,
+    PathScopeObjectCreateRequest,
+    PathScopeObjectResponse,
+    PathScopeObjectUpdateRequest,
     PermissionProfileCreateRequest,
     PermissionProfileResponse,
     PermissionProfileUpdateRequest,
     PolicyAssignmentCreateRequest,
     PolicyAssignmentResponse,
+    PolicyAssignmentWorkspaceCreateRequest,
+    PolicyAssignmentWorkspaceResponse,
     PolicyAssignmentUpdateRequest,
     PolicyOverrideResponse,
     PolicyOverrideUpsertRequest,
@@ -88,6 +93,7 @@ _SUPPORTED_APPROVAL_DURATIONS = frozenset({"once", "session", "conversation"})
 _DEFAULT_SCOPED_APPROVAL_TTL_MINUTES = 480
 _PATH_SCOPE_BREADTH_RANK = {"cwd_descendants": 0, "workspace_root": 1, "none": 2}
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_PATH_SCOPE_DOCUMENT_KEYS = {"path_scope_mode", "path_scope_enforcement", "path_allowlist_prefixes"}
 
 
 async def get_mcp_hub_service() -> McpHubService:
@@ -315,6 +321,16 @@ def _normalize_policy_document_for_storage(
     else:
         normalized["path_allowlist_prefixes"] = allowlist
     return normalized
+
+
+def _normalize_path_scope_document_for_storage(path_scope_document: dict[str, Any]) -> dict[str, Any]:
+    """Normalize and limit a reusable path-scope object document to path-governance keys."""
+    filtered = {
+        key: deepcopy(value)
+        for key, value in dict(path_scope_document or {}).items()
+        if key in _PATH_SCOPE_DOCUMENT_KEYS
+    }
+    return _normalize_policy_document_for_storage(filtered, allow_inherited_scope=False)
 
 
 def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -657,6 +673,7 @@ def _permission_profile_row_to_response(row: dict[str, Any]) -> PermissionProfil
         owner_scope_type=str(row.get("owner_scope_type") or "global"),
         owner_scope_id=row.get("owner_scope_id"),
         mode=str(row.get("mode") or "custom"),
+        path_scope_object_id=row.get("path_scope_object_id"),
         policy_document=_load_json_object(row.get("policy_document")),
         is_active=bool(row.get("is_active")),
         created_by=row.get("created_by"),
@@ -674,6 +691,7 @@ def _policy_assignment_row_to_response(row: dict[str, Any]) -> PolicyAssignmentR
         owner_scope_type=str(row.get("owner_scope_type") or "global"),
         owner_scope_id=row.get("owner_scope_id"),
         profile_id=row.get("profile_id"),
+        path_scope_object_id=row.get("path_scope_object_id"),
         inline_policy_document=_load_json_object(row.get("inline_policy_document")),
         approval_policy_id=row.get("approval_policy_id"),
         is_active=bool(row.get("is_active")),
@@ -685,6 +703,33 @@ def _policy_assignment_row_to_response(row: dict[str, Any]) -> PolicyAssignmentR
         updated_by=row.get("updated_by"),
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
+    )
+
+
+def _path_scope_object_row_to_response(row: dict[str, Any]) -> PathScopeObjectResponse:
+    return PathScopeObjectResponse(
+        id=int(row.get("id")),
+        name=str(row.get("name") or ""),
+        description=row.get("description"),
+        owner_scope_type=str(row.get("owner_scope_type") or "global"),
+        owner_scope_id=row.get("owner_scope_id"),
+        path_scope_document=_load_json_object(row.get("path_scope_document")),
+        is_active=bool(row.get("is_active")),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _policy_assignment_workspace_row_to_response(
+    row: dict[str, Any],
+) -> PolicyAssignmentWorkspaceResponse:
+    return PolicyAssignmentWorkspaceResponse(
+        assignment_id=int(row.get("assignment_id")),
+        workspace_id=str(row.get("workspace_id") or ""),
+        created_by=row.get("created_by"),
+        created_at=row.get("created_at"),
     )
 
 
@@ -935,12 +980,23 @@ async def create_permission_profile(
         allow_inherited_scope=False,
     )
     _require_grant_authority(principal, policy_document)
+    try:
+        await svc.validate_path_scope_object_reference(
+            path_scope_object_id=payload.path_scope_object_id,
+            target_scope_type=payload.owner_scope_type,
+            target_scope_id=payload.owner_scope_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     row = await svc.create_permission_profile(
         name=payload.name,
         description=payload.description,
         owner_scope_type=payload.owner_scope_type,
         owner_scope_id=payload.owner_scope_id,
         mode=payload.mode,
+        path_scope_object_id=payload.path_scope_object_id,
         policy_document=policy_document,
         is_active=payload.is_active,
         actor_id=principal.user_id,
@@ -990,6 +1046,22 @@ async def update_permission_profile(
         )
         _require_grant_authority(principal, update_fields.get("policy_document") or {})
     try:
+        if (
+            "path_scope_object_id" in update_fields
+            or "owner_scope_type" in update_fields
+            or "owner_scope_id" in update_fields
+        ):
+            existing = await svc.get_permission_profile(profile_id)
+            if not existing:
+                raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
+            await svc.validate_path_scope_object_reference(
+                path_scope_object_id=update_fields.get(
+                    "path_scope_object_id",
+                    existing.get("path_scope_object_id"),
+                ),
+                target_scope_type=str(update_fields.get("owner_scope_type") or existing.get("owner_scope_type") or "global"),
+                target_scope_id=update_fields.get("owner_scope_id", existing.get("owner_scope_id")),
+            )
         row = await svc.update_permission_profile(
             profile_id,
             actor_id=principal.user_id,
@@ -999,6 +1071,8 @@ async def update_permission_profile(
             raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _permission_profile_row_to_response(row)
 
 
@@ -1019,6 +1093,91 @@ async def delete_permission_profile(
     return MCPHubDeleteResponse(ok=True)
 
 
+@router.post("/path-scope-objects", response_model=PathScopeObjectResponse, status_code=201)
+async def create_path_scope_object(
+    payload: PathScopeObjectCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PathScopeObjectResponse:
+    _require_mutation_permission(principal)
+    row = await svc.create_path_scope_object(
+        name=payload.name,
+        description=payload.description,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+        path_scope_document=_normalize_path_scope_document_for_storage(payload.path_scope_document),
+        is_active=payload.is_active,
+        actor_id=principal.user_id,
+    )
+    return _path_scope_object_row_to_response(row)
+
+
+@router.get("/path-scope-objects", response_model=list[PathScopeObjectResponse])
+async def list_path_scope_objects(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[PathScopeObjectResponse]:
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_path_scope_objects(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [_path_scope_object_row_to_response(row) for row in rows]
+
+
+@router.put("/path-scope-objects/{path_scope_object_id}", response_model=PathScopeObjectResponse)
+async def update_path_scope_object(
+    path_scope_object_id: int,
+    payload: PathScopeObjectUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PathScopeObjectResponse:
+    _require_mutation_permission(principal)
+    update_fields = payload.model_dump(exclude_unset=True)
+    if "path_scope_document" in update_fields:
+        update_fields["path_scope_document"] = _normalize_path_scope_document_for_storage(
+            update_fields.get("path_scope_document") or {}
+        )
+    try:
+        row = await svc.update_path_scope_object(
+            path_scope_object_id,
+            actor_id=principal.user_id,
+            **update_fields,
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_path_scope_object", identifier=str(path_scope_object_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _path_scope_object_row_to_response(row)
+
+
+@router.delete("/path-scope-objects/{path_scope_object_id}", response_model=MCPHubDeleteResponse)
+async def delete_path_scope_object(
+    path_scope_object_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        deleted = await svc.delete_path_scope_object(path_scope_object_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_path_scope_object", identifier=str(path_scope_object_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
 @router.post("/policy-assignments", response_model=PolicyAssignmentResponse, status_code=201)
 async def create_policy_assignment(
     payload: PolicyAssignmentCreateRequest,
@@ -1032,12 +1191,23 @@ async def create_policy_assignment(
         allow_inherited_scope=False,
     )
     _require_grant_authority(principal, inline_policy_document)
+    try:
+        await svc.validate_path_scope_object_reference(
+            path_scope_object_id=payload.path_scope_object_id,
+            target_scope_type=payload.owner_scope_type,
+            target_scope_id=payload.owner_scope_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     row = await svc.create_policy_assignment(
         target_type=payload.target_type,
         target_id=payload.target_id,
         owner_scope_type=payload.owner_scope_type,
         owner_scope_id=payload.owner_scope_id,
         profile_id=payload.profile_id,
+        path_scope_object_id=payload.path_scope_object_id,
         inline_policy_document=inline_policy_document,
         approval_policy_id=payload.approval_policy_id,
         is_active=payload.is_active,
@@ -1092,6 +1262,22 @@ async def update_policy_assignment(
         )
         _require_grant_authority(principal, update_fields.get("inline_policy_document") or {})
     try:
+        if (
+            "path_scope_object_id" in update_fields
+            or "owner_scope_type" in update_fields
+            or "owner_scope_id" in update_fields
+        ):
+            existing = await svc.get_policy_assignment(assignment_id)
+            if not existing:
+                raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+            await svc.validate_path_scope_object_reference(
+                path_scope_object_id=update_fields.get(
+                    "path_scope_object_id",
+                    existing.get("path_scope_object_id"),
+                ),
+                target_scope_type=str(update_fields.get("owner_scope_type") or existing.get("owner_scope_type") or "global"),
+                target_scope_id=update_fields.get("owner_scope_id", existing.get("owner_scope_id")),
+            )
         row = await svc.update_policy_assignment(
             assignment_id,
             actor_id=principal.user_id,
@@ -1101,6 +1287,8 @@ async def update_policy_assignment(
             raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _policy_assignment_row_to_response(row)
 
 
@@ -1116,6 +1304,74 @@ async def delete_policy_assignment(
         deleted = await svc.delete_policy_assignment(assignment_id, actor_id=principal.user_id)
         if not deleted:
             raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.get(
+    "/policy-assignments/{assignment_id}/workspaces",
+    response_model=list[PolicyAssignmentWorkspaceResponse],
+)
+async def list_policy_assignment_workspaces(
+    assignment_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[PolicyAssignmentWorkspaceResponse]:
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    rows = await svc.list_policy_assignment_workspaces(assignment_id)
+    return [_policy_assignment_workspace_row_to_response(row) for row in rows]
+
+
+@router.post(
+    "/policy-assignments/{assignment_id}/workspaces",
+    response_model=PolicyAssignmentWorkspaceResponse,
+    status_code=201,
+)
+async def add_policy_assignment_workspace(
+    assignment_id: int,
+    payload: PolicyAssignmentWorkspaceCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PolicyAssignmentWorkspaceResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+        row = await svc.add_policy_assignment_workspace(
+            assignment_id,
+            workspace_id=payload.workspace_id,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except McpHubConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _policy_assignment_workspace_row_to_response(row)
+
+
+@router.delete(
+    "/policy-assignments/{assignment_id}/workspaces/{workspace_id}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_policy_assignment_workspace(
+    assignment_id: int,
+    workspace_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+        deleted = await svc.delete_policy_assignment_workspace(
+            assignment_id,
+            workspace_id=workspace_id,
+            actor_id=principal.user_id,
+        )
+        if not deleted:
+            raise ResourceNotFoundError(
+                "mcp_policy_assignment_workspace",
+                identifier=f"{assignment_id}:{workspace_id}",
+            )
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return MCPHubDeleteResponse(ok=True)

@@ -197,6 +197,18 @@ class McpHubPathEnforcementService:
         if not result["enabled"]:
             return result
 
+        allowed_workspace_ids = _unique(
+            _as_str_list((effective_policy or {}).get("selected_assignment_workspace_ids"))
+        )
+        active_workspace_id = str(scope.get("workspace_id") or "").strip()
+        if allowed_workspace_ids and active_workspace_id not in allowed_workspace_ids:
+            return self._blocked_result(
+                scope=scope,
+                reason="workspace_not_allowed_for_assignment",
+                force_approval=False,
+                allowed_workspace_ids=allowed_workspace_ids,
+            )
+
         reason = str(scope.get("reason") or "").strip() or None
         if reason:
             return self._blocked_result(scope=scope, reason=reason)
@@ -265,17 +277,21 @@ class McpHubPathEnforcementService:
         normalized_paths: list[str] | None = None,
         reason: str | None = None,
         path_allowlist_prefixes: list[str] | None = None,
+        allowed_workspace_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         scope_root = _scope_root_from_scope(scope)
         payload = {
             "path_scope_mode": str(scope.get("path_scope_mode") or "none").strip() or "none",
             "workspace_root": str(scope.get("workspace_root") or "").strip() or None,
+            "workspace_id": str(scope.get("workspace_id") or "").strip() or None,
             "scope_root": str(scope_root) if scope_root is not None else None,
         }
         if normalized_paths:
             payload["normalized_paths"] = list(normalized_paths)
         if path_allowlist_prefixes:
             payload["path_allowlist_prefixes"] = list(path_allowlist_prefixes)
+        if allowed_workspace_ids:
+            payload["allowed_workspace_ids"] = list(allowed_workspace_ids)
         if reason:
             payload["reason"] = reason
         return {key: value for key, value in payload.items() if value not in (None, "", [])}
@@ -287,18 +303,21 @@ class McpHubPathEnforcementService:
         reason: str,
         normalized_paths: list[str] | None = None,
         path_allowlist_prefixes: list[str] | None = None,
+        force_approval: bool = True,
+        allowed_workspace_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         return {
             "enabled": bool(scope.get("enabled")),
             "within_scope": False,
             "reason": reason,
-            "force_approval": True,
+            "force_approval": force_approval,
             "normalized_paths": list(normalized_paths or []),
             "scope_payload": self._scope_payload(
                 scope=scope,
                 normalized_paths=list(normalized_paths or []),
                 reason=reason,
                 path_allowlist_prefixes=path_allowlist_prefixes,
+                allowed_workspace_ids=allowed_workspace_ids,
             ),
         }
 

@@ -11,6 +11,7 @@ from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.endpoints import mcp_hub_management
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError
 
 
 def _make_principal(
@@ -44,6 +45,7 @@ class _FakePolicyService:
                 "owner_scope_id": 7,
                 "mode": "custom",
                 "policy_document": {"capabilities": ["process.execute"]},
+                "path_scope_object_id": None,
                 "is_active": True,
                 "created_by": 7,
                 "updated_by": 7,
@@ -59,6 +61,7 @@ class _FakePolicyService:
                 "owner_scope_type": "user",
                 "owner_scope_id": 7,
                 "profile_id": None,
+                "path_scope_object_id": None,
                 "inline_policy_document": {"capabilities": ["process.execute"]},
                 "approval_policy_id": None,
                 "is_active": True,
@@ -72,6 +75,35 @@ class _FakePolicyService:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         ]
+        self.path_scope_objects = [
+            {
+                "id": 41,
+                "name": "Docs Only",
+                "description": None,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "path_scope_document": {
+                    "path_scope_mode": "workspace_root",
+                    "path_scope_enforcement": "approval_required_when_unenforceable",
+                    "path_allowlist_prefixes": ["docs"],
+                },
+                "is_active": True,
+                "created_by": 7,
+                "updated_by": 7,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+        self.assignment_workspaces: dict[int, list[dict]] = {
+            11: [
+                {
+                    "assignment_id": 11,
+                    "workspace_id": "workspace-alpha",
+                    "created_by": 7,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ]
+        }
         self.policy_overrides = {
             11: {
                 "id": 31,
@@ -122,6 +154,7 @@ class _FakePolicyService:
             "owner_scope_id": kwargs.get("owner_scope_id"),
             "mode": kwargs["mode"],
             "policy_document": kwargs["policy_document"],
+            "path_scope_object_id": kwargs.get("path_scope_object_id"),
             "is_active": kwargs.get("is_active", True),
             "created_by": kwargs.get("actor_id"),
             "updated_by": kwargs.get("actor_id"),
@@ -143,6 +176,8 @@ class _FakePolicyService:
             profile["mode"] = kwargs["mode"]
         if kwargs.get("policy_document") is not None:
             profile["policy_document"] = kwargs["policy_document"]
+        if "path_scope_object_id" in kwargs:
+            profile["path_scope_object_id"] = kwargs.get("path_scope_object_id")
         if kwargs.get("is_active") is not None:
             profile["is_active"] = kwargs["is_active"]
         profile["updated_by"] = kwargs.get("actor_id")
@@ -169,6 +204,7 @@ class _FakePolicyService:
             "owner_scope_type": kwargs["owner_scope_type"],
             "owner_scope_id": kwargs.get("owner_scope_id"),
             "profile_id": kwargs.get("profile_id"),
+            "path_scope_object_id": kwargs.get("path_scope_object_id"),
             "inline_policy_document": kwargs["inline_policy_document"],
             "approval_policy_id": kwargs.get("approval_policy_id"),
             "is_active": kwargs.get("is_active", True),
@@ -196,6 +232,8 @@ class _FakePolicyService:
             assignment["inline_policy_document"] = kwargs["inline_policy_document"]
         if kwargs.get("profile_id") is not None:
             assignment["profile_id"] = kwargs["profile_id"]
+        if "path_scope_object_id" in kwargs:
+            assignment["path_scope_object_id"] = kwargs.get("path_scope_object_id")
         if kwargs.get("approval_policy_id") is not None:
             assignment["approval_policy_id"] = kwargs["approval_policy_id"]
         if kwargs.get("is_active") is not None:
@@ -326,6 +364,90 @@ class _FakePolicyService:
         }
         self.approval_decisions = [decision]
         return decision
+
+    async def list_path_scope_objects(self, **_kwargs):
+        return list(self.path_scope_objects)
+
+    async def get_path_scope_object(self, path_scope_object_id: int):
+        for row in self.path_scope_objects:
+            if int(row.get("id") or 0) == int(path_scope_object_id):
+                return dict(row)
+        return None
+
+    async def validate_path_scope_object_reference(
+        self,
+        *,
+        path_scope_object_id: int | None,
+        target_scope_type: str,
+        target_scope_id: int | None,
+    ):
+        if path_scope_object_id is None:
+            return None
+        row = await self.get_path_scope_object(path_scope_object_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="mcp_path_scope_object not found")
+        return row
+
+    async def create_path_scope_object(self, **kwargs):
+        row = {
+            "id": 41,
+            "name": kwargs["name"],
+            "description": kwargs.get("description"),
+            "owner_scope_type": kwargs["owner_scope_type"],
+            "owner_scope_id": kwargs.get("owner_scope_id"),
+            "path_scope_document": kwargs["path_scope_document"],
+            "is_active": kwargs.get("is_active", True),
+            "created_by": kwargs.get("actor_id"),
+            "updated_by": kwargs.get("actor_id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.path_scope_objects = [row]
+        return row
+
+    async def update_path_scope_object(self, path_scope_object_id: int, **kwargs):
+        if path_scope_object_id != 41:
+            return None
+        row = dict(self.path_scope_objects[0])
+        if kwargs.get("name") is not None:
+            row["name"] = kwargs["name"]
+        if kwargs.get("description") is not None:
+            row["description"] = kwargs["description"]
+        if kwargs.get("path_scope_document") is not None:
+            row["path_scope_document"] = kwargs["path_scope_document"]
+        if kwargs.get("is_active") is not None:
+            row["is_active"] = kwargs["is_active"]
+        row["updated_by"] = kwargs.get("actor_id")
+        self.path_scope_objects = [row]
+        return row
+
+    async def delete_path_scope_object(self, path_scope_object_id: int, *, actor_id: int | None):
+        return path_scope_object_id == 41 and actor_id == 7
+
+    async def list_policy_assignment_workspaces(self, assignment_id: int):
+        return [dict(row) for row in self.assignment_workspaces.get(assignment_id, [])]
+
+    async def add_policy_assignment_workspace(self, assignment_id: int, *, workspace_id: str, actor_id: int | None):
+        rows = self.assignment_workspaces.setdefault(assignment_id, [])
+        if any(str(row.get("workspace_id")) == workspace_id for row in rows):
+            raise McpHubConflictError("Workspace already attached to assignment")
+        row = {
+            "assignment_id": assignment_id,
+            "workspace_id": workspace_id,
+            "created_by": actor_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        rows.append(row)
+        return dict(row)
+
+    async def delete_policy_assignment_workspace(self, assignment_id: int, workspace_id: str, *, actor_id: int | None):
+        if actor_id != 7:
+            return False
+        rows = self.assignment_workspaces.get(assignment_id, [])
+        next_rows = [row for row in rows if str(row.get("workspace_id")) != workspace_id]
+        deleted = len(next_rows) != len(rows)
+        self.assignment_workspaces[assignment_id] = next_rows
+        return deleted
 
 
 class _FakePolicyResolver:
@@ -612,6 +734,109 @@ def test_create_permission_profile_normalizes_path_allowlist_prefixes() -> None:
     assert resp.status_code == 201
     payload = resp.json()
     assert payload["policy_document"]["path_allowlist_prefixes"] == ["docs/api", "src"]
+
+
+def test_create_path_scope_object_returns_created_payload() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/path-scope-objects",
+            json={
+                "name": "Docs Only",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "path_scope_document": {
+                    "path_scope_mode": "workspace_root",
+                    "path_scope_enforcement": "approval_required_when_unenforceable",
+                    "path_allowlist_prefixes": ["./docs/", "docs/api"],
+                },
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["name"] == "Docs Only"
+    assert payload["path_scope_document"]["path_allowlist_prefixes"] == ["docs", "docs/api"]
+
+
+def test_add_assignment_workspace_returns_created_payload() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/policy-assignments/11/workspaces",
+            json={"workspace_id": "workspace-beta"},
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["assignment_id"] == 11
+    assert payload["workspace_id"] == "workspace-beta"
+
+
+def test_add_assignment_workspace_rejects_duplicate_workspace_id() -> None:
+    service = _FakePolicyService()
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        ),
+        service=service,
+    )
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/v1/mcp/hub/policy-assignments/11/workspaces",
+            json={"workspace_id": "workspace-gamma"},
+        )
+        second = client.post(
+            "/api/v1/mcp/hub/policy-assignments/11/workspaces",
+            json={"workspace_id": "workspace-gamma"},
+        )
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+
+
+def test_create_policy_assignment_accepts_parent_scope_path_scope_object_reference() -> None:
+    app = _build_app(
+        _make_principal(
+            roles=[],
+            permissions=[SYSTEM_CONFIGURE],
+        )
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/policy-assignments",
+            json={
+                "target_type": "persona",
+                "target_id": "researcher",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "profile_id": None,
+                "path_scope_object_id": 41,
+                "inline_policy_document": {},
+                "approval_policy_id": None,
+                "is_active": True,
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["path_scope_object_id"] == 41
 
 
 def test_create_policy_assignment_returns_created_payload() -> None:

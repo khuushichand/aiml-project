@@ -113,6 +113,35 @@ class McpHubService:
             )
         return normalized
 
+    async def validate_path_scope_object_reference(
+        self,
+        *,
+        path_scope_object_id: int | None,
+        target_scope_type: str,
+        target_scope_id: int | None,
+    ) -> dict[str, Any] | None:
+        if path_scope_object_id is None:
+            return None
+        row = await self.repo.get_path_scope_object(int(path_scope_object_id))
+        if not row:
+            raise ResourceNotFoundError("mcp_path_scope_object", identifier=str(path_scope_object_id))
+        if not bool(row.get("is_active", True)):
+            raise BadRequestError("Referenced path scope object is inactive")
+
+        object_scope_type = str(row.get("owner_scope_type") or "global")
+        object_scope_id = row.get("owner_scope_id")
+        target_scope = str(target_scope_type or "global")
+        object_rank = _SCOPE_RANK.get(object_scope_type, -1)
+        target_rank = _SCOPE_RANK.get(target_scope, -1)
+        if object_rank < 0 or target_rank < 0:
+            raise BadRequestError("Invalid MCP Hub owner scope")
+        if object_rank > target_rank:
+            raise BadRequestError("Cannot reference a narrower-scope path scope object from a broader target")
+        if object_rank == target_rank and object_scope_type != "global":
+            if object_scope_id != target_scope_id:
+                raise BadRequestError("Cannot reference a path scope object from a different owner scope")
+        return row
+
     @classmethod
     def _credential_slot_required_permission(cls, privilege_class: str) -> str:
         normalized = cls._normalize_credential_slot_privilege_class(privilege_class)
@@ -389,6 +418,7 @@ class McpHubService:
         owner_scope_type: str,
         owner_scope_id: int | None,
         mode: str,
+        path_scope_object_id: int | None,
         policy_document: dict[str, Any],
         actor_id: int | None,
         description: str | None = None,
@@ -399,6 +429,7 @@ class McpHubService:
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,
             mode=mode,
+            path_scope_object_id=path_scope_object_id,
             policy_document=policy_document,
             actor_id=actor_id,
             description=description,
@@ -414,6 +445,88 @@ class McpHubService:
             )
         )
         return row
+
+    async def create_path_scope_object(
+        self,
+        *,
+        name: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        path_scope_document: dict[str, Any],
+        actor_id: int | None,
+        description: str | None = None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        row = await self.repo.create_path_scope_object(
+            name=name,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            path_scope_document=path_scope_document,
+            actor_id=actor_id,
+            description=description,
+            is_active=is_active,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.path_scope_object.create",
+                actor_id=actor_id,
+                resource_type="mcp_path_scope_object",
+                resource_id=str(row.get("id") or ""),
+                metadata={"name": row.get("name"), "owner_scope_type": row.get("owner_scope_type")},
+            )
+        )
+        return row
+
+    async def list_path_scope_objects(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.repo.list_path_scope_objects(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+
+    async def get_path_scope_object(self, path_scope_object_id: int) -> dict[str, Any] | None:
+        return await self.repo.get_path_scope_object(path_scope_object_id)
+
+    async def update_path_scope_object(
+        self,
+        path_scope_object_id: int,
+        *,
+        actor_id: int | None = None,
+        **update_fields: Any,
+    ) -> dict[str, Any] | None:
+        row = await self.repo.update_path_scope_object(
+            path_scope_object_id,
+            actor_id=actor_id,
+            **update_fields,
+        )
+        if row:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.path_scope_object.update",
+                    actor_id=actor_id,
+                    resource_type="mcp_path_scope_object",
+                    resource_id=str(row.get("id") or path_scope_object_id),
+                    metadata={"name": row.get("name"), "owner_scope_type": row.get("owner_scope_type")},
+                )
+            )
+        return row
+
+    async def delete_path_scope_object(self, path_scope_object_id: int, *, actor_id: int | None) -> bool:
+        deleted = await self.repo.delete_path_scope_object(path_scope_object_id)
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.path_scope_object.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_path_scope_object",
+                    resource_id=str(path_scope_object_id),
+                )
+            )
+        return deleted
 
     async def list_permission_profiles(
         self,
@@ -476,6 +589,7 @@ class McpHubService:
         owner_scope_type: str,
         owner_scope_id: int | None,
         profile_id: int | None,
+        path_scope_object_id: int | None,
         inline_policy_document: dict[str, Any],
         approval_policy_id: int | None,
         actor_id: int | None,
@@ -487,6 +601,7 @@ class McpHubService:
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,
             profile_id=profile_id,
+            path_scope_object_id=path_scope_object_id,
             inline_policy_document=inline_policy_document,
             approval_policy_id=approval_policy_id,
             actor_id=actor_id,
@@ -568,6 +683,56 @@ class McpHubService:
                     resource_type="mcp_policy_assignment",
                     resource_id=str(assignment_id),
                     metadata=None,
+                )
+            )
+        return deleted
+
+    async def list_policy_assignment_workspaces(self, assignment_id: int) -> list[dict[str, Any]]:
+        return await self.repo.list_policy_assignment_workspaces(assignment_id)
+
+    async def add_policy_assignment_workspace(
+        self,
+        assignment_id: int,
+        *,
+        workspace_id: str,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        workspace_value = str(workspace_id or "").strip()
+        existing = await self.repo.list_policy_assignment_workspaces(assignment_id)
+        if any(str(row.get("workspace_id") or "").strip() == workspace_value for row in existing):
+            raise McpHubConflictError("Workspace already attached to assignment")
+        row = await self.repo.add_policy_assignment_workspace(
+            assignment_id,
+            workspace_id=workspace_value,
+            actor_id=actor_id,
+        )
+        await _await_if_needed(
+            emit_mcp_hub_audit(
+                action="mcp_hub.policy_assignment_workspace.create",
+                actor_id=actor_id,
+                resource_type="mcp_policy_assignment_workspace",
+                resource_id=f"{assignment_id}:{workspace_value}",
+                metadata={"assignment_id": assignment_id, "workspace_id": workspace_value},
+            )
+        )
+        return row
+
+    async def delete_policy_assignment_workspace(
+        self,
+        assignment_id: int,
+        *,
+        workspace_id: str,
+        actor_id: int | None,
+    ) -> bool:
+        deleted = await self.repo.delete_policy_assignment_workspace(assignment_id, workspace_id)
+        if deleted:
+            await _await_if_needed(
+                emit_mcp_hub_audit(
+                    action="mcp_hub.policy_assignment_workspace.delete",
+                    actor_id=actor_id,
+                    resource_type="mcp_policy_assignment_workspace",
+                    resource_id=f"{assignment_id}:{workspace_id}",
+                    metadata={"assignment_id": assignment_id, "workspace_id": workspace_id},
                 )
             )
         return deleted

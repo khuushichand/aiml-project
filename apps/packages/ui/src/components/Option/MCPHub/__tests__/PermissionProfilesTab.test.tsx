@@ -6,7 +6,10 @@ import userEvent from "@testing-library/user-event"
 const mocks = vi.hoisted(() => ({
   listPermissionProfiles: vi.fn(),
   createPermissionProfile: vi.fn(),
+  updatePermissionProfile: vi.fn(),
+  deletePermissionProfile: vi.fn(),
   getToolRegistrySummary: vi.fn(),
+  listPathScopeObjects: vi.fn(),
   listExternalServers: vi.fn(),
   listProfileCredentialBindings: vi.fn(),
   upsertProfileCredentialBinding: vi.fn(),
@@ -16,7 +19,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/services/tldw/mcp-hub", () => ({
   listPermissionProfiles: (...args: unknown[]) => mocks.listPermissionProfiles(...args),
   createPermissionProfile: (...args: unknown[]) => mocks.createPermissionProfile(...args),
+  updatePermissionProfile: (...args: unknown[]) => mocks.updatePermissionProfile(...args),
+  deletePermissionProfile: (...args: unknown[]) => mocks.deletePermissionProfile(...args),
   getToolRegistrySummary: (...args: unknown[]) => mocks.getToolRegistrySummary(...args),
+  listPathScopeObjects: (...args: unknown[]) => mocks.listPathScopeObjects(...args),
   listExternalServers: (...args: unknown[]) => mocks.listExternalServers(...args),
   listProfileCredentialBindings: (...args: unknown[]) => mocks.listProfileCredentialBindings(...args),
   upsertProfileCredentialBinding: (...args: unknown[]) => mocks.upsertProfileCredentialBinding(...args),
@@ -53,6 +59,18 @@ describe("PermissionProfilesTab", () => {
       },
       is_active: true
     })
+    mocks.listPathScopeObjects.mockResolvedValue([
+      {
+        id: 41,
+        name: "Docs Only",
+        owner_scope_type: "global",
+        path_scope_document: {
+          path_scope_mode: "workspace_root",
+          path_allowlist_prefixes: ["docs"]
+        },
+        is_active: true
+      }
+    ])
     mocks.getToolRegistrySummary.mockResolvedValue({
       entries: [
         {
@@ -178,6 +196,7 @@ describe("PermissionProfilesTab", () => {
 
     await user.click(screen.getByRole("button", { name: /new profile/i }))
     expect(screen.getByLabelText(/profile name/i)).toBeTruthy()
+    expect(screen.getByText(/path scope source/i)).toBeTruthy()
     expect(screen.getByText(/allowed modules and tools/i)).toBeTruthy()
     expect(screen.getByText(/no additional restrictions/i)).toBeTruthy()
     await user.click(screen.getByRole("checkbox", { name: /notes\.search/i }))

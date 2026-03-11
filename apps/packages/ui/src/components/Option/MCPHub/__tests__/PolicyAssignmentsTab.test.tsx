@@ -7,6 +7,10 @@ const mocks = vi.hoisted(() => ({
   listPolicyAssignments: vi.fn(),
   createPolicyAssignment: vi.fn(),
   updatePolicyAssignment: vi.fn(),
+  listPathScopeObjects: vi.fn(),
+  listPolicyAssignmentWorkspaces: vi.fn(),
+  addPolicyAssignmentWorkspace: vi.fn(),
+  deletePolicyAssignmentWorkspace: vi.fn(),
   getPolicyAssignmentOverride: vi.fn(),
   upsertPolicyAssignmentOverride: vi.fn(),
   deletePolicyAssignmentOverride: vi.fn(),
@@ -25,6 +29,10 @@ vi.mock("@/services/tldw/mcp-hub", () => ({
   listPolicyAssignments: (...args: unknown[]) => mocks.listPolicyAssignments(...args),
   createPolicyAssignment: (...args: unknown[]) => mocks.createPolicyAssignment(...args),
   updatePolicyAssignment: (...args: unknown[]) => mocks.updatePolicyAssignment(...args),
+  listPathScopeObjects: (...args: unknown[]) => mocks.listPathScopeObjects(...args),
+  listPolicyAssignmentWorkspaces: (...args: unknown[]) => mocks.listPolicyAssignmentWorkspaces(...args),
+  addPolicyAssignmentWorkspace: (...args: unknown[]) => mocks.addPolicyAssignmentWorkspace(...args),
+  deletePolicyAssignmentWorkspace: (...args: unknown[]) => mocks.deletePolicyAssignmentWorkspace(...args),
   getPolicyAssignmentOverride: (...args: unknown[]) => mocks.getPolicyAssignmentOverride(...args),
   upsertPolicyAssignmentOverride: (...args: unknown[]) => mocks.upsertPolicyAssignmentOverride(...args),
   deletePolicyAssignmentOverride: (...args: unknown[]) => mocks.deletePolicyAssignmentOverride(...args),
@@ -52,6 +60,7 @@ describe("PolicyAssignmentsTab", () => {
         owner_scope_type: "user",
         owner_scope_id: 7,
         profile_id: 5,
+        path_scope_object_id: 41,
         inline_policy_document: {
           capabilities: ["network.external"]
         },
@@ -70,6 +79,7 @@ describe("PolicyAssignmentsTab", () => {
       owner_scope_type: "global",
       owner_scope_id: null,
       profile_id: 5,
+      path_scope_object_id: null,
       inline_policy_document: {},
       approval_policy_id: null,
       is_active: true
@@ -81,6 +91,7 @@ describe("PolicyAssignmentsTab", () => {
       owner_scope_type: "user",
       owner_scope_id: 7,
       profile_id: 5,
+      path_scope_object_id: 41,
       inline_policy_document: {
         capabilities: ["network.external"]
       },
@@ -130,6 +141,18 @@ describe("PolicyAssignmentsTab", () => {
         is_active: true
       }
     ])
+    mocks.listPathScopeObjects.mockResolvedValue([
+      {
+        id: 41,
+        name: "Docs Only",
+        owner_scope_type: "global",
+        path_scope_document: {
+          path_scope_mode: "workspace_root",
+          path_allowlist_prefixes: ["docs"]
+        },
+        is_active: true
+      }
+    ])
     mocks.getEffectivePolicy.mockResolvedValue({
       enabled: true,
       allowed_tools: ["Bash(git *)"],
@@ -141,6 +164,8 @@ describe("PolicyAssignmentsTab", () => {
         path_scope_mode: "workspace_root",
         path_scope_enforcement: "approval_required_when_unenforceable"
       },
+      selected_assignment_id: 11,
+      selected_assignment_workspace_ids: ["workspace-alpha"],
       sources: [],
       provenance: [
         {
@@ -314,6 +339,14 @@ describe("PolicyAssignmentsTab", () => {
         }
       ]
     })
+    mocks.listPolicyAssignmentWorkspaces.mockResolvedValue([
+      { assignment_id: 11, workspace_id: "workspace-alpha" }
+    ])
+    mocks.addPolicyAssignmentWorkspace.mockResolvedValue({
+      assignment_id: 11,
+      workspace_id: "workspace-beta"
+    })
+    mocks.deletePolicyAssignmentWorkspace.mockResolvedValue({ ok: true })
   })
 
   it("loads assignments and shows the current effective preview", async () => {
@@ -324,6 +357,7 @@ describe("PolicyAssignmentsTab", () => {
     expect(await screen.findByText("process.execute")).toBeTruthy()
     expect(screen.getByText("Bash(git *)")).toBeTruthy()
     expect(screen.getByText("override active")).toBeTruthy()
+    expect(screen.getByText(/workspaces workspace-alpha/i)).toBeTruthy()
     expect(screen.getByText("Why This Applies")).toBeTruthy()
     expect(screen.getByText(/allowed_tools/i)).toBeTruthy()
     expect(screen.getByText(/assignment override/i)).toBeTruthy()
@@ -345,6 +379,8 @@ describe("PolicyAssignmentsTab", () => {
     await user.click(screen.getByRole("button", { name: "Edit" }))
 
     expect(await screen.findByText("Assignment Override")).toBeTruthy()
+    expect(screen.getByText("Path Scope Source")).toBeTruthy()
+    expect(screen.getByText("Workspace Access")).toBeTruthy()
     expect(screen.getByText("Base Assignment Policy")).toBeTruthy()
     expect(screen.getAllByText(/approval fallback/i).length).toBeGreaterThan(0)
     expect(mocks.getPolicyAssignmentOverride).toHaveBeenCalledWith(11)

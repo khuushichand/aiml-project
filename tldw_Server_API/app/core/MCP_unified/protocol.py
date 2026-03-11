@@ -2151,6 +2151,20 @@ class MCPProtocol:
                 scope_payload = dict(scope_payload or {})
                 scope_payload.update(payload)
 
+        path_scope_block_reason = str(path_scope_result.get("reason") or "").strip()
+        if path_scope_block_reason and not bool(path_scope_result.get("within_scope", True)):
+            requires_approval = bool(path_scope_result.get("force_approval", False))
+            if not requires_approval or path_scope_block_reason == "workspace_not_allowed_for_assignment":
+                raise GovernanceDeniedError(
+                    "Blocked path-scoped tool use",
+                    governance={
+                        "action": "deny",
+                        "status": "deny",
+                        "reason_code": path_scope_block_reason,
+                        "path_scope": dict(scope_payload or {}),
+                    },
+                )
+
         approval_result = await self._evaluate_runtime_approval(
             effective_policy=effective_policy,
             tool_name=tool_name,

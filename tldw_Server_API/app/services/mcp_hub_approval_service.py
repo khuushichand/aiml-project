@@ -107,6 +107,7 @@ def _scope_fingerprint_payload(
         scope_context: dict[str, Any] = {}
         for key in (
             "path_scope_mode",
+            "workspace_id",
             "workspace_root",
             "scope_root",
             "server_id",

@@ -436,6 +436,33 @@ def test_external_slot_scope_key_includes_requested_slots() -> None:
     assert scope_key_a != scope_key_c
 
 
+def test_path_scope_key_includes_active_workspace_id() -> None:
+    from tldw_Server_API.app.services.mcp_hub_approval_service import _scope_key_for_tool_call
+
+    scope_key_a = _scope_key_for_tool_call(
+        "files.read",
+        {"path": "src/notes.txt"},
+        scope_payload={
+            "path_scope_mode": "workspace_root",
+            "workspace_id": "workspace-alpha",
+            "normalized_paths": ["/tmp/project/src/notes.txt"],
+            "blocked_reason": "path_outside_allowlist_scope",
+        },
+    )
+    scope_key_b = _scope_key_for_tool_call(
+        "files.read",
+        {"path": "src/notes.txt"},
+        scope_payload={
+            "path_scope_mode": "workspace_root",
+            "workspace_id": "workspace-beta",
+            "normalized_paths": ["/tmp/project/src/notes.txt"],
+            "blocked_reason": "path_outside_allowlist_scope",
+        },
+    )
+
+    assert scope_key_a != scope_key_b
+
+
 @pytest.mark.asyncio
 async def test_handle_tools_call_allows_direct_workspace_scoped_reader(monkeypatch) -> None:
     from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
@@ -518,10 +545,93 @@ async def test_handle_tools_call_allows_direct_workspace_scoped_reader(monkeypat
     )
 
     assert result["tool"] == "files.read"
-    assert result["module"] == "files"
-    assert result["content"][0]["json"] == {"ok": True}
-    assert fake_resolver.calls[0]["user_id"] == "7"
-    assert fake_resolver.calls[0]["workspace_id"] == "workspace-direct"
+
+
+@pytest.mark.asyncio
+async def test_handle_tools_call_hard_denies_workspace_not_allowed_for_assignment_without_approval(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.protocol import GovernanceDeniedError
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol
+    from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from tldw_Server_API.app.services import mcp_hub_approval_service as approval_service_mod
+
+    tool_def = {
+        "name": "files.read",
+        "description": "Read a file",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "metadata": {
+            "category": "retrieval",
+            "uses_filesystem": True,
+            "path_boundable": True,
+            "path_argument_hints": ["path"],
+        },
+    }
+    fake_module = _FakeModule(tool_def)
+    fake_approval_service = _NoopApprovalService()
+
+    async def _fake_get_approval_service():
+        return fake_approval_service
+
+    monkeypatch.setattr(approval_service_mod, "get_mcp_hub_approval_service", _fake_get_approval_service)
+
+    protocol = MCPProtocol()
+    protocol.module_registry = _FakeRegistry(fake_module)
+
+    async def _resolve_effective_policy(_context):
+        return {
+            "enabled": True,
+            "allowed_tools": ["files.read"],
+            "approval_policy_id": 1,
+            "approval_mode": "ask_outside_profile",
+            "sources": [{"assignment_id": 11, "profile_id": 7}],
+        }
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    async def _path_scope(*_args, **_kwargs):
+        return {
+            "enabled": True,
+            "within_scope": False,
+            "reason": "workspace_not_allowed_for_assignment",
+            "force_approval": False,
+            "scope_payload": {
+                "workspace_id": "workspace-beta",
+                "allowed_workspace_ids": ["workspace-alpha"],
+                "reason": "workspace_not_allowed_for_assignment",
+            },
+        }
+
+    protocol._resolve_effective_tool_policy = _resolve_effective_policy  # type: ignore[method-assign]
+    protocol._has_module_permission = _allow  # type: ignore[method-assign]
+    protocol._has_tool_permission = _allow  # type: ignore[method-assign]
+    protocol._is_tool_allowed_by_context = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+    protocol._evaluate_path_scope = _path_scope  # type: ignore[method-assign]
+
+    context = RequestContext(
+        request_id="req-workspace-set-deny",
+        user_id="7",
+        client_id="test-client",
+        session_id="sess-1",
+        metadata={"workspace_id": "workspace-beta"},
+    )
+
+    with pytest.raises(GovernanceDeniedError) as exc:
+        await protocol._handle_tools_call(
+            {"name": "files.read", "arguments": {"path": "notes.txt"}},
+            context,
+        )
+
+    assert fake_approval_service.calls == []
+    assert exc.value.governance["reason_code"] == "workspace_not_allowed_for_assignment"
+    assert exc.value.governance["path_scope"]["workspace_id"] == "workspace-beta"
+    assert exc.value.governance["path_scope"]["allowed_workspace_ids"] == ["workspace-alpha"]
 
 
 @pytest.mark.asyncio

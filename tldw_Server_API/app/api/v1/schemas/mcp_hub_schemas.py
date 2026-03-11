@@ -8,7 +8,13 @@ from pydantic import BaseModel, Field
 ScopeType = Literal["global", "org", "team", "user"]
 ProfileMode = Literal["preset", "custom"]
 AssignmentTargetType = Literal["default", "group", "persona"]
-PolicyProvenanceSourceKind = Literal["profile", "assignment_inline", "assignment_override"]
+PolicyProvenanceSourceKind = Literal[
+    "profile",
+    "profile_path_scope_object",
+    "assignment_path_scope_object",
+    "assignment_inline",
+    "assignment_override",
+]
 PolicyProvenanceEffect = Literal["merged", "replaced"]
 ApprovalMode = Literal[
     "allow_silently",
@@ -65,6 +71,7 @@ class PermissionProfileCreateRequest(BaseModel):
     owner_scope_type: ScopeType = Field(default="global")
     owner_scope_id: int | None = None
     mode: ProfileMode = "custom"
+    path_scope_object_id: int | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
 
@@ -75,6 +82,7 @@ class PermissionProfileUpdateRequest(BaseModel):
     owner_scope_type: ScopeType | None = None
     owner_scope_id: int | None = None
     mode: ProfileMode | None = None
+    path_scope_object_id: int | None = None
     policy_document: dict[str, Any] | None = None
     is_active: bool | None = None
 
@@ -86,7 +94,40 @@ class PermissionProfileResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     mode: ProfileMode
+    path_scope_object_id: int | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class PathScopeObjectCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=512)
+    owner_scope_type: ScopeType = Field(default="global")
+    owner_scope_id: int | None = None
+    path_scope_document: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = True
+
+
+class PathScopeObjectUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=512)
+    owner_scope_type: ScopeType | None = None
+    owner_scope_id: int | None = None
+    path_scope_document: dict[str, Any] | None = None
+    is_active: bool | None = None
+
+
+class PathScopeObjectResponse(BaseModel):
+    id: int
+    name: str
+    description: str | None = None
+    owner_scope_type: ScopeType
+    owner_scope_id: int | None = None
+    path_scope_document: dict[str, Any] = Field(default_factory=dict)
     is_active: bool
     created_by: int | None = None
     updated_by: int | None = None
@@ -100,6 +141,7 @@ class PolicyAssignmentCreateRequest(BaseModel):
     owner_scope_type: ScopeType = Field(default="global")
     owner_scope_id: int | None = None
     profile_id: int | None = None
+    path_scope_object_id: int | None = None
     inline_policy_document: dict[str, Any] = Field(default_factory=dict)
     approval_policy_id: int | None = None
     is_active: bool = True
@@ -111,6 +153,7 @@ class PolicyAssignmentUpdateRequest(BaseModel):
     owner_scope_type: ScopeType | None = None
     owner_scope_id: int | None = None
     profile_id: int | None = None
+    path_scope_object_id: int | None = None
     inline_policy_document: dict[str, Any] | None = None
     approval_policy_id: int | None = None
     is_active: bool | None = None
@@ -123,6 +166,7 @@ class PolicyAssignmentResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     profile_id: int | None = None
+    path_scope_object_id: int | None = None
     inline_policy_document: dict[str, Any] = Field(default_factory=dict)
     approval_policy_id: int | None = None
     is_active: bool
@@ -134,6 +178,17 @@ class PolicyAssignmentResponse(BaseModel):
     updated_by: int | None = None
     created_at: datetime | str | None = None
     updated_at: datetime | str | None = None
+
+
+class PolicyAssignmentWorkspaceCreateRequest(BaseModel):
+    workspace_id: str = Field(..., min_length=1, max_length=255)
+
+
+class PolicyAssignmentWorkspaceResponse(BaseModel):
+    assignment_id: int
+    workspace_id: str
+    created_by: int | None = None
+    created_at: datetime | str | None = None
 
 
 class PolicyOverrideUpsertRequest(BaseModel):
@@ -219,6 +274,7 @@ class EffectivePolicySourceResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     profile_id: int | None = None
+    path_scope_object_id: int | None = None
 
 
 class EffectivePolicyProvenanceResponse(BaseModel):
@@ -239,6 +295,8 @@ class EffectivePolicyResponse(BaseModel):
     approval_policy_id: int | None = None
     approval_mode: ApprovalMode | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
+    selected_assignment_id: int | None = None
+    selected_assignment_workspace_ids: list[str] = Field(default_factory=list)
     sources: list[EffectivePolicySourceResponse] = Field(default_factory=list)
     provenance: list[EffectivePolicyProvenanceResponse] = Field(default_factory=list)
 

@@ -71,6 +71,7 @@ export type McpHubPermissionProfile = {
   owner_scope_type: McpHubScopeType
   owner_scope_id?: number | null
   mode: McpHubProfileMode
+  path_scope_object_id?: number | null
   policy_document: McpHubPermissionPolicyDocument
   is_active: boolean
   created_by?: number | null
@@ -85,6 +86,7 @@ export type McpHubPermissionProfileCreateInput = {
   owner_scope_type?: McpHubScopeType
   owner_scope_id?: number | null
   mode?: McpHubProfileMode
+  path_scope_object_id?: number | null
   policy_document?: McpHubPermissionPolicyDocument
   is_active?: boolean
 }
@@ -95,7 +97,40 @@ export type McpHubPermissionProfileUpdateInput = {
   owner_scope_type?: McpHubScopeType
   owner_scope_id?: number | null
   mode?: McpHubProfileMode
+  path_scope_object_id?: number | null
   policy_document?: McpHubPermissionPolicyDocument
+  is_active?: boolean
+}
+
+export type McpHubPathScopeObject = {
+  id: number
+  name: string
+  description?: string | null
+  owner_scope_type: McpHubScopeType
+  owner_scope_id?: number | null
+  path_scope_document: McpHubPermissionPolicyDocument
+  is_active: boolean
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubPathScopeObjectCreateInput = {
+  name: string
+  description?: string | null
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  path_scope_document?: McpHubPermissionPolicyDocument
+  is_active?: boolean
+}
+
+export type McpHubPathScopeObjectUpdateInput = {
+  name?: string
+  description?: string | null
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  path_scope_document?: McpHubPermissionPolicyDocument
   is_active?: boolean
 }
 
@@ -106,6 +141,7 @@ export type McpHubPolicyAssignment = {
   owner_scope_type: McpHubScopeType
   owner_scope_id?: number | null
   profile_id?: number | null
+  path_scope_object_id?: number | null
   inline_policy_document: McpHubPermissionPolicyDocument
   approval_policy_id?: number | null
   is_active: boolean
@@ -125,6 +161,7 @@ export type McpHubPolicyAssignmentCreateInput = {
   owner_scope_type?: McpHubScopeType
   owner_scope_id?: number | null
   profile_id?: number | null
+  path_scope_object_id?: number | null
   inline_policy_document?: McpHubPermissionPolicyDocument
   approval_policy_id?: number | null
   is_active?: boolean
@@ -136,9 +173,17 @@ export type McpHubPolicyAssignmentUpdateInput = {
   owner_scope_type?: McpHubScopeType
   owner_scope_id?: number | null
   profile_id?: number | null
+  path_scope_object_id?: number | null
   inline_policy_document?: McpHubPermissionPolicyDocument
   approval_policy_id?: number | null
   is_active?: boolean
+}
+
+export type McpHubPolicyAssignmentWorkspace = {
+  assignment_id: number
+  workspace_id: string
+  created_by?: number | null
+  created_at?: string | null
 }
 
 export type McpHubApprovalPolicy = {
@@ -224,12 +269,18 @@ export type McpHubEffectivePolicySource = {
   owner_scope_type: McpHubScopeType
   owner_scope_id?: number | null
   profile_id?: number | null
+  path_scope_object_id?: number | null
 }
 
 export type McpHubEffectivePolicyProvenance = {
   field: string
   value: unknown
-  source_kind: "profile" | "assignment_inline" | "assignment_override"
+  source_kind:
+    | "profile"
+    | "profile_path_scope_object"
+    | "assignment_path_scope_object"
+    | "assignment_inline"
+    | "assignment_override"
   assignment_id: number
   profile_id?: number | null
   override_id?: number | null
@@ -244,6 +295,8 @@ export type McpHubEffectivePolicy = {
   approval_policy_id?: number | null
   approval_mode?: McpHubApprovalMode | null
   policy_document: Record<string, unknown>
+  selected_assignment_id?: number | null
+  selected_assignment_workspace_ids?: string[]
   sources: McpHubEffectivePolicySource[]
   provenance: McpHubEffectivePolicyProvenance[]
 }
@@ -721,6 +774,49 @@ export const listPermissionProfiles = async (params: {
   })
 }
 
+export const listPathScopeObjects = async (params: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+} = {}): Promise<McpHubPathScopeObject[]> => {
+  return await bgRequestClient<McpHubPathScopeObject[]>({
+    path: withQuery("/api/v1/mcp/hub/path-scope-objects", {
+      owner_scope_type: params.owner_scope_type,
+      owner_scope_id: params.owner_scope_id
+    }),
+    method: "GET"
+  })
+}
+
+export const createPathScopeObject = async (
+  payload: McpHubPathScopeObjectCreateInput
+): Promise<McpHubPathScopeObject> => {
+  return await bgRequestClient<McpHubPathScopeObject>({
+    path: "/api/v1/mcp/hub/path-scope-objects",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const updatePathScopeObject = async (
+  pathScopeObjectId: number,
+  payload: McpHubPathScopeObjectUpdateInput
+): Promise<McpHubPathScopeObject> => {
+  return await bgRequestClient<McpHubPathScopeObject>({
+    path: `/api/v1/mcp/hub/path-scope-objects/${pathScopeObjectId}`,
+    method: "PUT",
+    body: payload
+  })
+}
+
+export const deletePathScopeObject = async (
+  pathScopeObjectId: number
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/path-scope-objects/${pathScopeObjectId}`,
+    method: "DELETE"
+  })
+}
+
 export const listToolRegistry = async (): Promise<McpHubToolRegistryEntry[]> => {
   return await bgRequestClient<McpHubToolRegistryEntry[]>({
     path: "/api/v1/mcp/hub/tool-registry",
@@ -813,6 +909,36 @@ export const deletePolicyAssignment = async (
 ): Promise<{ ok: boolean }> => {
   return await bgRequestClient<{ ok: boolean }>({
     path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}`,
+    method: "DELETE"
+  })
+}
+
+export const listPolicyAssignmentWorkspaces = async (
+  assignmentId: number
+): Promise<McpHubPolicyAssignmentWorkspace[]> => {
+  return await bgRequestClient<McpHubPolicyAssignmentWorkspace[]>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/workspaces`,
+    method: "GET"
+  })
+}
+
+export const addPolicyAssignmentWorkspace = async (
+  assignmentId: number,
+  workspaceId: string
+): Promise<McpHubPolicyAssignmentWorkspace> => {
+  return await bgRequestClient<McpHubPolicyAssignmentWorkspace>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/workspaces`,
+    method: "POST",
+    body: { workspace_id: workspaceId }
+  })
+}
+
+export const deletePolicyAssignmentWorkspace = async (
+  assignmentId: number,
+  workspaceId: string
+): Promise<{ ok: boolean }> => {
+  return await bgRequestClient<{ ok: boolean }>({
+    path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/workspaces/${encodeURIComponent(workspaceId)}`,
     method: "DELETE"
   })
 }

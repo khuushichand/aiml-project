@@ -168,6 +168,9 @@ class McpHubPolicyResolver:
         profile_cache: dict[int, dict[str, Any] | None] = {}
         resolved_approval_policy_id: int | None = None
         provenance: list[dict[str, Any]] = []
+        selected_assignment_id: int | None = None
+        selected_assignment_workspace_ids: list[str] = []
+        path_scope_object_cache: dict[int, dict[str, Any] | None] = {}
 
         for assignment in assignments:
             assignment_document: dict[str, Any] = {}
@@ -179,6 +182,33 @@ class McpHubPolicyResolver:
                     profile_cache[profile_key] = await self.repo.get_permission_profile(profile_key)
                 profile_row = profile_cache.get(profile_key) or {}
                 if bool(profile_row.get("is_active", True)):
+                    profile_path_scope_object_id = profile_row.get("path_scope_object_id")
+                    profile_path_scope_key = (
+                        int(profile_path_scope_object_id)
+                        if profile_path_scope_object_id is not None
+                        else None
+                    )
+                    if profile_path_scope_key is not None:
+                        if profile_path_scope_key not in path_scope_object_cache:
+                            path_scope_object_cache[profile_path_scope_key] = await self.repo.get_path_scope_object(
+                                profile_path_scope_key
+                            )
+                        path_scope_row = path_scope_object_cache.get(profile_path_scope_key) or {}
+                        if bool(path_scope_row.get("is_active", True)):
+                            path_scope_document = _as_dict(path_scope_row.get("path_scope_document"))
+                            assignment_document = _merge_policy_documents(
+                                assignment_document,
+                                path_scope_document,
+                            )
+                            provenance.extend(
+                                _provenance_entries(
+                                    layer_document=path_scope_document,
+                                    source_kind="profile_path_scope_object",
+                                    assignment_id=assignment_id,
+                                    profile_id=profile_key,
+                                    override_id=None,
+                                )
+                            )
                     profile_document = _as_dict(profile_row.get("policy_document"))
                     assignment_document = _merge_policy_documents(
                         assignment_document,
@@ -188,6 +218,36 @@ class McpHubPolicyResolver:
                         _provenance_entries(
                             layer_document=profile_document,
                             source_kind="profile",
+                            assignment_id=assignment_id,
+                            profile_id=profile_key,
+                            override_id=None,
+                        )
+                    )
+
+            assignment_path_scope_object_id = assignment.get("path_scope_object_id")
+            assignment_path_scope_key = (
+                int(assignment_path_scope_object_id)
+                if assignment_path_scope_object_id is not None
+                else None
+            )
+            if assignment_path_scope_key is not None:
+                if assignment_path_scope_key not in path_scope_object_cache:
+                    path_scope_object_cache[assignment_path_scope_key] = await self.repo.get_path_scope_object(
+                        assignment_path_scope_key
+                    )
+                assignment_path_scope_row = path_scope_object_cache.get(assignment_path_scope_key) or {}
+                if bool(assignment_path_scope_row.get("is_active", True)):
+                    assignment_path_scope_document = _as_dict(
+                        assignment_path_scope_row.get("path_scope_document")
+                    )
+                    assignment_document = _merge_policy_documents(
+                        assignment_document,
+                        assignment_path_scope_document,
+                    )
+                    provenance.extend(
+                        _provenance_entries(
+                            layer_document=assignment_path_scope_document,
+                            source_kind="assignment_path_scope_object",
                             assignment_id=assignment_id,
                             profile_id=profile_key,
                             override_id=None,
@@ -228,6 +288,15 @@ class McpHubPolicyResolver:
             approval_policy_id = assignment.get("approval_policy_id")
             if approval_policy_id is not None:
                 resolved_approval_policy_id = int(approval_policy_id)
+            selected_assignment_id = assignment_id
+            selected_assignment_workspace_ids = _unique(
+                _as_str_list(
+                    [
+                        row.get("workspace_id")
+                        for row in await self.repo.list_policy_assignment_workspaces(assignment_id)
+                    ]
+                )
+            )
             sources.append(
                 {
                     "assignment_id": assignment_id,
@@ -236,6 +305,7 @@ class McpHubPolicyResolver:
                     "owner_scope_type": str(assignment.get("owner_scope_type") or "global"),
                     "owner_scope_id": assignment.get("owner_scope_id"),
                     "profile_id": assignment.get("profile_id"),
+                    "path_scope_object_id": assignment.get("path_scope_object_id"),
                 }
             )
 
@@ -247,6 +317,8 @@ class McpHubPolicyResolver:
             "approval_policy_id": resolved_approval_policy_id,
             "approval_mode": str(merged_policy_document.get("approval_mode") or "").strip() or None,
             "policy_document": merged_policy_document,
+            "selected_assignment_id": selected_assignment_id,
+            "selected_assignment_workspace_ids": selected_assignment_workspace_ids,
             "sources": sources,
             "provenance": provenance,
         }
@@ -299,6 +371,8 @@ class McpHubPolicyResolver:
             "approval_policy_id": None,
             "approval_mode": None,
             "policy_document": {},
+            "selected_assignment_id": None,
+            "selected_assignment_workspace_ids": [],
             "sources": [],
             "provenance": [],
         }
