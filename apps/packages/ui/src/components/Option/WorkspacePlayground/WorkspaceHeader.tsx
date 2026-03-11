@@ -28,7 +28,10 @@ import {
   Archive,
   RotateCcw,
   Download,
-  Upload
+  Upload,
+  MoreHorizontal,
+  Settings,
+  Star
 } from "lucide-react"
 import type { SavedWorkspace, WorkspaceBannerImage } from "@/types/workspace"
 import { useWorkspaceStore } from "@/store/workspace"
@@ -65,8 +68,10 @@ import {
 import {
   WORKSPACE_UNDO_WINDOW_MS,
   scheduleWorkspaceUndoAction,
-  undoWorkspaceAction
+  undoWorkspaceAction,
+  clearAllPendingUndoActions
 } from "./undo-manager"
+import { useTutorialStore } from "@/store/tutorials"
 import {
   FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS,
   FEATURE_ROLLOUT_SUBJECT_ID_STORAGE_KEY,
@@ -143,6 +148,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 }) => {
   const { t } = useTranslation(["playground", "option", "common"])
   const navigate = useNavigate()
+  const startTutorial = useTutorialStore((s) => s.startTutorial)
   const [messageApi, messageContextHolder] = message.useMessage()
   const [isEditing, setIsEditing] = React.useState(false)
   const [editName, setEditName] = React.useState("")
@@ -161,6 +167,25 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     research_studio_status_guardrails_v1: 100
   })
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = React.useState("")
+  const PINNED_STORAGE_KEY = "tldw:workspace-playground:pinned-workspaces:v1"
+  const [pinnedWorkspaceIds, setPinnedWorkspaceIds] = React.useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem(PINNED_STORAGE_KEY)
+      if (raw) return new Set(JSON.parse(raw) as string[])
+    } catch { /* ignore */ }
+    return new Set()
+  })
+  const togglePinWorkspace = React.useCallback((id: string) => {
+    setPinnedWorkspaceIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      try {
+        window.localStorage.setItem(PINNED_STORAGE_KEY, JSON.stringify([...next]))
+      } catch { /* ignore */ }
+      return next
+    })
+  }, [])
   const [bannerModalOpen, setBannerModalOpen] = React.useState(false)
   const [bannerTitleDraft, setBannerTitleDraft] = React.useState("")
   const [bannerSubtitleDraft, setBannerSubtitleDraft] = React.useState("")
@@ -377,6 +402,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     useWorkspaceStore((s) => s.clearWorkspaceBannerImage) || (() => undefined)
   const resetWorkspaceBanner =
     useWorkspaceStore((s) => s.resetWorkspaceBanner) || (() => undefined)
+  const currentNote = useWorkspaceStore((s) => s.currentNote)
   const setCurrentNote = useWorkspaceStore((s) => s.setCurrentNote)
   const savedWorkspaces = useWorkspaceStore((s) => s.savedWorkspaces)
   const archivedWorkspaces = useWorkspaceStore((s) => s.archivedWorkspaces)
@@ -473,6 +499,41 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   }
 
   const handleSwitchWorkspace = (id: string) => {
+    // Finalize and discard pending undo actions to prevent cross-workspace undo
+    clearAllPendingUndoActions()
+    if (currentNote?.isDirty) {
+      Modal.confirm({
+        title: t(
+          "playground:workspace.unsavedNoteTitle",
+          "Unsaved note changes"
+        ),
+        content: t(
+          "playground:workspace.unsavedNoteMessage",
+          "You have unsaved changes in your note. What would you like to do?"
+        ),
+        okText: t("playground:workspace.saveAndSwitch", "Save & Switch"),
+        cancelText: t("common:cancel", "Cancel"),
+        onOk: () => {
+          saveCurrentWorkspace()
+          switchWorkspace(id)
+        },
+        footer: (_, { OkBtn, CancelBtn }) => (
+          <>
+            <CancelBtn />
+            <Button
+              onClick={() => {
+                Modal.destroyAll()
+                switchWorkspace(id)
+              }}
+            >
+              {t("playground:workspace.discardAndSwitch", "Discard & Switch")}
+            </Button>
+            <OkBtn />
+          </>
+        )
+      })
+      return
+    }
     switchWorkspace(id)
   }
 
@@ -956,7 +1017,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 
   const handleRestoreWorkspace = (id: string) => {
     restoreArchivedWorkspace(id)
-    switchWorkspace(id)
+    handleSwitchWorkspace(id)
   }
 
   const triggerFileDownload = (blob: Blob, filename: string) => {
@@ -1149,8 +1210,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   const savedRelativeLabel = (workspace: SavedWorkspace) =>
     formatWorkspaceLastAccessed(new Date(workspace.lastAccessedAt))
 
-  // Build dropdown menu items
-  const workspaceMenuItems: MenuProps["items"] = [
+  // ── Workspace Switcher dropdown: recent/pinned workspaces + navigation ──
+  const workspaceSwitcherItems: MenuProps["items"] = [
     // Recent workspaces section
     ...(savedWorkspaces.length > 0
       ? [
@@ -1191,38 +1252,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           { type: "divider" as const, key: "divider-1" }
         ]
       : []),
-    ...(workspaceId
-      ? [
-          {
-            key: "duplicate-current",
-            icon: <Copy className="h-4 w-4" />,
-            label: t(
-              "playground:workspace.duplicateCurrent",
-              "Duplicate Current Workspace"
-            ),
-            onClick: handleDuplicateCurrentWorkspace
-          },
-          {
-            key: "archive-current",
-            icon: <Archive className="h-4 w-4" />,
-            label: t(
-              "playground:workspace.archiveCurrent",
-              "Archive Current Workspace"
-            ),
-            onClick: handleArchiveCurrentWorkspace
-          },
-          {
-            key: "customize-banner",
-            icon: <Pencil className="h-4 w-4" />,
-            label: t(
-              "playground:workspace.customizeBanner",
-              "Customize banner"
-            ),
-            onClick: handleOpenCustomizeBannerModal
-          },
-          { type: "divider" as const, key: "divider-current-actions" }
-        ]
-      : []),
     ...(archivedWorkspaces.length > 0
       ? [
           {
@@ -1258,6 +1287,48 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             onClick: handleOpenWorkspaceBrowser
           },
           { type: "divider" as const, key: "divider-view-all" }
+        ]
+      : []),
+    {
+      key: "new",
+      icon: <Plus className="h-4 w-4" />,
+      label: t("playground:workspace.newWorkspace", "New Workspace"),
+      onClick: handleCreateNewWorkspace
+    }
+  ]
+
+  // ── Settings kebab menu: import/export, templates, tools, navigation ──
+  const workspaceSettingsItems: MenuProps["items"] = [
+    ...(workspaceId
+      ? [
+          {
+            key: "duplicate-current",
+            icon: <Copy className="h-4 w-4" />,
+            label: t(
+              "playground:workspace.duplicateCurrent",
+              "Duplicate Current Workspace"
+            ),
+            onClick: handleDuplicateCurrentWorkspace
+          },
+          {
+            key: "archive-current",
+            icon: <Archive className="h-4 w-4" />,
+            label: t(
+              "playground:workspace.archiveCurrent",
+              "Archive Current Workspace"
+            ),
+            onClick: handleArchiveCurrentWorkspace
+          },
+          {
+            key: "customize-banner",
+            icon: <Pencil className="h-4 w-4" />,
+            label: t(
+              "playground:workspace.customizeBanner",
+              "Customize banner"
+            ),
+            onClick: handleOpenCustomizeBannerModal
+          },
+          { type: "divider" as const, key: "divider-current-actions" }
         ]
       : []),
     ...(workspaceId
@@ -1301,12 +1372,11 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       onClick: () => handleCreateWorkspaceFromTemplate(template.id)
     })),
     { type: "divider" as const, key: "divider-templates" },
-    // New workspace option
     {
-      key: "new",
-      icon: <Plus className="h-4 w-4" />,
-      label: t("playground:workspace.newWorkspace", "New Workspace"),
-      onClick: handleCreateNewWorkspace
+      key: "replay-tour",
+      icon: <FlaskConical className="h-4 w-4" />,
+      label: t("playground:workspace.replayTour", "Replay tour"),
+      onClick: () => startTutorial("workspace-playground-basics")
     },
     {
       key: "keyboard-shortcuts",
@@ -1325,7 +1395,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         ]
       : []),
     { type: "divider" as const, key: "divider-2" },
-    // Simple chat option
     {
       key: "simple-chat",
       icon: <MessageSquare className="h-4 w-4" />,
@@ -1385,7 +1454,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
                 <button
                   type="button"
                   onClick={handleStartEdit}
-                  className="rounded p-1 text-text-muted opacity-40 transition hover:bg-surface2 hover:text-text hover:opacity-100"
+                  className="flex h-9 w-9 items-center justify-center rounded text-text-muted opacity-40 transition hover:bg-surface2 hover:text-text hover:opacity-100"
                   aria-label={t("playground:workspace.rename", "Rename workspace")}
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -1400,40 +1469,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         data-testid="workspace-header-actions"
         className="flex items-center gap-2"
       >
-        {statusGuardrailsEnabled && (
-          <div
-            data-testid="workspace-header-status-group"
-            className="flex items-center gap-1 rounded-lg border border-border/60 bg-surface2/30 px-1.5 py-1"
-          >
-            <Tooltip
-              title={
-                connectionIndicator.description
-                  ? `${connectionIndicator.detail}: ${connectionIndicator.description}`
-                  : connectionIndicator.detail
-              }
-            >
-              <span
-                data-testid="workspace-connection-status-indicator"
-                className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${connectionIndicator.toneClass}`}
-                aria-live="polite"
-              >
-                <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" />
-                {connectionIndicator.label}
-              </span>
-            </Tooltip>
-            {formattedStorageUsage && (
-              <Tooltip title={formattedStorageUsage.longLabel}>
-                <span
-                  data-testid="workspace-storage-usage-indicator"
-                  className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${formattedStorageUsage.toneClass}`}
-                >
-                  {t("playground:workspace.capacity", "Capacity")}{" "}
-                  {formattedStorageUsage.shortLabel}
-                </span>
-              </Tooltip>
-            )}
-          </div>
-        )}
         {/* Left pane expand button (only shown when collapsed) */}
         {!hideToggles && !leftPaneOpen && (
           <Tooltip
@@ -1445,13 +1480,14 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             <button
               type="button"
               onClick={onToggleLeftPane}
-              className="hidden rounded-lg bg-primary/10 p-2 text-primary transition-colors hover:bg-primary/20 lg:block"
+              className="hidden items-center gap-1.5 rounded-lg bg-primary/10 p-2 text-primary transition-colors hover:bg-primary/20 lg:flex"
               aria-label={t(
                 "playground:workspace.showSourcesShortcut",
                 `Show sources (${shortcutModifierLabel}+1)`
               )}
             >
               <PanelLeftOpen className="h-4 w-4" />
+              <kbd className="rounded bg-primary/15 px-1 py-0.5 text-[10px] font-medium leading-none text-primary/70">{shortcutModifierLabel}+1</kbd>
             </button>
           </Tooltip>
         )}
@@ -1467,20 +1503,21 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             <button
               type="button"
               onClick={onToggleRightPane}
-              className="hidden rounded-lg bg-primary/10 p-2 text-primary transition-colors hover:bg-primary/20 lg:block"
+              className="hidden items-center gap-1.5 rounded-lg bg-primary/10 p-2 text-primary transition-colors hover:bg-primary/20 lg:flex"
               aria-label={t(
                 "playground:workspace.showStudioShortcut",
                 `Show studio (${shortcutModifierLabel}+3)`
               )}
             >
               <PanelRightOpen className="h-4 w-4" />
+              <kbd className="rounded bg-primary/15 px-1 py-0.5 text-[10px] font-medium leading-none text-primary/70">{shortcutModifierLabel}+3</kbd>
             </button>
           </Tooltip>
         )}
 
         {/* Workspace Switcher Dropdown */}
         <Dropdown
-          menu={{ items: workspaceMenuItems }}
+          menu={{ items: workspaceSwitcherItems }}
           trigger={["click"]}
           placement="bottomRight"
         >
@@ -1492,6 +1529,24 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             <span>{t("playground:workspace.workspaces", "Workspaces")}</span>
             <ChevronDown className="h-4 w-4 text-text-muted" />
           </button>
+        </Dropdown>
+
+        {/* Settings Kebab Menu */}
+        <Dropdown
+          menu={{ items: workspaceSettingsItems }}
+          trigger={["click"]}
+          placement="bottomRight"
+        >
+          <Tooltip title={t("playground:workspace.workspaceSettings", "Workspace settings")}>
+            <button
+              type="button"
+              data-testid="workspace-settings-button"
+              className="flex items-center justify-center rounded-lg border border-border bg-surface p-1.5 text-text-muted transition hover:bg-surface2 hover:text-text"
+              aria-label={t("playground:workspace.workspaceSettings", "Workspace settings")}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+          </Tooltip>
         </Dropdown>
       </div>
 
@@ -1636,42 +1691,74 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           />
 
           <div className="custom-scrollbar max-h-[360px] space-y-1 overflow-y-auto rounded-lg border border-border p-1">
-            {filterSavedWorkspaces(savedWorkspaces, workspaceSearchQuery).map(
+            {filterSavedWorkspaces(savedWorkspaces, workspaceSearchQuery)
+              .sort((a, b) => {
+                const aPinned = pinnedWorkspaceIds.has(a.id) ? 0 : 1
+                const bPinned = pinnedWorkspaceIds.has(b.id) ? 0 : 1
+                return aPinned - bPinned
+              })
+              .map(
               (workspace) => {
                 const isCurrent = workspace.id === workspaceId
+                const isPinned = pinnedWorkspaceIds.has(workspace.id)
                 return (
-                  <button
+                  <div
                     key={workspace.id}
-                    type="button"
-                    disabled={isCurrent}
-                    onClick={() => {
-                      switchWorkspace(workspace.id)
-                      handleCloseWorkspaceBrowser()
-                    }}
-                    className={`w-full rounded-md border px-3 py-2 text-left transition ${
+                    className={`flex w-full items-center gap-1 rounded-md border px-3 py-2 transition ${
                       isCurrent
                         ? "cursor-default border-primary/30 bg-primary/10"
                         : "border-border hover:bg-surface2"
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate font-medium text-text">
-                          {workspace.name}
+                    <button
+                      type="button"
+                      disabled={isCurrent}
+                      onClick={() => {
+                        handleCloseWorkspaceBrowser()
+                        handleSwitchWorkspace(workspace.id)
+                      }}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium text-text">
+                            {workspace.name}
+                          </div>
+                          <div className="truncate text-xs text-text-muted">
+                            {workspace.tag}
+                          </div>
                         </div>
-                        <div className="truncate text-xs text-text-muted">
-                          {workspace.tag}
+                        <div className="shrink-0 text-right text-xs text-text-muted">
+                          <div>{savedCountLabel(workspace)}</div>
+                          <div>
+                            {t("playground:workspace.lastAccessed", "Last accessed")}{" "}
+                            {savedRelativeLabel(workspace)}
+                          </div>
                         </div>
                       </div>
-                      <div className="shrink-0 text-right text-xs text-text-muted">
-                        <div>{savedCountLabel(workspace)}</div>
-                        <div>
-                          {t("playground:workspace.lastAccessed", "Last accessed")}{" "}
-                          {savedRelativeLabel(workspace)}
-                        </div>
-                      </div>
-                    </div>
-                  </button>
+                    </button>
+                    <Tooltip title={isPinned
+                      ? t("playground:workspace.unpin", "Unpin")
+                      : t("playground:workspace.pin", "Pin to top")
+                    }>
+                      <button
+                        type="button"
+                        data-testid={`pin-workspace-${workspace.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          togglePinWorkspace(workspace.id)
+                        }}
+                        className={`shrink-0 rounded p-1 transition ${
+                          isPinned
+                            ? "text-warning"
+                            : "text-text-muted opacity-0 group-hover:opacity-100 hover:text-warning"
+                        }`}
+                        style={isPinned ? undefined : { opacity: 1 }}
+                      >
+                        <Star className={`h-3.5 w-3.5 ${isPinned ? "fill-current" : ""}`} />
+                      </button>
+                    </Tooltip>
+                  </div>
                 )
               }
             )}

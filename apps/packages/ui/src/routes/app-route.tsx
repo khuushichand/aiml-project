@@ -26,6 +26,11 @@ import {
   type RouteKind
 } from "@/routes/route-registry"
 import { isRouteEnabledForCapabilities } from "@/routes/route-capabilities"
+import {
+  COMPANION_CAPTURE_MESSAGE_TYPE,
+  normalizePendingCompanionCapture,
+  writePendingCompanionCapture
+} from "@/services/companion-capture"
 import { HEADER_SHORTCUTS_EXPANDED_SETTING } from "@/services/settings/ui-settings"
 import { setSetting } from "@/services/settings/registry"
 import OptionLayout from "~/components/Layouts/Layout"
@@ -288,6 +293,48 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
     }
   }, [navigate])
   React.useEffect(() => {
+    if (kind !== "sidepanel") return
+    const runtime =
+      (globalThis as any)?.browser?.runtime ||
+      (globalThis as any)?.chrome?.runtime
+    const onMessage = runtime?.onMessage
+    if (!onMessage || typeof onMessage.addListener !== "function") {
+      return
+    }
+
+    const listener = (message: {
+      from?: string
+      type?: string
+      text?: string
+      payload?: unknown
+    }) => {
+      if (message?.from !== "background") return
+      if (message?.type !== COMPANION_CAPTURE_MESSAGE_TYPE) return
+      const payload =
+        normalizePendingCompanionCapture({
+          ...(typeof message?.payload === "object" && message.payload !== null
+            ? (message.payload as Record<string, unknown>)
+            : {}),
+          selectionText:
+            (message?.text || "").trim() ||
+            String(
+              (message?.payload as { selectionText?: string } | undefined)
+                ?.selectionText || ""
+            ).trim()
+        }) || null
+      if (!payload) return
+      writePendingCompanionCapture(payload)
+      navigate("/companion")
+    }
+
+    onMessage.addListener(listener)
+    return () => {
+      if (typeof onMessage.removeListener === "function") {
+        onMessage.removeListener(listener)
+      }
+    }
+  }, [kind, navigate])
+  React.useEffect(() => {
     registerUiDiagnostics(kind === "options" ? "options" : "sidepanel")
   }, [kind])
   React.useEffect(() => {
@@ -304,8 +351,12 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
         path === "/review" ||
         path === "/media" ||
         path === "/media-multi"
+      const needsCompanionConversation = path === "/companion/conversation"
       if (needsReview) {
         void ensureI18nNamespaces(["review"])
+      }
+      if (needsCompanionConversation) {
+        void ensureI18nNamespaces(["sidepanel", "common"])
       }
     } else {
       void ensureI18nNamespaces(["sidepanel", "common", "settings", "playground"])

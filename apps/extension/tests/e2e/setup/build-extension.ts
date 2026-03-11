@@ -5,7 +5,13 @@ import path from 'path'
 export default async function globalSetup() {
   // If a built chrome extension already exists, skip rebuilding.
   const projectRoot = path.resolve(__dirname, '..', '..', '..')
-  const builtChromePath = path.resolve(projectRoot, 'build/chrome-mv3')
+  const builtChromeCandidates = [
+    path.resolve(projectRoot, 'build/chrome-mv3'),
+    path.resolve(projectRoot, '.output/chrome-mv3')
+  ]
+  const builtChromePath =
+    builtChromeCandidates.find((candidate) => fs.existsSync(candidate)) ||
+    builtChromeCandidates[0]
   const forceBuildChrome =
     process.env.FORCE_BUILD_CHROME === '1' ||
     process.env.FORCE_BUILD_CHROME === 'true'

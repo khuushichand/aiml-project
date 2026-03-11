@@ -71,3 +71,8 @@ def is_collections_reading_note_links_enabled() -> bool:
 
 def is_collections_reading_archive_controls_enabled() -> bool:
     return _flag_enabled("COLLECTIONS_READING_ARCHIVE_CONTROLS_ENABLED", default=True)
+
+
+def is_mcp_hub_policy_enforcement_enabled() -> bool:
+    """Return True when MCP Hub runtime policy enforcement should be active."""
+    return _flag_enabled("MCP_HUB_POLICY_ENFORCEMENT_ENABLED", default=True)

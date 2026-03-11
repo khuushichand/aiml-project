@@ -55,6 +55,19 @@ export type ConflictResolution = 'keep_local' | 'keep_server' | 'keep_both'
 const AUTO_SYNC_PROJECT_NAME = 'Workspace Prompts'
 const AUTO_SYNC_PROJECT_DESCRIPTION =
   'Auto-created project used to persist prompts saved from the Prompts workspace.'
+const CURRENT_PROMPT_SYNC_PAYLOAD_VERSION = 1
+
+type PromptFormat = 'legacy' | 'structured'
+
+type ComparablePromptPayload = {
+  promptFormat: PromptFormat
+  promptSchemaVersion: number | null
+  promptDefinition: Record<string, any> | null
+  systemPrompt: string
+  userPrompt: string
+  fewShotExamples: FewShotExample[] | null
+  modulesConfig: PromptModule[] | null
+}
 
 const isValidProjectId = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -65,6 +78,16 @@ const unwrapResponseData = <T>(response: unknown): T | null => {
 }
 
 const toText = (value: unknown): string => (typeof value === 'string' ? value : '')
+const toFiniteNumberOrNull = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null
+const toPromptFormat = (value: unknown): PromptFormat =>
+  value === 'structured' ? 'structured' : 'legacy'
+const toRecordOrNull = (value: unknown): Record<string, any> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, any>)
+    : null
+const toArrayOrNull = <T>(value: unknown): T[] | null =>
+  Array.isArray(value) ? (value as T[]) : null
 
 const getLocalPromptTextsForConflict = (
   local: LocalPrompt
@@ -88,8 +111,25 @@ const getServerPromptTextsForConflict = (
   userPrompt: toText(server.user_prompt)
 })
 
-const promptTextHash = (systemPrompt: string, userPrompt: string): string => {
-  const combined = `${systemPrompt}\u241f${userPrompt}`
+const normalizeForStableHash = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeForStableHash(item))
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, normalizeForStableHash(item)])
+    )
+  }
+
+  return value
+}
+
+const promptPayloadHash = (payload: ComparablePromptPayload): string => {
+  const combined = JSON.stringify(normalizeForStableHash(payload))
   let hash = 0x811c9dc5
   for (let i = 0; i < combined.length; i += 1) {
     hash ^= combined.charCodeAt(i)
@@ -98,16 +138,43 @@ const promptTextHash = (systemPrompt: string, userPrompt: string): string => {
   return hash.toString(16).padStart(8, '0')
 }
 
+const getLocalPromptComparablePayload = (
+  local: LocalPrompt
+): ComparablePromptPayload => {
+  const localText = getLocalPromptTextsForConflict(local)
+  return {
+    promptFormat: toPromptFormat(local.promptFormat),
+    promptSchemaVersion: toFiniteNumberOrNull(local.promptSchemaVersion),
+    promptDefinition: toRecordOrNull(local.structuredPromptDefinition),
+    systemPrompt: localText.systemPrompt,
+    userPrompt: localText.userPrompt,
+    fewShotExamples: toArrayOrNull<FewShotExample>(local.fewShotExamples),
+    modulesConfig: toArrayOrNull<PromptModule>(local.modulesConfig)
+  }
+}
+
+const getServerPromptComparablePayload = (
+  server: ServerPrompt
+): ComparablePromptPayload => {
+  const serverText = getServerPromptTextsForConflict(server)
+  return {
+    promptFormat: toPromptFormat(server.prompt_format),
+    promptSchemaVersion: toFiniteNumberOrNull(server.prompt_schema_version),
+    promptDefinition: toRecordOrNull(server.prompt_definition),
+    systemPrompt: serverText.systemPrompt,
+    userPrompt: serverText.userPrompt,
+    fewShotExamples: toArrayOrNull<FewShotExample>(server.few_shot_examples),
+    modulesConfig: toArrayOrNull<PromptModule>(server.modules_config)
+  }
+}
+
 const hasPromptContentConflict = (
   local: LocalPrompt,
   server: ServerPrompt
 ): boolean => {
-  const localText = getLocalPromptTextsForConflict(local)
-  const serverText = getServerPromptTextsForConflict(server)
-  return (
-    promptTextHash(localText.systemPrompt, localText.userPrompt) !==
-    promptTextHash(serverText.systemPrompt, serverText.userPrompt)
-  )
+  const localPayload = getLocalPromptComparablePayload(local)
+  const serverPayload = getServerPromptComparablePayload(server)
+  return promptPayloadHash(localPayload) !== promptPayloadHash(serverPayload)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -121,11 +188,21 @@ function localToServerPayload(
   local: LocalPrompt,
   projectId: number
 ): PromptCreatePayload {
+  const promptFormat = toPromptFormat(local.promptFormat)
   return {
     project_id: projectId,
     name: local.name || local.title,
     system_prompt: local.system_prompt,
     user_prompt: local.user_prompt,
+    prompt_format: promptFormat,
+    prompt_schema_version:
+      promptFormat === 'structured'
+        ? toFiniteNumberOrNull(local.promptSchemaVersion)
+        : null,
+    prompt_definition:
+      promptFormat === 'structured'
+        ? toRecordOrNull(local.structuredPromptDefinition)
+        : null,
     few_shot_examples: local.fewShotExamples,
     modules_config: local.modulesConfig,
     change_description: local.changeDescription || 'Initial sync from workspace'
@@ -136,10 +213,20 @@ function localToServerPayload(
  * Convert a local prompt to server update payload.
  */
 function localToServerUpdatePayload(local: LocalPrompt): PromptUpdatePayload {
+  const promptFormat = toPromptFormat(local.promptFormat)
   return {
     name: local.name || local.title,
     system_prompt: local.system_prompt,
     user_prompt: local.user_prompt,
+    prompt_format: promptFormat,
+    prompt_schema_version:
+      promptFormat === 'structured'
+        ? toFiniteNumberOrNull(local.promptSchemaVersion)
+        : null,
+    prompt_definition:
+      promptFormat === 'structured'
+        ? toRecordOrNull(local.structuredPromptDefinition)
+        : null,
     few_shot_examples: local.fewShotExamples,
     modules_config: local.modulesConfig,
     change_description: local.changeDescription || 'Synced from workspace'
@@ -157,8 +244,12 @@ function serverToLocalFields(server: ServerPrompt): Partial<LocalPrompt> {
     name: server.name,
     system_prompt: server.system_prompt,
     user_prompt: server.user_prompt,
-    fewShotExamples: server.few_shot_examples as FewShotExample[] | undefined,
-    modulesConfig: server.modules_config as PromptModule[] | undefined,
+    promptFormat: toPromptFormat(server.prompt_format),
+    promptSchemaVersion: toFiniteNumberOrNull(server.prompt_schema_version),
+    structuredPromptDefinition: toRecordOrNull(server.prompt_definition),
+    syncPayloadVersion: CURRENT_PROMPT_SYNC_PAYLOAD_VERSION,
+    fewShotExamples: toArrayOrNull<FewShotExample>(server.few_shot_examples),
+    modulesConfig: toArrayOrNull<PromptModule>(server.modules_config),
     versionNumber: server.version_number,
     changeDescription: server.change_description,
     serverParentVersionId: server.parent_version_id,
@@ -181,6 +272,10 @@ function serverToNewLocalPrompt(server: ServerPrompt): LocalPrompt {
     is_system: !!server.system_prompt,
     system_prompt: server.system_prompt,
     user_prompt: server.user_prompt,
+    promptFormat: toPromptFormat(server.prompt_format),
+    promptSchemaVersion: toFiniteNumberOrNull(server.prompt_schema_version),
+    structuredPromptDefinition: toRecordOrNull(server.prompt_definition),
+    syncPayloadVersion: CURRENT_PROMPT_SYNC_PAYLOAD_VERSION,
     createdAt: now,
     updatedAt: now,
     usageCount: 0,
@@ -189,8 +284,8 @@ function serverToNewLocalPrompt(server: ServerPrompt): LocalPrompt {
     serverId: server.id,
     studioProjectId: server.project_id,
     studioPromptId: server.id,
-    fewShotExamples: server.few_shot_examples as FewShotExample[] | undefined,
-    modulesConfig: server.modules_config as PromptModule[] | undefined,
+    fewShotExamples: toArrayOrNull<FewShotExample>(server.few_shot_examples),
+    modulesConfig: toArrayOrNull<PromptModule>(server.modules_config),
     versionNumber: server.version_number,
     changeDescription: server.change_description,
     serverParentVersionId: server.parent_version_id,

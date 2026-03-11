@@ -7,6 +7,19 @@ from tldw_Server_API.app.core.MCP_unified.config import get_config
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 
 
+@pytest.fixture(autouse=True)
+def _clear_mcp_config_cache():
+    try:
+        get_config.cache_clear()  # type: ignore[attr-defined]
+    except Exception:
+        _ = None
+    yield
+    try:
+        get_config.cache_clear()  # type: ignore[attr-defined]
+    except Exception:
+        _ = None
+
+
 class AllowAllRBAC:
     async def check_permission(self, *args, **kwargs):
         return True
@@ -193,12 +206,7 @@ async def test_schema_validation_required_type_and_unknown():
 
 @pytest.mark.asyncio
 async def test_disable_write_tools_gate(monkeypatch):
-    # Force-disable write tools for this test by tweaking cached config
-    try:
-        cfg = get_config()
-        setattr(cfg, "disable_write_tools", True)
-    except Exception:
-        _ = None
+    monkeypatch.setenv("MCP_DISABLE_WRITE_TOOLS", "true")
 
     registry = get_module_registry()
     await registry.register_module("dummy_write_disabled", DummyWriteModuleWithValidator, ModuleConfig(name="dummy_write_disabled"))

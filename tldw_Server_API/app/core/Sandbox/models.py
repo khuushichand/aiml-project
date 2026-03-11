@@ -9,6 +9,9 @@ class RuntimeType(str, Enum):
     docker = "docker"
     firecracker = "firecracker"
     lima = "lima"
+    vz_linux = "vz_linux"
+    vz_macos = "vz_macos"
+    seatbelt = "seatbelt"
 
 
 class TrustLevel(str, Enum):

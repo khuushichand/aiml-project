@@ -1,23 +1,23 @@
 """ACP Session persistence and admin query service.
 
-Stores session metadata alongside the in-memory runner client state,
+Stores session metadata with SQLite-backed persistence via ACPSessionsDB,
 enabling session listing, usage tracking, and admin visibility.
 
-The store is currently in-memory (dict-based) and is populated as sessions
-are created/updated/closed through the ACP endpoints.  A future iteration
-can persist to SQLite/PostgreSQL without changing the public API.
+The public API (SessionRecord, SessionTokenUsage, async methods) is preserved
+while all state is delegated to the SQLite backend.
 """
 from __future__ import annotations
 
 import asyncio
 import copy
 import fnmatch
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
 
 
 # ---------------------------------------------------------------------------
@@ -89,41 +89,21 @@ class SessionRecord:
             "forked_from": self.forked_from,
         }
 
-    def to_detail_dict(self, *, has_websocket: bool = False) -> dict[str, Any]:
+    def to_detail_dict(
+        self,
+        *,
+        has_websocket: bool = False,
+        fork_lineage: list[str] | None = None,
+    ) -> dict[str, Any]:
         d = self.to_info_dict(has_websocket=has_websocket)
         d["messages"] = list(self.messages)
         d["cwd"] = self.cwd
+        d["fork_lineage"] = fork_lineage or []
         return d
 
 
-def _normalize_text_content(value: Any) -> str | None:
-    if isinstance(value, str):
-        text = value.strip()
-        return text or None
-
-    if isinstance(value, list):
-        parts: list[str] = []
-        for item in value:
-            normalized = _normalize_text_content(item)
-            if normalized:
-                parts.append(normalized)
-        if parts:
-            return "\n".join(parts)
-        return None
-
-    if isinstance(value, dict):
-        content_type = str(value.get("type") or "").strip().lower()
-        if content_type in {"text", "input_text", "output_text"}:
-            direct_text = value.get("text")
-            if isinstance(direct_text, str) and direct_text.strip():
-                return direct_text.strip()
-        for key in ("content", "text", "message", "output", "detail", "value"):
-            normalized = _normalize_text_content(value.get(key))
-            if normalized:
-                return normalized
-        return None
-
-    return None
+# Re-use the canonical implementation from the DB layer
+_normalize_text_content = ACPSessionsDB._normalize_text_content
 
 
 def _normalize_prompt_messages(prompt: list[dict[str, Any]], timestamp: str) -> tuple[list[dict[str, Any]], bool]:
@@ -240,17 +220,162 @@ class AgentConfig:
 # ---------------------------------------------------------------------------
 
 class ACPSessionStore:
-    """In-memory session metadata store with query capabilities."""
+    """SQLite-backed session metadata store with query capabilities.
 
-    def __init__(self) -> None:
-        self._sessions: dict[str, SessionRecord] = {}
+    Delegates all persistent state to an ``ACPSessionsDB`` instance while
+    preserving the original async public API.
+    """
+
+    def __init__(self, db: ACPSessionsDB | None = None) -> None:
+        if db is None:
+            self._db = ACPSessionsDB()
+        else:
+            self._db = db
         self._lock = asyncio.Lock()
-        # Agent configs — keyed by id
+        # Agent configs — keyed by id (in-memory for now)
         self._agent_configs: dict[int, AgentConfig] = {}
         self._agent_config_seq = 0
-        # Permission policies — keyed by id
+        # Permission policies — keyed by id (in-memory for now)
         self._permission_policies: dict[int, PermissionPolicy] = {}
         self._permission_policy_seq = 0
+        # Session TTL cleanup task
+        self._cleanup_task: asyncio.Task | None = None
+        # Quotas (loaded from config on first use)
+        self._session_ttl_seconds: int = 86400
+        self._max_concurrent_per_user: int = 5
+        self._max_tokens_per_session: int = 1_000_000
+        self._max_session_duration_seconds: int = 14400
+
+    # ------------------------------------------------------------------
+    # Internal helpers — convert DB dicts to public dataclasses
+    # ------------------------------------------------------------------
+
+    def _db_messages_to_record_messages(self, db_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Convert DB message rows to the SessionRecord.messages format.
+
+        DB stores a single ``raw_data`` column; the public API expects
+        ``raw_prompt`` for user messages and ``raw_result`` for assistant
+        messages.
+        """
+        result: list[dict[str, Any]] = []
+        for msg in db_messages:
+            content = msg.get("content")
+            # The DB stores empty string for non-normalizable content;
+            # the public API expects None in that case.
+            if isinstance(content, str) and not content.strip():
+                content = None
+            entry: dict[str, Any] = {
+                "role": msg["role"],
+                "content": content,
+                "timestamp": msg.get("timestamp", ""),
+            }
+            raw = msg.get("raw_data")
+            if msg["role"] == "assistant":
+                entry["raw_result"] = raw
+            else:
+                entry["raw_prompt"] = raw
+            result.append(entry)
+        return result
+
+    def _dict_to_record(
+        self,
+        d: dict[str, Any],
+        messages: list[dict[str, Any]] | None = None,
+    ) -> SessionRecord:
+        """Convert a DB session dict to a ``SessionRecord`` dataclass."""
+        usage = SessionTokenUsage(
+            prompt_tokens=d.get("prompt_tokens", 0),
+            completion_tokens=d.get("completion_tokens", 0),
+            total_tokens=d.get("total_tokens", 0),
+        )
+        return SessionRecord(
+            session_id=d["session_id"],
+            user_id=d["user_id"],
+            agent_type=d.get("agent_type", "custom"),
+            name=d.get("name", ""),
+            status=d.get("status", "active"),
+            cwd=d.get("cwd", ""),
+            created_at=d.get("created_at", ""),
+            last_activity_at=d.get("last_activity_at"),
+            message_count=d.get("message_count", 0),
+            usage=usage,
+            tags=d.get("tags", []),
+            messages=messages or [],
+            mcp_servers=d.get("mcp_servers", []),
+            persona_id=d.get("persona_id"),
+            workspace_id=d.get("workspace_id"),
+            workspace_group_id=d.get("workspace_group_id"),
+            scope_snapshot_id=d.get("scope_snapshot_id"),
+            bootstrap_ready=d.get("bootstrap_ready", True),
+            needs_bootstrap=d.get("needs_bootstrap", False),
+            forked_from=d.get("forked_from"),
+        )
+
+    # ------------------------------------------------------------------
+    # Quota configuration
+    # ------------------------------------------------------------------
+
+    def configure_quotas(
+        self,
+        session_ttl_seconds: int = 86400,
+        max_concurrent_per_user: int = 5,
+        max_tokens_per_session: int = 1_000_000,
+        max_session_duration_seconds: int = 14400,
+    ) -> None:
+        """Set quota limits from config."""
+        self._session_ttl_seconds = session_ttl_seconds
+        self._max_concurrent_per_user = max_concurrent_per_user
+        self._max_tokens_per_session = max_tokens_per_session
+        self._max_session_duration_seconds = max_session_duration_seconds
+        self._db.configure_quotas(
+            max_concurrent_per_user=max_concurrent_per_user,
+            max_tokens_per_session=max_tokens_per_session,
+            session_ttl_seconds=session_ttl_seconds,
+            max_session_duration_seconds=max_session_duration_seconds,
+        )
+
+    def start_cleanup_task(self) -> None:
+        """Start background task to evict expired sessions."""
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.ensure_future(self._cleanup_loop())
+
+    def stop_cleanup_task(self) -> None:
+        """Cancel the cleanup background task."""
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            self._cleanup_task = None
+
+    async def _cleanup_loop(self) -> None:
+        """Periodically evict expired sessions."""
+        while True:
+            try:
+                await asyncio.sleep(300)  # Check every 5 minutes
+                await self._evict_expired_sessions()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("ACP session cleanup error: {}", exc)
+                await asyncio.sleep(60)
+
+    async def _evict_expired_sessions(self) -> int:
+        """Evict sessions past TTL or max duration. Returns count evicted."""
+        return self._db.evict_expired_sessions()
+
+    async def check_session_quota(self, user_id: int) -> dict[str, Any] | None:
+        """Check if user can create a new session. Returns None if ok, or error dict."""
+        return self._db.check_session_quota(user_id)
+
+    async def check_token_quota(self, session_id: str) -> dict[str, Any] | None:
+        """Check if a session has exceeded its token quota. Returns None if ok."""
+        return self._db.check_token_quota(session_id)
+
+    async def get_quota_status(self, user_id: int, session_id: str | None = None) -> dict[str, Any]:
+        """Get current quota usage for a user/session."""
+        result = self._db.get_quota_status(user_id, session_id=session_id)
+        # Add TTL fields that the DB layer doesn't include
+        result["session_ttl_seconds"] = self._session_ttl_seconds
+        result["max_session_duration_seconds"] = self._max_session_duration_seconds
+        return result
 
     # -- Session CRUD -------------------------------------------------------
 
@@ -268,33 +393,24 @@ class ACPSessionStore:
         workspace_group_id: str | None = None,
         scope_snapshot_id: str | None = None,
     ) -> SessionRecord:
-        now = datetime.now(timezone.utc).isoformat()
-        record = SessionRecord(
+        d = self._db.register_session(
             session_id=session_id,
             user_id=user_id,
             agent_type=agent_type,
             name=name,
             cwd=cwd,
-            created_at=now,
-            last_activity_at=now,
-            tags=tags or [],
-            mcp_servers=copy.deepcopy(mcp_servers or []),
+            tags=tags,
+            mcp_servers=mcp_servers,
             persona_id=persona_id,
             workspace_id=workspace_id,
             workspace_group_id=workspace_group_id,
             scope_snapshot_id=scope_snapshot_id,
         )
-        async with self._lock:
-            self._sessions[session_id] = record
         logger.debug("Registered ACP session {} for user {}", session_id, user_id)
-        return record
+        return self._dict_to_record(d)
 
     async def close_session(self, session_id: str) -> None:
-        async with self._lock:
-            rec = self._sessions.get(session_id)
-            if rec:
-                rec.status = "closed"
-                rec.last_activity_at = datetime.now(timezone.utc).isoformat()
+        self._db.close_session(session_id)
 
     async def record_prompt(
         self,
@@ -304,30 +420,36 @@ class ACPSessionStore:
     ) -> SessionTokenUsage | None:
         """Record a prompt+response exchange and accumulate token usage."""
         async with self._lock:
-            rec = self._sessions.get(session_id)
-            if not rec:
+            # 1. Persist to DB
+            usage_dict = self._db.record_prompt(session_id, prompt, result)
+            if usage_dict is None:
                 return None
+
+            # 2. Handle bootstrap_ready tracking (DB doesn't track this)
             now = datetime.now(timezone.utc).isoformat()
-            rec.last_activity_at = now
-            prompt_entries, prompt_bootstrap_ready = _normalize_prompt_messages(prompt, now)
-            result_entry, result_bootstrap_ready = _normalize_result_message(result, now)
-            rec.messages.extend(prompt_entries)
-            rec.messages.append(result_entry)
-            rec.message_count = len(rec.messages)
-            rec.bootstrap_ready = rec.bootstrap_ready and prompt_bootstrap_ready and result_bootstrap_ready
-            # Extract token usage from result
-            usage_data = result.get("usage") or {}
-            prompt_tokens = int(usage_data.get("prompt_tokens") or usage_data.get("input_tokens") or 0)
-            completion_tokens = int(usage_data.get("completion_tokens") or usage_data.get("output_tokens") or 0)
-            rec.usage.add(prompt_tokens, completion_tokens)
+            _, prompt_bootstrap_ready = _normalize_prompt_messages(prompt, now)
+            _, result_bootstrap_ready = _normalize_result_message(result, now)
+
+            if not (prompt_bootstrap_ready and result_bootstrap_ready):
+                self._db.set_bootstrap_ready(session_id, False)
+
             return SessionTokenUsage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
+                prompt_tokens=usage_dict["prompt_tokens"],
+                completion_tokens=usage_dict["completion_tokens"],
+                total_tokens=usage_dict["total_tokens"],
             )
 
     async def get_session(self, session_id: str) -> SessionRecord | None:
-        return self._sessions.get(session_id)
+        d = self._db.get_session(session_id)
+        if d is None:
+            return None
+        db_messages = self._db.get_messages(session_id)
+        messages = self._db_messages_to_record_messages(db_messages)
+        return self._dict_to_record(d, messages)
+
+    async def get_fork_lineage(self, session_id: str, *, max_depth: int = 50) -> list[str]:
+        """Walk the forked_from chain and return ancestor session IDs (oldest first)."""
+        return self._db.get_fork_lineage(session_id, max_depth=max_depth)
 
     async def build_bootstrap_prompt(
         self,
@@ -335,26 +457,25 @@ class ACPSessionStore:
         prompt: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], bool]:
         async with self._lock:
-            rec = self._sessions.get(session_id)
-            if not rec or not rec.needs_bootstrap:
+            d = self._db.get_session(session_id)
+            if d is None or not d.get("needs_bootstrap"):
                 return copy.deepcopy(prompt), False
 
-            if not _messages_bootstrap_ready(rec.messages):
-                rec.bootstrap_ready = False
+            db_messages = self._db.get_messages(session_id)
+            messages = self._db_messages_to_record_messages(db_messages)
+
+            if not _messages_bootstrap_ready(messages):
+                self._db.set_bootstrap_ready(session_id, False)
                 raise ValueError("fork_not_resumable")
 
             bootstrap_prompt = [
-                {"role": str(message["role"]), "content": str(message["content"])}
-                for message in rec.messages
+                {"role": str(msg["role"]), "content": str(msg["content"])}
+                for msg in messages
             ]
             return bootstrap_prompt + copy.deepcopy(prompt), True
 
     async def clear_bootstrap(self, session_id: str) -> None:
-        async with self._lock:
-            rec = self._sessions.get(session_id)
-            if rec:
-                rec.needs_bootstrap = False
-                rec.last_activity_at = datetime.now(timezone.utc).isoformat()
+        self._db.clear_needs_bootstrap(session_id)
 
     async def list_sessions(
         self,
@@ -366,19 +487,12 @@ class ACPSessionStore:
         offset: int = 0,
     ) -> tuple[list[SessionRecord], int]:
         """List sessions with optional filters. Returns (records, total_count)."""
-        results: list[SessionRecord] = []
-        for rec in self._sessions.values():
-            if user_id is not None and rec.user_id != user_id:
-                continue
-            if status is not None and rec.status != status:
-                continue
-            if agent_type is not None and rec.agent_type != agent_type:
-                continue
-            results.append(rec)
-        # Sort by created_at descending
-        results.sort(key=lambda r: r.created_at, reverse=True)
-        total = len(results)
-        return results[offset:offset + limit], total
+        rows, total = self._db.list_sessions(
+            user_id=user_id, status=status, agent_type=agent_type,
+            limit=limit, offset=offset,
+        )
+        records = [self._dict_to_record(d) for d in rows]
+        return records, total
 
     async def fork_session(
         self,
@@ -390,37 +504,21 @@ class ACPSessionStore:
     ) -> SessionRecord | None:
         """Fork a session, copying messages up to message_index."""
         async with self._lock:
-            source = self._sessions.get(source_session_id)
-            if not source:
-                return None
-            if source.user_id != user_id:
-                return None
-            # message_index is inclusive (0-based) — copy messages 0..message_index
-            forked_messages = copy.deepcopy(source.messages[:message_index + 1])
-            now = datetime.now(timezone.utc).isoformat()
-            fork_name = name or f"Fork of {source.name}"
-            forked = SessionRecord(
-                session_id=new_session_id,
-                user_id=user_id,
-                agent_type=source.agent_type,
-                name=fork_name,
-                cwd=source.cwd,
-                created_at=now,
-                last_activity_at=now,
-                message_count=len(forked_messages),
-                tags=list(source.tags),
-                mcp_servers=copy.deepcopy(source.mcp_servers),
-                messages=forked_messages,
-                persona_id=source.persona_id,
-                workspace_id=source.workspace_id,
-                workspace_group_id=source.workspace_group_id,
-                scope_snapshot_id=source.scope_snapshot_id,
-                bootstrap_ready=_messages_bootstrap_ready(forked_messages),
-                needs_bootstrap=bool(forked_messages),
-                forked_from=source_session_id,
+            d = self._db.fork_session(
+                source_session_id, new_session_id, message_index, user_id, name,
             )
-            self._sessions[new_session_id] = forked
-        return forked
+            if d is None:
+                return None
+
+            db_messages = self._db.get_messages(new_session_id)
+            messages = self._db_messages_to_record_messages(db_messages)
+
+            # Check bootstrap readiness based on message content
+            if not _messages_bootstrap_ready(messages):
+                self._db.set_bootstrap_ready(new_session_id, False)
+                d["bootstrap_ready"] = False
+
+            return self._dict_to_record(d, messages)
 
     # -- Agent Config CRUD --------------------------------------------------
 
@@ -573,5 +671,37 @@ async def get_acp_session_store() -> ACPSessionStore:
     if _store is None:
         async with _store_lock:
             if _store is None:
-                _store = ACPSessionStore()
+                store = ACPSessionStore()
+                # Initialize quotas from ACP config
+                try:
+                    from tldw_Server_API.app.core.Agent_Client_Protocol.config import load_acp_sandbox_config
+                    cfg = load_acp_sandbox_config()
+                    store.configure_quotas(
+                        session_ttl_seconds=cfg.session_ttl_seconds,
+                        max_concurrent_per_user=cfg.max_concurrent_sessions_per_user,
+                        max_tokens_per_session=cfg.max_tokens_per_session,
+                        max_session_duration_seconds=cfg.max_session_duration_seconds,
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to load ACP quota config, using defaults: {}", exc)
+
+                # Wire the agent registry and health monitor with DB
+                try:
+                    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import (
+                        get_agent_registry,
+                        set_registry_db,
+                    )
+                    from tldw_Server_API.app.core.Agent_Client_Protocol.health_monitor import (
+                        configure_health_monitor,
+                    )
+
+                    set_registry_db(store._db)
+                    registry = get_agent_registry()
+                    monitor = configure_health_monitor(registry=registry, db=store._db)
+                    await monitor.start()
+                except Exception as exc:
+                    logger.warning("Failed to wire agent registry/health monitor: {}", exc)
+
+                store.start_cleanup_task()
+                _store = store
     return _store

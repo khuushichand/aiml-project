@@ -88,6 +88,29 @@ class _FakeService:
             resource_usage=None,
         )
 
+    def macos_diagnostics(self):
+        return {
+            "host": {
+                "os": "darwin",
+                "arch": "arm64",
+                "apple_silicon": True,
+                "macos_version": "15.0",
+                "supported": True,
+                "reasons": [],
+            },
+            "helper": {
+                "configured": True,
+                "path": "/tmp/helper",
+                "exists": True,
+                "executable": True,
+                "ready": True,
+                "transport": "fake",
+                "reasons": [],
+            },
+            "templates": {},
+            "runtimes": {},
+        }
+
 
 def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
     app = FastAPI()
@@ -159,6 +182,25 @@ async def test_sandbox_admin_runs_allowed_for_admin_principal(monkeypatch):
     body = resp.json()
     assert isinstance(body.get("items"), list)
     assert body.get("total") == 0
+
+
+@pytest.mark.asyncio
+async def test_sandbox_admin_macos_diagnostics_allowed_for_admin_principal(monkeypatch):
+    principal = _make_principal(
+        roles=[ROLE_ADMIN],
+        permissions=[],
+        is_admin=True,
+    )
+    fake_service = _FakeService()
+    monkeypatch.setattr(sandbox_mod, "_service", fake_service, raising=True)
+
+    app = _build_app_with_overrides(principal)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/sandbox/admin/macos-diagnostics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["host"]["supported"] is True
 
 
 @pytest.mark.unit

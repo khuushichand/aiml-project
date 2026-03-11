@@ -1,53 +1,88 @@
 # Persona
 
-## 1. Descriptive of Current Feature Set
+## 1. Current Feature Set
 
-- Purpose: Scaffold for an agent-like Persona with catalog, session creation, and a basic WebSocket stream.
+- Purpose: Persona Garden provides persisted persona profiles, live persona sessions, scoped tool usage, persona state docs, persona exemplars, and websocket-based interaction for persona-driven workflows.
 - Capabilities:
-  - Persona catalog (static placeholder)
-  - Session create/resume with basic scope list
-  - WebSocket: tool-plan proposal + tool-call delegation to MCP server
+  - Persona profile catalog backed by ChaChaNotes persistence
+  - Persona session create/resume/list/detail flows
+  - Persona state docs (`soul`, `identity`, `heartbeat`) with history/restore
+  - Persona scope and policy rule management
+  - Persona exemplar bank with CRUD, transcript import, review flow, and adaptive retrieval
+  - Live websocket session flow with tool-plan proposal, policy enforcement, personalization memory/state-doc usage, and shared persona exemplar guidance
+  - Ordinary persona-backed chat and live Persona Garden both consume the shared exemplar retrieval/prompt-assembly layer
 - Inputs/Outputs:
-  - Input: session requests and WS JSON frames (user messages, plan confirmations)
-  - Output: persona info, session IDs, stream events (tool_plan, tool_result, notices)
+  - Input: persona profile/session HTTP requests, websocket JSON frames, transcript import payloads, persona configuration writes
+  - Output: persisted persona metadata, session history, live stream events (`notice`, `tool_plan`, `tool_call`, `tool_result`, `assistant_delta`), exemplar retrieval influence in prompt/planning inputs
 - Related Endpoints:
-  - `tldw_Server_API/app/api/v1/endpoints/persona.py:1` (catalog, session, websocket)
+  - `tldw_Server_API/app/api/v1/endpoints/persona.py`
+  - `tldw_Server_API/app/api/v1/endpoints/chat.py`
 - Related Schemas:
-  - `tldw_Server_API/app/api/v1/schemas/persona.py:1`
+  - `tldw_Server_API/app/api/v1/schemas/persona.py`
 
-## 2. Technical Details of Features
+## 2. Technical Details
 
 - Architecture & Data Flow:
-  - Endpoints guarded by feature flag; WS delegates tool calls to MCP Unified via `get_mcp_server()`
-  - Optional user resolution from single-user API key; lightweight session manager in `Persona/session_manager.py`
-- Key Classes/Functions:
-  - `SessionManager` and `Session` dataclass; persona endpoints (catalog/session/stream)
+  - Persona profiles, sessions, state docs, scope rules, policy rules, and exemplars persist in `ChaChaNotes_DB`.
+  - Persona websocket sessions use the process-local `SessionManager` for live turn snapshots while also persisting turn history through `memory_integration.persist_persona_turn(...)`.
+  - Persona exemplar retrieval is deterministic today: turn classification -> exemplar selection -> shared prompt assembly.
+  - Ordinary persona-backed chat and live Persona Garden both reuse the same shared exemplar prompt assembly helpers.
+  - Policy/scope enforcement remains authoritative over tools and capabilities; exemplars shape in-character guidance only.
+- Key Modules:
+  - `Persona/session_manager.py`
+  - `Persona/memory_integration.py`
+  - `Persona/exemplar_retrieval.py`
+  - `Persona/exemplar_prompt_assembly.py`
+  - `Persona/exemplar_turn_classifier.py`
+  - `Persona/exemplar_ingestion.py`
 - Dependencies:
-  - Internal: MCP Unified server (`core/MCP_unified`), `feature_flags`, AuthNZ settings
+  - Internal: MCP Unified server, AuthNZ, ChaChaNotes DB, personalization memory integration, streaming infrastructure
 - Data Models & DB:
-  - No DB; in-memory sessions
+  - Persona profiles, sessions, policy rules, scope rules, and exemplars are persisted
+  - Persona live sessions keep an in-process runtime snapshot for low-latency websocket interaction
 - Configuration:
-  - `PERSONA_ENABLED` feature flag; optional RBAC toggles for delete/export (`PERSONA_RBAC_ALLOW_*`)
+  - `PERSONA_ENABLED`
+  - `persona` and `persona.rbac` config sections
+  - memory/state-doc limits and websocket runtime knobs from config
 - Concurrency & Performance:
-  - WS loop with heartbeats and basic plan execution
+  - Websocket runtime offloads blocking persistence work with `asyncio.to_thread(...)`
+  - exemplar lookup and persona persistence are structured to avoid blocking the live event loop
 - Error Handling:
-  - Graceful close on disabled flag; catch and report tool errors in-frame
+  - graceful websocket notices/close behavior on auth or policy failures
+  - explicit HTTP exceptions for persona CRUD/configuration routes
 - Security:
-  - Single-user mode optional API-key recognition for WS; future JWT integration expected
+  - websocket auth supports JWT and API key flows
+  - scope and policy rules gate tool execution
+  - rate limits apply on persona exemplar CRUD/import endpoints
 
-## 3. Developer-Related/Relevant Information for Contributors
+## 3. Developer Notes
 
 - Folder Structure:
-  - `Persona/session_manager.py`; endpoints in `api/v1/endpoints/persona.py`
+  - Runtime/core logic in `tldw_Server_API/app/core/Persona/`
+  - HTTP and websocket entrypoints in `tldw_Server_API/app/api/v1/endpoints/persona.py`
 - Extension Points:
-  - Expand catalog/tooling; add persistence for sessions; richer plan proposal module
+  - websocket-specific exemplar debug events are not yet exposed to clients
+  - richer live assistant generation beyond plan/tool scaffolding can build on the shared exemplar/state/memory seam
+  - future retrieval improvements can evolve classifier/ranking behavior without changing storage shape
 - Coding Patterns:
-  - Keep stream protocol simple; reuse MCP request/response structure for tool invocations
+  - keep persona layers distinct:
+    - profile = top-level identity/config
+    - state docs = durable self-model
+    - memory = retrieved experience
+    - policy/scope = permissions
+    - exemplars = retrieved voice/boundary/style guidance
+  - prefer shared helpers over runtime-specific duplication
 - Tests:
-  - (Scaffold) Add unit/integration tests as flows solidify
+  - websocket behavior: `tldw_Server_API/tests/Persona/test_persona_ws.py`
+  - session routes: `tldw_Server_API/tests/Persona/test_persona_sessions.py`
+  - exemplar retrieval/ingestion/eval: `tldw_Server_API/tests/Persona/`
+  - prompt assembly and persona-backed chat: `tldw_Server_API/tests/Chat/`
 - Local Dev Tips:
-  - Connect to `/api/v1/persona/stream` from a WS client; send `{ "type": "user_message", "text": "<query>" }`
+  - connect to `/api/v1/persona/stream` with a websocket client and send `{ "type": "user_message", "text": "<query>" }`
+  - inspect persisted persona sessions via `/api/v1/persona/sessions`
 - Pitfalls & Gotchas:
-  - Ensure tools are permitted by RBAC toggles; handle WS disconnects
-- Roadmap/TODOs:
-  - Real catalog, persona memory, tool routing/policies
+  - personas are created from characters conceptually, but evolve independently after creation
+  - do not store exemplar text snapshots in turn metadata when compact IDs/reasons are sufficient
+  - keep websocket protocol changes separate from runtime retrieval/persistence changes unless explicitly scoped together
+- Current Limitation:
+  - live websocket turns now use shared exemplar retrieval and persist compact selection metadata, but websocket-specific exemplar debug events are still not exposed to clients

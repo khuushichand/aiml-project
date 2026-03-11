@@ -139,6 +139,187 @@ _CREATE_MCP_HUB_TABLES = [
         "ON mcp_external_server_secrets(updated_at)",
         (),
     ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_permission_profiles (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            mode TEXT NOT NULL DEFAULT 'custom',
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_permission_profiles_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_scope "
+        "ON mcp_permission_profiles(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignments (
+            id SERIAL PRIMARY KEY,
+            target_type TEXT NOT NULL,
+            target_id TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            profile_id INTEGER NULL REFERENCES mcp_permission_profiles(id) ON DELETE SET NULL,
+            inline_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            approval_policy_id INTEGER NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_scope "
+        "ON mcp_policy_assignments(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_target "
+        "ON mcp_policy_assignments(target_type, target_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_overrides (
+            id SERIAL PRIMARY KEY,
+            assignment_id INTEGER NOT NULL UNIQUE REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE,
+            override_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            broadens_access BOOLEAN DEFAULT FALSE,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_overrides "
+        "ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_policy_overrides_assignment "
+        "ON mcp_policy_overrides(assignment_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_policies (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            mode TEXT NOT NULL,
+            rules_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_policies_scope "
+        "ON mcp_approval_policies(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_decisions (
+            id SERIAL PRIMARY KEY,
+            approval_policy_id INTEGER NULL REFERENCES mcp_approval_policies(id) ON DELETE SET NULL,
+            context_key TEXT NOT NULL,
+            conversation_id TEXT NULL,
+            tool_name TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            consume_on_match BOOLEAN DEFAULT FALSE,
+            expires_at TIMESTAMPTZ NULL,
+            consumed_at TIMESTAMPTZ NULL,
+            created_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE mcp_approval_decisions ADD COLUMN IF NOT EXISTS consume_on_match BOOLEAN DEFAULT FALSE", ()),
+    ("ALTER TABLE mcp_approval_decisions ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMPTZ", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_context "
+        "ON mcp_approval_decisions(context_key, conversation_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_active "
+        "ON mcp_approval_decisions(context_key, conversation_id, tool_name, scope_key, decision, consumed_at)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_credential_bindings (
+            id SERIAL PRIMARY KEY,
+            binding_target_type TEXT NOT NULL,
+            binding_target_id TEXT NULL,
+            external_server_id TEXT NOT NULL REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
+            credential_ref TEXT NOT NULL,
+            usage_rules_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_credential_bindings_target "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_audit_history (
+            id SERIAL PRIMARY KEY,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            previous_value_json TEXT NOT NULL DEFAULT '{}',
+            new_value_json TEXT NOT NULL DEFAULT '{}',
+            broadened_access BOOLEAN DEFAULT FALSE,
+            actor_id INTEGER NULL,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_audit_history_resource "
+        "ON mcp_policy_audit_history(resource_type, resource_id)",
+        (),
+    ),
 ]
 
 
@@ -1188,6 +1369,53 @@ _CREATE_GENERATED_FILES_TABLES = [
     ),
 ]
 
+_CREATE_DATA_SUBJECT_REQUESTS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS data_subject_requests (
+            id SERIAL PRIMARY KEY,
+            client_request_id TEXT NOT NULL UNIQUE,
+            requester_identifier TEXT NOT NULL,
+            resolved_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            request_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            selected_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+            preview_summary JSONB NOT NULL DEFAULT '[]'::jsonb,
+            coverage_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            requested_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT NULL
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requester "
+        "ON data_subject_requests(requester_identifier)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_resolved_user "
+        "ON data_subject_requests(resolved_user_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_type "
+        "ON data_subject_requests(request_type)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_status "
+        "ON data_subject_requests(status)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requested_at "
+        "ON data_subject_requests(requested_at)",
+        (),
+    ),
+]
+
 
 async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
@@ -1902,6 +2130,28 @@ async def ensure_generated_files_table_pg(pool: DatabasePool | None = None) -> b
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL generated_files table: {exc}")
+        return False
+
+
+async def ensure_data_subject_requests_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure data_subject_requests table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before data_subject_requests failed: {exc}")
+        for sql, params in _CREATE_DATA_SUBJECT_REQUESTS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure data_subject_requests DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL data_subject_requests table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL data_subject_requests table: {exc}")
         return False
 
 

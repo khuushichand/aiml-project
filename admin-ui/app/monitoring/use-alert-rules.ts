@@ -14,10 +14,12 @@ import type {
 
 type UseAlertRulesArgs = {
   setSuccess: (message: string) => void;
+  unsafeLocalToolsEnabled: boolean;
 };
 
 export const useAlertRules = ({
   setSuccess,
+  unsafeLocalToolsEnabled,
 }: UseAlertRulesArgs) => {
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
   const [alertRuleDraft, setAlertRuleDraft] = useState<AlertRuleDraft>(DEFAULT_ALERT_RULE_DRAFT);
@@ -26,9 +28,14 @@ export const useAlertRules = ({
   const alertRulesHydratedRef = useRef(false);
 
   useEffect(() => {
+    if (!unsafeLocalToolsEnabled) {
+      alertRulesHydratedRef.current = false;
+      setAlertRules([]);
+      return;
+    }
     setAlertRules(readStoredAlertRules());
     alertRulesHydratedRef.current = true;
-  }, []);
+  }, [unsafeLocalToolsEnabled]);
 
   useEffect(() => {
     if (!alertRulesHydratedRef.current) return;
@@ -41,6 +48,9 @@ export const useAlertRules = ({
   };
 
   const handleCreateAlertRule = () => {
+    if (!unsafeLocalToolsEnabled) {
+      return;
+    }
     const validation = validateAlertRuleDraft(alertRuleDraft);
     if (!validation.valid) {
       setAlertRuleValidationErrors(validation.errors);
@@ -60,6 +70,9 @@ export const useAlertRules = ({
   };
 
   const handleDeleteAlertRule = (rule: AlertRule) => {
+    if (!unsafeLocalToolsEnabled) {
+      return;
+    }
     setAlertRules((prev) => prev.filter((item) => item.id !== rule.id));
     setSuccess('Alert rule deleted');
   };

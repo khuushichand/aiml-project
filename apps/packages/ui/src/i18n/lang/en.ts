@@ -7,6 +7,7 @@ import knowledge from "@/assets/locale/en/knowledge.json"
 import review from "@/assets/locale/en/review.json"
 import dataTables from "@/assets/locale/en/dataTables.json"
 import collections from "@/assets/locale/en/collections.json"
+import sources from "@/assets/locale/en/sources.json"
 import evaluations from "@/assets/locale/en/evaluations.json"
 import audiobook from "@/assets/locale/en/audiobook.json"
 import tutorials from "@/assets/locale/en/tutorials.json"
@@ -21,6 +22,7 @@ export const en = {
   review,
   dataTables,
   collections,
+  sources,
   evaluations,
   audiobook,
   tutorials
