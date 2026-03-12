@@ -1,6 +1,6 @@
 # MCP Hub Multi-Root Path Scope Objects Design
 
-Status: Approved for planning
+Status: Implemented
 
 ## Goal
 
