@@ -1,4 +1,6 @@
 from pathlib import Path
+import sqlite3
+from typing import Any
 
 import pytest
 
@@ -164,6 +166,82 @@ def test_insert_companion_activity_events_bulk_keeps_unique_rows_when_one_confli
                 "dedupe_key": "notes.create:n1",
                 "provenance": {"capture_mode": "explicit"},
                 "metadata": {"title": "Duplicate"},
+            },
+            {
+                "event_type": "note_created",
+                "source_type": "note",
+                "source_id": "n2",
+                "surface": "api.notes.import",
+                "dedupe_key": "notes.create:n2",
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "Fresh"},
+            },
+        ],
+    )
+
+    assert len(inserted) == 1
+    rows, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 2
+    source_ids = {row["source_id"] for row in rows}
+    assert source_ids == {"n1", "n2"}
+
+
+def test_insert_companion_activity_events_bulk_keeps_unique_rows_when_conflict_appears_at_insert_time(
+    companion_db_env,
+    monkeypatch,
+):
+    user_id = "77-bulk-race"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+    real_connect = db._connect
+
+    class _RaceInjectingConnection:
+        def __init__(self, inner: sqlite3.Connection) -> None:
+            self._inner = inner
+            self._injected = False
+
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> Any:
+            normalized_sql = " ".join(sql.split()).upper()
+            if (
+                normalized_sql.startswith("INSERT")
+                and "COMPANION_ACTIVITY_EVENTS" in normalized_sql
+                and len(params) >= 7
+                and str(params[6]) == "notes.create:n1"
+                and not self._injected
+            ):
+                self._injected = True
+                competing = sqlite3.connect(db.db_path, timeout=10, isolation_level=None)
+                try:
+                    competing.execute("PRAGMA journal_mode=WAL")
+                    competing.execute("PRAGMA foreign_keys=ON")
+                    competing.execute("PRAGMA busy_timeout=5000")
+                    competing.execute(sql, params)
+                    competing.commit()
+                finally:
+                    competing.close()
+            return self._inner.execute(sql, params)
+
+        def executemany(self, sql: str, seq_of_params: Any) -> Any:
+            for row in seq_of_params:
+                self.execute(sql, row)
+            return None
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(db, "_connect", lambda: _RaceInjectingConnection(real_connect()))
+
+    inserted = db.insert_companion_activity_events_bulk(
+        user_id=user_id,
+        events=[
+            {
+                "event_type": "note_created",
+                "source_type": "note",
+                "source_id": "n1",
+                "surface": "api.notes.import",
+                "dedupe_key": "notes.create:n1",
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "Conflicted"},
             },
             {
                 "event_type": "note_created",

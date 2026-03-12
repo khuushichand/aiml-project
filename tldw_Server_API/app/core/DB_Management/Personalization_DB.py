@@ -743,7 +743,6 @@ class PersonalizationDB:
                     existing_dedupe_keys = {str(row["dedupe_key"]) for row in existing_rows}
 
                 rows: list[tuple[Any, ...]] = []
-                event_ids: list[str] = []
                 seen_dedupe_keys: set[str] = set(existing_dedupe_keys)
                 for event in events:
                     dedupe_key = str(event["dedupe_key"])
@@ -751,7 +750,6 @@ class PersonalizationDB:
                         continue
                     seen_dedupe_keys.add(dedupe_key)
                     event_id = uuid.uuid4().hex
-                    event_ids.append(event_id)
                     rows.append(
                         (
                             event_id,
@@ -771,16 +769,20 @@ class PersonalizationDB:
                 if not rows:
                     return []
 
-                conn.executemany(
-                    """
-                    INSERT INTO companion_activity_events (
-                        id, user_id, event_type, source_type, source_id, surface,
-                        dedupe_key, tags, provenance_json, metadata_json, created_at
+                event_ids: list[str] = []
+                for row in rows:
+                    cursor = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO companion_activity_events (
+                            id, user_id, event_type, source_type, source_id, surface,
+                            dedupe_key, tags, provenance_json, metadata_json, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        row,
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows,
-                )
+                    if cursor.rowcount == 1:
+                        event_ids.append(str(row[0]))
                 conn.commit()
                 return event_ids
             finally:

@@ -1671,7 +1671,11 @@ async def import_sources_opml(
         except (*_WATCHLISTS_NONCRITICAL_EXCEPTIONS, _DatabaseError) as exc:
             items.append(SourcesImportItem(url=url_str, name=e.name, status="skipped", error=str(exc)))
             skipped += 1
-    record_companion_activity_events_bulk(user_id=current_user.id, events=companion_events)
+    await asyncio.to_thread(
+        record_companion_activity_events_bulk,
+        user_id=current_user.id,
+        events=companion_events,
+    )
     return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
 
 
@@ -2414,7 +2418,11 @@ async def bulk_create_sources(
             )
             errors_count += 1
 
-    record_companion_activity_events_bulk(user_id=current_user.id, events=companion_events)
+    await asyncio.to_thread(
+        record_companion_activity_events_bulk,
+        user_id=current_user.id,
+        events=companion_events,
+    )
     return SourcesBulkCreateResponse(
         items=items,
         total=len(items),

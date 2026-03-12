@@ -105,10 +105,15 @@ def record_companion_activity_events_bulk(
     user_id: str | int | None,
     events: list[dict[str, Any]],
 ) -> list[str]:
-    """Persist explicit companion activity events in bulk when the user opted in."""
+    """Persist explicit companion activity events in bulk when the user opted in.
+
+    This helper performs synchronous DB I/O and should be wrapped in
+    ``asyncio.to_thread`` from async request handlers.
+    """
     if user_id is None or not is_personalization_enabled() or not events:
         return []
 
+    normalized_user_id = str(user_id or "").strip() or None
     try:
         db, normalized_user_id = _open_db_for_user(user_id)
         if not _profile_opted_in(db, normalized_user_id):
@@ -125,7 +130,20 @@ def record_companion_activity_events_bulk(
             events=safe_events,
         )
     except Exception as exc:
-        logger.debug("companion activity bulk capture skipped: {}", exc)
+        sample_event_types = [str(event.get("event_type", "")) for event in events[:3]]
+        sample_dedupe_keys = [
+            str(event.get("dedupe_key", ""))
+            for event in events[:3]
+            if str(event.get("dedupe_key", "")).strip()
+        ]
+        logger.warning(
+            "companion activity bulk capture skipped for user={} batch_size={} sample_event_types={} sample_dedupe_keys={} error={}",
+            normalized_user_id or str(user_id or ""),
+            len(events),
+            sample_event_types,
+            sample_dedupe_keys,
+            exc,
+        )
         return []
 
 

@@ -824,6 +824,29 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) 
     }
 
 
+def _build_import_note_companion_event(
+    *,
+    db: CharactersRAGDB,
+    note_id: str | int,
+    operation: str,
+    patch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reload an imported note and build a stable companion activity payload."""
+    reloaded_note = db.get_note_by_id(str(note_id))
+    if not reloaded_note:
+        raise CharactersRAGDBError(
+            f"Imported {str(operation).replace('_', ' ')} note could not be reloaded."
+        )
+    reloaded_note = _attach_keywords_inline(db, reloaded_note)
+    return build_note_bulk_import_activity(
+        note=reloaded_note,
+        operation=operation,
+        route="/api/v1/notes/import",
+        surface="api.notes.import",
+        patch=patch,
+    )
+
+
 def _normalize_keyword_tokens(tokens: Optional[list[str]]) -> list[str]:
     if not tokens:
         return []
@@ -1663,16 +1686,11 @@ async def import_notes(
                                 note_id=str(imported_id),
                                 keywords=parsed_note.get("keywords", []),
                             )
-                        updated_note = db.get_note_by_id(str(imported_id))
-                        if not updated_note:
-                            raise CharactersRAGDBError("Imported overwrite note could not be reloaded.")  # noqa: TRY003
-                        updated_note = _attach_keywords_inline(db, updated_note)
                         companion_events.append(
-                            build_note_bulk_import_activity(
-                                note=updated_note,
+                            _build_import_note_companion_event(
+                                db=db,
+                                note_id=str(imported_id),
                                 operation="import_overwrite",
-                                route="/api/v1/notes/import",
-                                surface="api.notes.import",
                                 patch=update_patch,
                             )
                         )
@@ -1693,16 +1711,11 @@ async def import_notes(
                             note_id=str(created_note_id),
                             keywords=parsed_note.get("keywords", []),
                         )
-                    created_note = db.get_note_by_id(str(created_note_id))
-                    if not created_note:
-                        raise CharactersRAGDBError("Imported note could not be reloaded.")  # noqa: TRY003
-                    created_note = _attach_keywords_inline(db, created_note)
                     companion_events.append(
-                        build_note_bulk_import_activity(
-                            note=created_note,
+                        _build_import_note_companion_event(
+                            db=db,
+                            note_id=str(created_note_id),
                             operation="import_create",
-                            route="/api/v1/notes/import",
-                            surface="api.notes.import",
                         )
                     )
                     file_result.created_count += 1
@@ -1724,16 +1737,11 @@ async def import_notes(
                                     note_id=str(created_note_id),
                                     keywords=parsed_note.get("keywords", []),
                                 )
-                            created_note = db.get_note_by_id(str(created_note_id))
-                            if not created_note:
-                                raise CharactersRAGDBError("Imported create-copy note could not be reloaded.")  # noqa: TRY003
-                            created_note = _attach_keywords_inline(db, created_note)
                             companion_events.append(
-                                build_note_bulk_import_activity(
-                                    note=created_note,
+                                _build_import_note_companion_event(
+                                    db=db,
+                                    note_id=str(created_note_id),
                                     operation="import_create",
-                                    route="/api/v1/notes/import",
-                                    surface="api.notes.import",
                                 )
                             )
                             file_result.created_count += 1
@@ -1755,7 +1763,8 @@ async def import_notes(
             totals["failed_count"] += file_result.failed_count
             files.append(file_result)
 
-        record_companion_activity_events_bulk(
+        await _run_db_call(
+            record_companion_activity_events_bulk,
             user_id=current_user.id,
             events=companion_events,
         )
@@ -3609,7 +3618,8 @@ async def bulk_create_notes(
             results.append(NoteBulkCreateItemResult(success=False, error=str(e)))
             failed += 1
 
-    record_companion_activity_events_bulk(
+    await _run_db_call(
+        record_companion_activity_events_bulk,
         user_id=current_user.id,
         events=companion_events,
     )
