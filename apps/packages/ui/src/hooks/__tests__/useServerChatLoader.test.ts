@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { Message } from "@/store/option"
 import type { ServerChatMessage } from "@/services/tldw/TldwApiClient"
 import {
+  applyAssistantPresentationToMessages,
   fetchAllServerChatMessages,
   mapServerChatMessagesToPlaygroundMessages,
   resolveServerChatAssistantIdentity,
@@ -349,5 +350,49 @@ describe("mapServerChatMessagesToPlaygroundMessages", () => {
       "flux-test-backend"
     )
     expect(mapped[0].generationInfo?.image_generation?.sync?.status).toBe("synced")
+  })
+})
+
+describe("applyAssistantPresentationToMessages", () => {
+  it("updates placeholder assistant labels after deferred enrichment", () => {
+    const result = applyAssistantPresentationToMessages({
+      messages: [
+        createMessage({
+          isBot: true,
+          role: "assistant",
+          name: "Assistant",
+          modelName: "Assistant",
+          modelImage: undefined
+        }),
+        createMessage({
+          isBot: true,
+          role: "assistant",
+          name: "Narrator",
+          modelName: "Narrator",
+          modelImage: "existing-image"
+        }),
+        createMessage({
+          isBot: false,
+          role: "user",
+          name: "You"
+        })
+      ],
+      assistantName: "Archivist",
+      assistantAvatarUrl: "avatar.png"
+    })
+
+    expect(result[0]).toMatchObject({
+      name: "Archivist",
+      modelName: "Archivist",
+      modelImage: "avatar.png"
+    })
+    expect(result[1]).toMatchObject({
+      name: "Narrator",
+      modelName: "Narrator",
+      modelImage: "existing-image"
+    })
+    expect(result[2]).toMatchObject({
+      name: "You"
+    })
   })
 })
