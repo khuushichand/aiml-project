@@ -251,6 +251,7 @@ providers:
     runtime: "auto"
     model: "auto"
     model_path: null
+    mlx_model: null
     tokenizer_model: "Qwen/Qwen3-TTS-Tokenizer-12Hz"
     device: "cpu"  # "cpu" | "cuda" | "mps"
     dtype: "float32"  # "float16" | "bfloat16" | "float32" (use float16/bfloat16 with cuda/mps)

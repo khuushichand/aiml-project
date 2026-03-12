@@ -44,6 +44,7 @@ class ProviderConfig(BaseModel):
     runtime: Optional[str] = None
     model: Optional[str] = None
     model_path: Optional[str] = None
+    mlx_model: Optional[str] = None
     device: str = "cpu"
     timeout: int = 60
     max_retries: int = 3
