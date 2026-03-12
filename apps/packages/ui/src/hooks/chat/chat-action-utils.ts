@@ -7,11 +7,16 @@ import type { Message } from "@/store/option";
 import type { ToolChoice } from "@/store/option";
 import type { ImageGenerationEventSyncMode } from "@/utils/image-generation-chat";
 import type { SaveMessageData } from "@/types/chat-modes";
+import type { ChatModelSettings } from "@/store/model";
 import { isGreetingMessageType } from "@/utils/character-greetings";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+export type ChatModelSettingsStore = ChatModelSettings & {
+  setSystemPrompt?: (prompt: string) => void;
+};
 
 export type ChatModeOverrides = {
   historyId?: string | null;

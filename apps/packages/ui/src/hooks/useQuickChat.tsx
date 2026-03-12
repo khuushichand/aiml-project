@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
+import { useSelectedModel } from "@/hooks/chat/useSelectedModel"
 import {
   useQuickChatStore,
   QuickChatMessage,
@@ -28,7 +29,7 @@ export type QuickChatSendOptions = {
 }
 
 export const useQuickChat = () => {
-  const [selectedModel] = useStorage<string>("selectedModel")
+  const { selectedModel } = useSelectedModel()
   const [quickChatStrictDocsOnly] = useStorage<boolean>(
     "quickChatStrictDocsOnly",
     true

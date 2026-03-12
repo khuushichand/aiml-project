@@ -9,11 +9,7 @@ import { tldwClient } from "@/services/tldw/TldwApiClient";
 import type { ConversationState } from "@/services/tldw/TldwApiClient";
 import type { UploadedFile } from "@/db/dexie/types";
 import type { ChatHistory, Message, ReplyTarget } from "@/store/option";
-import type { ChatModelSettings } from "@/store/model";
-
-type ChatModelSettingsStore = ChatModelSettings & {
-  setSystemPrompt?: (prompt: string) => void;
-};
+import type { ChatModelSettingsStore } from "./chat-action-utils";
 
 export type UseMessageOperationsOptions = {
   messages: Message[];

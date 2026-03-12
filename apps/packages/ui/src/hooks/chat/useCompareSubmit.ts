@@ -20,22 +20,18 @@ import { trackCompareMetric } from "@/utils/compare-metrics";
 import { updatePageTitle } from "@/utils/update-page-title";
 import type { ChatDocuments } from "@/models/ChatTypes";
 import type { ChatHistory, Message, Knowledge } from "@/store/option";
-import type { ChatModelSettings } from "@/store/model";
 import {
   getLastThreadMessageId,
   getCompareBranchMessageIds,
   buildHistoryForModel,
   type SaveMessagePayload,
+  type ChatModelSettingsStore,
 } from "./chat-action-utils";
 import {
   hasActiveMessageSteering,
 } from "@/utils/message-steering";
 import { tldwClient } from "@/services/tldw/TldwApiClient";
 import { generateTitle } from "@/services/title";
-
-type ChatModelSettingsStore = ChatModelSettings & {
-  setSystemPrompt?: (prompt: string) => void;
-};
 
 export type UseCompareSubmitOptions = {
   t: TFunction;

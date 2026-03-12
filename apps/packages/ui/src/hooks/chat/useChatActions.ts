@@ -92,9 +92,7 @@ export type { ChatModeOverrides, SaveMessagePayload } from "./chat-action-utils"
 
 const loadActorSettings = () => import("@/services/actor-settings");
 
-type ChatModelSettingsStore = ChatModelSettings & {
-  setSystemPrompt?: (prompt: string) => void;
-};
+import type { ChatModelSettingsStore } from "./chat-action-utils";
 
 type UseChatActionsOptions = {
   t: TFunction;

@@ -19,7 +19,6 @@ interface MessageSourcesSectionProps {
   trackSourceClick: (...args: any[]) => void
   trackCitationUsed: (...args: any[]) => void
   trackDwellTime: (ms: number, source?: any, index?: number) => void
-  pinnedSourceKeySet: Set<string>
   resolveSourcePinnedState: (source: any) => "active" | "inactive" | null
   onAskWithSources: (sources: any[]) => void
   onOpenKnowledgePanel: () => void

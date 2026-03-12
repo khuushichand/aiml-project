@@ -4,24 +4,17 @@ import { LoadingStatus } from "./ActionInfo"
 import {
   AlertTriangle,
   CheckCircle2,
-  RotateCcw,
   Smile,
   StopCircle as StopCircleIcon,
-  Trash2
 } from "lucide-react"
-import { EditMessageForm } from "./EditMessageForm"
 import { tagColors } from "@/utils/color"
 import { removeModelSuffix } from "@/db/dexie/models"
-import { parseReasoning } from "@/libs/reasoning"
-import type { ChatErrorPayload } from "@/utils/chat-error-message"
 import { PlaygroundUserMessageBubble } from "./PlaygroundUserMessage"
 import { copyToClipboard } from "@/utils/clipboard"
-import { highlightText } from "@/utils/text-highlight"
 import { FeedbackModal } from "@/components/Sidepanel/Chat/FeedbackModal"
 import { ToolCallBlock } from "@/components/Sidepanel/Chat/ToolCallBlock"
 import type { ToolCall, ToolCallResult } from "@/types/tool-calls"
 import { MessageActionsBar } from "./MessageActionsBar"
-import { ReasoningBlock } from "./ReasoningBlock"
 import { useStoreMessageOption } from "@/store/option"
 import type { MessageVariant } from "@/store/option"
 import { EDIT_MESSAGE_EVENT } from "@/utils/timeline-actions"
@@ -43,68 +36,9 @@ import {
 } from "./quick-message-actions"
 import type { PlaygroundMessageProps } from "./message-types"
 import { MessageSourcesSection } from "./MessageSourcesSection"
+import { MessageContent } from "./MessageContent"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useMessageState } from "./useMessageState"
-
-const Markdown = React.lazy(() => import("../../Common/Markdown"))
-
-const ErrorBubble: React.FC<{
-  payload: ChatErrorPayload
-  toggleLabels: { show: string; hide: string }
-  recoveryActions?: Array<{
-    id: string
-    label: string
-    onClick: () => void
-  }>
-}> = ({ payload, toggleLabels, recoveryActions = [] }) => {
-  const [showDetails, setShowDetails] = React.useState(false)
-
-  return (
-    <div
-      role="alert"
-      aria-live="assertive"
-      className="rounded-md border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
-      <p className="font-semibold">{payload.summary}</p>
-      {payload.hint && (
-        <p className="mt-1 text-xs text-danger">
-          {payload.hint}
-        </p>
-      )}
-      {payload.detail && (
-        <button
-          type="button"
-          onClick={() => setShowDetails((prev) => !prev)}
-          title={showDetails ? toggleLabels.hide : toggleLabels.show}
-          className="mt-2 text-xs font-medium text-danger underline hover:text-danger">
-          {showDetails ? toggleLabels.hide : toggleLabels.show}
-        </button>
-      )}
-      {showDetails && payload.detail && (
-        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-danger/10 p-2 text-xs text-danger">
-          {payload.detail}
-        </pre>
-      )}
-      {recoveryActions.length > 0 && (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <span className="sr-only">
-            Recommended next actions:{" "}
-            {recoveryActions.map((action) => action.label).join(", ")}
-          </span>
-          {recoveryActions.map((action) => (
-            <button
-              key={action.id}
-              type="button"
-              onClick={action.onClick}
-              className="rounded border border-danger/40 bg-surface px-2 py-1 text-[11px] font-medium text-danger transition hover:bg-danger/10"
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
 
 type Props = PlaygroundMessageProps & {
   sources?: any[]
@@ -1109,8 +1043,6 @@ export const PlaygroundMessage = React.memo(function PlaygroundMessage(props: Pr
     )
   }
 
-  const MARKDOWN_BASE_CLASSES =
-    "prose break-words text-message dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark max-w-none"
   const hasSources = props.isBot && Boolean(props?.sources?.length)
   const messageSpacing = isProMode
     ? `gap-2 px-4 pt-3 ${hasSources ? "pb-4" : "pb-2.5"}`
@@ -1671,176 +1603,32 @@ export const PlaygroundMessage = React.memo(function PlaygroundMessage(props: Pr
               )}
             </div>
           )}
-          <div className="flex flex-grow flex-col">
-            {!editMode ? (
-              props.isBot ? (
-                errorPayload ? (
-                  <ErrorBubble
-                    payload={errorPayload}
-                    toggleLabels={{
-                      show: t(
-                        "error.showDetails",
-                        "Show technical details"
-                      ) as string,
-                      hide: t(
-                        "error.hideDetails",
-                        "Hide technical details"
-                      ) as string
-                    }}
-                    recoveryActions={errorRecoveryActions}
-                  />
-                ) : shouldRenderStreamingPlainText ? (
-                  <p
-                    data-testid="playground-streaming-plain-text"
-                    className={`text-body text-text-muted whitespace-pre-wrap ${assistantTextClass}`}
-                  >
-                    {props.message}
-                  </p>
-                ) : renderGreetingMarkdown ? (
-                  <React.Suspense
-                    fallback={
-                      <p
-                        className={`text-body text-text-muted ${assistantTextClass}`}>
-                        {t("loading.content")}
-                      </p>
-                    }>
-                    <Markdown
-                      message={props.message}
-                      className={`${MARKDOWN_BASE_CLASSES} ${assistantTextClass}`}
-                      searchQuery={props.searchQuery}
-                      codeBlockVariant="compact"
-                    />
-                  </React.Suspense>
-                ) : (
-                  <>
-                    {parseReasoning(props.message).map((e, i) => {
-                      if (e.type === "reasoning") {
-                        return (
-                          <ReasoningBlock
-                            key={`reasoning-${i}`}
-                            content={e.content}
-                            isStreaming={props.isStreaming}
-                            reasoningRunning={e.reasoning_running}
-                            openReasoning={props.openReasoning}
-                            reasoningTimeTaken={props.reasoningTimeTaken}
-                            assistantTextClass={assistantTextClass}
-                            markdownBaseClasses={MARKDOWN_BASE_CLASSES}
-                            searchQuery={props.searchQuery}
-                            t={t}
-                          />
-                        )
-                      }
-
-                      return (
-                        <React.Suspense
-                          key={`message-${i}`}
-                          fallback={
-                            <p
-                              className={`text-body text-text-muted ${assistantTextClass}`}>
-                              {t("loading.content")}
-                            </p>
-                          }>
-                          <Markdown
-                            message={e.content}
-                            className={`${MARKDOWN_BASE_CLASSES} ${assistantTextClass}`}
-                            searchQuery={props.searchQuery}
-                            codeBlockVariant="github"
-                          />
-                        </React.Suspense>
-                      )
-                    })}
-                  </>
-                )
-              ) : (
-                <p
-                  className={`prose max-w-none dark:prose-invert whitespace-pre-line prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark ${chatTextClass} ${
-                    props.message_type &&
-                    "italic text-text-muted text-body"
-                  }
-                  `}>
-                  {props.searchQuery
-                    ? highlightText(props.message, props.searchQuery)
-                    : props.message}
-                </p>
-              )
-            ) : (
-              <EditMessageForm
-                value={props.message}
-                onSumbit={internalEditFormSubmit}
-                onClose={() => setEditMode(false)}
-                isBot={props.isBot}
-              />
-            )}
-          </div>
-          {/* images if available */}
-          {props.images &&
-            props.images.filter((img) => img.length > 0).length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-3">
-                {props.images
-                  .filter((image) => image.length > 0)
-                  .map((image, index) => (
-                    <div key={index} className="group relative">
-                      <Image
-                        src={image}
-                        alt="Uploaded Image"
-                        width={180}
-                        className="rounded-md relative"
-                      />
-                      {showInlineImageActions && (
-                        <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-full border border-border/70 bg-surface/90 px-1 py-1 opacity-0 shadow-sm transition group-hover:opacity-100 group-focus-within:opacity-100">
-                          {canRegenerateImage && (
-                            <button
-                              type="button"
-                              className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition hover:bg-surface2 hover:text-text"
-                              aria-label={t(
-                                "playground:imageGeneration.regenerateImage",
-                                "Regenerate image"
-                              ) as string}
-                              title={t(
-                                "playground:imageGeneration.regenerateImage",
-                                "Regenerate image"
-                              ) as string}
-                              onClick={() => {
-                                void props.onRegenerateImage?.({
-                                  messageId: props.messageId,
-                                  imageIndex: index,
-                                  imageUrl: image,
-                                  request: imageGenerationMetadata?.request ?? null
-                                })
-                              }}
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                            </button>
-                          )}
-                          {props.onDeleteImage && (
-                            <button
-                              type="button"
-                              className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition hover:bg-danger/10 hover:text-danger"
-                              aria-label={t(
-                                "playground:imageGeneration.deleteImage",
-                                "Delete image"
-                              ) as string}
-                              title={t(
-                                "playground:imageGeneration.deleteImage",
-                                "Delete image"
-                              ) as string}
-                              onClick={() => {
-                                props.onDeleteImage?.({
-                                  messageId: props.messageId,
-                                  imageIndex: index,
-                                  imageUrl: image
-                                })
-                              }}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-              </div>
-            )}
+          <MessageContent
+            t={t}
+            message={props.message}
+            message_type={props.message_type}
+            isBot={props.isBot}
+            isStreaming={props.isStreaming}
+            editMode={editMode}
+            onEditFormSubmit={internalEditFormSubmit}
+            onCloseEdit={() => setEditMode(false)}
+            errorPayload={errorPayload}
+            shouldRenderStreamingPlainText={shouldRenderStreamingPlainText}
+            renderGreetingMarkdown={renderGreetingMarkdown}
+            assistantTextClass={assistantTextClass}
+            chatTextClass={chatTextClass}
+            searchQuery={props.searchQuery}
+            errorRecoveryActions={errorRecoveryActions}
+            openReasoning={props.openReasoning}
+            reasoningTimeTaken={props.reasoningTimeTaken}
+            images={props.images}
+            messageId={props.messageId}
+            showInlineImageActions={showInlineImageActions}
+            canRegenerateImage={canRegenerateImage}
+            imageGenerationMetadata={imageGenerationMetadata}
+            onRegenerateImage={props.onRegenerateImage}
+            onDeleteImage={props.onDeleteImage}
+          />
 
           {showInlineActions && (
             <MessageActionsBar
@@ -1967,7 +1755,6 @@ export const PlaygroundMessage = React.memo(function PlaygroundMessage(props: Pr
               trackSourceClick={trackSourceClick}
               trackCitationUsed={trackCitationUsed}
               trackDwellTime={trackDwellTime}
-              pinnedSourceKeySet={pinnedSourceKeySet}
               resolveSourcePinnedState={resolveSourcePinnedState}
               onAskWithSources={handleAskWithSources}
               onOpenKnowledgePanel={handleOpenKnowledgePanel}

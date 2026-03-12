@@ -37,19 +37,15 @@ import {
 } from "@/hooks/chat/abort-turn-cleanup";
 import type { Character } from "@/types/character";
 import type { ChatHistory, Message } from "@/store/option";
-import type { ChatModelSettings } from "@/store/model";
 import type { SaveMessageData } from "@/types/chat-modes";
 import {
   attemptCharacterStreamRecoveryPersist,
   type TldwChatMeta,
   type SaveMessagePayload,
+  type ChatModelSettingsStore,
 } from "./chat-action-utils";
 
 const STREAMING_UPDATE_INTERVAL_MS = 80;
-
-type ChatModelSettingsStore = ChatModelSettings & {
-  setSystemPrompt?: (prompt: string) => void;
-};
 
 export type CharacterChatModeParams = {
   message: string;
