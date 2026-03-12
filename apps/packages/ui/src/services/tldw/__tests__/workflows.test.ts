@@ -42,12 +42,22 @@ describe("workflow diagnostics service helpers", () => {
     mocks.bgRequest.mockResolvedValueOnce({
       run_id: "run-1",
       step_id: "step-2",
-      attempts: [{ attempt: 2, status: "failed" }]
+      attempts: [
+        {
+          attempt_id: "attempt-2",
+          step_run_id: "run-1:step-2:1",
+          step_id: "step-2",
+          attempt_number: 2,
+          status: "failed",
+          started_at: "2026-03-11T10:00:00Z",
+          metadata: {}
+        }
+      ]
     })
 
     const result = await getWorkflowStepAttempts("run-1", "step-2")
 
-    expect(result.attempts[0]?.attempt).toBe(2)
+    expect(result.attempts[0]?.attempt_number).toBe(2)
     expect(mocks.bgRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         path: "/api/v1/workflows/runs/run-1/steps/step-2/attempts",

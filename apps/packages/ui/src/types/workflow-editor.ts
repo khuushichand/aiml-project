@@ -80,34 +80,35 @@ export interface WorkflowFailureSummary {
   blame_scope?: string | null
   retryable?: boolean | null
   retry_recommendation?: string | null
-  message?: string | null
-  summary?: string | null
-  internal_detail?: string | null
+  error_summary?: string | null
+  internal_detail?: Record<string, unknown> | null
 }
 
 export interface WorkflowStepAttempt {
-  attempt: number
+  attempt_id: string
+  step_run_id: string
+  step_id: string
+  attempt_number: number
   status: string
   reason_code_core?: string | null
   reason_code_detail?: string | null
-  category?: string | null
-  blame_scope?: string | null
   retryable?: boolean | null
-  retry_recommendation?: string | null
-  error?: string | null
+  error_summary?: string | null
   started_at?: string | null
-  finished_at?: string | null
-  evidence?: Record<string, unknown> | null
-  step_capability?: Record<string, unknown> | null
+  ended_at?: string | null
+  duration_ms?: number | null
+  metadata?: Record<string, unknown>
   [key: string]: unknown
 }
 
 export interface WorkflowRunStepSummary {
   step_id: string
-  step_run_id?: number
-  step_type?: string | null
+  step_run_id?: string
+  name?: string | null
+  type?: string | null
   status?: string
-  attempts?: WorkflowStepAttempt[]
+  attempt_count?: number
+  latest_failure?: WorkflowFailureSummary | null
   [key: string]: unknown
 }
 

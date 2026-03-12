@@ -5,7 +5,7 @@
  * and handles human-in-the-loop approvals.
  */
 
-import { useMemo } from "react"
+import { useEffect, useMemo } from "react"
 import {
   Button,
   Progress,
@@ -30,6 +30,7 @@ import {
   Hand,
   ChevronRight
 } from "lucide-react"
+import { WorkflowRunInspector } from "@/components/Common/Workflow"
 import type { StepExecutionStatus } from "@/types/workflow-editor"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
 
@@ -101,6 +102,9 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
   const error = useWorkflowEditorStore((s) => s.error)
   const startedAt = useWorkflowEditorStore((s) => s.startedAt)
   const completedAt = useWorkflowEditorStore((s) => s.completedAt)
+  const runInvestigation = useWorkflowEditorStore((s) => s.runInvestigation)
+  const runInvestigationLoading = useWorkflowEditorStore((s) => s.runInvestigationLoading)
+  const runInvestigationError = useWorkflowEditorStore((s) => s.runInvestigationError)
 
   // Store actions
   const startRun = useWorkflowEditorStore((s) => s.startRun)
@@ -110,6 +114,7 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
   const resetExecution = useWorkflowEditorStore((s) => s.resetExecution)
   const respondToApproval = useWorkflowEditorStore((s) => s.respondToApproval)
   const validate = useWorkflowEditorStore((s) => s.validate)
+  const loadRunInvestigation = useWorkflowEditorStore((s) => s.loadRunInvestigation)
 
   // Calculate progress
   const progress = useMemo(() => {
@@ -221,6 +226,12 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
   const isIdle = status === "idle"
   const isCompleted = status === "completed" || status === "failed" || status === "cancelled"
 
+  useEffect(() => {
+    if (status === "failed" && runId) {
+      void loadRunInvestigation(runId)
+    }
+  }, [loadRunInvestigation, runId, status])
+
   return (
     <div className={`flex flex-col h-full ${className}`}>
       {/* Header */}
@@ -326,6 +337,33 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
             showIcon
             className="mb-3"
           />
+        )}
+
+        {status === "failed" && runId && (
+          <div className="mb-4">
+            {runInvestigationLoading ? (
+              <div className="rounded-lg border border-border p-3">
+                <Spin size="small" />
+                <span className="ml-2 text-xs text-text-subtle">
+                  Loading run diagnostics...
+                </span>
+              </div>
+            ) : runInvestigationError ? (
+              <Alert
+                type="warning"
+                title="Diagnostics unavailable"
+                description={runInvestigationError}
+                showIcon
+                action={(
+                  <Button size="small" onClick={() => void loadRunInvestigation(runId)}>
+                    Retry diagnostics
+                  </Button>
+                )}
+              />
+            ) : runInvestigation ? (
+              <WorkflowRunInspector investigation={runInvestigation} />
+            ) : null}
+          </div>
         )}
 
         {/* Pending approval */}
