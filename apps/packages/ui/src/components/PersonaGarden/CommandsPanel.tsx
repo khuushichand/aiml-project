@@ -38,6 +38,8 @@ type CommandFormState = {
   workflowId: string
   customAction: string
   connectionId: string
+  requestMethod: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
+  requestPath: string
   extractMode: "none" | "query" | "content"
   slotMapText: string
   defaultPayloadText: string
@@ -59,6 +61,8 @@ type CommandsPanelProps = {
   isActive?: boolean
 }
 
+const REQUEST_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const
+
 const DEFAULT_FORM_STATE: CommandFormState = {
   commandId: null,
   name: "",
@@ -69,6 +73,8 @@ const DEFAULT_FORM_STATE: CommandFormState = {
   workflowId: "",
   customAction: "",
   connectionId: "",
+  requestMethod: "POST",
+  requestPath: "",
   extractMode: "none",
   slotMapText: "{}",
   defaultPayloadText: "{}",
@@ -152,6 +158,15 @@ const parseJsonRecord = (
   }
 }
 
+const normalizeRequestMethod = (
+  value: unknown
+): CommandFormState["requestMethod"] => {
+  const normalized = String(value || "POST").trim().toUpperCase()
+  return REQUEST_METHODS.includes(normalized as CommandFormState["requestMethod"])
+    ? (normalized as CommandFormState["requestMethod"])
+    : "POST"
+}
+
 const toCommandTargetLabel = (command: PersonaVoiceCommand): string => {
   if (command.action_type === "mcp_tool") {
     return String(command.action_config?.tool_name || "").trim() || "MCP tool"
@@ -164,6 +179,11 @@ const toCommandTargetLabel = (command: PersonaVoiceCommand): string => {
     )
   }
   if (command.action_type === "custom") {
+    if (command.connection_id) {
+      const method = String(command.action_config?.method || "POST").trim().toUpperCase()
+      const path = String(command.action_config?.path || "").trim()
+      return path ? `${method} ${path}` : `${method} connection base URL`
+    }
     return String(command.action_config?.action || "").trim() || "Custom action"
   }
   return "Persona planner fallback"
@@ -195,6 +215,8 @@ const toFormState = (command: PersonaVoiceCommand): CommandFormState => {
       String(command.action_config?.workflow_name || ""),
     customAction: String(command.action_config?.action || ""),
     connectionId: String(command.connection_id || ""),
+    requestMethod: normalizeRequestMethod(command.action_config?.method),
+    requestPath: String(command.action_config?.path || ""),
     extractMode,
     slotMapText: stringifyJson(rawSlotMap),
     defaultPayloadText: stringifyJson(rawDefaultPayload),
@@ -438,11 +460,19 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
       actionConfig.workflow_id = workflowId
     } else if (formState.actionType === "custom") {
       const customAction = formState.customAction.trim()
-      if (!customAction) {
+      if (!customAction && !formState.connectionId.trim()) {
         setValidationError("Action name is required for custom commands.")
         return
       }
-      actionConfig.action = customAction
+      if (customAction) {
+        actionConfig.action = customAction
+      }
+      if (formState.connectionId.trim()) {
+        actionConfig.method = formState.requestMethod
+        if (formState.requestPath.trim()) {
+          actionConfig.path = formState.requestPath.trim()
+        }
+      }
     }
 
     if (Object.keys(slotMapResult.value).length > 0) {
@@ -872,20 +902,76 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                   ) : null}
 
                   {formState.actionType === "custom" ? (
-                    <label className="block text-xs text-text-muted">
-                      {t("sidepanel:personaGarden.commands.customAction", {
-                        defaultValue: "Custom action"
-                      })}
-                      <input
-                        data-testid="persona-commands-target-input"
-                        className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
-                        value={formState.customAction}
-                        onChange={(event) =>
-                          updateFormField("customAction", event.target.value)
-                        }
-                        placeholder="help"
-                      />
-                    </label>
+                    <div className="space-y-3">
+                      <label className="block text-xs text-text-muted">
+                        {t("sidepanel:personaGarden.commands.customAction", {
+                          defaultValue: "Custom action"
+                        })}
+                        <input
+                          data-testid="persona-commands-custom-action-input"
+                          className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
+                          value={formState.customAction}
+                          onChange={(event) =>
+                            updateFormField("customAction", event.target.value)
+                          }
+                          placeholder={
+                            formState.connectionId
+                              ? "external_request"
+                              : "help"
+                          }
+                        />
+                      </label>
+
+                      {formState.connectionId ? (
+                        <div className="space-y-3 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-3">
+                          <div className="text-xs text-sky-900">
+                            {t("sidepanel:personaGarden.commands.externalRequestHint", {
+                              defaultValue:
+                                "This command will call the selected connection directly. Leave request path blank to call the connection base URL."
+                            })}
+                          </div>
+                          <div className="grid gap-3 md:grid-cols-[minmax(0,140px)_minmax(0,1fr)]">
+                            <label className="block text-xs text-text-muted">
+                              {t("sidepanel:personaGarden.commands.httpMethod", {
+                                defaultValue: "HTTP method"
+                              })}
+                              <select
+                                data-testid="persona-commands-http-method-select"
+                                className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
+                                value={formState.requestMethod}
+                                onChange={(event) =>
+                                  updateFormField(
+                                    "requestMethod",
+                                    event.target.value as CommandFormState["requestMethod"]
+                                  )
+                                }
+                              >
+                                {REQUEST_METHODS.map((method) => (
+                                  <option key={method} value={method}>
+                                    {method}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <label className="block text-xs text-text-muted">
+                              {t("sidepanel:personaGarden.commands.requestPath", {
+                                defaultValue: "Request path"
+                              })}
+                              <input
+                                data-testid="persona-commands-request-path-input"
+                                className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
+                                value={formState.requestPath}
+                                onChange={(event) =>
+                                  updateFormField("requestPath", event.target.value)
+                                }
+                                placeholder="alerts/search"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   ) : null}
 
                   {formState.actionType === "llm_chat" ? (
@@ -986,12 +1072,14 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                   </div>
 
                   {formState.connectionId ? (
-                    <div className="rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-800">
-                      {t("sidepanel:personaGarden.commands.connectionHint", {
-                        defaultValue:
-                          "Connection-backed commands are stored now and visible in Test Lab. Runtime external execution is not wired into this pass yet."
-                      })}
-                    </div>
+                    formState.actionType === "custom" ? null : (
+                      <div className="rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-800">
+                        {t("sidepanel:personaGarden.commands.connectionHint", {
+                          defaultValue:
+                            "Connection-backed live execution is configured through custom commands. Switch to custom to define the HTTP request for this connection."
+                        })}
+                      </div>
+                    )
                   ) : null}
 
                   <div className="flex flex-wrap gap-2">

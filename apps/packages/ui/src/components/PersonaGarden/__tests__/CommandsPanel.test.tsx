@@ -47,6 +47,24 @@ const existingCommand = {
   requires_confirmation: false
 }
 
+const existingExternalCommand = {
+  id: "cmd-external",
+  persona_id: "persona-1",
+  connection_id: "conn-1",
+  name: "Search Slack Alerts",
+  phrases: ["search slack alerts for {query}"],
+  action_type: "custom",
+  action_config: {
+    action: "external_search",
+    method: "POST",
+    path: "alerts/search",
+    slot_to_param_map: { query: "query" }
+  },
+  priority: 40,
+  enabled: true,
+  requires_confirmation: true
+}
+
 const connections = [
   {
     id: "conn-1",
@@ -66,7 +84,7 @@ describe("CommandsPanel", () => {
       ) {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ commands: [existingCommand] })
+          json: async () => ({ commands: [existingCommand, existingExternalCommand] })
         })
       }
       if (
@@ -108,6 +126,22 @@ describe("CommandsPanel", () => {
             ...existingCommand,
             name: init.body.name,
             description: init.body.description
+          })
+        })
+      }
+      if (
+        path === "/api/v1/persona/profiles/persona-1/voice-commands/cmd-external" &&
+        init?.method === "PUT"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...existingExternalCommand,
+            name: init.body.name,
+            description: init.body.description,
+            action_config: init.body.action_config,
+            connection_id: init.body.connection_id,
+            requires_confirmation: init.body.requires_confirmation
           })
         })
       }
@@ -160,6 +194,59 @@ describe("CommandsPanel", () => {
     ).toBeInTheDocument()
   })
 
+  it("creates a connection-backed external command with method and path", async () => {
+    render(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+      />
+    )
+
+    await screen.findByText("Search Notes")
+    fireEvent.change(screen.getByTestId("persona-commands-name-input"), {
+      target: { value: "Call Slack Alerts API" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-phrases-input"), {
+      target: { value: "search slack alerts for {query}" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-action-type-select"), {
+      target: { value: "custom" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-connection-select"), {
+      target: { value: "conn-1" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-custom-action-input"), {
+      target: { value: "external_search" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-http-method-select"), {
+      target: { value: "POST" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-request-path-input"), {
+      target: { value: "alerts/search" }
+    })
+    fireEvent.click(screen.getByTestId("persona-commands-save"))
+
+    await waitFor(() =>
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/persona/profiles/persona-1/voice-commands",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.objectContaining({
+            name: "Call Slack Alerts API",
+            connection_id: "conn-1",
+            action_type: "custom",
+            action_config: expect.objectContaining({
+              action: "external_search",
+              method: "POST",
+              path: "alerts/search"
+            })
+          })
+        })
+      )
+    )
+  })
+
   it("loads a command into the editor and updates it", async () => {
     render(
       <CommandsPanel
@@ -187,6 +274,29 @@ describe("CommandsPanel", () => {
           })
         })
       )
+    )
+  })
+
+  it("loads external request fields when editing a connection-backed custom command", async () => {
+    render(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+      />
+    )
+
+    await screen.findByText("Search Slack Alerts")
+    fireEvent.click(screen.getByTestId("persona-commands-edit-cmd-external"))
+
+    expect(screen.getByTestId("persona-commands-custom-action-input")).toHaveValue(
+      "external_search"
+    )
+    expect(screen.getByTestId("persona-commands-http-method-select")).toHaveValue(
+      "POST"
+    )
+    expect(screen.getByTestId("persona-commands-request-path-input")).toHaveValue(
+      "alerts/search"
     )
   })
 })
