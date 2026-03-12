@@ -438,6 +438,11 @@ class DatabasePaths:
         return workflows_dir / DatabasePaths.WORKFLOWS_DB_NAME
 
     @staticmethod
+    def get_chat_workflows_db_path(user_id: Optional[UserId]) -> Path:
+        """Backward-compatible alias for the per-user workflows database path."""
+        return DatabasePaths.get_workflows_db_path(user_id)
+
+    @staticmethod
     def get_workflows_scheduler_db_path(user_id: Optional[UserId]) -> Path:
         """Get the path to the user's workflows scheduler database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)

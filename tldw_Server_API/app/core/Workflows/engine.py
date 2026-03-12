@@ -257,6 +257,38 @@ class WorkflowEngine:
         except _WF_NONCRITICAL_EXCEPTIONS:
             return (None, None, None)
 
+    def _complete_step_attempt_record(
+        self,
+        *,
+        attempt_id: str | None,
+        step_type: str,
+        status: str,
+        failure: Any | None = None,
+    ) -> None:
+        """Best-effort compatibility hook for newer step-attempt tracking backends."""
+        if not attempt_id:
+            return
+        complete_step_attempt = getattr(self.db, "complete_step_attempt", None)
+        if not callable(complete_step_attempt):
+            return
+        try:
+            complete_step_attempt(
+                attempt_id=attempt_id,
+                status=status,
+                reason_code_core=getattr(failure, "reason_code_core", None),
+                reason_code_detail=getattr(failure, "reason_code_detail", None),
+                retryable=getattr(failure, "retryable", None),
+                error_summary=getattr(failure, "error_summary", None),
+                metadata={"step_type": step_type},
+            )
+        except _WF_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(
+                "WorkflowEngine: failed to complete step attempt attempt_id={} status={} error={}",
+                attempt_id,
+                status,
+                e,
+            )
+
     def _append_event(self, run_id: str, event_type: str, payload: dict[str, Any] | None = None, step_run_id: str | None = None) -> None:
         try:
             tenant = self._tenant_for_run(run_id)
@@ -532,6 +564,7 @@ class WorkflowEngine:
                     err: Exception | None = None
                     error_reason_code = ""
                     outputs: dict[str, Any] = {}
+                    attempt_id: str | None = None
 
                     step_start_ts = time.time()
                     jump_to_id_on_failure: str | None = None
@@ -1017,6 +1050,7 @@ class WorkflowEngine:
             err: Exception | None = None
             error_reason_code = ""
             outputs: dict[str, Any] = {}
+            attempt_id: str | None = None
             while attempt <= max_retries:
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
                     self.db.update_step_lock_and_heartbeat(step_run_id=step_run_id, locked_by="engine", lock_ttl_seconds=int(self.config.heartbeat_interval_sec * 5))
