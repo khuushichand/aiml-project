@@ -9,7 +9,6 @@ import base64
 import contextlib
 import importlib
 import inspect
-import platform
 import tempfile
 from collections.abc import AsyncGenerator, Iterable
 from pathlib import Path
@@ -33,7 +32,7 @@ from ..tts_exceptions import (
     TTSStreamingError,
     TTSValidationError,
 )
-from ..utils import parse_bool
+from ..utils import parse_bool, resolve_qwen3_runtime_name
 from .base import (
     AudioFormat,
     TTSAdapter,
@@ -187,11 +186,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         }
 
     def _resolve_runtime_name(self) -> str:
-        if self.runtime in {"upstream", "mlx", "remote"}:
-            return self.runtime
-        if platform.system() == "Darwin" and platform.machine().lower() == "arm64":
-            return "mlx"
-        return "upstream"
+        return resolve_qwen3_runtime_name(self.runtime)
 
     def _build_runtime(self) -> Qwen3Runtime:
         runtime_name = self._resolve_runtime_name()

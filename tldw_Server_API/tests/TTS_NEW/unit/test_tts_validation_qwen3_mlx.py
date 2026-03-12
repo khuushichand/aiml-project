@@ -2,7 +2,7 @@ import pytest
 
 from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, TTSRequest
 from tldw_Server_API.app.core.TTS.tts_exceptions import TTSValidationError
-import tldw_Server_API.app.core.TTS.tts_validation as tts_validation_mod
+import tldw_Server_API.app.core.TTS.utils as tts_utils
 from tldw_Server_API.app.core.TTS.tts_validation import validate_tts_request
 
 
@@ -27,8 +27,8 @@ def test_mlx_runtime_rejects_uploaded_custom_voice_request():
 
 @pytest.mark.unit
 def test_runtime_auto_on_apple_silicon_rejects_uploaded_custom_voice_request(monkeypatch):
-    monkeypatch.setattr(tts_validation_mod.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(tts_validation_mod.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tts_utils.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tts_utils.platform, "machine", lambda: "arm64")
 
     request = TTSRequest(
         text="hello",

@@ -4,7 +4,6 @@
 # Imports
 import base64
 import html
-import platform
 import re
 import unicodedata
 from typing import Any, Optional, Union
@@ -26,7 +25,7 @@ from .tts_exceptions import (
     TTSValidationError,
     TTSVoiceNotFoundError,
 )
-from .utils import parse_bool
+from .utils import parse_bool, resolve_qwen3_runtime_name
 
 #
 #######################################################################################################################
@@ -356,12 +355,8 @@ class TTSInputValidator:
             return None
 
     def _resolve_qwen3_runtime(self, provider: Optional[str]) -> str:
-        configured = str(self._get_provider_setting(provider, "runtime") or "auto").strip().lower()
-        if configured in {"upstream", "mlx", "remote"}:
-            return configured
-        if platform.system() == "Darwin" and platform.machine().lower() == "arm64":
-            return "mlx"
-        return "upstream"
+        configured = self._get_provider_setting(provider, "runtime")
+        return resolve_qwen3_runtime_name(configured)
 
     def _decode_base64_payload(self, payload: str) -> bytes:
         """Decode base64 payload with optional data URL prefix."""

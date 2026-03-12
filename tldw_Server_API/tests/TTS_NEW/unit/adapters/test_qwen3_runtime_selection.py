@@ -1,6 +1,18 @@
 import platform
 
+import tldw_Server_API.app.core.TTS.utils as tts_utils
 from tldw_Server_API.app.core.TTS.adapters.qwen3_tts_adapter import Qwen3TTSAdapter
+
+
+def test_shared_runtime_resolver_exists_and_prefers_mlx_on_macos_arm64(monkeypatch):
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tts_utils, "platform", platform, raising=False)
+
+    helper = getattr(tts_utils, "resolve_qwen3_runtime_name", None)
+
+    assert helper is not None
+    assert helper("auto") == "mlx"
 
 
 def test_runtime_auto_prefers_mlx_on_macos_arm64(monkeypatch):

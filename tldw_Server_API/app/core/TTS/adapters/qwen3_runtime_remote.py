@@ -1,3 +1,5 @@
+"""Remote Qwen3-TTS runtime backed by an OpenAI-compatible HTTP service."""
+
 from __future__ import annotations
 
 import asyncio
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
 
 
 class RemoteQwenRuntime:
+    """Execute Qwen3-TTS requests against a separately hosted backend."""
+
     runtime_name = "remote"
 
     def __init__(self, adapter_or_config: "Qwen3TTSAdapter | dict[str, Any]") -> None:
@@ -44,7 +48,19 @@ class RemoteQwenRuntime:
             self.provider_key = "qwen3_tts"
             self.provider_name = "Qwen3TTS"
             self.sample_rate = int(self.config.get("sample_rate") or 24000)
-            self.supported_languages = {"auto", "en", "zh", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"}
+            self.supported_languages = {
+                "auto",
+                "en",
+                "zh",
+                "ja",
+                "ko",
+                "de",
+                "fr",
+                "ru",
+                "pt",
+                "es",
+                "it",
+            }
             self.supported_voices = []
 
         self.base_url = str(self.config.get("base_url") or "").strip()

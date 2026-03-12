@@ -121,7 +121,7 @@ class Qwen3MlxRuntime:
             )
         return speaker
 
-    async def _get_model(self, resolved_model: str):
+    async def _get_model(self, resolved_model: str) -> tuple[object, str]:
         backend_model_id = self._resolve_backend_model_id(resolved_model)
         if self._model is not None and self._model_id == backend_model_id:
             return self._model, backend_model_id
