@@ -141,6 +141,10 @@ import { Button as TldwButton } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useStoreMessageOption } from "@/store/option"
+import {
+  shouldEnableOptionalResource,
+  useChatSurfaceCoordinatorStore
+} from "@/store/chat-surface-coordinator"
 import { trackOnboardingChatSubmitSuccess } from "@/utils/onboarding-ingestion-telemetry"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import { withTemplateFallback } from "@/utils/template-guards"
@@ -459,6 +463,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     () => deriveConnectionUxState(connectionState),
     [connectionState]
   )
+  const setOptionalPanelVisible = useChatSurfaceCoordinatorStore(
+    (state) => state.setPanelVisible
+  )
+  const markOptionalPanelEngaged = useChatSurfaceCoordinatorStore(
+    (state) => state.markPanelEngaged
+  )
+  const mcpToolsEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "mcp-tools")
+  )
+  const audioHealthEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "audio-health")
+  )
+  const modelCatalogEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "model-catalog")
+  )
   const isConnectionReady = isConnected && phase === ConnectionPhase.CONNECTED
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const {
@@ -478,7 +497,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setToolCatalogId,
     setToolModules,
     setToolCatalogStrict
-  } = useMcpTools()
+  } = useMcpTools({ enabled: mcpToolsEnabled })
   const mcpCtrl = useMcpToolsControl({
     hasMcp,
     mcpHealthState,
@@ -508,7 +527,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     isConnectionReady &&
     !capsLoading &&
     Boolean(capabilities?.hasStt)
-  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus()
+  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus({
+    enabled: audioHealthEnabled
+  })
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"
   const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
@@ -829,7 +850,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const { data: composerModels } = useQuery({
     queryKey: ["playground:chatModels"],
     queryFn: () => fetchChatModels({ returnEmpty: true }),
-    enabled: true
+    enabled: modelCatalogEnabled
   })
   const { data: imageModels = [] } = useQuery({
     queryKey: ["playground:imageModels"],
@@ -866,6 +887,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setSelectedModel,
     navigate
   })
+
+  React.useEffect(() => {
+    setOptionalPanelVisible("model-catalog", modelDropdownOpen)
+    if (modelDropdownOpen) {
+      markOptionalPanelEngaged("model-catalog")
+    }
+
+    return () => {
+      setOptionalPanelVisible("model-catalog", false)
+    }
+  }, [markOptionalPanelEngaged, modelDropdownOpen, setOptionalPanelVisible])
+
+  React.useEffect(() => {
+    setOptionalPanelVisible("audio-health", voiceChatEnabled)
+    if (voiceChatEnabled) {
+      markOptionalPanelEngaged("audio-health")
+    }
+
+    return () => {
+      setOptionalPanelVisible("audio-health", false)
+    }
+  }, [markOptionalPanelEngaged, setOptionalPanelVisible, voiceChatEnabled])
 
   // Ensure compare selection has a sensible default when enabling compare mode
   React.useEffect(() => {
@@ -4650,6 +4693,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [imageGenerateSubmitting, setImageGenerateSubmitting] =
     React.useState(false)
   const { mcpSettingsOpen, setMcpSettingsOpen } = mcpCtrl
+  React.useEffect(() => {
+    setOptionalPanelVisible("mcp-tools", mcpSettingsOpen)
+    if (mcpSettingsOpen || toolChoice !== "none") {
+      markOptionalPanelEngaged("mcp-tools")
+    }
+
+    return () => {
+      setOptionalPanelVisible("mcp-tools", false)
+    }
+  }, [
+    markOptionalPanelEngaged,
+    mcpSettingsOpen,
+    setOptionalPanelVisible,
+    toolChoice
+  ])
 
   const parseJsonObject = React.useCallback((value?: string) => {
     if (!value || typeof value !== "string") return undefined

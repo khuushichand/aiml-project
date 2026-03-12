@@ -1057,9 +1057,10 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
     await user.click(screen.getByRole("button", { name: "Queue request" }))
 
     expect(onSubmitMock).not.toHaveBeenCalled()
-    expect(
-      playgroundFormMessageOptionState.value.setQueuedMessages
-    ).toHaveBeenCalledWith([
+    const queuedUpdate =
+      playgroundFormMessageOptionState.value.setQueuedMessages.mock.calls.at(-1)?.[0]
+    expect(queuedUpdate).toBeTypeOf("function")
+    expect(queuedUpdate([])).toEqual([
       expect.objectContaining({
         promptText: "Queue this while offline",
         message: "Queue this while offline"
