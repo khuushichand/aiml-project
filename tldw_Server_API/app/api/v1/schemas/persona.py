@@ -245,3 +245,57 @@ class PersonaStateHistoryResponse(BaseModel):
 
 class PersonaStateRestoreRequest(BaseModel):
     entry_id: str = Field(..., min_length=1, max_length=200)
+
+
+class PersonaConnectionCreate(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=200)
+    name: str = Field(..., min_length=1, max_length=200)
+    base_url: str = Field(..., min_length=1, max_length=2048)
+    auth_type: str = Field(default="none", min_length=1, max_length=64)
+    secret: str | None = Field(default=None, min_length=1, max_length=8192)
+    headers_template: dict[str, str] = Field(default_factory=dict)
+    timeout_ms: int = Field(default=15_000, ge=100, le=120_000)
+
+
+class PersonaConnectionResponse(BaseModel):
+    id: str
+    persona_id: str
+    name: str
+    base_url: str
+    auth_type: str
+    headers_template: dict[str, str] = Field(default_factory=dict)
+    timeout_ms: int
+    allowed_hosts: list[str] = Field(default_factory=list)
+    secret_configured: bool = False
+    key_hint: str | None = None
+    created_at: str | None = None
+    last_modified: str | None = None
+
+
+class PersonaCommandDryRunRequest(BaseModel):
+    heard_text: str = Field(..., min_length=1, max_length=20_000)
+
+
+class PersonaCommandPlannedActionResponse(BaseModel):
+    target_type: str
+    target_name: str | None = None
+    payload_preview: dict[str, Any] = Field(default_factory=dict)
+
+
+class PersonaCommandSafetyGateResponse(BaseModel):
+    classification: str
+    requires_confirmation: bool
+    reason: str
+
+
+class PersonaCommandDryRunResponse(BaseModel):
+    heard_text: str
+    matched: bool
+    match_reason: str | None = None
+    command_id: str | None = None
+    command_name: str | None = None
+    extracted_params: dict[str, Any] = Field(default_factory=dict)
+    planned_action: PersonaCommandPlannedActionResponse | None = None
+    safety_gate: PersonaCommandSafetyGateResponse | None = None
+    fallback_to_persona_planner: bool = False
+    failure_phase: str | None = None

@@ -68,6 +68,7 @@ class IntentParser:
         text: str,
         user_id: int = 0,
         context: Optional[dict[str, Any]] = None,
+        persona_id: Optional[str] = None,
     ) -> ParsedIntent:
         """
         Parse transcribed text into an intent.
@@ -110,7 +111,7 @@ class IntentParser:
                 )
 
         # Stage 2: Keyword/prefix matching
-        keyword_result = await self._keyword_match(text, user_id)
+        keyword_result = await self._keyword_match(text, user_id, persona_id=persona_id)
         if keyword_result and keyword_result.intent.confidence >= self.KEYWORD_MATCH_THRESHOLD:
             keyword_result.processing_time_ms = (time.time() - start_time) * 1000
             return keyword_result
@@ -140,6 +141,46 @@ class IntentParser:
             processing_time_ms=(time.time() - start_time) * 1000,
         )
 
+    async def parse_registered_command(
+        self,
+        text: str,
+        user_id: int = 0,
+        *,
+        context: Optional[dict[str, Any]] = None,
+        persona_id: Optional[str] = None,
+        include_disabled: bool = False,
+    ) -> Optional[ParsedIntent]:
+        """Match only against registered command phrases without generic fallbacks."""
+        start_time = time.time()
+        text = text.strip()
+        if not text:
+            return None
+
+        if context and context.get("awaiting_confirmation"):
+            confirm_result = self._check_confirmation(text)
+            if confirm_result is not None:
+                return ParsedIntent(
+                    intent=VoiceIntent(
+                        action_type=ActionType.CUSTOM,
+                        action_config={"action": "confirmation", "confirmed": confirm_result},
+                        raw_text=text,
+                        confidence=1.0,
+                    ),
+                    match_method="confirmation",
+                    processing_time_ms=(time.time() - start_time) * 1000,
+                )
+
+        keyword_result = await self._keyword_match(
+            text,
+            user_id,
+            persona_id=persona_id,
+            include_disabled=include_disabled,
+        )
+        if keyword_result and keyword_result.intent.confidence >= self.KEYWORD_MATCH_THRESHOLD:
+            keyword_result.processing_time_ms = (time.time() - start_time) * 1000
+            return keyword_result
+        return None
+
     def _check_confirmation(self, text: str) -> Optional[bool]:
         """Check if text is a confirmation/denial response."""
         text_lower = text.lower().strip()
@@ -158,9 +199,17 @@ class IntentParser:
         self,
         text: str,
         user_id: int,
+        *,
+        persona_id: Optional[str] = None,
+        include_disabled: bool = False,
     ) -> Optional[ParsedIntent]:
         """Match text against registered command phrases."""
-        matches = self.registry.find_matching_commands(text, user_id)
+        matches = self.registry.find_matching_commands(
+            text,
+            user_id,
+            persona_id=persona_id,
+            include_disabled=include_disabled,
+        )
 
         if not matches:
             return None
@@ -198,9 +247,32 @@ class IntentParser:
 
         return ParsedIntent(
             intent=intent,
+            matched_phrase=matched_phrase,
+            match_reason=self._match_reason_for_phrase(text, matched_phrase),
             match_method="keyword",
             alternatives=alternatives,
         )
+
+    def _match_reason_for_phrase(self, text: str, matched_phrase: str) -> str:
+        text_lower = text.lower().strip()
+        phrase_lower = matched_phrase.lower().strip()
+        if "{" in matched_phrase and "}" in matched_phrase:
+            return "phrase_pattern"
+        if text_lower == phrase_lower:
+            return "phrase_exact"
+        return "phrase_prefix"
+
+    def _compile_slot_phrase_pattern(self, phrase: str) -> tuple[Optional[re.Pattern[str]], list[str]]:
+        slot_names = re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", phrase)
+        if not slot_names:
+            return None, []
+        pattern = "^" + re.sub(
+            r"\\\{([a-zA-Z_][a-zA-Z0-9_]*)\\\}",
+            r"(?P<\1>.+?)",
+            re.escape(phrase),
+        ) + "$"
+        pattern = re.sub(r"\\ ", r"\\s+", pattern)
+        return re.compile(pattern, re.IGNORECASE), slot_names
 
     def _extract_entities(
         self,
@@ -210,6 +282,17 @@ class IntentParser:
     ) -> dict[str, Any]:
         """Extract entities from text based on command configuration."""
         entities = {}
+        slot_pattern, slot_names = self._compile_slot_phrase_pattern(matched_phrase)
+        if slot_pattern is not None:
+            match = slot_pattern.match(text.strip())
+            if match:
+                for slot_name in slot_names:
+                    value = str(match.group(slot_name) or "").strip()
+                    if value:
+                        entities[slot_name] = value
+                if entities:
+                    return entities
+
         text_lower = text.lower()
         phrase_lower = matched_phrase.lower()
 

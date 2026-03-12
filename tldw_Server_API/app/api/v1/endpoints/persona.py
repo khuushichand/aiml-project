@@ -14,6 +14,7 @@ import json
 import time
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
@@ -22,6 +23,12 @@ from starlette.requests import Request as StarletteRequest
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.persona import (
+    PersonaCommandDryRunRequest,
+    PersonaCommandDryRunResponse,
+    PersonaCommandPlannedActionResponse,
+    PersonaCommandSafetyGateResponse,
+    PersonaConnectionCreate,
+    PersonaConnectionResponse,
     PersonaDeleteResponse,
     PersonaExemplarCreate,
     PersonaExemplarDeleteResponse,
@@ -46,6 +53,13 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaScopeRulesReplaceRequest,
     PersonaScopeRulesResponse,
 )
+from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
+    VoiceCommandDefinition,
+    VoiceCommandInfo,
+    VoiceCommandListResponse,
+    VoiceCommandToggleRequest,
+    VoiceActionType,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
@@ -57,6 +71,11 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTok
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
+    build_secret_payload,
+    encrypt_byok_payload,
+    key_hint_for_api_key,
+)
 from tldw_Server_API.app.core.feature_flags import (
     is_mcp_hub_policy_enforcement_enabled,
     is_persona_enabled,
@@ -101,6 +120,16 @@ from tldw_Server_API.app.core.Persona.policy_evaluator import (
 from tldw_Server_API.app.core.Persona.session_manager import get_session_manager
 from tldw_Server_API.app.core.Skills.context_integration import handle_skill_tool_call
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.VoiceAssistant import (
+    ActionType as VoiceActionTypeInternal,
+    VoiceCommand,
+    delete_voice_command as delete_voice_command_db,
+    get_user_voice_commands,
+    get_voice_command as get_voice_command_db,
+    get_voice_command_registry,
+    get_voice_command_router,
+    save_voice_command,
+)
 
 router = APIRouter()
 
@@ -116,11 +145,16 @@ _DEFAULT_PERSONA_DEFAULT_TOOLS = ["ingest_url", "rag_search", "summarize"]
 _DEFAULT_PERSONA_POLICY_RULES: list[dict[str, Any]] = [
     {"rule_kind": "mcp_tool", "rule_name": "media.search", "allowed": True, "require_confirmation": False},
     {"rule_kind": "mcp_tool", "rule_name": "chats.search", "allowed": True, "require_confirmation": False},
+    {"rule_kind": "mcp_tool", "rule_name": "notes.search", "allowed": True, "require_confirmation": False},
+    {"rule_kind": "mcp_tool", "rule_name": "notes.create", "allowed": True, "require_confirmation": True},
 ]
 _EXPLICIT_SCOPE_RULE_TYPES = {"conversation_id", "character_id", "media_id", "note_id"}
 _PERSONA_RUNTIME_MODES = {"session_scoped", "persistent_scoped"}
 _PERSONA_WS_REQUIRED_NOTICE_LEVELS = {"info", "warning", "error"}
 _PERSONA_WS_ALLOWED_STEP_TYPES = {"mcp_tool", "skill", "rag_query", "final_answer"}
+_PERSONA_CONNECTION_MEMORY_TYPE = "persona_connection"
+_PERSONA_CONNECTION_ALLOWED_AUTH_TYPES = {"none", "bearer", "api_key", "basic", "custom_header"}
+_PERSONA_CONNECTION_STATUS_FIELD = "secret_configured"
 _PERSONA_STATE_FIELD_TO_MEMORY_TYPE = {
     "soul_md": "persona_state_soul",
     "identity_md": "persona_state_identity",
@@ -385,6 +419,222 @@ async def _get_persona_profile_or_404(
     if profile is None:
         raise HTTPException(status_code=404, detail="Persona profile not found")
     return profile
+
+
+def _voice_command_to_response(command: VoiceCommand) -> VoiceCommandInfo:
+    return VoiceCommandInfo(
+        id=command.id,
+        user_id=command.user_id,
+        persona_id=command.persona_id,
+        connection_id=command.connection_id,
+        name=command.name,
+        phrases=command.phrases,
+        action_type=VoiceActionType(command.action_type.value),
+        action_config=command.action_config,
+        priority=command.priority,
+        enabled=command.enabled,
+        requires_confirmation=command.requires_confirmation,
+        description=command.description,
+        created_at=command.created_at,
+    )
+
+
+def _normalize_command_path_persona_id(path_persona_id: str, payload_persona_id: str | None) -> str:
+    normalized_path_persona_id = str(path_persona_id or "").strip()
+    normalized_payload_persona_id = str(payload_persona_id or "").strip()
+    if normalized_payload_persona_id and normalized_payload_persona_id != normalized_path_persona_id:
+        raise HTTPException(status_code=400, detail="persona_id in payload must match the route persona")
+    return normalized_path_persona_id
+
+
+def _normalize_connection_base_url(base_url: str) -> tuple[str, list[str]]:
+    parsed = urlparse(str(base_url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=422, detail="base_url must be an absolute http(s) URL")
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        raise HTTPException(status_code=422, detail="base_url must include a hostname")
+    normalized = parsed.geturl().rstrip("/")
+    return normalized, [host]
+
+
+def _connection_memory_content_from_payload(payload: PersonaConnectionCreate) -> dict[str, Any]:
+    normalized_base_url, allowed_hosts = _normalize_connection_base_url(payload.base_url)
+    auth_type = str(payload.auth_type or "none").strip().lower()
+    if auth_type not in _PERSONA_CONNECTION_ALLOWED_AUTH_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported auth_type")
+
+    content: dict[str, Any] = {
+        "schema_version": 1,
+        "name": str(payload.name).strip(),
+        "base_url": normalized_base_url,
+        "auth_type": auth_type,
+        "headers_template": {str(k): str(v) for k, v in (payload.headers_template or {}).items()},
+        "timeout_ms": int(payload.timeout_ms),
+        "allowed_hosts": allowed_hosts,
+        _PERSONA_CONNECTION_STATUS_FIELD: False,
+        "key_hint": None,
+    }
+
+    raw_secret = str(payload.secret or "").strip()
+    if raw_secret:
+        try:
+            envelope = encrypt_byok_payload(build_secret_payload(raw_secret))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        content["secret_envelope"] = envelope
+        content[_PERSONA_CONNECTION_STATUS_FIELD] = True
+        content["key_hint"] = key_hint_for_api_key(raw_secret)
+    return content
+
+
+def _connection_response_from_row(persona_id: str, row: dict[str, Any]) -> PersonaConnectionResponse:
+    raw_content = row.get("content")
+    if isinstance(raw_content, str):
+        try:
+            content = json.loads(raw_content)
+        except (TypeError, ValueError):
+            content = {}
+    elif isinstance(raw_content, dict):
+        content = raw_content
+    else:
+        content = {}
+
+    return PersonaConnectionResponse(
+        id=str(row.get("id") or ""),
+        persona_id=persona_id,
+        name=str(content.get("name") or ""),
+        base_url=str(content.get("base_url") or ""),
+        auth_type=str(content.get("auth_type") or "none"),
+        headers_template={
+            str(k): str(v)
+            for k, v in dict(content.get("headers_template") or {}).items()
+        },
+        timeout_ms=int(content.get("timeout_ms") or 15000),
+        allowed_hosts=[str(item) for item in list(content.get("allowed_hosts") or []) if str(item).strip()],
+        secret_configured=bool(content.get(_PERSONA_CONNECTION_STATUS_FIELD, False)),
+        key_hint=(str(content.get("key_hint") or "").strip() or None),
+        created_at=(str(row.get("created_at") or "").strip() or None),
+        last_modified=(str(row.get("last_modified") or "").strip() or None),
+    )
+
+
+async def _list_persona_connection_rows(
+    db: CharactersRAGDB,
+    *,
+    user_id: str,
+    persona_id: str,
+) -> list[dict[str, Any]]:
+    rows = await _run_persona_db_call(
+        db.list_persona_memory_entries,
+        user_id=user_id,
+        persona_id=persona_id,
+        memory_type=_PERSONA_CONNECTION_MEMORY_TYPE,
+        include_archived=False,
+        include_deleted=False,
+        limit=200,
+        offset=0,
+    )
+    return [row for row in rows if row]
+
+
+async def _list_persona_connections(
+    db: CharactersRAGDB,
+    *,
+    user_id: str,
+    persona_id: str,
+) -> list[PersonaConnectionResponse]:
+    rows = await _list_persona_connection_rows(db, user_id=user_id, persona_id=persona_id)
+    return [_connection_response_from_row(persona_id, row) for row in rows]
+
+
+async def _get_persona_connections_by_id(
+    db: CharactersRAGDB,
+    *,
+    user_id: str,
+    persona_id: str,
+) -> dict[str, PersonaConnectionResponse]:
+    responses = await _list_persona_connections(db, user_id=user_id, persona_id=persona_id)
+    return {response.id: response for response in responses}
+
+
+def _voice_target_name(command: VoiceCommand) -> str | None:
+    if command.action_type == VoiceActionTypeInternal.MCP_TOOL:
+        return str(command.action_config.get("tool_name") or "").strip() or None
+    if command.action_type == VoiceActionTypeInternal.WORKFLOW:
+        return (
+            str(command.action_config.get("workflow_id") or "").strip()
+            or str(command.action_config.get("workflow_name") or "").strip()
+            or None
+        )
+    if command.action_type == VoiceActionTypeInternal.CUSTOM:
+        return str(command.action_config.get("action") or "").strip() or None
+    if command.action_type == VoiceActionTypeInternal.LLM_CHAT:
+        return "persona_planner"
+    return None
+
+
+def _build_payload_preview(command: VoiceCommand, extracted_params: dict[str, Any]) -> dict[str, Any]:
+    preview: dict[str, Any] = {}
+    raw_slot_map = command.action_config.get("slot_to_param_map") or command.action_config.get("param_map") or {}
+    if isinstance(raw_slot_map, dict):
+        for param_name, source in raw_slot_map.items():
+            if isinstance(source, str):
+                slot_name = source.strip().strip("{}")
+                if slot_name in extracted_params:
+                    preview[str(param_name)] = extracted_params[slot_name]
+
+    if not preview:
+        if len(extracted_params) == 1:
+            slot_name, slot_value = next(iter(extracted_params.items()))
+            target_name = str(_voice_target_name(command) or "")
+            if target_name.endswith("search"):
+                preview["query"] = slot_value
+            elif target_name.endswith("create"):
+                preview["content"] = slot_value
+            else:
+                preview[slot_name] = slot_value
+        else:
+            preview.update(extracted_params)
+
+    defaults = command.action_config.get("default_payload")
+    if isinstance(defaults, dict):
+        for key, value in defaults.items():
+            preview.setdefault(str(key), value)
+
+    return preview
+
+
+def _build_dry_run_safety_gate(
+    *,
+    command: VoiceCommand,
+    persona_policy_rules: list[dict[str, Any]],
+) -> PersonaCommandSafetyGateResponse:
+    if command.connection_id:
+        return PersonaCommandSafetyGateResponse(
+            classification="calls_external_api",
+            requires_confirmation=True,
+            reason="persona_default",
+        )
+
+    target_name = _voice_target_name(command) or ""
+    decision = _evaluate_step_policy(
+        step_type="mcp_tool" if command.action_type == VoiceActionTypeInternal.MCP_TOOL else "skill",
+        tool_name=target_name,
+        args=command.action_config,
+        persona_policy_rules=persona_policy_rules,
+        session_policy_rules=_default_session_policy_rules(),
+        session_scopes={"read", "write:preview", "write:export", "write:delete"},
+        allow_export=True,
+        allow_delete=True,
+    )
+    classification = "read_only" if str(decision.get("action") or "read") == "read" else "changes_data"
+    reason = "persona_default" if decision.get("reason_code") in {None, ""} else str(decision.get("reason_code")).lower()
+    return PersonaCommandSafetyGateResponse(
+        classification=classification,
+        requires_confirmation=bool(decision.get("requires_confirmation", False)),
+        reason=reason,
+    )
 
 
 def _default_session_policy_rules() -> list[dict[str, Any]]:
@@ -2496,6 +2746,433 @@ async def replace_persona_policy_rules(
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="replace persona policy rules") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/voice-commands",
+    response_model=VoiceCommandListResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def list_persona_voice_commands(
+    persona_id: str,
+    include_system: bool = Query(default=False),
+    include_disabled: bool = Query(default=False),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> VoiceCommandListResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(db, persona_id=persona_id, user_id=user_id, include_deleted=False)
+        registry = get_voice_command_registry()
+        registry.load_defaults()
+        registry.refresh_user_commands(
+            db,
+            user_id=int(user_id),
+            include_disabled=include_disabled,
+            persona_id=persona_id,
+        )
+        commands = registry.get_all_commands(
+            int(user_id),
+            include_system=include_system,
+            include_disabled=include_disabled,
+            persona_id=persona_id,
+        )
+        command_infos = [_voice_command_to_response(command) for command in commands]
+        return VoiceCommandListResponse(commands=command_infos, total=len(command_infos))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="list persona voice commands") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/voice-commands",
+    response_model=VoiceCommandInfo,
+    tags=["persona"],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_persona_voice_command(
+    persona_id: str,
+    payload: VoiceCommandDefinition = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> VoiceCommandInfo:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    normalized_persona_id = _normalize_command_path_persona_id(persona_id, payload.persona_id)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=normalized_persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        if payload.connection_id:
+            connections = await _get_persona_connections_by_id(
+                db,
+                user_id=user_id,
+                persona_id=normalized_persona_id,
+            )
+            if payload.connection_id not in connections:
+                raise HTTPException(status_code=404, detail="Persona connection not found")
+
+        command = VoiceCommand(
+            id=str(uuid.uuid4()),
+            user_id=int(user_id),
+            persona_id=normalized_persona_id,
+            connection_id=payload.connection_id,
+            name=payload.name,
+            phrases=payload.phrases,
+            action_type=VoiceActionTypeInternal(payload.action_type.value),
+            action_config=payload.action_config,
+            priority=payload.priority,
+            enabled=payload.enabled,
+            requires_confirmation=payload.requires_confirmation,
+            description=payload.description,
+        )
+        save_voice_command(db, command)
+        registry = get_voice_command_registry()
+        registry.load_defaults()
+        registry.register_command(command)
+        saved = get_voice_command_db(
+            db,
+            command.id,
+            int(user_id),
+            persona_id=normalized_persona_id,
+        ) or command
+        return _voice_command_to_response(saved)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="create persona voice command") from exc
+
+
+@router.put(
+    "/profiles/{persona_id}/voice-commands/{command_id}",
+    response_model=VoiceCommandInfo,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def update_persona_voice_command(
+    persona_id: str,
+    command_id: str,
+    payload: VoiceCommandDefinition = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> VoiceCommandInfo:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    normalized_persona_id = _normalize_command_path_persona_id(persona_id, payload.persona_id)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=normalized_persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        existing = get_voice_command_db(
+            db,
+            command_id,
+            int(user_id),
+            persona_id=normalized_persona_id,
+        )
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Voice command not found")
+
+        next_connection_id = (
+            payload.connection_id
+            if "connection_id" in payload.model_fields_set
+            else existing.connection_id
+        )
+        if next_connection_id:
+            connections = await _get_persona_connections_by_id(
+                db,
+                user_id=user_id,
+                persona_id=normalized_persona_id,
+            )
+            if next_connection_id not in connections:
+                raise HTTPException(status_code=404, detail="Persona connection not found")
+
+        updated = VoiceCommand(
+            id=command_id,
+            user_id=int(user_id),
+            persona_id=normalized_persona_id,
+            connection_id=next_connection_id,
+            name=payload.name,
+            phrases=payload.phrases,
+            action_type=VoiceActionTypeInternal(payload.action_type.value),
+            action_config=payload.action_config,
+            priority=payload.priority,
+            enabled=payload.enabled if "enabled" in payload.model_fields_set else existing.enabled,
+            requires_confirmation=payload.requires_confirmation,
+            description=payload.description,
+            created_at=existing.created_at,
+        )
+        save_voice_command(db, updated)
+        registry = get_voice_command_registry()
+        registry.load_defaults()
+        registry.register_command(updated)
+        saved = get_voice_command_db(
+            db,
+            command_id,
+            int(user_id),
+            persona_id=normalized_persona_id,
+        ) or updated
+        return _voice_command_to_response(saved)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="update persona voice command") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/voice-commands/{command_id}/toggle",
+    response_model=VoiceCommandInfo,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def toggle_persona_voice_command(
+    persona_id: str,
+    command_id: str,
+    payload: VoiceCommandToggleRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> VoiceCommandInfo:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(db, persona_id=persona_id, user_id=user_id, include_deleted=False)
+        existing = get_voice_command_db(
+            db,
+            command_id,
+            int(user_id),
+            persona_id=persona_id,
+        )
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Voice command not found")
+
+        updated = VoiceCommand(
+            id=command_id,
+            user_id=existing.user_id,
+            persona_id=existing.persona_id,
+            connection_id=existing.connection_id,
+            name=existing.name,
+            phrases=existing.phrases,
+            action_type=existing.action_type,
+            action_config=existing.action_config,
+            priority=existing.priority,
+            enabled=payload.enabled,
+            requires_confirmation=existing.requires_confirmation,
+            description=existing.description,
+            created_at=existing.created_at,
+        )
+        save_voice_command(db, updated)
+        registry = get_voice_command_registry()
+        registry.load_defaults()
+        registry.register_command(updated)
+        saved = get_voice_command_db(
+            db,
+            command_id,
+            int(user_id),
+            persona_id=persona_id,
+        ) or updated
+        return _voice_command_to_response(saved)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="toggle persona voice command") from exc
+
+
+@router.delete(
+    "/profiles/{persona_id}/voice-commands/{command_id}",
+    tags=["persona"],
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def delete_persona_voice_command(
+    persona_id: str,
+    command_id: str,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> None:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(db, persona_id=persona_id, user_id=user_id, include_deleted=False)
+        existing = get_voice_command_db(
+            db,
+            command_id,
+            int(user_id),
+            persona_id=persona_id,
+        )
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Voice command not found")
+        deleted = delete_voice_command_db(db, command_id, int(user_id))
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Voice command not found")
+        registry = get_voice_command_registry()
+        registry.unregister_command(command_id, int(user_id), persona_id=persona_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="delete persona voice command") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/voice-commands/test",
+    response_model=PersonaCommandDryRunResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def dry_run_persona_voice_command(
+    persona_id: str,
+    payload: PersonaCommandDryRunRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaCommandDryRunResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(db, persona_id=persona_id, user_id=user_id, include_deleted=False)
+        router_instance = get_voice_command_router()
+        parsed = await router_instance.match_registered_command(
+            payload.heard_text,
+            user_id=int(user_id),
+            persona_id=persona_id,
+            db=db,
+        )
+        if parsed is None or not parsed.intent.command_id:
+            return PersonaCommandDryRunResponse(
+                heard_text=payload.heard_text,
+                matched=False,
+                fallback_to_persona_planner=True,
+                failure_phase="no_match",
+            )
+
+        command = get_voice_command_db(
+            db,
+            parsed.intent.command_id,
+            int(user_id),
+            persona_id=persona_id,
+        )
+        if command is None:
+            command = get_voice_command_registry().get_command(
+                parsed.intent.command_id,
+                int(user_id),
+                persona_id=persona_id,
+            )
+        if command is None or not command.enabled:
+            return PersonaCommandDryRunResponse(
+                heard_text=payload.heard_text,
+                matched=False,
+                fallback_to_persona_planner=True,
+                failure_phase="disabled_command" if command is not None and not command.enabled else "no_match",
+            )
+
+        persona_policy_rules = normalize_policy_rules(
+            await _run_persona_db_call(
+                db.list_persona_policy_rules,
+                persona_id=persona_id,
+                user_id=user_id,
+                include_deleted=False,
+            )
+        )
+        planned_action = PersonaCommandPlannedActionResponse(
+            target_type=command.action_type.value,
+            target_name=_voice_target_name(command),
+            payload_preview=_build_payload_preview(command, parsed.intent.entities),
+        )
+        safety_gate = _build_dry_run_safety_gate(
+            command=command,
+            persona_policy_rules=persona_policy_rules,
+        )
+        return PersonaCommandDryRunResponse(
+            heard_text=payload.heard_text,
+            matched=True,
+            match_reason=parsed.match_reason or parsed.match_method,
+            command_id=command.id,
+            command_name=command.name,
+            extracted_params=parsed.intent.entities,
+            planned_action=planned_action,
+            safety_gate=safety_gate,
+            fallback_to_persona_planner=False,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="dry run persona voice command") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/connections",
+    response_model=list[PersonaConnectionResponse],
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def list_persona_connections(
+    persona_id: str,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> list[PersonaConnectionResponse]:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(db, persona_id=persona_id, user_id=user_id, include_deleted=False)
+        return await _list_persona_connections(db, user_id=user_id, persona_id=persona_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="list persona connections") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/connections",
+    response_model=PersonaConnectionResponse,
+    tags=["persona"],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_persona_connection(
+    persona_id: str,
+    payload: PersonaConnectionCreate = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaConnectionResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(db, persona_id=persona_id, user_id=user_id, include_deleted=False)
+        connection_id = str(payload.id or uuid.uuid4())
+        connection_content = _connection_memory_content_from_payload(payload)
+        await _run_persona_db_call(
+            db.add_persona_memory_entry,
+            {
+                "id": connection_id,
+                "persona_id": persona_id,
+                "user_id": user_id,
+                "memory_type": _PERSONA_CONNECTION_MEMORY_TYPE,
+                "content": json.dumps(connection_content),
+                "salience": 0.0,
+            },
+        )
+        responses = await _get_persona_connections_by_id(db, user_id=user_id, persona_id=persona_id)
+        response = responses.get(connection_id)
+        if response is None:
+            raise HTTPException(status_code=500, detail="Failed to load created persona connection")
+        return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="create persona connection") from exc
 
 
 @router.get("/catalog", response_model=list[PersonaInfo], tags=["persona"], status_code=status.HTTP_200_OK)

@@ -249,6 +249,7 @@ class WSWorkflowCompleteMessage(BaseModel):
 class VoiceCommandRequest(BaseModel):
     """Request for processing a voice command via REST."""
     text: str = Field(..., description="Transcribed text to process")
+    persona_id: Optional[str] = Field(default=None, description="Optional persona identifier for scoped commands")
     session_id: Optional[str] = Field(default=None, description="Session ID for context")
     include_tts: bool = Field(default=True, description="Whether to generate TTS audio")
     tts_provider: Optional[str] = Field(default=None, description="TTS provider override")

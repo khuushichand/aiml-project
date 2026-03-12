@@ -92,6 +92,7 @@ class VoiceCommandRouter:
         session_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         db: Optional[Any] = None,
+        persona_id: Optional[str] = None,
     ) -> tuple[ActionResult, str]:
         """
         Process a voice command through the full pipeline.
@@ -120,7 +121,12 @@ class VoiceCommandRouter:
         if db:
             try:
                 self.registry.load_defaults()
-                self.registry.refresh_user_commands(db, user_id, include_disabled=True)
+                self.registry.refresh_user_commands(
+                    db,
+                    user_id,
+                    include_disabled=True,
+                    persona_id=persona_id,
+                )
                 if created:
                     from .db_helpers import save_voice_session
 
@@ -150,7 +156,12 @@ class VoiceCommandRouter:
             }
 
             # Parse intent
-            parsed = await self.parser.parse(text, user_id, context)
+            parsed = await self.parser.parse(
+                text,
+                user_id,
+                context,
+                persona_id=persona_id,
+            )
             logger.debug(
                 f"Parsed intent: {parsed.intent.action_type} "
                 f"(method={parsed.match_method}, confidence={parsed.intent.confidence:.2f})"
@@ -200,7 +211,11 @@ class VoiceCommandRouter:
 
                     command_name = None
                     if parsed.intent.command_id:
-                        cmd = self.registry.get_command(parsed.intent.command_id, user_id)
+                        cmd = self.registry.get_command(
+                            parsed.intent.command_id,
+                            user_id,
+                            persona_id=persona_id,
+                        )
                         command_name = cmd.name if cmd else None
                     if not command_name:
                         command_name = parsed.intent.action_config.get("action") or parsed.intent.action_type.value
@@ -233,6 +248,33 @@ class VoiceCommandRouter:
                 error_message=str(e),
                 execution_time_ms=(time.time() - start_time) * 1000,
             ), session.session_id
+
+    async def match_registered_command(
+        self,
+        text: str,
+        *,
+        user_id: int,
+        persona_id: str | None = None,
+        db: Optional[Any] = None,
+        include_disabled: bool = False,
+        context: Optional[dict[str, Any]] = None,
+    ) -> Optional[ParsedIntent]:
+        """Run the deterministic registered-command fast path without executing the action."""
+        self.registry.load_defaults()
+        if db:
+            self.registry.refresh_user_commands(
+                db,
+                user_id,
+                include_disabled=include_disabled,
+                persona_id=persona_id,
+            )
+        return await self.parser.parse_registered_command(
+            text,
+            user_id=user_id,
+            persona_id=persona_id,
+            context=context,
+            include_disabled=include_disabled,
+        )
 
     async def _execute_intent(
         self,

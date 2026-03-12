@@ -91,6 +91,14 @@ class ParsedIntent(BaseModel):
     Result of intent parsing including match method and alternatives.
     """
     intent: VoiceIntent = Field(..., description="Primary matched intent")
+    matched_phrase: Optional[str] = Field(
+        default=None,
+        description="Best matching phrase template when a command match occurred"
+    )
+    match_reason: Optional[str] = Field(
+        default=None,
+        description="More specific reason for the match, e.g. phrase_exact or phrase_pattern"
+    )
     match_method: str = Field(
         default="unknown",
         description="How the intent was matched: keyword, pattern, llm, or default"
