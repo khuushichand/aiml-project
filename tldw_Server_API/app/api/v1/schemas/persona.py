@@ -257,6 +257,16 @@ class PersonaConnectionCreate(BaseModel):
     timeout_ms: int = Field(default=15_000, ge=100, le=120_000)
 
 
+class PersonaConnectionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    base_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    auth_type: str | None = Field(default=None, min_length=1, max_length=64)
+    secret: str | None = Field(default=None, min_length=1, max_length=8192)
+    clear_secret: bool = False
+    headers_template: dict[str, str] | None = None
+    timeout_ms: int | None = Field(default=None, ge=100, le=120_000)
+
+
 class PersonaConnectionResponse(BaseModel):
     id: str
     persona_id: str
@@ -270,6 +280,34 @@ class PersonaConnectionResponse(BaseModel):
     key_hint: str | None = None
     created_at: str | None = None
     last_modified: str | None = None
+
+
+class PersonaConnectionDeleteResponse(BaseModel):
+    status: str
+    persona_id: str
+    connection_id: str
+
+
+class PersonaConnectionTestRequest(BaseModel):
+    method: str = Field(default="GET", min_length=1, max_length=16)
+    path: str | None = Field(default=None, max_length=2048)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    auth_header_name: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class PersonaConnectionTestResponse(BaseModel):
+    ok: bool
+    connection_id: str
+    method: str
+    url: str
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+    timeout_ms: int
+    status_code: int | None = None
+    body_preview: Any = None
+    latency_ms: int | None = None
+    error: str | None = None
 
 
 class PersonaCommandDryRunRequest(BaseModel):

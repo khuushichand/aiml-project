@@ -8805,6 +8805,73 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, tuple(update_params), commit=True)
         return bool(cursor.rowcount and cursor.rowcount > 0)
 
+    def update_persona_memory_entry(
+        self,
+        *,
+        entry_id: str,
+        user_id: str,
+        persona_id: str,
+        update_data: dict[str, Any],
+    ) -> bool:
+        """Update mutable persona memory entry fields."""
+        if not update_data:
+            raise InputError("No persona memory fields provided for update.")  # noqa: TRY003
+
+        allowed_fields = {
+            "content",
+            "salience",
+            "source_conversation_id",
+            "scope_snapshot_id",
+            "session_id",
+            "archived",
+            "deleted",
+        }
+        set_parts: list[str] = []
+        params: list[Any] = []
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "content":
+                content = str(value or "").strip()
+                if not content:
+                    raise InputError("content cannot be empty.")  # noqa: TRY003
+                params.append(content)
+                set_parts.append("content = ?")
+            elif key == "salience":
+                try:
+                    params.append(float(value))
+                except (TypeError, ValueError) as exc:
+                    raise InputError("salience must be a numeric value.") from exc  # noqa: TRY003
+                set_parts.append("salience = ?")
+            elif key in {"archived", "deleted"}:
+                params.append(bool_cast(self._as_bool(value)))
+                set_parts.append(f"{key} = ?")
+            else:
+                normalized = None if value is None else str(value).strip() or None
+                params.append(normalized)
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError("No valid persona memory fields provided for update.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1"])
+        params.append(now)
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "UPDATE persona_memory_entries "
+                f"SET {', '.join(set_parts)} "
+                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"  # nosec B608
+            )
+            params.extend([entry_id, persona_id, user_id])
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
+
     def backfill_persona_memory_scope_namespace(
         self,
         *,

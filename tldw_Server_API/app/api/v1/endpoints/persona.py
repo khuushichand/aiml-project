@@ -14,7 +14,7 @@ import json
 import time
 import uuid
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
@@ -28,7 +28,11 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaCommandPlannedActionResponse,
     PersonaCommandSafetyGateResponse,
     PersonaConnectionCreate,
+    PersonaConnectionDeleteResponse,
     PersonaConnectionResponse,
+    PersonaConnectionTestRequest,
+    PersonaConnectionTestResponse,
+    PersonaConnectionUpdate,
     PersonaDeleteResponse,
     PersonaExemplarCreate,
     PersonaExemplarDeleteResponse,
@@ -73,8 +77,10 @@ from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     build_secret_payload,
+    decrypt_byok_payload,
     encrypt_byok_payload,
     key_hint_for_api_key,
+    loads_envelope,
 )
 from tldw_Server_API.app.core.feature_flags import (
     is_mcp_hub_policy_enforcement_enabled,
@@ -118,6 +124,8 @@ from tldw_Server_API.app.core.Persona.policy_evaluator import (
     normalize_policy_rules,
 )
 from tldw_Server_API.app.core.Persona.session_manager import get_session_manager
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 from tldw_Server_API.app.core.Skills.context_integration import handle_skill_tool_call
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.VoiceAssistant import (
@@ -155,6 +163,7 @@ _PERSONA_WS_ALLOWED_STEP_TYPES = {"mcp_tool", "skill", "rag_query", "final_answe
 _PERSONA_CONNECTION_MEMORY_TYPE = "persona_connection"
 _PERSONA_CONNECTION_ALLOWED_AUTH_TYPES = {"none", "bearer", "api_key", "basic", "custom_header"}
 _PERSONA_CONNECTION_STATUS_FIELD = "secret_configured"
+_PERSONA_CONNECTION_TEST_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
 _PERSONA_STATE_FIELD_TO_MEMORY_TYPE = {
     "soul_md": "persona_state_soul",
     "identity_md": "persona_state_identity",
@@ -488,7 +497,7 @@ def _connection_memory_content_from_payload(payload: PersonaConnectionCreate) ->
     return content
 
 
-def _connection_response_from_row(persona_id: str, row: dict[str, Any]) -> PersonaConnectionResponse:
+def _connection_content_from_row(row: dict[str, Any]) -> dict[str, Any]:
     raw_content = row.get("content")
     if isinstance(raw_content, str):
         try:
@@ -496,9 +505,220 @@ def _connection_response_from_row(persona_id: str, row: dict[str, Any]) -> Perso
         except (TypeError, ValueError):
             content = {}
     elif isinstance(raw_content, dict):
-        content = raw_content
+        content = dict(raw_content)
     else:
         content = {}
+    return content if isinstance(content, dict) else {}
+
+
+def _connection_memory_content_from_update(
+    existing_content: dict[str, Any],
+    payload: PersonaConnectionUpdate,
+) -> dict[str, Any]:
+    if payload.clear_secret and payload.secret is not None:
+        raise HTTPException(status_code=422, detail="Provide either secret or clear_secret, not both")
+
+    create_payload = PersonaConnectionCreate(
+        name=str(payload.name if payload.name is not None else existing_content.get("name") or "").strip(),
+        base_url=str(
+            payload.base_url
+            if payload.base_url is not None
+            else existing_content.get("base_url")
+            or ""
+        ).strip(),
+        auth_type=str(
+            payload.auth_type
+            if payload.auth_type is not None
+            else existing_content.get("auth_type")
+            or "none"
+        ).strip(),
+        secret=payload.secret,
+        headers_template=(
+            payload.headers_template
+            if payload.headers_template is not None
+            else {
+                str(key): str(value)
+                for key, value in dict(existing_content.get("headers_template") or {}).items()
+            }
+        ),
+        timeout_ms=int(
+            payload.timeout_ms
+            if payload.timeout_ms is not None
+            else existing_content.get("timeout_ms")
+            or 15000
+        ),
+    )
+    content = _connection_memory_content_from_payload(create_payload)
+
+    if payload.clear_secret:
+        content.pop("secret_envelope", None)
+        content[_PERSONA_CONNECTION_STATUS_FIELD] = False
+        content["key_hint"] = None
+        return content
+
+    if payload.secret is None:
+        existing_envelope = str(existing_content.get("secret_envelope") or "").strip()
+        if existing_envelope:
+            content["secret_envelope"] = existing_envelope
+            content[_PERSONA_CONNECTION_STATUS_FIELD] = bool(
+                existing_content.get(_PERSONA_CONNECTION_STATUS_FIELD, False)
+            )
+            content["key_hint"] = existing_content.get("key_hint")
+    return content
+
+
+def _normalize_hostname(host: str) -> str:
+    return str(host or "").strip().rstrip(".").lower()
+
+
+def _host_matches_allowlist(host: str, allowlist: list[str]) -> bool:
+    normalized_host = _normalize_hostname(host)
+    normalized_allowlist = [_normalize_hostname(item) for item in allowlist if _normalize_hostname(item)]
+    if not normalized_allowlist:
+        return True
+    for allowed in normalized_allowlist:
+        if normalized_host == allowed or normalized_host.endswith(f".{allowed}"):
+            return True
+    return False
+
+
+class _SafeFormatDict(dict[str, str]):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _safe_template_context(*payloads: dict[str, Any]) -> dict[str, str]:
+    context: dict[str, str] = {}
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            if value is None:
+                continue
+            context[str(key)] = str(value)
+    return context
+
+
+def _render_template_value(value: str, context: dict[str, str]) -> str:
+    rendered = str(value)
+    for key, replacement in context.items():
+        rendered = rendered.replace(f"{{{{{key}}}}}", replacement)
+    try:
+        return rendered.format_map(_SafeFormatDict(context))
+    except Exception:
+        return rendered
+
+
+def _render_nested_templates(value: Any, context: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return _render_template_value(value, context)
+    if isinstance(value, dict):
+        return {
+            str(key): _render_nested_templates(item, context)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_render_nested_templates(item, context) for item in value]
+    return value
+
+
+def _resolve_persona_connection_secret(connection: dict[str, Any]) -> str | None:
+    encrypted_blob = str(connection.get("secret_envelope") or "").strip()
+    if not encrypted_blob:
+        return None
+    payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
+    secret = str(payload.get("api_key") or "").strip()
+    return secret or None
+
+
+def _build_persona_connection_headers(
+    connection: dict[str, Any],
+    *,
+    payload: dict[str, Any],
+    extra_headers: dict[str, str] | None = None,
+    auth_header_name: str | None = None,
+) -> tuple[dict[str, str], str | None]:
+    secret = _resolve_persona_connection_secret(connection)
+    template_context = _safe_template_context(
+        payload,
+        {
+            "secret": secret or "",
+            "connection_id": str(connection.get("id") or ""),
+            "base_url": str(connection.get("base_url") or ""),
+        },
+    )
+    headers = {
+        str(key): _render_template_value(str(value), template_context)
+        for key, value in dict(connection.get("headers_template") or {}).items()
+    }
+    if extra_headers:
+        headers.update(
+            {
+                str(key): _render_template_value(str(value), template_context)
+                for key, value in extra_headers.items()
+            }
+        )
+
+    auth_type = str(connection.get("auth_type") or "none").strip().lower()
+    existing_header_names = {key.lower() for key in headers}
+    if secret:
+        if auth_type == "bearer" and "authorization" not in existing_header_names:
+            headers["Authorization"] = f"Bearer {secret}"
+        elif auth_type == "api_key" and "x-api-key" not in existing_header_names:
+            headers["X-API-Key"] = secret
+        elif auth_type == "basic" and "authorization" not in existing_header_names:
+            encoded = base64.b64encode(secret.encode("utf-8")).decode("ascii")
+            headers["Authorization"] = f"Basic {encoded}"
+        elif auth_type == "custom_header":
+            header_name = str(auth_header_name or "X-API-Key").strip() or "X-API-Key"
+            if header_name.lower() not in existing_header_names:
+                headers[header_name] = secret
+
+    return headers, secret
+
+
+def _redact_persona_connection_headers(headers: dict[str, str], secret: str | None) -> dict[str, str]:
+    redacted: dict[str, str] = {}
+    for key, value in headers.items():
+        normalized_key = str(key).strip().lower()
+        value_text = str(value)
+        if (
+            normalized_key in {"authorization", "proxy-authorization"}
+            or "api-key" in normalized_key
+            or "token" in normalized_key
+            or "secret" in normalized_key
+            or (secret and secret in value_text)
+        ):
+            redacted[str(key)] = "[redacted]"
+        else:
+            redacted[str(key)] = value_text
+    return redacted
+
+
+def _parse_persona_connection_test_response_body(response: Any) -> Any:
+    headers = getattr(response, "headers", {}) or {}
+    content_type = str(headers.get("content-type") or headers.get("Content-Type") or "").lower()
+    if "json" in content_type and callable(getattr(response, "json", None)):
+        try:
+            return response.json()
+        except Exception:
+            return getattr(response, "text", None)
+    text = getattr(response, "text", None)
+    return text if isinstance(text, str) else None
+
+
+async def _close_persona_connection_test_response(response: Any) -> None:
+    close = getattr(response, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(response, "close", None)
+    if callable(close):
+        close()
+
+
+def _connection_response_from_row(persona_id: str, row: dict[str, Any]) -> PersonaConnectionResponse:
+    content = _connection_content_from_row(row)
 
     return PersonaConnectionResponse(
         id=str(row.get("id") or ""),
@@ -556,6 +776,134 @@ async def _get_persona_connections_by_id(
 ) -> dict[str, PersonaConnectionResponse]:
     responses = await _list_persona_connections(db, user_id=user_id, persona_id=persona_id)
     return {response.id: response for response in responses}
+
+
+async def _get_persona_connection_row_or_404(
+    db: CharactersRAGDB,
+    *,
+    user_id: str,
+    persona_id: str,
+    connection_id: str,
+) -> dict[str, Any]:
+    rows = await _list_persona_connection_rows(db, user_id=user_id, persona_id=persona_id)
+    for row in rows:
+        if str(row.get("id") or "").strip() == str(connection_id or "").strip():
+            return row
+    raise HTTPException(status_code=404, detail="Persona connection not found")
+
+
+async def _test_persona_connection(
+    connection_id: str,
+    connection: dict[str, Any],
+    payload: PersonaConnectionTestRequest,
+) -> PersonaConnectionTestResponse:
+    method = str(payload.method or "GET").strip().upper() or "GET"
+    if method not in _PERSONA_CONNECTION_TEST_METHODS:
+        raise HTTPException(status_code=422, detail="Unsupported connection test method")
+
+    request_payload = _render_nested_templates(
+        dict(payload.payload or {}),
+        _safe_template_context(dict(payload.payload or {})),
+    )
+    if not isinstance(request_payload, dict):
+        request_payload = {}
+
+    base_url = str(connection.get("base_url") or "").strip()
+    path = str(payload.path or "").strip()
+    rendered_path = _render_template_value(path, _safe_template_context(request_payload)) if path else ""
+    url = urljoin(base_url.rstrip("/") + "/", rendered_path.lstrip("/")) if rendered_path else base_url
+
+    parsed_url = urlparse(url)
+    final_host = _normalize_hostname(parsed_url.hostname or "")
+    allowed_hosts = [
+        _normalize_hostname(item)
+        for item in list(connection.get("allowed_hosts") or [])
+        if _normalize_hostname(item)
+    ]
+    if not _host_matches_allowlist(final_host, allowed_hosts):
+        return PersonaConnectionTestResponse(
+            ok=False,
+            connection_id=connection_id,
+            method=method,
+            url=url,
+            request_headers={},
+            request_payload=request_payload,
+            timeout_ms=int(connection.get("timeout_ms") or 15000),
+            error=f"Host '{final_host}' is not allowed for this connection.",
+        )
+
+    policy = evaluate_url_policy(url, allowlist=allowed_hosts or None)
+    if not getattr(policy, "allowed", False):
+        reason = str(getattr(policy, "reason", None) or "egress policy denied")
+        return PersonaConnectionTestResponse(
+            ok=False,
+            connection_id=connection_id,
+            method=method,
+            url=url,
+            request_headers={},
+            request_payload=request_payload,
+            timeout_ms=int(connection.get("timeout_ms") or 15000),
+            error=f"Egress policy denied connection test: {reason}",
+        )
+
+    headers, secret = _build_persona_connection_headers(
+        connection,
+        payload=request_payload,
+        extra_headers=dict(payload.headers or {}),
+        auth_header_name=payload.auth_header_name,
+    )
+    timeout_ms = int(connection.get("timeout_ms") or 15000)
+    timeout_seconds = max(0.1, timeout_ms / 1000.0)
+    retry_policy = RetryPolicy()
+    retry_policy.attempts = 1
+    retry_policy.retry_on_unsafe = False
+
+    request_kwargs: dict[str, Any] = {
+        "method": method,
+        "url": url,
+        "headers": headers or None,
+        "timeout": timeout_seconds,
+        "retry": retry_policy,
+    }
+    if method in {"GET", "DELETE", "HEAD"}:
+        request_kwargs["params"] = request_payload or None
+    else:
+        request_kwargs["json"] = request_payload
+
+    started_at = time.perf_counter()
+    try:
+        response = await afetch(**request_kwargs)
+        try:
+            body_preview = _parse_persona_connection_test_response_body(response)
+        finally:
+            await _close_persona_connection_test_response(response)
+    except Exception as exc:
+        return PersonaConnectionTestResponse(
+            ok=False,
+            connection_id=connection_id,
+            method=method,
+            url=url,
+            request_headers=_redact_persona_connection_headers(headers, secret),
+            request_payload=request_payload,
+            timeout_ms=timeout_ms,
+            latency_ms=max(1, int((time.perf_counter() - started_at) * 1000)),
+            error=str(exc),
+        )
+
+    status_code = int(getattr(response, "status_code", 500))
+    return PersonaConnectionTestResponse(
+        ok=200 <= status_code < 400,
+        connection_id=connection_id,
+        method=method,
+        url=url,
+        request_headers=_redact_persona_connection_headers(headers, secret),
+        request_payload=request_payload,
+        timeout_ms=timeout_ms,
+        status_code=status_code,
+        body_preview=body_preview,
+        latency_ms=max(1, int((time.perf_counter() - started_at) * 1000)),
+        error=None if 200 <= status_code < 400 else str(body_preview),
+    )
 
 
 def _voice_target_name(command: VoiceCommand) -> str | None:
@@ -3173,6 +3521,123 @@ async def create_persona_connection(
         raise
     except Exception as exc:
         raise _to_http_exception(exc, action="create persona connection") from exc
+
+
+@router.put(
+    "/profiles/{persona_id}/connections/{connection_id}",
+    response_model=PersonaConnectionResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def update_persona_connection(
+    persona_id: str,
+    connection_id: str,
+    payload: PersonaConnectionUpdate = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaConnectionResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(db, persona_id=persona_id, user_id=user_id, include_deleted=False)
+        row = await _get_persona_connection_row_or_404(
+            db,
+            user_id=user_id,
+            persona_id=persona_id,
+            connection_id=connection_id,
+        )
+        updated_content = _connection_memory_content_from_update(
+            _connection_content_from_row(row),
+            payload,
+        )
+        updated = await _run_persona_db_call(
+            db.update_persona_memory_entry,
+            entry_id=connection_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            update_data={"content": json.dumps(updated_content)},
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Persona connection not found")
+        responses = await _get_persona_connections_by_id(db, user_id=user_id, persona_id=persona_id)
+        response = responses.get(connection_id)
+        if response is None:
+            raise HTTPException(status_code=500, detail="Failed to load updated persona connection")
+        return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="update persona connection") from exc
+
+
+@router.delete(
+    "/profiles/{persona_id}/connections/{connection_id}",
+    response_model=PersonaConnectionDeleteResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def delete_persona_connection(
+    persona_id: str,
+    connection_id: str,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaConnectionDeleteResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(db, persona_id=persona_id, user_id=user_id, include_deleted=False)
+        deleted = await _run_persona_db_call(
+            db.soft_delete_persona_memory_entry,
+            entry_id=connection_id,
+            persona_id=persona_id,
+            user_id=user_id,
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Persona connection not found")
+        return PersonaConnectionDeleteResponse(
+            status="deleted",
+            persona_id=persona_id,
+            connection_id=connection_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="delete persona connection") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/connections/{connection_id}/test",
+    response_model=PersonaConnectionTestResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def test_persona_connection(
+    persona_id: str,
+    connection_id: str,
+    payload: PersonaConnectionTestRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaConnectionTestResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(db, persona_id=persona_id, user_id=user_id, include_deleted=False)
+        row = await _get_persona_connection_row_or_404(
+            db,
+            user_id=user_id,
+            persona_id=persona_id,
+            connection_id=connection_id,
+        )
+        connection = _connection_content_from_row(row)
+        connection["id"] = connection_id
+        return await _test_persona_connection(connection_id, connection, payload)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="test persona connection") from exc
 
 
 @router.get("/catalog", response_model=list[PersonaInfo], tags=["persona"], status_code=status.HTTP_200_OK)
