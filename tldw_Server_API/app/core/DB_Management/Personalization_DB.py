@@ -710,47 +710,79 @@ class PersonalizationDB:
         user_id: str,
         events: list[dict[str, Any]],
     ) -> list[str]:
-        """Insert multiple companion activity events in a single transaction."""
+        """Insert multiple companion activity events in a single transaction.
+
+        Duplicate dedupe keys are skipped so one conflict does not fail the
+        entire batch.
+        """
         if not events:
             return []
 
         import uuid
 
         self.get_or_create_profile(user_id)
-        rows: list[tuple[Any, ...]] = []
-        event_ids: list[str] = []
-        for event in events:
-            event_id = uuid.uuid4().hex
-            event_ids.append(event_id)
-            rows.append(
-                (
-                    event_id,
-                    str(user_id),
-                    str(event["event_type"]),
-                    str(event["source_type"]),
-                    str(event["source_id"]),
-                    str(event["surface"]),
-                    str(event["dedupe_key"]),
-                    json.dumps(event.get("tags")) if event.get("tags") is not None else None,
-                    json.dumps(event.get("provenance") or {}),
-                    json.dumps(event.get("metadata")) if event.get("metadata") is not None else None,
-                    _utcnow_iso(),
-                )
-            )
-
         with self._lock:
             conn = self._connect()
             try:
-                conn.executemany(
-                    """
-                    INSERT INTO companion_activity_events (
-                        id, user_id, event_type, source_type, source_id, surface,
-                        dedupe_key, tags, provenance_json, metadata_json, created_at
+                existing_dedupe_keys: set[str] = set()
+                dedupe_keys = [
+                    str(event.get("dedupe_key"))
+                    for event in events
+                    if str(event.get("dedupe_key", "")).strip()
+                ]
+                if dedupe_keys:
+                    placeholders = ", ".join(["?"] * len(dedupe_keys))
+                    existing_rows = conn.execute(
+                        f"""
+                        SELECT dedupe_key
+                        FROM companion_activity_events
+                        WHERE user_id = ? AND dedupe_key IN ({placeholders})
+                        """,  # nosec B608
+                        (str(user_id), *dedupe_keys),
+                    ).fetchall()
+                    existing_dedupe_keys = {str(row["dedupe_key"]) for row in existing_rows}
+
+                rows: list[tuple[Any, ...]] = []
+                seen_dedupe_keys: set[str] = set(existing_dedupe_keys)
+                for event in events:
+                    dedupe_key = str(event["dedupe_key"])
+                    if dedupe_key in seen_dedupe_keys:
+                        continue
+                    seen_dedupe_keys.add(dedupe_key)
+                    event_id = uuid.uuid4().hex
+                    rows.append(
+                        (
+                            event_id,
+                            str(user_id),
+                            str(event["event_type"]),
+                            str(event["source_type"]),
+                            str(event["source_id"]),
+                            str(event["surface"]),
+                            dedupe_key,
+                            json.dumps(event.get("tags")) if event.get("tags") is not None else None,
+                            json.dumps(event.get("provenance") or {}),
+                            json.dumps(event.get("metadata")) if event.get("metadata") is not None else None,
+                            _utcnow_iso(),
+                        )
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows,
-                )
+
+                if not rows:
+                    return []
+
+                event_ids: list[str] = []
+                for row in rows:
+                    cursor = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO companion_activity_events (
+                            id, user_id, event_type, source_type, source_id, surface,
+                            dedupe_key, tags, provenance_json, metadata_json, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        row,
+                    )
+                    if cursor.rowcount == 1:
+                        event_ids.append(str(row[0]))
                 conn.commit()
                 return event_ids
             finally:

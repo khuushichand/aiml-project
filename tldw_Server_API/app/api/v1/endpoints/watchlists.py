@@ -64,6 +64,8 @@ from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _g
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.exceptions import TemplateValidationError
 from tldw_Server_API.app.core.Personalization.companion_activity import (
+    build_watchlist_source_bulk_import_activity,
+    record_companion_activity_events_bulk,
     record_watchlist_item_updated,
     record_watchlist_source_created,
     record_watchlist_source_deleted,
@@ -1618,6 +1620,7 @@ async def import_sources_opml(
     if group_id is not None:
         _validate_group_ids(db, [group_id])
     items: list[SourcesImportItem] = []
+    companion_events: list[dict[str, Any]] = []
     created = skipped = errors = 0
     default_tags = tags or []
     for e in entries:
@@ -1655,11 +1658,24 @@ async def import_sources_opml(
                 tags=default_tags,
                 group_ids=([group_id] if group_id else []),
             )
+            companion_events.append(
+                build_watchlist_source_bulk_import_activity(
+                    source=row,
+                    operation="import_create",
+                    route="/api/v1/watchlists/sources/import",
+                    surface="api.watchlists.sources.import",
+                )
+            )
             items.append(SourcesImportItem(url=url_str, name=row.name, id=row.id, status="created"))
             created += 1
         except (*_WATCHLISTS_NONCRITICAL_EXCEPTIONS, _DatabaseError) as exc:
             items.append(SourcesImportItem(url=url_str, name=e.name, status="skipped", error=str(exc)))
             skipped += 1
+    await asyncio.to_thread(
+        record_companion_activity_events_bulk,
+        user_id=current_user.id,
+        events=companion_events,
+    )
     return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
 
 
@@ -2257,6 +2273,7 @@ async def bulk_create_sources(
     db = Depends(get_watchlists_db_for_user),
 ):
     items: list[SourcesBulkCreateItem] = []
+    companion_events: list[dict[str, Any]] = []
     created_count = 0
     errors_count = 0
     for s in payload.sources:
@@ -2368,6 +2385,15 @@ async def bulk_create_sources(
                 tags=s.tags or [],
                 group_ids=s.group_ids or [],
             )
+            if getattr(row, "was_created", False):
+                companion_events.append(
+                    build_watchlist_source_bulk_import_activity(
+                        source=row,
+                        operation="bulk_create",
+                        route="/api/v1/watchlists/sources/bulk",
+                        surface="api.watchlists.sources.bulk",
+                    )
+                )
             # Echo request name for stable per-entry mapping, even on idempotent creates
             items.append(
                 SourcesBulkCreateItem(
@@ -2392,6 +2418,11 @@ async def bulk_create_sources(
             )
             errors_count += 1
 
+    await asyncio.to_thread(
+        record_companion_activity_events_bulk,
+        user_id=current_user.id,
+        events=companion_events,
+    )
     return SourcesBulkCreateResponse(
         items=items,
         total=len(items),
