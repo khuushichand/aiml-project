@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.schemas.workspace_schemas import (
     StatusResponse,
     WorkspaceArtifactCreateRequest,
@@ -25,7 +26,7 @@ from tldw_Server_API.app.api.v1.schemas.workspace_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(check_rate_limit)])
 
 
 def _ws_to_response(ws: dict) -> WorkspaceResponse:
@@ -190,7 +191,10 @@ async def delete_workspace(
 ):
     """Soft-delete a workspace and cascade soft-delete its conversations."""
     ws = _require_workspace(db, workspace_id)
-    db.delete_workspace(workspace_id, ws["version"])
+    try:
+        db.delete_workspace(workspace_id, ws["version"])
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # ── Sources ─────────────────────────────────────────────────────
