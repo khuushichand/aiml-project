@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import platform
 from collections.abc import Iterable
@@ -22,6 +23,7 @@ class Qwen3MlxRuntime:
         self._load_model = None
         self._model = None
         self._model_id: str | None = None
+        self._model_lock = asyncio.Lock()
 
     async def initialize(self) -> bool:
         if platform.system() != "Darwin" or platform.machine().lower() != "arm64":
@@ -119,17 +121,42 @@ class Qwen3MlxRuntime:
             )
         return speaker
 
-    def _get_model(self, resolved_model: str):
+    async def _get_model(self, resolved_model: str):
         backend_model_id = self._resolve_backend_model_id(resolved_model)
-        if self._model is None or self._model_id != backend_model_id:
-            if self._load_model is None:
-                raise TTSProviderInitializationError(
-                    "mlx-audio backend was not initialized",
-                    provider=self.adapter.PROVIDER_KEY,
-                )
-            self._model = self._load_model(backend_model_id)
-            self._model_id = backend_model_id
+        if self._model is not None and self._model_id == backend_model_id:
+            return self._model, backend_model_id
+        if self._load_model is None:
+            raise TTSProviderInitializationError(
+                "mlx-audio backend was not initialized",
+                provider=self.adapter.PROVIDER_KEY,
+            )
+        async with self._model_lock:
+            if self._model is None or self._model_id != backend_model_id:
+                self._model = await asyncio.to_thread(self._load_model, backend_model_id)
+                self._model_id = backend_model_id
         return self._model, backend_model_id
+
+    def _run_generation(
+        self,
+        model: object,
+        *,
+        text: str,
+        speaker: str,
+        language: str,
+        speed: float,
+    ) -> tuple[np.ndarray, int]:
+        if not hasattr(model, "generate"):
+            raise TTSGenerationError(
+                "MLX runtime model does not expose generate()",
+                provider=self.adapter.PROVIDER_KEY,
+            )
+        results = model.generate(
+            text=text,
+            voice=speaker,
+            language=language,
+            speed=speed,
+        )
+        return self._collect_pcm_audio(results)
 
     def _collect_pcm_audio(self, results: Iterable[object]) -> tuple[np.ndarray, int]:
         chunks: list[np.ndarray] = []
@@ -159,18 +186,19 @@ class Qwen3MlxRuntime:
 
     async def generate(self, request: TTSRequest, resolved_model: str, mode: str) -> TTSResponse:
         self.validate_mode(request, mode)
-        model, backend_model_id = self._get_model(resolved_model)
+        model, backend_model_id = await self._get_model(resolved_model)
         speaker = self._resolve_speaker(request)
         language = self._resolve_language(request)
 
         try:
-            results = model.generate(
+            pcm_audio, sample_rate = await asyncio.to_thread(
+                self._run_generation,
+                model,
                 text=request.text,
-                voice=speaker,
+                speaker=speaker,
                 language=language,
                 speed=request.speed,
             )
-            pcm_audio, sample_rate = self._collect_pcm_audio(results)
         except Exception as exc:
             raise TTSGenerationError(
                 "Qwen3-TTS MLX runtime generation failed",

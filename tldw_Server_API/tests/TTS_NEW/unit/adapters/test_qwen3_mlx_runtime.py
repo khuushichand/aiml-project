@@ -1,6 +1,7 @@
+import asyncio
+import platform
 import sys
 import types
-import platform
 
 import numpy as np
 import pytest
@@ -32,6 +33,7 @@ def fake_mlx_audio_module(monkeypatch):
     mlx_audio_module = types.ModuleType("mlx_audio")
     mlx_audio_tts_module = types.ModuleType("mlx_audio.tts")
     mlx_audio_utils_module = types.ModuleType("mlx_audio.tts.utils")
+    load_calls = {"count": 0}
 
     class _FakeResult:
         def __init__(self):
@@ -42,11 +44,16 @@ def fake_mlx_audio_module(monkeypatch):
         def generate(self, **_kwargs):
             yield _FakeResult()
 
-    mlx_audio_utils_module.load_model = lambda _model_id: _FakeModel()
+    def fake_load_model(_model_id):
+        load_calls["count"] += 1
+        return _FakeModel()
+
+    mlx_audio_utils_module.load_model = fake_load_model
 
     monkeypatch.setitem(sys.modules, "mlx_audio", mlx_audio_module)
     monkeypatch.setitem(sys.modules, "mlx_audio.tts", mlx_audio_tts_module)
     monkeypatch.setitem(sys.modules, "mlx_audio.tts.utils", mlx_audio_utils_module)
+    return load_calls
 
 
 @pytest.mark.asyncio
@@ -70,6 +77,58 @@ async def test_mlx_runtime_generates_preset_speaker_audio(fake_mlx_audio_module,
 
     assert response.audio_content
     assert response.metadata["runtime"] == "mlx"
+
+
+@pytest.mark.asyncio
+async def test_mlx_runtime_offloads_model_load_and_generation(fake_mlx_audio_module, monkeypatch):
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+
+    to_thread_calls = []
+
+    async def fake_to_thread(func, *args, **kwargs):
+        to_thread_calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    adapter = Qwen3TTSAdapter({"runtime": "mlx", "device": "mps"})
+
+    await adapter.ensure_initialized()
+
+    request = TTSRequest(
+        text="hello",
+        voice="Vivian",
+        format=AudioFormat.PCM,
+        stream=False,
+    )
+    request.model = "auto"
+
+    await adapter.generate(request)
+
+    assert to_thread_calls == ["fake_load_model", "_run_generation"]
+
+
+@pytest.mark.asyncio
+async def test_mlx_runtime_serializes_concurrent_model_loads(fake_mlx_audio_module, monkeypatch):
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+
+    async def fake_to_thread(func, *args, **kwargs):
+        await asyncio.sleep(0)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    adapter = Qwen3TTSAdapter({"runtime": "mlx", "device": "mps"})
+
+    await adapter.ensure_initialized()
+    runtime = adapter._get_runtime()
+
+    models = await asyncio.gather(runtime._get_model("auto"), runtime._get_model("auto"))
+
+    assert models[0][0] is models[1][0]
+    assert fake_mlx_audio_module["count"] == 1
 
 
 @pytest.mark.asyncio

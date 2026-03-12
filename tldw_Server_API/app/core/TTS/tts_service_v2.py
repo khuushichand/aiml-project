@@ -1257,6 +1257,7 @@ class TTSServiceV2:
         return data
 
     def _resolve_circuit_breaker_key(self, provider_key: str, adapter: Optional[Any] = None) -> str:
+        """Return the circuit-breaker key, namespacing Qwen runtimes when available."""
         if provider_key != "qwen3_tts" or adapter is None:
             return provider_key
 
