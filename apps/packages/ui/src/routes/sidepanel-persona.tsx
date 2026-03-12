@@ -11,12 +11,15 @@ import { useTranslation } from "react-i18next"
 
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { PersonaPolicySummary } from "@/components/Option/MCPHub"
+import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
+import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
 import { LiveSessionPanel } from "@/components/PersonaGarden/LiveSessionPanel"
 import { PersonaGardenTabs } from "@/components/PersonaGarden/PersonaGardenTabs"
 import { PoliciesPanel } from "@/components/PersonaGarden/PoliciesPanel"
 import { ProfilePanel } from "@/components/PersonaGarden/ProfilePanel"
 import { ScopesPanel } from "@/components/PersonaGarden/ScopesPanel"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
+import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
@@ -2079,6 +2082,28 @@ const SidepanelPersona = ({
 
   const tabItems = [
     {
+      key: "commands",
+      label: t("sidepanel:persona.tabCommands", "Commands"),
+      content: (
+        <CommandsPanel
+          selectedPersonaId={selectedPersonaId}
+          selectedPersonaName={selectedPersonaName}
+          isActive={activeTab === "commands"}
+        />
+      )
+    },
+    {
+      key: "test-lab",
+      label: t("sidepanel:persona.tabTestLab", "Test Lab"),
+      content: (
+        <TestLabPanel
+          selectedPersonaId={selectedPersonaId}
+          selectedPersonaName={selectedPersonaName}
+          isActive={activeTab === "test-lab"}
+        />
+      )
+    },
+    {
       key: "live",
       label: t("sidepanel:persona.tabLive", "Live Session"),
       content: (
@@ -2112,6 +2137,17 @@ const SidepanelPersona = ({
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "voice"}
+        />
+      )
+    },
+    {
+      key: "connections",
+      label: t("sidepanel:persona.tabConnections", "Connections"),
+      content: (
+        <ConnectionsPanel
+          selectedPersonaId={selectedPersonaId}
+          selectedPersonaName={selectedPersonaName}
+          isActive={activeTab === "connections"}
         />
       )
     },
