@@ -632,6 +632,7 @@ export function ServerChatList({
           (prev || []).filter((id) => id !== chat.id)
         )
         queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
+        setOpenMenuFor(null)
         if (serverChatId === chat.id) {
           clearChat()
         }
@@ -709,6 +710,7 @@ export function ServerChatList({
         })
         setPinnedChatIds((prev) => (prev || []).filter((id) => id !== chat.id))
         queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
+        setOpenMenuFor(null)
         if (serverChatId === chat.id) {
           clearChat()
         }
@@ -786,9 +788,10 @@ export function ServerChatList({
         return
       }
       if (isTrashView) return
+      if (chat.id === serverChatId) return
       selectServerChat(chat)
     },
-    [isTrashView, selectionMode, selectServerChat, toggleChatSelected]
+    [isTrashView, selectionMode, selectServerChat, serverChatId, toggleChatSelected]
   )
 
   const selectionPropsForChat = React.useCallback(

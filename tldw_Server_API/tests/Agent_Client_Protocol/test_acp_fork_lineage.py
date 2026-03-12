@@ -25,6 +25,7 @@ async def _create_session(store, session_id, forked_from=None):
         user_id=1,
         agent_type="claude_code",
         name=f"Session {session_id}",
+        forked_from=forked_from,
     )
     if forked_from is not None:
         # Set forked_from directly in the DB

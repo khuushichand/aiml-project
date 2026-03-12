@@ -19,6 +19,8 @@ agents:
     name: Claude Code
     description: "Anthropic's Claude Code agent"
     command: claude
+    args: []
+    env: {}
     requires_api_key: ANTHROPIC_API_KEY
     default: true
     install_instructions:
@@ -29,6 +31,8 @@ agents:
     name: OpenAI Codex CLI
     description: "OpenAI's coding agent"
     command: codex
+    args: []
+    env: {}
     requires_api_key: OPENAI_API_KEY
     install_instructions:
       - "npm install -g @openai/codex"
@@ -61,18 +65,25 @@ agents:
     install_instructions:
       - "npm install -g @continuedev/cli"
     docs_url: "https://continue.dev"
+    default: false
 
   - type: opencode
     name: OpenCode
     description: "Terminal-based AI coding assistant"
     command: opencode
+    args: []
+    env: {}
     requires_api_key: null
     install_instructions:
       - "go install github.com/sst/opencode@latest"
     docs_url: "https://github.com/sst/opencode"
+    default: false
 
   - type: custom
     name: Custom Agent
-    description: "Configure a custom agent"
+    description: "Configure a custom agent with your own settings"
     command: ""
+    args: []
+    env: {}
     requires_api_key: null
+    default: false

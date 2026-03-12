@@ -17,6 +17,13 @@ const SHORTCUT_SUPPRESSION_SELECTORS = [
   ".ant-modal-root"
 ].join(",")
 
+const INTERACTIVE_SHORTCUT_SELECTORS = [
+  "button",
+  "a[href]",
+  "[role='link']",
+  "summary"
+].join(",")
+
 const toElement = (target: EventTarget | null): HTMLElement | null => {
   if (!target) return null
   if (target instanceof HTMLElement) return target
@@ -37,6 +44,7 @@ export function shouldHandleGlobalShortcut(target: EventTarget | null): boolean 
   if (element.getAttribute("role") === "button") return false
   if (element.isContentEditable) return false
   if (element.closest("input, textarea, select, [contenteditable='true']")) return false
+  if (element.closest(INTERACTIVE_SHORTCUT_SELECTORS)) return false
   if (element.closest(SHORTCUT_SUPPRESSION_SELECTORS)) return false
 
   return true

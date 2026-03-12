@@ -762,6 +762,7 @@ export const MediaReviewReadingPane: React.FC<MediaReviewReadingPaneProps> = ({ 
             <SectionNavigator
               content={primaryContent}
               onNavigate={(section) => {
+                // Scroll the content area to the section offset
                 const contentEl = viewerRef?.current?.querySelector("[data-testid^='media-review-content-body-']")
                 if (!contentEl) return
                 scrollSectionIntoView(contentEl, section)

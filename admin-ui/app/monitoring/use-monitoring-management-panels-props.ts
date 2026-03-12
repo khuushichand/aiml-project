@@ -16,7 +16,6 @@ import type {
 } from './types';
 
 type UseMonitoringManagementPanelsPropsArgs = {
-  unsafeLocalToolsEnabled: boolean;
   alertRules: AlertRule[];
   alertRuleDraft: AlertRuleDraft;
   alertRuleValidationErrors: AlertRuleValidationErrors;
@@ -53,7 +52,6 @@ type UseMonitoringManagementPanelsPropsArgs = {
 };
 
 export const useMonitoringManagementPanelsProps = ({
-  unsafeLocalToolsEnabled,
   alertRules,
   alertRuleDraft,
   alertRuleValidationErrors,
@@ -94,13 +92,12 @@ export const useMonitoringManagementPanelsProps = ({
 
   return useMemo(
     () => ({
-      unsafeLocalToolsEnabled,
       alertRulesPanelProps: {
         rules: alertRules,
         draft: alertRuleDraft,
         errors: alertRuleValidationErrors,
         saving: alertRulesSaving,
-        mutationsEnabled: unsafeLocalToolsEnabled,
+        mutationsEnabled: true,
         onDraftChange: handleAlertRuleDraftChange,
         onCreateRule: handleCreateAlertRule,
         onDeleteRule: handleDeleteAlertRule,
@@ -111,7 +108,7 @@ export const useMonitoringManagementPanelsProps = ({
         showSnoozed: showSnoozedAlerts,
         assignableUsers,
         loading,
-        localActionsEnabled: unsafeLocalToolsEnabled,
+        localActionsEnabled: true,
         onToggleShowSnoozed: handleToggleShowSnoozed,
         onAcknowledge: handleAcknowledgeAlert,
         onDismiss: handleDismissAlert,
@@ -176,7 +173,6 @@ export const useMonitoringManagementPanelsProps = ({
       showCreateWatchlist,
       showSnoozedAlerts,
       systemStatus,
-      unsafeLocalToolsEnabled,
       watchlists,
     ]
   );

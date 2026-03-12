@@ -154,6 +154,40 @@ export interface BackupsResponse {
   offset: number;
 }
 
+export interface BackupScheduleItem {
+  id: string;
+  dataset: string;
+  target_user_id?: number | null;
+  frequency: 'daily' | 'weekly' | 'monthly';
+  time_of_day: string;
+  timezone: string;
+  anchor_day_of_week?: number | null;
+  anchor_day_of_month?: number | null;
+  retention_count: number;
+  is_paused: boolean;
+  schedule_description: string;
+  next_run_at?: string | null;
+  last_run_at?: string | null;
+  last_status?: string | null;
+  last_job_id?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface BackupScheduleListResponse {
+  items: BackupScheduleItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface BackupScheduleMutationResponse {
+  status: string;
+  item: BackupScheduleItem;
+}
+
 export interface RetentionPolicy {
   key: string;
   days?: number | null;

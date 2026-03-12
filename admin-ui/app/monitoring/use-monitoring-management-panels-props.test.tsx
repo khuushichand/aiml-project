@@ -3,7 +3,7 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useMonitoringManagementPanelsProps } from './use-monitoring-management-panels-props';
 
-const createArgs = () => ({
+  const createArgs = () => ({
   alertRules: [
     {
       id: 'rule-1',
@@ -24,7 +24,6 @@ const createArgs = () => ({
   },
   alertRuleValidationErrors: {},
   alertRulesSaving: false,
-  unsafeLocalToolsEnabled: false,
   handleAlertRuleDraftChange: vi.fn(),
   handleCreateAlertRule: vi.fn(),
   handleDeleteAlertRule: vi.fn(),
@@ -105,9 +104,9 @@ describe('useMonitoringManagementPanelsProps', () => {
     const { result } = renderHook(() => useMonitoringManagementPanelsProps(args));
 
     expect(result.current.alertRulesPanelProps.rules).toHaveLength(1);
-    expect(result.current.alertRulesPanelProps.mutationsEnabled).toBe(false);
+    expect(result.current.alertRulesPanelProps.mutationsEnabled).toBe(true);
     expect(result.current.alertsPanelProps.alerts).toHaveLength(1);
-    expect(result.current.alertsPanelProps.localActionsEnabled).toBe(false);
+    expect(result.current.alertsPanelProps.localActionsEnabled).toBe(true);
     expect(result.current.watchlistsPanelProps.watchlists).toHaveLength(1);
     expect(result.current.notificationsPanelProps.recentNotifications).toHaveLength(1);
     expect(result.current.systemStatusPanelProps.systemStatus).toHaveLength(1);

@@ -269,6 +269,7 @@ export interface MediaReviewActions {
   handleBatchMoveToTrash: () => Promise<void>
   handleBatchExport: () => void
   handleBatchReprocess: () => Promise<void>
+  handleCompareContent: () => Promise<void>
   handleChatAboutSelection: () => void
   expandAllContent: () => void
   collapseAllContent: () => void
@@ -277,6 +278,7 @@ export interface MediaReviewActions {
   getSelectedNumericIds: () => number[]
   openTrashFromBatch: (deletedIds: Array<string | number>) => void
   confirmBatchTrash: () => Promise<boolean>
+  resolveDetailForCompare: (id: string | number) => Promise<MediaDetail | null>
 }
 
 // ── RenderCard options ──────────────────────────────────────────
