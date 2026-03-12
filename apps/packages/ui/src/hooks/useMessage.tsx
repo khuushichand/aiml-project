@@ -83,6 +83,7 @@ import {
 import { resolveServerChatAssistantIdentity } from "@/hooks/chat/useServerChatLoader";
 import {
   characterToAssistantSelection,
+  isPersonaAssistantSelection,
   personaToAssistantSelection,
 } from "@/types/assistant-selection";
 import { ensurePersonaServerChat } from "@/hooks/chat/personaServerChat";
@@ -285,7 +286,7 @@ export const useMessage = () => {
         const chat = await tldwClient.getChat(serverChatId);
         const { assistantKind, assistantId, characterId, personaMemoryMode } =
           resolveServerChatAssistantIdentity(
-            (chat as Record<string, unknown> | null) ?? null,
+            (chat as unknown as Record<string, unknown> | null) ?? null,
           );
         setServerChatTitle(String((chat as any)?.title || ""));
         setServerChatCharacterId(characterId);
@@ -2394,7 +2395,7 @@ export const useMessage = () => {
               regenerateFromMessage,
               serverChatIdOverride,
             );
-          } else if (selectedAssistant?.kind === "persona") {
+          } else if (isPersonaAssistantSelection(selectedAssistant)) {
             const personaServerChat = await ensurePersonaServerChat({
               assistant: selectedAssistant,
               serverChatIdOverride,
@@ -2440,7 +2441,6 @@ export const useMessage = () => {
                 selectedSystemPrompt: resolvedSelectedSystemPrompt,
                 currentChatModelSettings,
                 setMessages,
-                saveMessageOnSuccess,
                 saveMessageOnError,
                 setHistory,
                 setIsProcessing,
@@ -2451,7 +2451,6 @@ export const useMessage = () => {
                   id: string,
                   options?: { preserveServerChatId?: boolean },
                 ) => void,
-                serverChatId: personaServerChat.chatId,
                 assistantIdentity: {
                   name: selectedAssistant.name,
                   avatarUrl:
@@ -2459,6 +2458,11 @@ export const useMessage = () => {
                       ? selectedAssistant.avatar_url
                       : undefined,
                 },
+                saveMessageOnSuccess: (data) =>
+                  saveMessageOnSuccess({
+                    ...data,
+                    conversationId: personaServerChat.chatId,
+                  }),
                 webSearch: resolvedWebSearch,
                 setIsSearchingInternet,
                 uploadedFiles,

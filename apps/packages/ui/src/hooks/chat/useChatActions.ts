@@ -999,6 +999,7 @@ export const useChatActions = ({
     model,
     regenerateFromMessage,
     character,
+    controller,
     messageSteering,
     serverChatIdOverride,
   }: {
@@ -1011,6 +1012,7 @@ export const useChatActions = ({
     model: string;
     regenerateFromMessage?: Message;
     character?: Character | null;
+    controller: AbortController;
     serverChatIdOverride?: string | null;
     messageSteering: {
       continueAsUser: boolean;
@@ -1122,6 +1124,7 @@ export const useChatActions = ({
     let pendingStreamingText = "";
     let pendingReasoningTime = 0;
     let lastStreamingUpdateAt = 0;
+    let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
     const flushStreamingUpdate = () => {
       if (pendingStreamingText.length === 0) return;
@@ -1472,7 +1475,6 @@ export const useChatActions = ({
 
       const shouldPersistToServer = !temporaryChat;
       const STREAM_INACTIVITY_TIMEOUT_MS = 60_000;
-      let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
       let inactivityAborted = false;
       const resetInactivityTimer = () => {
         if (inactivityTimer) clearTimeout(inactivityTimer);
@@ -2137,13 +2139,16 @@ export const useChatActions = ({
         ? imageBackendOverride.trim()
         : "";
     let signal: AbortSignal;
+    let activeAbortController: AbortController;
     if (!controller) {
       const newController = new AbortController();
       signal = newController.signal;
+      activeAbortController = newController;
       setAbortController(newController);
     } else {
       setAbortController(controller);
       signal = controller.signal;
+      activeAbortController = controller;
     }
 
     const messageSteeringForTurn = messageSteeringOverride
@@ -2418,6 +2423,7 @@ export const useChatActions = ({
               model: resolvedModel,
               regenerateFromMessage,
               character: resolvedSelectedCharacter,
+              controller: activeAbortController,
               messageSteering: messageSteeringForTurn,
               serverChatIdOverride,
             });
@@ -2460,7 +2466,6 @@ export const useChatActions = ({
                 ...enhancedChatModeParams,
                 assistantIdentity,
                 historyId: personaServerChat.historyId,
-                serverChatId: personaServerChat.chatId,
                 saveMessageOnSuccess: (data: SaveMessageData) =>
                   saveMessageOnSuccess({
                     ...data,
