@@ -14,7 +14,7 @@
 - [x] Task 2: Add Env-Gated Backend Test-Support Router For Reset, Seed, And Session Bootstrap
 - [x] Task 3: Make Login And Session Bootstrap Real In Both Auth Modes
 - [x] Task 4: Add DSR Real-Backend E2E Coverage
-- [ ] Task 5: Add Backup Scheduling Real-Backend E2E Coverage
+- [x] Task 5: Add Backup Scheduling Real-Backend E2E Coverage
 - [ ] Task 6: Add Monitoring Authority And Debug RBAC Real-Backend E2E Coverage
 - [ ] Task 7: Wire The Real-Backend Lane Into CI And Project Scripts
 

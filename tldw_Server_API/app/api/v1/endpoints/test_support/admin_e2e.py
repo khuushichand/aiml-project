@@ -23,7 +23,7 @@ router = APIRouter()
 @router.post("/reset", response_model=AdminE2EResetResponse)
 async def reset_admin_e2e() -> AdminE2EResetResponse:
     """Reset transient admin e2e seed state."""
-    return AdminE2EResetResponse(**reset_admin_e2e_state())
+    return AdminE2EResetResponse(**(await reset_admin_e2e_state()))
 
 
 @router.post("/seed", response_model=AdminE2ESeedResponse)
@@ -45,4 +45,4 @@ async def bootstrap_jwt_session(
 @router.post("/run-due-backup-schedules", response_model=AdminE2ERunDueBackupSchedulesResponse)
 async def run_due_backup_schedules() -> AdminE2ERunDueBackupSchedulesResponse:
     """Trigger a deterministic scheduler tick for backup schedule browser tests."""
-    return AdminE2ERunDueBackupSchedulesResponse(**run_due_backup_schedules_for_admin_e2e())
+    return AdminE2ERunDueBackupSchedulesResponse(**(await run_due_backup_schedules_for_admin_e2e()))

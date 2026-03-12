@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import shutil
 import os
 import secrets
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, status
+from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
@@ -32,9 +35,52 @@ _SEEDED_ALERT_ID = "alert-cpu-high"
 _SEEDED_PRINCIPALS: dict[str, dict[str, Any]] = {}
 
 
-def reset_admin_e2e_state() -> dict[str, Any]:
-    """Clear transient in-memory seed state used by browser bootstrap helpers."""
+async def _get_backup_schedules_repo():
+    from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import (
+        AuthnzBackupSchedulesRepo,
+    )
+
+    pool = await get_db_pool()
+    repo = AuthnzBackupSchedulesRepo(pool)
+    await repo.ensure_schema()
+    return repo
+
+
+async def _soft_delete_all_backup_schedules() -> int:
+    repo = await _get_backup_schedules_repo()
+    deleted = 0
+    deleted_at = datetime.now(timezone.utc).isoformat()
+    while True:
+        items, _ = await repo.list_schedules(limit=200, offset=0, include_deleted=False)
+        if not items:
+            break
+        for item in items:
+            if await repo.delete_schedule(str(item["id"]), deleted_at=deleted_at):
+                deleted += 1
+    return deleted
+
+
+def _clear_backup_artifacts() -> int:
+    backup_root = str(os.getenv("TLDW_DB_BACKUP_PATH") or "").strip()
+    if not backup_root:
+        return 0
+    backup_dir = Path(backup_root)
+    if not backup_dir.exists():
+        return 0
+    shutil.rmtree(backup_dir)
+    return 1
+
+
+async def reset_admin_e2e_state() -> dict[str, Any]:
+    """Clear transient seed state and delete admin-e2e backup schedule artifacts."""
     _SEEDED_PRINCIPALS.clear()
+    deleted_schedules = await _soft_delete_all_backup_schedules()
+    deleted_backup_dirs = _clear_backup_artifacts()
+    logger.debug(
+        "Admin e2e reset completed: deleted_schedules={} deleted_backup_dirs={}",
+        deleted_schedules,
+        deleted_backup_dirs,
+    )
     return {"ok": True}
 
 
@@ -483,6 +529,70 @@ async def bootstrap_admin_e2e_jwt_session(principal_key: str) -> dict[str, Any]:
     }
 
 
-def run_due_backup_schedules_for_admin_e2e() -> dict[str, Any]:
-    """Deterministic placeholder until backup schedule browser coverage is implemented."""
-    return {"ok": True, "triggered_runs": 0}
+async def run_due_backup_schedules_for_admin_e2e() -> dict[str, Any]:
+    """Force active backup schedules due now and process the resulting queued jobs once."""
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+    from tldw_Server_API.app.core.Storage.backup_schedule_jobs import (
+        BACKUP_SCHEDULE_DOMAIN,
+        BACKUP_SCHEDULE_JOB_TYPE,
+    )
+    from tldw_Server_API.app.services.admin_backup_jobs_worker import handle_backup_schedule_job
+    from tldw_Server_API.app.services.admin_backup_scheduler import _AdminBackupScheduler
+
+    repo = await _get_backup_schedules_repo()
+    scheduler = _AdminBackupScheduler(repo=repo)
+    jobs = JobManager()
+
+    active_schedules: list[dict[str, Any]] = []
+    offset = 0
+    page_size = 200
+    while True:
+        page, total = await repo.list_schedules(limit=page_size, offset=offset, include_deleted=False)
+        active_schedules.extend([item for item in page if not bool(item.get("is_paused"))])
+        offset += len(page)
+        if not page or offset >= int(total):
+            break
+
+    if not active_schedules:
+        return {"ok": True, "triggered_runs": 0}
+
+    existing_job_ids = {
+        str(job["id"])
+        for job in jobs.list_jobs(
+            domain=BACKUP_SCHEDULE_DOMAIN,
+            job_type=BACKUP_SCHEDULE_JOB_TYPE,
+            limit=500,
+        )
+    }
+
+    forced_due = datetime.now(timezone.utc).replace(second=0, microsecond=0).isoformat()
+    for schedule in active_schedules:
+        await repo.update_schedule(
+            str(schedule["id"]),
+            next_run_at=forced_due,
+            updated_by_user_id=(
+                int(schedule["updated_by_user_id"])
+                if schedule.get("updated_by_user_id") is not None
+                else None
+            ),
+        )
+        await scheduler._run_schedule(str(schedule["id"]))
+
+    queued_new_jobs = [
+        job
+        for job in jobs.list_jobs(
+            domain=BACKUP_SCHEDULE_DOMAIN,
+            job_type=BACKUP_SCHEDULE_JOB_TYPE,
+            status="queued",
+            limit=500,
+        )
+        if str(job["id"]) not in existing_job_ids
+    ]
+
+    triggered_runs = 0
+    for job in sorted(queued_new_jobs, key=lambda item: int(item["id"])):
+        result = await handle_backup_schedule_job(job, repo=repo)
+        jobs.complete_job(int(job["id"]), result=result, enforce=False)
+        triggered_runs += 1
+
+    return {"ok": True, "triggered_runs": triggered_runs}

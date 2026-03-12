@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { type RealBackendProjectEnv } from './project-env';
@@ -12,6 +12,7 @@ export type ManagedBackendProcess = {
 
 const repoRoot = resolve(process.cwd(), '..');
 const lifecycleScript = resolve(repoRoot, 'tldw_Server_API/scripts/server_lifecycle.py');
+const tempRoot = realpathSync('/tmp');
 
 const getPythonCommand = (): string => {
   if (process.env.TLDW_ADMIN_E2E_PYTHON) {
@@ -68,10 +69,16 @@ export const buildBackendEnv = (
   SINGLE_USER_TEST_API_KEY: process.env.SINGLE_USER_TEST_API_KEY || 'single-user-admin-key',
   DATABASE_URL:
     process.env.DATABASE_URL
-    || `sqlite:////tmp/${project.serverLabel}-authnz.db`,
+    || `sqlite:////${tempRoot.replace(/^\/+/, '')}/${project.serverLabel}-authnz.db`,
+  JOBS_DB_PATH:
+    process.env.JOBS_DB_PATH
+    || `${tempRoot}/${project.serverLabel}-jobs.db`,
+  TLDW_DB_BACKUP_PATH:
+    process.env.TLDW_DB_BACKUP_PATH
+    || `${tempRoot}/${project.serverLabel}-backups`,
   USER_DB_BASE_DIR:
     process.env.USER_DB_BASE_DIR
-    || `/tmp/${project.serverLabel}-userdbs`,
+    || `${tempRoot}/${project.serverLabel}-userdbs`,
   ...overrides,
 });
 
