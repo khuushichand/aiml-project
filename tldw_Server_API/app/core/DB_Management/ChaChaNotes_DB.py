@@ -4730,6 +4730,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     name          TEXT    NOT NULL,
                     description   TEXT,
                     metadata_json TEXT    NOT NULL DEFAULT '{}',
+                    archived      BOOLEAN  NOT NULL DEFAULT 0,
                     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     deleted       BOOLEAN  NOT NULL DEFAULT 0,
@@ -13025,7 +13026,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         set_clauses = ["last_modified = ?", "version = ?"]
         params: list[Any] = [now, expected_version + 1]
 
-        for col in ("name", "description", "metadata_json"):
+        for col in ("name", "description", "metadata_json", "archived"):
             if col in update_data:
                 set_clauses.append(f"{col} = ?")
                 params.append(update_data[col])
