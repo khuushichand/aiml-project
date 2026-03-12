@@ -84,6 +84,61 @@ def test_migration_v25_to_latest_creates_persona_tables(db_path: Path):
     migrated.close_connection()
 
 
+def test_migration_v36_to_latest_adds_voice_command_persona_columns(db_path: Path):
+    db = CharactersRAGDB(db_path, "voice-command-seed-client")
+    db.close_connection()
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            "UPDATE db_schema_version SET version = ? WHERE schema_name = ?",
+            (36, CharactersRAGDB._SCHEMA_NAME),
+        )
+        conn.execute("DROP TABLE IF EXISTS voice_commands")
+        conn.execute(
+            """
+            CREATE TABLE voice_commands (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                phrases TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                action_config TEXT NOT NULL,
+                priority INTEGER DEFAULT 0,
+                enabled INTEGER DEFAULT 1,
+                requires_confirmation INTEGER DEFAULT 0,
+                description TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                deleted INTEGER DEFAULT 0
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_voice_commands_user_id ON voice_commands(user_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voice_commands_enabled ON voice_commands(enabled, deleted)"
+        )
+        conn.commit()
+
+    migrated = CharactersRAGDB(db_path, "voice-command-migration-check-client")
+    conn = migrated.get_connection()
+
+    version = conn.execute(
+        "SELECT version FROM db_schema_version WHERE schema_name = ?",
+        (CharactersRAGDB._SCHEMA_NAME,),
+    ).fetchone()["version"]
+    assert version == CharactersRAGDB._CURRENT_SCHEMA_VERSION
+
+    voice_columns = {row["name"] for row in conn.execute("PRAGMA table_info('voice_commands')").fetchall()}
+    assert "persona_id" in voice_columns
+    assert "connection_id" in voice_columns
+
+    voice_indexes = {row["name"] for row in conn.execute("PRAGMA index_list('voice_commands')").fetchall()}
+    assert "idx_voice_commands_user_persona_enabled" in voice_indexes
+
+    migrated.close_connection()
+
+
 def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB):
     character_id = db_instance.add_character_card(sample_card_data(name="Research Persona Source"))
     assert character_id is not None

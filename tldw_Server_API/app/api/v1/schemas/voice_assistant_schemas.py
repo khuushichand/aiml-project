@@ -270,6 +270,8 @@ class VoiceCommandResponse(BaseModel):
 
 class VoiceCommandDefinition(BaseModel):
     """Definition for creating/updating a voice command."""
+    persona_id: Optional[str] = Field(default=None, description="Persona owner ID")
+    connection_id: Optional[str] = Field(default=None, description="Reusable connection reference")
     name: str = Field(..., description="Human-readable command name")
     phrases: list[str] = Field(..., min_length=1, description="Trigger phrases")
     action_type: VoiceActionType = Field(..., description="Action type")
@@ -287,6 +289,8 @@ class VoiceCommandInfo(BaseModel):
     """Information about a registered voice command."""
     id: str = Field(..., description="Command ID")
     user_id: int = Field(..., description="Owner user ID (0 for system)")
+    persona_id: Optional[str] = Field(default=None, description="Persona owner ID")
+    connection_id: Optional[str] = Field(default=None, description="Reusable connection reference")
     name: str = Field(..., description="Command name")
     phrases: list[str] = Field(..., description="Trigger phrases")
     action_type: VoiceActionType = Field(..., description="Action type")

@@ -4805,6 +4805,94 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "ALTER TABLE persona_sessions ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
             )
 
+    def _ensure_recent_voice_command_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Backfill recent voice command schema columns and sync triggers."""
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'voice_commands'"
+        ).fetchone()
+        if not table_exists:
+            return
+
+        voice_cols = {row[1] for row in conn.execute("PRAGMA table_info('voice_commands')").fetchall()}
+        if "persona_id" not in voice_cols:
+            conn.execute("ALTER TABLE voice_commands ADD COLUMN persona_id TEXT")
+        if "connection_id" not in voice_cols:
+            conn.execute("ALTER TABLE voice_commands ADD COLUMN connection_id TEXT")
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voice_commands_user_persona_enabled "
+            "ON voice_commands(user_id, persona_id, enabled, deleted)"
+        )
+
+        conn.executescript(
+            """
+            DROP TRIGGER IF EXISTS voice_commands_insert_sync;
+            DROP TRIGGER IF EXISTS voice_commands_update_sync;
+
+            CREATE TRIGGER IF NOT EXISTS voice_commands_insert_sync
+            AFTER INSERT ON voice_commands
+            BEGIN
+                INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                VALUES(
+                    'voice_commands',
+                    NEW.id,
+                    'create',
+                    NEW.created_at,
+                    'system',
+                    1,
+                    json_object(
+                        'id',NEW.id,
+                        'user_id',NEW.user_id,
+                        'persona_id',NEW.persona_id,
+                        'connection_id',NEW.connection_id,
+                        'name',NEW.name,
+                        'phrases',NEW.phrases,
+                        'action_type',NEW.action_type,
+                        'action_config',NEW.action_config,
+                        'priority',NEW.priority,
+                        'enabled',NEW.enabled,
+                        'requires_confirmation',NEW.requires_confirmation,
+                        'description',NEW.description,
+                        'created_at',NEW.created_at,
+                        'updated_at',NEW.updated_at,
+                        'deleted',NEW.deleted
+                    )
+                );
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS voice_commands_update_sync
+            AFTER UPDATE ON voice_commands
+            BEGIN
+                INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                VALUES(
+                    'voice_commands',
+                    NEW.id,
+                    'update',
+                    NEW.updated_at,
+                    'system',
+                    1,
+                    json_object(
+                        'id',NEW.id,
+                        'user_id',NEW.user_id,
+                        'persona_id',NEW.persona_id,
+                        'connection_id',NEW.connection_id,
+                        'name',NEW.name,
+                        'phrases',NEW.phrases,
+                        'action_type',NEW.action_type,
+                        'action_config',NEW.action_config,
+                        'priority',NEW.priority,
+                        'enabled',NEW.enabled,
+                        'requires_confirmation',NEW.requires_confirmation,
+                        'description',NEW.description,
+                        'created_at',NEW.created_at,
+                        'updated_at',NEW.updated_at,
+                        'deleted',NEW.deleted
+                    )
+                );
+            END;
+            """
+        )
+
     def _ensure_recent_persona_schema_postgres(self, conn: Any) -> None:
         """Backfill recent persona schema columns for PostgreSQL deployments."""
         if not hasattr(self.backend, "execute"):
@@ -4830,6 +4918,22 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             """,
             "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS activity_surface TEXT NOT NULL DEFAULT 'api.persona'",
             "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS preferences_json TEXT NOT NULL DEFAULT '{}'",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
+    def _ensure_recent_voice_command_schema_postgres(self, conn: Any) -> None:
+        """Backfill recent voice command schema columns for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+
+        statements = [
+            "ALTER TABLE IF EXISTS voice_commands ADD COLUMN IF NOT EXISTS persona_id TEXT",
+            "ALTER TABLE IF EXISTS voice_commands ADD COLUMN IF NOT EXISTS connection_id TEXT",
+            (
+                "CREATE INDEX IF NOT EXISTS idx_voice_commands_user_persona_enabled "
+                "ON voice_commands(user_id, persona_id, enabled, deleted)"
+            ),
         ]
         for statement in statements:
             self.backend.execute(statement, connection=conn)
@@ -4986,6 +5090,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
                     self._ensure_notes_fts_triggers_sqlite(conn)
                     self._ensure_recent_persona_schema_sqlite(conn)
+                    self._ensure_recent_voice_command_schema_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
                     self._self_heal_character_cards_fts_sqlite(conn)
@@ -5506,6 +5611,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
+                self._ensure_recent_voice_command_schema_sqlite(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -5860,6 +5966,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 )
 
             self._ensure_recent_persona_schema_postgres(conn)
+            self._ensure_recent_voice_command_schema_postgres(conn)
 
             if current_version < target_version:
                 logger.warning(

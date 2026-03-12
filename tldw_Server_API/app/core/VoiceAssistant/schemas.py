@@ -25,6 +25,14 @@ class VoiceCommand(BaseModel):
     """
     id: str = Field(..., description="Unique identifier for the command")
     user_id: int = Field(..., description="Owner user ID")
+    persona_id: Optional[str] = Field(
+        default=None,
+        description="Optional persona owner for persona-scoped command libraries"
+    )
+    connection_id: Optional[str] = Field(
+        default=None,
+        description="Optional reusable external connection reference"
+    )
     name: str = Field(..., description="Human-readable name for the command")
     phrases: list[str] = Field(..., description="Trigger phrases that activate this command")
     action_type: ActionType = Field(..., description="Type of action to execute")

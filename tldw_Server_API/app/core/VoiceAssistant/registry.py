@@ -345,6 +345,8 @@ class VoiceCommandRegistry:
                 command = VoiceCommand(
                     id=row["id"],
                     user_id=user_id,
+                    persona_id=row.get("persona_id"),
+                    connection_id=row.get("connection_id"),
                     name=row["name"],
                     phrases=phrases,
                     action_type=ActionType(row["action_type"]),

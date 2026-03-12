@@ -32,11 +32,13 @@ def save_voice_command(
         db.execute_query(
             """
             INSERT INTO voice_commands (
-                id, user_id, name, phrases, action_type, action_config,
+                id, user_id, persona_id, connection_id, name, phrases, action_type, action_config,
                 priority, enabled, requires_confirmation, description,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
+                persona_id = excluded.persona_id,
+                connection_id = excluded.connection_id,
                 name = excluded.name,
                 phrases = excluded.phrases,
                 action_type = excluded.action_type,
@@ -50,6 +52,8 @@ def save_voice_command(
             (
                 command_id,
                 command.user_id,
+                command.persona_id,
+                command.connection_id,
                 command.name,
                 json.dumps(command.phrases),
                 command.action_type.value,
@@ -71,6 +75,7 @@ def get_voice_command(
     db,
     command_id: str,
     user_id: Optional[int] = None,
+    persona_id: Optional[str] = None,
 ) -> Optional[VoiceCommand]:
     """
     Get a voice command by ID.
@@ -90,6 +95,10 @@ def get_voice_command(
         query += " AND user_id = ?"
         params.append(user_id)
 
+    if persona_id is not None:
+        query += " AND persona_id = ?"
+        params.append(persona_id)
+
     result = db.execute_query(query, tuple(params))
     rows = result.fetchall() if hasattr(result, 'fetchall') else list(result)
 
@@ -104,6 +113,7 @@ def get_user_voice_commands(
     user_id: int,
     include_system: bool = True,
     enabled_only: bool = True,
+    persona_id: Optional[str] = None,
 ) -> list[VoiceCommand]:
     """
     Get all voice commands for a user.
@@ -121,11 +131,18 @@ def get_user_voice_commands(
     params = []
 
     if include_system:
-        conditions.append("(user_id = ? OR user_id = 0)")
-        params.append(user_id)
+        if persona_id is not None:
+            conditions.append("((user_id = ? AND persona_id = ?) OR user_id = 0)")
+            params.extend([user_id, persona_id])
+        else:
+            conditions.append("(user_id = ? OR user_id = 0)")
+            params.append(user_id)
     else:
         conditions.append("user_id = ?")
         params.append(user_id)
+        if persona_id is not None:
+            conditions.append("persona_id = ?")
+            params.append(persona_id)
 
     if enabled_only:
         conditions.append("enabled = 1")
@@ -721,6 +738,8 @@ def _row_to_voice_command(row: dict[str, Any]) -> VoiceCommand:
     return VoiceCommand(
         id=row["id"],
         user_id=row["user_id"],
+        persona_id=row.get("persona_id"),
+        connection_id=row.get("connection_id"),
         name=row["name"],
         phrases=phrases,
         action_type=ActionType(row["action_type"]),
