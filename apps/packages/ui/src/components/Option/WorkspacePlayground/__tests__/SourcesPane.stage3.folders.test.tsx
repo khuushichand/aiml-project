@@ -18,6 +18,7 @@ const mockToggleSourceFolderSelection = vi.fn()
 const mockAssignSourceToFolders = vi.fn()
 const mockGetEffectiveSelectedSources = vi.fn()
 const mockGetEffectiveSelectedMediaIds = vi.fn()
+const mockCreateSourceFolder = vi.fn()
 
 const workspaceStoreState = {
   sources: [
@@ -79,6 +80,7 @@ const workspaceStoreState = {
   setActiveFolder: mockSetActiveFolder,
   toggleSourceFolderSelection: mockToggleSourceFolderSelection,
   assignSourceToFolders: mockAssignSourceToFolders,
+  createSourceFolder: mockCreateSourceFolder,
   getEffectiveSelectedSources: mockGetEffectiveSelectedSources,
   getEffectiveSelectedMediaIds: mockGetEffectiveSelectedMediaIds
 }
@@ -90,11 +92,25 @@ vi.mock("react-i18next", () => ({
       defaultValueOrOptions?:
         | string
         | {
+            count?: number
             defaultValue?: string
-          }
+          },
+      interpolationValues?: {
+        count?: number
+      }
     ) => {
-      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
-      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      if (typeof defaultValueOrOptions === "string") {
+        return defaultValueOrOptions.replace(
+          "{{count}}",
+          String(interpolationValues?.count ?? "")
+        )
+      }
+      if (defaultValueOrOptions?.defaultValue) {
+        return defaultValueOrOptions.defaultValue.replace(
+          "{{count}}",
+          String(defaultValueOrOptions.count ?? "")
+        )
+      }
       return _key
     }
   })
@@ -114,6 +130,30 @@ describe("SourcesPane Stage 3 source folders", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     workspaceStoreState.activeFolderId = null
+    workspaceStoreState.sourceFolders = [
+      {
+        id: "folder-evidence",
+        workspaceId: "workspace-1",
+        name: "Evidence",
+        parentFolderId: null,
+        createdAt: new Date("2026-03-11T00:00:00.000Z"),
+        updatedAt: new Date("2026-03-11T00:00:00.000Z")
+      },
+      {
+        id: "folder-quotes",
+        workspaceId: "workspace-1",
+        name: "Quotes",
+        parentFolderId: "folder-evidence",
+        createdAt: new Date("2026-03-11T00:00:00.000Z"),
+        updatedAt: new Date("2026-03-11T00:00:00.000Z")
+      }
+    ]
+    workspaceStoreState.sourceFolderMemberships = [
+      { folderId: "folder-evidence", sourceId: "s1" },
+      { folderId: "folder-quotes", sourceId: "s2" }
+    ]
+    workspaceStoreState.selectedSourceIds = ["s1"]
+    workspaceStoreState.selectedSourceFolderIds = ["folder-evidence"]
     mockGetEffectiveSelectedSources.mockReturnValue([
       workspaceStoreState.sources[0],
       workspaceStoreState.sources[1]
@@ -161,5 +201,70 @@ describe("SourcesPane Stage 3 source folders", () => {
       "folder-evidence",
       "folder-quotes"
     ])
+  })
+
+  it("shows an empty folder state with a create action for the first folder", () => {
+    workspaceStoreState.sourceFolders = []
+    workspaceStoreState.sourceFolderMemberships = []
+    workspaceStoreState.selectedSourceIds = []
+    workspaceStoreState.selectedSourceFolderIds = []
+    mockGetEffectiveSelectedSources.mockReturnValue([])
+    mockGetEffectiveSelectedMediaIds.mockReturnValue([])
+
+    render(<SourcesPane />)
+
+    expect(screen.getByText("No folders yet")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "New folder" }))
+
+    expect(mockCreateSourceFolder).toHaveBeenCalledWith("New folder", null)
+  })
+
+  it("clears active folder focus back to all sources", () => {
+    workspaceStoreState.activeFolderId = "folder-evidence"
+
+    render(<SourcesPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "All sources" }))
+
+    expect(mockSetActiveFolder).toHaveBeenCalledWith(null)
+  })
+
+  it("uses effective selection for summary count and clear actions", () => {
+    workspaceStoreState.selectedSourceIds = []
+    workspaceStoreState.selectedSourceFolderIds = ["folder-evidence"]
+    mockGetEffectiveSelectedSources.mockReturnValue([
+      workspaceStoreState.sources[0],
+      workspaceStoreState.sources[1]
+    ])
+
+    render(<SourcesPane />)
+
+    expect(screen.getByText("2 selected")).toBeInTheDocument()
+    expect(screen.getByTestId("sources-selected-actions")).toBeInTheDocument()
+    expect(
+      screen.getByText("2 selected for grounded chat")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Remove (2)")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }))
+
+    expect(mockDeselectAllSources).toHaveBeenCalledTimes(1)
+    expect(mockToggleSourceFolderSelection).toHaveBeenCalledWith(
+      "folder-evidence"
+    )
+  })
+
+  it("enables preview and remove actions from folder-derived selection", () => {
+    workspaceStoreState.selectedSourceIds = []
+    workspaceStoreState.selectedSourceFolderIds = ["folder-quotes"]
+    mockGetEffectiveSelectedSources.mockReturnValue([workspaceStoreState.sources[1]])
+
+    render(<SourcesPane />)
+
+    expect(
+      screen.getByRole("button", { name: "Preview selected" })
+    ).not.toBeDisabled()
+    expect(screen.getByText("Remove (1)")).toBeInTheDocument()
   })
 })

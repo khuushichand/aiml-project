@@ -13,6 +13,8 @@ interface SourceFolderTreeProps {
   nodes: SourceFolderTreeNode[]
   activeFolderId: string | null
   selectionStateByFolderId: Record<string, FolderSelectionState>
+  onClearFocus: () => void
+  onCreateFolder: () => void
   onFocusFolder: (folderId: string) => void
   onToggleFolderSelection: (folderId: string) => void
 }
@@ -74,33 +76,58 @@ export const SourceFolderTree: React.FC<SourceFolderTreeProps> = ({
   nodes,
   activeFolderId,
   selectionStateByFolderId,
+  onClearFocus,
+  onCreateFolder,
   onFocusFolder,
   onToggleFolderSelection
 }) => {
-  if (nodes.length === 0) {
-    return null
-  }
-
   return (
     <div
       className="rounded-lg border border-border/70 bg-surface/60 p-2"
       aria-label="Source folders"
     >
-      <div className="mb-2 flex items-center justify-between px-2 text-xs font-semibold uppercase tracking-[0.08em] text-text-muted">
-        <span>Folders</span>
+      <div className="mb-2 flex items-center justify-between gap-2 px-2">
+        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-text-muted">
+          Folders
+        </span>
+        <div className="flex items-center gap-2">
+          {activeFolderId && (
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-0.5 text-[11px] font-medium text-text-muted transition hover:bg-surface2 hover:text-text"
+              onClick={onClearFocus}
+            >
+              All sources
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary transition hover:bg-primary/15"
+            onClick={onCreateFolder}
+          >
+            New folder
+          </button>
+        </div>
       </div>
-      <div className="space-y-1">
-        {nodes.map((node) =>
-          renderNode(
-            node,
-            0,
-            activeFolderId,
-            selectionStateByFolderId,
-            onFocusFolder,
-            onToggleFolderSelection
-          )
-        )}
-      </div>
+      {nodes.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border/70 px-3 py-2 text-xs text-text-muted">
+          <p className="font-medium text-text">No folders yet</p>
+          <p className="mt-1">Create a folder to organize related sources.</p>
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {nodes.map((node) =>
+            renderNode(
+              node,
+              0,
+              activeFolderId,
+              selectionStateByFolderId,
+              onFocusFolder,
+              onToggleFolderSelection
+            )
+          )}
+        </div>
+      )}
     </div>
   )
 }
