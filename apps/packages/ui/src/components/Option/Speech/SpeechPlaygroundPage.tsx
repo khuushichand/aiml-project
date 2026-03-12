@@ -223,7 +223,9 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [historyFavoritesOnly, setHistoryFavoritesOnly] = React.useState(false)
   const [historyQuery, setHistoryQuery] = React.useState("")
   const [ttsPreset, setTtsPreset] = useStorage<TtsPresetKey>("ttsPreset", "balanced")
+  const isLockedTtsRoute = lockedMode === "listen"
   const effectiveMode = lockedMode ?? mode
+  const effectiveHistoryFilter = isLockedTtsRoute ? "tts" : historyFilter
 
   React.useEffect(() => {
     if (lockedMode) return
@@ -264,12 +266,12 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const filteredHistory = React.useMemo(() => {
     const query = historyQuery.trim().toLowerCase()
     return (historyItems || []).filter((item) => {
-      if (historyFilter !== "all" && item.type !== historyFilter) return false
+      if (effectiveHistoryFilter !== "all" && item.type !== effectiveHistoryFilter) return false
       if (historyFavoritesOnly && !item.favorite) return false
       if (!query) return true
       return item.text.toLowerCase().includes(query)
     })
-  }, [historyFilter, historyItems, historyQuery, historyFavoritesOnly])
+  }, [effectiveHistoryFilter, historyItems, historyQuery, historyFavoritesOnly])
 
   const toggleHistoryFavorite = React.useCallback(
     (id: string) => {
@@ -1965,22 +1967,32 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     }
   }
 
-  const historyEmptyState = t(
-    "playground:speech.emptyHistory",
-    "Start a recording or generate audio to see history here."
-  )
+  const pageTitle = isLockedTtsRoute
+    ? t("playground:speech.ttsRouteTitle", "TTS Playground")
+    : t("playground:speech.title", "Speech Playground")
+  const pageSubtitle = isLockedTtsRoute
+    ? t(
+        "playground:speech.ttsRouteSubtitle",
+        "Draft text, choose a voice, and generate audio in one place."
+      )
+    : t(
+        "playground:speech.subtitle",
+        "Record speech, edit transcripts, and synthesize audio in one place."
+      )
+  const historyTitle = isLockedTtsRoute
+    ? t("playground:speech.ttsHistoryTitle", "TTS history")
+    : t("playground:speech.historyTitle", "Speech history")
+  const historyEmptyState = isLockedTtsRoute
+    ? t("playground:speech.ttsEmptyHistory", "Generate audio to see TTS history here.")
+    : t(
+        "playground:speech.emptyHistory",
+        "Start a recording or generate audio to see history here."
+      )
 
   return (
     <PageShell maxWidthClassName="max-w-5xl" className="py-6">
-      <Title level={3} className="!mb-1">
-        {t("playground:speech.title", "Speech Playground")}
-      </Title>
-      <Text type="secondary">
-        {t(
-          "playground:speech.subtitle",
-          "Record speech, edit transcripts, and synthesize audio in one place."
-        )}
-      </Text>
+      <Title level={3} className="!mb-1">{pageTitle}</Title>
+      <Text type="secondary">{pageSubtitle}</Text>
 
       <div className="mt-4 space-y-4">
         {!hideModeSwitcher && (
@@ -2796,7 +2808,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
 
         <Card>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Text strong>{t("playground:speech.historyTitle", "Speech history")}</Text>
+            <Text strong>{historyTitle}</Text>
             <Space size="small" className="flex flex-wrap">
               <Tooltip title="Show favorites only">
                 <Button
@@ -2807,16 +2819,20 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   {historyFavoritesOnly ? "Favorites" : "All items"}
                 </Button>
               </Tooltip>
-              <Select
-                size="small"
-                value={historyFilter}
-                onChange={(value) => setHistoryFilter(value)}
-                options={[
-                  { label: t("playground:speech.historyAll", "All"), value: "all" },
-                  { label: t("playground:speech.historyStt", "STT"), value: "stt" },
-                  { label: t("playground:speech.historyTts", "TTS"), value: "tts" }
-                ]}
-              />
+              {!isLockedTtsRoute && (
+                <div data-testid="speech-history-type-filter">
+                  <Select
+                    size="small"
+                    value={historyFilter}
+                    onChange={(value) => setHistoryFilter(value)}
+                    options={[
+                      { label: t("playground:speech.historyAll", "All"), value: "all" },
+                      { label: t("playground:speech.historyStt", "STT"), value: "stt" },
+                      { label: t("playground:speech.historyTts", "TTS"), value: "tts" }
+                    ]}
+                  />
+                </div>
+              )}
               <Input
                 size="small"
                 placeholder={t("playground:speech.historySearch", "Search transcripts")}

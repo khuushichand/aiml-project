@@ -17,11 +17,21 @@ const { invalidateQueriesMock, transcribeAudioMock, getTranscriptionModelsMock }
     })),
   }))
 
-const { speechModeState, setSpeechModeMock } = vi.hoisted(() => ({
+const { speechModeState, setSpeechModeMock, speechHistoryState, setSpeechHistoryMock } = vi.hoisted(() => ({
   speechModeState: {
     value: "roundtrip" as "roundtrip" | "speak" | "listen",
   },
   setSpeechModeMock: vi.fn(),
+  speechHistoryState: {
+    value: [] as Array<{
+      id: string
+      type: "stt" | "tts"
+      createdAt: string
+      text: string
+      favorite?: boolean
+    }>,
+  },
+  setSpeechHistoryMock: vi.fn(),
 }))
 
 vi.mock("react-i18next", () => ({
@@ -34,6 +44,9 @@ vi.mock("@plasmohq/storage/hook", () => ({
   useStorage: (key: string, defaultValue: unknown) => {
     if (key === "speechPlaygroundMode") {
       return [speechModeState.value ?? defaultValue, setSpeechModeMock, { isLoading: false }] as const
+    }
+    if (key === "speechPlaygroundHistory") {
+      return [speechHistoryState.value ?? defaultValue, setSpeechHistoryMock, { isLoading: false }] as const
     }
     return [defaultValue, vi.fn(), { isLoading: false }] as const
   },
@@ -275,7 +288,9 @@ describe("SpeechPlaygroundPage", () => {
     transcribeAudioMock.mockReset()
     getTranscriptionModelsMock.mockClear()
     speechModeState.value = "roundtrip"
+    speechHistoryState.value = []
     setSpeechModeMock.mockReset()
+    setSpeechHistoryMock.mockReset()
   })
 
   it("renders without triggering a temporal dead zone error", (): void => {
@@ -294,6 +309,18 @@ describe("SpeechPlaygroundPage", () => {
     expect(screen.getByTestId("tts-provider-strip")).toBeInTheDocument()
   })
 
+  it("uses TTS-specific page copy and history controls when locked to listen mode", (): void => {
+    render(<SpeechPlaygroundPage lockedMode="listen" hideModeSwitcher />)
+
+    expect(screen.getByText("TTS Playground")).toBeInTheDocument()
+    expect(
+      screen.getByText("Draft text, choose a voice, and generate audio in one place.")
+    ).toBeInTheDocument()
+    expect(screen.getByText("TTS history")).toBeInTheDocument()
+    expect(screen.getByText("Generate audio to see TTS history here.")).toBeInTheDocument()
+    expect(screen.queryByTestId("speech-history-type-filter")).not.toBeInTheDocument()
+  })
+
   it("does not overwrite stored mode when locked mode is provided", (): void => {
     speechModeState.value = "speak"
 
@@ -302,9 +329,33 @@ describe("SpeechPlaygroundPage", () => {
     expect(setSpeechModeMock).not.toHaveBeenCalled()
   })
 
+  it("filters stored history down to TTS entries when locked to listen mode", (): void => {
+    speechHistoryState.value = [
+      {
+        id: "stt-1",
+        type: "stt",
+        createdAt: "2026-03-11T00:00:00.000Z",
+        text: "Recorded transcript",
+      },
+      {
+        id: "tts-1",
+        type: "tts",
+        createdAt: "2026-03-11T00:01:00.000Z",
+        text: "Synthesized narration",
+      },
+    ]
+
+    render(<SpeechPlaygroundPage lockedMode="listen" hideModeSwitcher />)
+
+    expect(screen.getByText("Synthesized narration")).toBeInTheDocument()
+    expect(screen.queryByText("Recorded transcript")).not.toBeInTheDocument()
+  })
+
   it("keeps the mode switcher visible when unlocked", (): void => {
     render(<SpeechPlaygroundPage />)
 
+    expect(screen.getByText("Speech Playground")).toBeInTheDocument()
     expect(screen.getByText("Mode")).toBeInTheDocument()
+    expect(screen.getByTestId("speech-history-type-filter")).toBeInTheDocument()
   })
 })
