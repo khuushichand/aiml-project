@@ -35,6 +35,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -60,6 +61,7 @@ _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
     ConnectionError,
     TimeoutError,
+    sqlite3.IntegrityError,
     json.JSONDecodeError,
 )
 
@@ -87,6 +89,7 @@ class SourceRow:
     created_at: str
     updated_at: str
     tags: list[str]
+    was_created: bool = False
 
 
 @dataclass
@@ -932,12 +935,14 @@ class WatchlistsDatabase:
         now = _utcnow_iso()
         # Try insert; if UNIQUE(user_id,url) violates, fetch existing id and proceed idempotently
         sid: int | None = None
+        created_new = False
         try:
             res = self._execute_insert(
                 "INSERT INTO sources (user_id, name, url, source_type, active, settings_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (self.user_id, name, url, source_type, 1 if active else 0, settings_json, now, now),
             )
             sid = self._extract_lastrowid(res)
+            created_new = True
         except (*_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS, _DatabaseError):
             # Look up existing source for idempotency
             try:
@@ -952,7 +957,7 @@ class WatchlistsDatabase:
             except (*_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS, _DatabaseError):
                 raise
         if sid is None:
-            raise RuntimeError("failed_to_create_or_lookup_source")
+                raise RuntimeError("failed_to_create_or_lookup_source")
         if tags:
             tag_ids = self.ensure_tag_ids(tags)
             for tid in tag_ids:
@@ -979,7 +984,9 @@ class WatchlistsDatabase:
                         "INSERT INTO source_groups (source_id, group_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_groups WHERE source_id = ? AND group_id = ?)",
                         (sid, gid, sid, gid),
                     )
-        return self.get_source(sid)
+        row = self.get_source(sid)
+        row.was_created = created_new
+        return row
 
     def get_source_by_url(self, url: str) -> SourceRow | None:
         row = self.backend.execute(

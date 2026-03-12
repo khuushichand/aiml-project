@@ -160,3 +160,111 @@ def test_note_delete_and_restore_record_companion_activity(notes_client_with_com
     assert restored_event["metadata"]["title"] == "Recoverable Note"
     assert restored_event["metadata"]["version"] == restored["version"]
     assert restored_event["metadata"]["deleted"] is False
+
+
+def test_notes_import_create_records_companion_note_created(notes_client_with_companion_opt_in):
+    client, personalization_db = notes_client_with_companion_opt_in
+
+    response = client.post(
+        "/api/v1/notes/import",
+        json={
+            "duplicate_strategy": "create_copy",
+            "items": [
+                {
+                    "file_name": "note.json",
+                    "format": "json",
+                    "content": "{\"title\": \"Imported Note\", \"content\": \"Body\", \"keywords\": [\"alpha\"]}",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    events, total = personalization_db.list_companion_activity_events(str(TEST_USER_ID), limit=10)
+    assert total == 1
+    event = events[0]
+    assert event["event_type"] == "note_created"
+    assert event["surface"] == "api.notes.import"
+    assert event["provenance"]["route"] == "/api/v1/notes/import"
+    assert event["provenance"]["action"] == "import_create"
+    assert event["tags"] == ["alpha"]
+
+
+def test_notes_import_overwrite_records_companion_note_updated(notes_client_with_companion_opt_in):
+    client, personalization_db = notes_client_with_companion_opt_in
+
+    create_resp = client.post(
+        "/api/v1/notes/",
+        json={
+            "title": "Original",
+            "content": "Before",
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    note_id = create_resp.json()["id"]
+
+    response = client.post(
+        "/api/v1/notes/import",
+        json={
+            "duplicate_strategy": "overwrite",
+            "items": [
+                {
+                    "file_name": "note.json",
+                    "format": "json",
+                    "content": f"{{\"id\": \"{note_id}\", \"title\": \"Updated\", \"content\": \"After\"}}",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    events, total = personalization_db.list_companion_activity_events(str(TEST_USER_ID), limit=10)
+    assert total == 2
+    updated = next(event for event in events if event["event_type"] == "note_updated")
+    assert updated["source_id"] == note_id
+    assert updated["surface"] == "api.notes.import"
+    assert updated["provenance"]["route"] == "/api/v1/notes/import"
+    assert updated["provenance"]["action"] == "import_overwrite"
+    assert updated["metadata"]["changed_fields"] == ["content", "title"]
+
+
+def test_notes_bulk_success_rows_record_companion_activity(notes_client_with_companion_opt_in):
+    client, personalization_db = notes_client_with_companion_opt_in
+
+    response = client.post(
+        "/api/v1/notes/bulk",
+        json={
+            "notes": [
+                {"title": "Bulk One", "content": "One"},
+                {"title": "Bulk Two", "content": "Two"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    events, total = personalization_db.list_companion_activity_events(str(TEST_USER_ID), limit=10)
+    assert total == 2
+    assert all(event["event_type"] == "note_created" for event in events)
+    assert all(event["surface"] == "api.notes.bulk" for event in events)
+    assert all(event["provenance"]["route"] == "/api/v1/notes/bulk" for event in events)
+    assert all(event["provenance"]["action"] == "bulk_create" for event in events)
+
+
+def test_notes_bulk_failed_rows_do_not_record_companion_activity(notes_client_with_companion_opt_in):
+    client, personalization_db = notes_client_with_companion_opt_in
+
+    response = client.post(
+        "/api/v1/notes/bulk",
+        json={
+            "notes": [
+                {"title": "Bulk Good", "content": "Good"},
+                {"content": "Missing title and no auto title"},
+            ]
+        },
+    )
+
+    assert response.status_code == 207, response.text
+    events, total = personalization_db.list_companion_activity_events(str(TEST_USER_ID), limit=10)
+    assert total == 1
+    assert events[0]["event_type"] == "note_created"
+    assert events[0]["metadata"]["title"] == "Bulk Good"

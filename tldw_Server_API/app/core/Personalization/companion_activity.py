@@ -100,6 +100,35 @@ def record_companion_activity(
         return None
 
 
+def record_companion_activity_events_bulk(
+    *,
+    user_id: str | int | None,
+    events: list[dict[str, Any]],
+) -> list[str]:
+    """Persist explicit companion activity events in bulk when the user opted in."""
+    if user_id is None or not is_personalization_enabled() or not events:
+        return []
+
+    try:
+        db, normalized_user_id = _open_db_for_user(user_id)
+        if not _profile_opted_in(db, normalized_user_id):
+            return []
+        safe_events: list[dict[str, Any]] = []
+        for event in events:
+            safe_event = dict(event)
+            safe_provenance = dict(safe_event.get("provenance") or {})
+            safe_provenance.setdefault("capture_mode", "explicit")
+            safe_event["provenance"] = safe_provenance
+            safe_events.append(safe_event)
+        return db.insert_companion_activity_events_bulk(
+            user_id=normalized_user_id,
+            events=safe_events,
+        )
+    except Exception as exc:
+        logger.debug("companion activity bulk capture skipped: {}", exc)
+        return []
+
+
 def _truncate_text(value: str | None, *, max_length: int) -> str | None:
     if value is None:
         return None
@@ -471,6 +500,58 @@ def _note_timestamp(note: Any, *, prefer_created: bool = False) -> str | None:
     return _value(note, "last_modified") or _value(note, "updated_at") or _value(note, "created_at")
 
 
+def build_note_bulk_import_activity(
+    *,
+    note: Any,
+    operation: str,
+    route: str,
+    surface: str,
+    patch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a note companion activity payload for explicit bulk/import flows."""
+    normalized_operation = str(operation or "").strip().lower()
+    note_id = str(_value(note, "id"))
+    if normalized_operation in {"import_create", "bulk_create"}:
+        source_timestamp = _note_timestamp(note, prefer_created=True)
+        return {
+            "event_type": "note_created",
+            "source_type": "note",
+            "source_id": note_id,
+            "surface": surface,
+            "dedupe_key": f"notes.create:{note_id}",
+            "tags": _note_tags(note),
+            "provenance": _explicit_provenance(
+                route=route,
+                action=normalized_operation,
+                source_timestamp=source_timestamp,
+            ),
+            "metadata": _note_metadata(note),
+        }
+    if normalized_operation == "import_overwrite":
+        source_timestamp = _note_timestamp(note)
+        version = _value(note, "version")
+        fingerprint = _payload_fingerprint(patch)
+        changed_fields = sorted(str(key) for key in dict(patch or {}).keys())
+        return {
+            "event_type": "note_updated",
+            "source_type": "note",
+            "source_id": note_id,
+            "surface": surface,
+            "dedupe_key": f"notes.update:{note_id}:{version or source_timestamp or 'na'}:{fingerprint}",
+            "tags": _note_tags(note),
+            "provenance": _explicit_provenance(
+                route=route,
+                action=normalized_operation,
+                source_timestamp=source_timestamp,
+            ),
+            "metadata": {
+                **_note_metadata(note),
+                "changed_fields": changed_fields,
+            },
+        }
+    raise ValueError(f"unsupported note bulk/import operation: {operation}")
+
+
 def record_note_created(*, user_id: str | int | None, note: Any) -> str | None:
     note_id = str(_value(note, "id"))
     source_timestamp = _note_timestamp(note, prefer_created=True)
@@ -777,6 +858,58 @@ def _watchlist_source_metadata(source: Any) -> dict[str, Any]:
 
 def _watchlist_source_timestamp(source: Any) -> str | None:
     return _value(source, "updated_at") or _value(source, "created_at")
+
+
+def build_watchlist_source_bulk_import_activity(
+    *,
+    source: Any,
+    operation: str,
+    route: str,
+    surface: str,
+    patch: dict[str, Any] | None = None,
+    event_timestamp: str | None = None,
+) -> dict[str, Any]:
+    """Build a watchlist source companion activity payload for bulk/import flows."""
+    normalized_operation = str(operation or "").strip().lower()
+    source_id = str(_value(source, "id"))
+    if normalized_operation in {"import_create", "bulk_create"}:
+        source_timestamp = event_timestamp or _watchlist_source_timestamp(source)
+        return {
+            "event_type": "watchlist_source_created",
+            "source_type": "watchlist_source",
+            "source_id": source_id,
+            "surface": surface,
+            "dedupe_key": f"watchlists.source.create:{source_id}",
+            "tags": list(_value(source, "tags") or []),
+            "provenance": _explicit_provenance(
+                route=route,
+                action=normalized_operation,
+                source_timestamp=source_timestamp,
+            ),
+            "metadata": _watchlist_source_metadata(source),
+        }
+    if normalized_operation == "import_update":
+        source_timestamp = event_timestamp or _watchlist_source_timestamp(source)
+        fingerprint = _payload_fingerprint(patch)
+        changed_fields = sorted(str(key) for key in dict(patch or {}).keys())
+        return {
+            "event_type": "watchlist_source_updated",
+            "source_type": "watchlist_source",
+            "source_id": source_id,
+            "surface": surface,
+            "dedupe_key": f"watchlists.source.update:{source_id}:{source_timestamp or 'na'}:{fingerprint}",
+            "tags": list(_value(source, "tags") or []),
+            "provenance": _explicit_provenance(
+                route=route,
+                action=normalized_operation,
+                source_timestamp=source_timestamp,
+            ),
+            "metadata": {
+                **_watchlist_source_metadata(source),
+                "changed_fields": changed_fields,
+            },
+        }
+    raise ValueError(f"unsupported watchlist source bulk/import operation: {operation}")
 
 
 def record_watchlist_source_created(
