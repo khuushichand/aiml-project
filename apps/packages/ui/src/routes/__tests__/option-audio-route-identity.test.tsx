@@ -13,8 +13,18 @@ vi.mock("~/components/Layouts/Layout", () => ({
 }))
 
 vi.mock("@/components/Common/RouteErrorBoundary", () => ({
-  RouteErrorBoundary: ({ children }: { children: React.ReactNode }) => (
-    <>{children}</>
+  RouteErrorBoundary: ({
+    children,
+    routeId,
+    routeLabel
+  }: {
+    children: React.ReactNode
+    routeId: string
+    routeLabel: string
+  }) => (
+    <div data-testid="route-boundary" data-route-id={routeId} data-route-label={routeLabel}>
+      {children}
+    </div>
   )
 }))
 
@@ -30,19 +40,40 @@ vi.mock("@/components/Option/STT/SttPlaygroundPage", () => ({
 
 vi.mock("@/components/Option/Speech/SpeechPlaygroundPage", () => ({
   __esModule: true,
-  default: ({ initialMode }: { initialMode?: string }) => (
-    <div data-testid="speech-playground" data-mode={initialMode ?? "roundtrip"}>
+  default: ({
+    initialMode,
+    lockedMode,
+    hideModeSwitcher
+  }: {
+    initialMode?: string
+    lockedMode?: string
+    hideModeSwitcher?: boolean
+  }) => (
+    <div
+      data-testid="speech-playground"
+      data-mode={initialMode ?? "roundtrip"}
+      data-locked-mode={lockedMode ?? ""}
+      data-hide-mode-switcher={hideModeSwitcher ? "true" : "false"}
+    >
       Speech
     </div>
   )
 }))
 
 describe("audio option routes", () => {
-  it("renders dedicated TTS playground on /tts route component", () => {
+  it("routes /tts into the shared speech playground locked to TTS mode", () => {
     render(<OptionTts />)
+
+    const speech = screen.getByTestId("speech-playground")
+    const boundary = screen.getByTestId("route-boundary")
+
     expect(screen.getByTestId("option-layout")).toBeVisible()
-    expect(screen.getByTestId("tts-playground")).toBeVisible()
-    expect(screen.queryByTestId("speech-playground")).not.toBeInTheDocument()
+    expect(boundary).toHaveAttribute("data-route-id", "tts")
+    expect(boundary).toHaveAttribute("data-route-label", "TTS Playground")
+    expect(speech).toBeVisible()
+    expect(speech).toHaveAttribute("data-locked-mode", "listen")
+    expect(speech).toHaveAttribute("data-hide-mode-switcher", "true")
+    expect(screen.queryByTestId("tts-playground")).not.toBeInTheDocument()
   })
 
   it("renders dedicated STT playground on /stt route component", () => {
@@ -54,7 +85,12 @@ describe("audio option routes", () => {
 
   it("keeps /speech route mapped to the unified speech playground", () => {
     render(<OptionSpeech />)
+
     const speech = screen.getByTestId("speech-playground")
+    const boundary = screen.getByTestId("route-boundary")
+
+    expect(boundary).toHaveAttribute("data-route-id", "speech")
+    expect(boundary).toHaveAttribute("data-route-label", "Speech Playground")
     expect(speech).toBeVisible()
     expect(speech).toHaveAttribute("data-mode", "roundtrip")
     expect(screen.queryByTestId("tts-playground")).not.toBeInTheDocument()

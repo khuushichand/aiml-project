@@ -1,11 +1,14 @@
 import OptionLayout from "~/components/Layouts/Layout"
-import TtsPlaygroundPage from "@/components/Option/TTS/TtsPlaygroundPage"
+import SpeechPlaygroundPage from "@/components/Option/Speech/SpeechPlaygroundPage"
+import { RouteErrorBoundary } from "@/components/Common/RouteErrorBoundary"
 
 const OptionTts = () => {
   return (
-    <OptionLayout>
-      <TtsPlaygroundPage />
-    </OptionLayout>
+    <RouteErrorBoundary routeId="tts" routeLabel="TTS Playground">
+      <OptionLayout>
+        <SpeechPlaygroundPage lockedMode="listen" hideModeSwitcher />
+      </OptionLayout>
+    </RouteErrorBoundary>
   )
 }
 

@@ -1,7 +1,5 @@
 # Workflows Diagnostics and Improvements Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Add a first-class workflows diagnostics model with explicit replay safety, per-attempt execution history, investigation APIs, a shared run inspector, and server-authoritative preflight validation.
 
 **Architecture:** Keep the current workflows runtime and raw execution ledger in place, but add a structured diagnostics layer beside it. Preserve `workflow_step_runs` as the logical step record, add child `workflow_step_attempts`, derive a `run investigation` view from runs/events/artifacts, and expose that view consistently to the API and shared UI. Build replay safety from explicit step capability metadata rather than inferring it from failures after the fact.
@@ -9,13 +7,6 @@
 **Tech Stack:** FastAPI, Pydantic, SQLite/PostgreSQL via `Workflows_DB`, asyncio workflow engine, pytest, React, Zustand, shared UI services, Vitest
 
 ---
-
-**Execution Notes**
-
-- Use @using-git-worktrees before implementation so the work happens in an isolated worktree.
-- Follow @test-driven-development for every code task.
-- If tests fail unexpectedly, use @systematic-debugging before changing the implementation approach.
-- Before claiming completion, use @verification-before-completion.
 
 ### Task 1: Establish replay capability metadata for step types
 
