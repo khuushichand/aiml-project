@@ -6519,6 +6519,21 @@ else:
     _include_if_enabled("web-scraping", web_scraping_router, prefix=f"{API_V1_PREFIX}", tags=["web-scraping"])
 
 # Register control-plane metrics endpoints (works in both minimal and full modes)
+if _shared_env_flag_enabled("ENABLE_ADMIN_E2E_TEST_MODE"):
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.test_support.admin_e2e import (
+            router as admin_e2e_test_support_router,
+        )
+
+        include_router_idempotent(
+            app,
+            admin_e2e_test_support_router,
+            prefix=f"{API_V1_PREFIX}/test-support/admin-e2e",
+            tags=["test-support"],
+        )
+    except _IMPORT_EXCEPTIONS as _admin_e2e_err:
+        logger.warning(f"Failed to include admin e2e test-support router: {_admin_e2e_err}")
+
 try:
     if route_enabled("metrics"):
         app.add_api_route("/metrics", metrics, include_in_schema=False)
