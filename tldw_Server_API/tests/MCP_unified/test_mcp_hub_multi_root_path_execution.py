@@ -46,7 +46,7 @@ async def test_multi_root_service_maps_absolute_paths_to_allowed_workspace_bundl
         McpHubMultiRootPathService,
     )
 
-    service = McpHubMultiRootPathService()
+    service = McpHubMultiRootPathService(workspace_root_resolver=object())
     workspace_alpha_root = str(Path("/tmp/workspace-alpha").resolve())
     workspace_beta_root = str(Path("/tmp/workspace-beta").resolve())
     alpha_readme = str((Path(workspace_alpha_root) / "src/README.md").resolve())
@@ -80,7 +80,7 @@ async def test_multi_root_service_denies_ambiguous_workspace_match() -> None:
         McpHubMultiRootPathService,
     )
 
-    service = McpHubMultiRootPathService()
+    service = McpHubMultiRootPathService(workspace_root_resolver=object())
     workspace_alpha_root = str(Path("/tmp/workspace-alpha").resolve())
     workspace_alpha_docs_root = str((Path(workspace_alpha_root) / "docs").resolve())
     shared_doc = str((Path(workspace_alpha_docs_root) / "shared.md").resolve())

@@ -48,7 +48,7 @@ class McpHubMultiRootPathService:
     """Resolve exact path-to-workspace mappings for narrow multi-root execution."""
 
     def __init__(self, workspace_root_resolver: McpHubWorkspaceRootResolver | Any | None = None) -> None:
-        self._workspace_root_resolver = workspace_root_resolver or McpHubWorkspaceRootResolver()
+        self._workspace_root_resolver = workspace_root_resolver
 
     async def resolve_path_bundle(
         self,
@@ -90,6 +90,15 @@ class McpHubMultiRootPathService:
         for workspace_id in normalized_allowed_ids:
             if workspace_id in resolved_roots_by_id:
                 continue
+            if self._workspace_root_resolver is None:
+                return {
+                    "ok": False,
+                    "reason": "workspace_root_unavailable",
+                    "normalized_paths": [],
+                    "workspace_bundle_ids": [],
+                    "workspace_bundle_roots": [],
+                    "path_workspace_map": {},
+                }
             resolution = await self._workspace_root_resolver.resolve_for_context(
                 session_id=None,
                 user_id=user_id,

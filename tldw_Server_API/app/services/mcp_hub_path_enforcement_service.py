@@ -181,8 +181,8 @@ class McpHubPathEnforcementService:
         path_scope_service: McpHubPathScopeService | Any | None = None,
         multi_root_path_service: McpHubMultiRootPathService | Any | None = None,
     ) -> None:
-        self._path_scope_service = path_scope_service or McpHubPathScopeService()
-        self._multi_root_path_service = multi_root_path_service or McpHubMultiRootPathService()
+        self._path_scope_service = path_scope_service
+        self._multi_root_path_service = multi_root_path_service
 
     async def evaluate_tool_call(
         self,
@@ -193,6 +193,8 @@ class McpHubPathEnforcementService:
         tool_args: Any,
         tool_def: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        if self._path_scope_service is None:
+            raise RuntimeError("McpHubPathEnforcementService requires an explicit path_scope_service")
         scope = await self._path_scope_service.resolve_for_context(
             effective_policy=effective_policy,
             context=context,
@@ -260,6 +262,8 @@ class McpHubPathEnforcementService:
         )
 
         if is_multi_root_candidate:
+            if self._multi_root_path_service is None:
+                raise RuntimeError("McpHubPathEnforcementService requires an explicit multi_root_path_service for multi-root evaluation")
             multi_root_result = await self._multi_root_path_service.resolve_path_bundle(
                 raw_paths=raw_paths,
                 active_workspace_id=active_workspace_id,
