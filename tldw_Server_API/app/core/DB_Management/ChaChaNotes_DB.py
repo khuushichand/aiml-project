@@ -435,7 +435,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 35  # Schema v35 includes restart-safe persona session persistence
+    _CURRENT_SCHEMA_VERSION = 36  # Schema v36 adds workspaces table + conversation scope columns
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -4719,6 +4719,66 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V34->V35: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V35 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v35_to_v36(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V35 to V36 (workspaces table + conversation scope columns)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V35 to V36 for DB: {self.db_path_str}...")
+        try:
+            # 1. Create workspaces table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    id            TEXT    PRIMARY KEY NOT NULL,
+                    name          TEXT    NOT NULL,
+                    description   TEXT,
+                    metadata_json TEXT    NOT NULL DEFAULT '{}',
+                    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted       BOOLEAN  NOT NULL DEFAULT 0,
+                    client_id     TEXT    NOT NULL DEFAULT 'unknown',
+                    version       INTEGER  NOT NULL DEFAULT 1
+                )
+            """)
+
+            # 2. Add scope columns to conversations
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
+            if "scope_type" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'global' "
+                    "CHECK(scope_type IN ('global','workspace'))"
+                )
+            if "workspace_id" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
+                )
+
+            # 3. Create index for scope filtering
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_scope ON conversations(scope_type, workspace_id)"
+            )
+
+            # 4. Update schema version
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 36
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 36;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 36:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V35->V36 failed version check. Expected 36, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V36 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V35->V36 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V35->V36 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V35->V36: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V36 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -5041,6 +5101,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 35 and current_db_version == 34:
                         self._migrate_from_v34_to_v35(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 36 and current_db_version == 35:
+                        self._migrate_from_v35_to_v36(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -5353,6 +5416,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v33_to_v34(conn)
                             elif fallback_version == 34:
                                 self._migrate_from_v34_to_v35(conn)
+                            elif fallback_version == 35:
+                                self._migrate_from_v35_to_v36(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5433,6 +5498,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 35 and current_db_version == 34:
                     self._migrate_from_v34_to_v35(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 36 and current_db_version == 35:
+                    self._migrate_from_v35_to_v36(conn)
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
@@ -11498,6 +11566,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return stripped if stripped else None
         return str(value)
 
+    _ALLOWED_SCOPE_TYPES: tuple[str, ...] = ("global", "workspace")
+
+    @staticmethod
+    def _normalize_scope(
+        scope_type: str | None,
+        workspace_id: str | None,
+    ) -> tuple[str, str | None]:
+        """Validate and normalize conversation scope fields.
+
+        Returns:
+            (scope_type, workspace_id) tuple.
+
+        Raises:
+            InputError: If scope_type is invalid or workspace scope lacks workspace_id.
+        """
+        if scope_type is None:
+            scope_type = "global"
+        scope_type = scope_type.strip().lower()
+        if scope_type not in ("global", "workspace"):
+            raise InputError(  # noqa: TRY003
+                f"Invalid scope_type '{scope_type}'. Allowed: global, workspace"
+            )
+        if scope_type == "workspace":
+            if not workspace_id:
+                raise InputError("workspace_id is required when scope_type is 'workspace'.")  # noqa: TRY003
+        else:
+            workspace_id = None  # global scope never references a workspace
+        return scope_type, workspace_id
+
     def _normalize_conversation_assistant_identity(
         self,
         *,
@@ -11607,27 +11704,34 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             persona_memory_mode=conv_data.get('persona_memory_mode'),
         )
 
+        scope_type, workspace_id = self._normalize_scope(
+            conv_data.get('scope_type'), conv_data.get('workspace_id'),
+        )
+
         now = self._get_current_utc_timestamp_iso()
         query = """
                 INSERT INTO conversations (id, root_id, forked_from_message_id, parent_conversation_id, \
                                            character_id, assistant_kind, assistant_id, persona_memory_mode, \
                                            title, state, topic_label, cluster_id, source, external_ref, rating, \
-                                           created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                                           created_at, last_modified, client_id, version, deleted, \
+                                           scope_type, workspace_id) \
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                 """ # created_at added
         if self.backend_type == BackendType.POSTGRESQL:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
                 conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
-                now, now, client_id, 1, False
+                now, now, client_id, 1, False,
+                scope_type, workspace_id
             )
         else:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
                 conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
-                now, now, client_id, 1, 0
+                now, now, client_id, 1, 0,
+                scope_type, workspace_id
             )
         try:
             with self.transaction() as conn:
@@ -12670,6 +12774,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         start_date: str | None = None,
         end_date: str | None = None,
         date_field: str = "last_modified",
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Search/filter conversations with optional FTS query and metadata filters.
@@ -12737,6 +12843,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         f"WHERE ck.conversation_id = c.id AND k.deleted = FALSE AND LOWER(k.keyword) = ?)"
                     )
                     params.append(kw.lower())
+            if scope_type is not None:
+                filters.append("c.scope_type = ?")
+                params.append(scope_type)
+            if workspace_id is not None:
+                filters.append("c.workspace_id = ?")
+                params.append(workspace_id)
 
             if filters:
                 base_query += " AND " + " AND ".join(filters)
@@ -12796,6 +12908,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     "WHERE ck.conversation_id = c.id AND k.deleted = 0 AND LOWER(k.keyword) = ?)"
                 )
                 params.append(kw.lower())
+        if scope_type is not None:
+            filters.append("c.scope_type = ?")
+            params.append(scope_type)
+        if workspace_id is not None:
+            filters.append("c.workspace_id = ?")
+            params.append(workspace_id)
 
         if filters:
             base_query += " AND " + " AND ".join(filters)
@@ -12806,6 +12924,171 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError as e:
             logger.error(f"Error searching conversations: {e}")
             raise
+
+    # --- Workspace Methods ---
+
+    def upsert_workspace(
+        self,
+        workspace_id: str,
+        name: str,
+        *,
+        description: str | None = None,
+        metadata_json: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a workspace or return the existing one (idempotent by id).
+
+        If the workspace already exists (and is not deleted), its current row is
+        returned without modification, making the call idempotent.
+
+        Returns:
+            A dict representing the workspace row.
+
+        Raises:
+            InputError: If *workspace_id* or *name* are empty.
+            CharactersRAGDBError: On database errors.
+        """
+        if not workspace_id or not name:
+            raise InputError("workspace_id and name are required.")  # noqa: TRY003
+
+        existing = self.get_workspace(workspace_id)
+        if existing is not None:
+            return existing
+
+        now = self._get_current_utc_timestamp_iso()
+        client_id = self.client_id or "unknown"
+        query = (
+            "INSERT INTO workspaces (id, name, description, metadata_json, created_at, last_modified, deleted, client_id, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, ?, 1)"
+        )
+        params = (
+            workspace_id,
+            name,
+            description,
+            metadata_json or "{}",
+            now,
+            now,
+            client_id,
+        )
+        try:
+            with self.transaction() as conn:
+                conn.execute(query, params)
+        except sqlite3.IntegrityError:
+            # Race condition: another thread inserted between our check and insert.
+            existing = self.get_workspace(workspace_id)
+            if existing is not None:
+                return existing
+            raise  # pragma: no cover
+        return self.get_workspace(workspace_id)  # type: ignore[return-value]
+
+    def get_workspace(self, workspace_id: str) -> dict[str, Any] | None:
+        """Retrieve a non-deleted workspace by id."""
+        query = "SELECT * FROM workspaces WHERE id = ? AND deleted = 0"
+        cursor = self.execute_query(query, (workspace_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def list_workspaces(self) -> list[dict[str, Any]]:
+        """Return all non-deleted workspaces ordered by name."""
+        query = "SELECT * FROM workspaces WHERE deleted = 0 ORDER BY name"
+        cursor = self.execute_query(query, ())
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_workspace(
+        self,
+        workspace_id: str,
+        update_data: dict[str, Any],
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Update a workspace with optimistic locking.
+
+        Returns:
+            The updated workspace row dict.
+
+        Raises:
+            ConflictError: If the workspace is not found or version mismatch.
+        """
+        existing = self.get_workspace(workspace_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' not found.",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' version mismatch (db={existing['version']}, expected={expected_version}).",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+
+        now = self._get_current_utc_timestamp_iso()
+        set_clauses = ["last_modified = ?", "version = ?"]
+        params: list[Any] = [now, expected_version + 1]
+
+        for col in ("name", "description", "metadata_json"):
+            if col in update_data:
+                set_clauses.append(f"{col} = ?")
+                params.append(update_data[col])
+
+        query = f"UPDATE workspaces SET {', '.join(set_clauses)} WHERE id = ? AND version = ?"  # nosec B608
+        params.extend([workspace_id, expected_version])
+
+        with self.transaction() as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Workspace '{workspace_id}' concurrent update detected.",
+                    entity="workspaces",
+                    entity_id=workspace_id,
+                )
+        return self.get_workspace(workspace_id)  # type: ignore[return-value]
+
+    def delete_workspace(
+        self,
+        workspace_id: str,
+        expected_version: int,
+    ) -> bool:
+        """Soft-delete a workspace and cascade soft-delete its scoped conversations.
+
+        Returns:
+            True on success.
+
+        Raises:
+            ConflictError: If not found or version mismatch.
+        """
+        existing = self.get_workspace(workspace_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' not found.",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' version mismatch.",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+
+        now = self._get_current_utc_timestamp_iso()
+        with self.transaction() as conn:
+            # Soft-delete the workspace itself
+            cursor = conn.execute(
+                "UPDATE workspaces SET deleted = 1, last_modified = ?, version = ? WHERE id = ? AND version = ?",
+                (now, expected_version + 1, workspace_id, expected_version),
+            )
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Workspace '{workspace_id}' concurrent delete detected.",
+                    entity="workspaces",
+                    entity_id=workspace_id,
+                )
+            # Cascade: soft-delete conversations scoped to this workspace
+            conn.execute(
+                "UPDATE conversations SET deleted = 1, last_modified = ? WHERE workspace_id = ? AND deleted = 0",
+                (now, workspace_id),
+            )
+        return True
 
     # --- Message Methods ---
     def add_message(self, msg_data: dict[str, Any]) -> str | None:
