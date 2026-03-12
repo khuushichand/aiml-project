@@ -6,6 +6,9 @@ import {
   buildSimplePolicyDocument,
   createPresetSelection,
   getDerivedCapabilities,
+  getAdvancedPolicyKeys,
+  getExternalBlockedReasonLabel,
+  getManagedExternalServers,
   getPolicyAllowedToolSelection,
   toggleStringValue
 } from "../policyHelpers"
@@ -25,6 +28,7 @@ const TOOL_REGISTRY: McpHubToolRegistryEntry[] = [
     uses_credentials: false,
     supports_arguments_preview: true,
     path_boundable: false,
+    path_argument_hints: ["path"],
     metadata_source: "explicit",
     metadata_warnings: []
   },
@@ -42,6 +46,7 @@ const TOOL_REGISTRY: McpHubToolRegistryEntry[] = [
     uses_credentials: false,
     supports_arguments_preview: true,
     path_boundable: false,
+    path_argument_hints: [],
     metadata_source: "heuristic",
     metadata_warnings: []
   },
@@ -59,6 +64,7 @@ const TOOL_REGISTRY: McpHubToolRegistryEntry[] = [
     uses_credentials: true,
     supports_arguments_preview: true,
     path_boundable: false,
+    path_argument_hints: [],
     metadata_source: "heuristic",
     metadata_warnings: []
   }
@@ -71,7 +77,9 @@ describe("policyHelpers", () => {
         allowed_tools: ["notes.search", "Bash(git *)"],
         denied_tools: ["sandbox.run"],
         capabilities: ["filesystem.read", "mcp.server.connect"],
-        approval_mode: "ask_every_time"
+        approval_mode: "ask_every_time",
+        path_scope_mode: "workspace_root",
+        path_scope_enforcement: "approval_required_when_unenforceable"
       },
       selectedTools: ["notes.search", "remote.fetch"],
       deniedTools: ["sandbox.run"],
@@ -82,6 +90,22 @@ describe("policyHelpers", () => {
     expect(next.denied_tools).toEqual(["sandbox.run"])
     expect(next.capabilities).toEqual(["filesystem.read", "mcp.server.connect", "network.external"])
     expect(next.approval_mode).toEqual("ask_every_time")
+    expect(next.path_scope_mode).toEqual("workspace_root")
+    expect(next.path_scope_enforcement).toEqual("approval_required_when_unenforceable")
+  })
+
+  it("treats path scope and allowlist fields as guided policy fields rather than advanced keys", () => {
+    const advancedKeys = getAdvancedPolicyKeys({
+      allowed_tools: ["notes.search"],
+      capabilities: ["filesystem.read"],
+      path_scope_mode: "workspace_root",
+      path_scope_enforcement: "approval_required_when_unenforceable",
+      path_allowlist_prefixes: ["src"]
+    })
+
+    expect(advancedKeys).not.toContain("path_scope_mode")
+    expect(advancedKeys).not.toContain("path_scope_enforcement")
+    expect(advancedKeys).not.toContain("path_allowlist_prefixes")
   })
 
   it("derives read-only presets from registry metadata and preserves pattern separation", () => {
@@ -95,7 +119,38 @@ describe("policyHelpers", () => {
     expect(capabilities).toEqual(["filesystem.read"])
   })
 
-  it("adds and removes string options without creating duplicates", () => {
+  it("maps external server helpers to managed-only selections and readable blocked reasons", () => {
+    const managedServers = getManagedExternalServers([
+      {
+        id: "docs-managed",
+        name: "Docs Managed",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "stdio",
+        config: {},
+        secret_configured: true,
+        server_source: "managed",
+        runtime_executable: true
+      },
+      {
+        id: "docs-legacy",
+        name: "Docs Legacy",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "stdio",
+        config: {},
+        secret_configured: false,
+        server_source: "legacy",
+        runtime_executable: false
+      }
+    ])
+
+    expect(managedServers.map((server) => server.id)).toEqual(["docs-managed"])
+    expect(getExternalBlockedReasonLabel("disabled_by_assignment")).toEqual("Disabled by assignment")
+    expect(getExternalBlockedReasonLabel("missing_secret")).toEqual("Missing secret")
+  })
+
+  it("toggles string selections without duplicating enabled entries", () => {
     expect(toggleStringValue(["session"], "conversation", true)).toEqual([
       "session",
       "conversation"
@@ -104,7 +159,6 @@ describe("policyHelpers", () => {
     expect(toggleStringValue(["session", "conversation"], "session", false)).toEqual([
       "conversation"
     ])
-  it("toggles string selections without duplicating enabled entries", () => {
     expect(toggleStringValue(["session"], "once", true)).toEqual(["session", "once"])
     expect(toggleStringValue(["session", "once"], "once", true)).toEqual(["session", "once"])
     expect(toggleStringValue(["session", "once"], "once", false)).toEqual(["session"])

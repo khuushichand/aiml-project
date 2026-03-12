@@ -240,6 +240,66 @@ def test_tools_list_attaches_api_key_metadata(monkeypatch):
     assert server.last_metadata.get("api_key_scopes") == ["read"]
 
 
+def test_mcp_request_attaches_workspace_headers_to_metadata(monkeypatch):
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
+    server = _install_dummy_server(monkeypatch)
+
+    headers = {
+        "X-API-KEY": os.getenv("SINGLE_USER_API_KEY", "THIS-IS-A-SECURE-KEY-123-FAKE-KEY"),
+        "x-tldw-workspace-id": "workspace-direct",
+        "x-tldw-cwd": "src/app",
+    }
+    body = {"jsonrpc": "2.0", "method": "status", "id": 1}
+
+    response = client.post("/api/v1/mcp/request", headers=headers, json=body)
+
+    assert response.status_code == 200, response.text
+    assert server.last_metadata is not None
+    assert server.last_metadata.get("workspace_id") == "workspace-direct"
+    assert server.last_metadata.get("cwd") == "src/app"
+
+
+def test_mcp_request_batch_attaches_workspace_headers_to_metadata(monkeypatch):
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
+    server = _install_dummy_server(monkeypatch)
+
+    headers = {
+        "X-API-KEY": os.getenv("SINGLE_USER_API_KEY", "THIS-IS-A-SECURE-KEY-123-FAKE-KEY"),
+        "x-tldw-workspace-id": "workspace-direct",
+        "x-tldw-cwd": "src/app",
+    }
+    body = [
+        {"jsonrpc": "2.0", "method": "status", "id": 1},
+        {"jsonrpc": "2.0", "method": "status", "id": 2},
+    ]
+
+    response = client.post("/api/v1/mcp/request/batch", headers=headers, json=body)
+
+    assert response.status_code == 200, response.text
+    assert server.last_metadata is not None
+    assert server.last_metadata.get("workspace_id") == "workspace-direct"
+    assert server.last_metadata.get("cwd") == "src/app"
+
+
+def test_tools_execute_attaches_workspace_headers_to_metadata(monkeypatch):
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
+    server = _install_dummy_server(monkeypatch)
+
+    headers = {
+        "X-API-KEY": os.getenv("SINGLE_USER_API_KEY", "THIS-IS-A-SECURE-KEY-123-FAKE-KEY"),
+        "x-tldw-workspace-id": "workspace-direct",
+        "x-tldw-cwd": "src/app",
+    }
+    payload = {"tool_name": "media.search", "arguments": {"query": "hello"}}
+
+    response = client.post("/api/v1/mcp/tools/execute", headers=headers, json=payload)
+
+    assert response.status_code in {200, 400}, response.text
+    assert server.last_metadata is not None
+    assert server.last_metadata.get("workspace_id") == "workspace-direct"
+    assert server.last_metadata.get("cwd") == "src/app"
+
+
 def test_tools_execute_api_key_scopes_enforced(monkeypatch):
     """
     Ensure /mcp/tools/execute respects API key scopes.

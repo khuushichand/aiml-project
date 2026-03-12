@@ -1726,6 +1726,15 @@ class SandboxService:
     def get_session_workspace_path(self, session_id: str) -> str | None:
         return self._orch.get_session_workspace_path(session_id)
 
+    def get_session_workspace_path_for_user(self, session_id: str, user_id: str) -> str | None:
+        return self._orch.get_session_workspace_path_for_user(session_id, user_id)
+
+    def list_workspace_paths_for_user_workspace(self, *, user_id: str, workspace_id: str) -> list[str]:
+        return self._orch.list_workspace_paths_for_user_workspace(
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+
     def cancel_run(self, run_id: str) -> bool:
         st = self._orch.get_run(run_id)
         if not st:
