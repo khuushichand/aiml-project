@@ -247,6 +247,60 @@ describe("CommandsPanel", () => {
     )
   })
 
+  it("applies the external api template with connection-ready defaults", async () => {
+    render(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+      />
+    )
+
+    await screen.findByText("Search Notes")
+    fireEvent.click(screen.getByTestId("persona-commands-template-external-api"))
+
+    expect(screen.getByTestId("persona-commands-name-input")).toHaveValue(
+      "Call External API"
+    )
+    expect(screen.getByTestId("persona-commands-action-type-select")).toHaveValue(
+      "custom"
+    )
+    expect(screen.getByTestId("persona-commands-custom-action-input")).toHaveValue(
+      "external_request"
+    )
+
+    fireEvent.change(screen.getByTestId("persona-commands-connection-select"), {
+      target: { value: "conn-1" }
+    })
+
+    expect(screen.getByTestId("persona-commands-http-method-select")).toHaveValue(
+      "POST"
+    )
+    expect(screen.getByTestId("persona-commands-request-path-input")).toHaveValue(
+      ""
+    )
+
+    fireEvent.click(screen.getByTestId("persona-commands-save"))
+
+    await waitFor(() =>
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/persona/profiles/persona-1/voice-commands",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.objectContaining({
+            name: "Call External API",
+            connection_id: "conn-1",
+            action_type: "custom",
+            action_config: expect.objectContaining({
+              action: "external_request",
+              method: "POST"
+            })
+          })
+        })
+      )
+    )
+  })
+
   it("loads a command into the editor and updates it", async () => {
     render(
       <CommandsPanel

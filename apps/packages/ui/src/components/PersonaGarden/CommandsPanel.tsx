@@ -123,6 +123,23 @@ const COMMAND_TEMPLATES: CommandTemplate[] = [
       toolName: "media.search",
       slotMapText: JSON.stringify({ query: "query" }, null, 2)
     })
+  },
+  {
+    key: "external-api",
+    label: "External API",
+    description: "Call a saved connection with a direct request",
+    apply: () => ({
+      ...DEFAULT_FORM_STATE,
+      name: "Call External API",
+      description: "Send a direct request through a saved persona connection",
+      phrasesText: "call external api for {query}\nsend api request for {query}",
+      actionType: "custom",
+      customAction: "external_request",
+      requestMethod: "POST",
+      requestPath: "",
+      slotMapText: JSON.stringify({ query: "query" }, null, 2),
+      requiresConfirmation: true
+    })
   }
 ]
 
