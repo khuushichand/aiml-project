@@ -2,6 +2,7 @@ import { useState } from "react"
 import { Tabs, Typography } from "antd"
 
 import { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
+import { GovernanceAuditTab } from "./GovernanceAuditTab"
 import { PathScopesTab } from "./PathScopesTab"
 import { PermissionProfilesTab } from "./PermissionProfilesTab"
 import { PolicyAssignmentsTab } from "./PolicyAssignmentsTab"
@@ -9,9 +10,18 @@ import { SharedWorkspacesTab } from "./SharedWorkspacesTab"
 import { ToolCatalogsTab } from "./ToolCatalogsTab"
 import { ExternalServersTab } from "./ExternalServersTab"
 import { WorkspaceSetsTab } from "./WorkspaceSetsTab"
+import type { McpHubGovernanceAuditNavigateTarget, McpHubGovernanceAuditTabKey } from "@/services/tldw/mcp-hub"
 
 export const McpHubPage = () => {
-  const [activeTab, setActiveTab] = useState("profiles")
+  const [activeTab, setActiveTab] = useState<McpHubGovernanceAuditTabKey>("profiles")
+  const [, setSelectedObjectKind] = useState<string | null>(null)
+  const [, setSelectedObjectId] = useState<string | null>(null)
+
+  const handleOpen = (target: McpHubGovernanceAuditNavigateTarget) => {
+    setSelectedObjectKind(target.object_kind)
+    setSelectedObjectId(target.object_id)
+    setActiveTab(target.tab)
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-4">
@@ -46,6 +56,11 @@ export const McpHubPage = () => {
             key: "shared-workspaces",
             label: "Shared Workspaces",
             children: <SharedWorkspacesTab />
+          },
+          {
+            key: "audit",
+            label: "Audit",
+            children: <GovernanceAuditTab onOpen={handleOpen} />
           },
           {
             key: "approvals",

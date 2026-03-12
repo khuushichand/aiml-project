@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -34,6 +34,7 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ExternalServerCreateRequest,
     ExternalServerResponse,
     ExternalServerUpdateRequest,
+    GovernanceAuditFindingListResponse,
     MCPHubDeleteResponse,
     PathScopeObjectCreateRequest,
     PathScopeObjectResponse,
@@ -618,6 +619,21 @@ def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not row_id:
             continue
         deduped[row_id] = row
+    return list(deduped.values())
+
+
+def _dedupe_rows_by_id(
+    rows: list[dict[str, Any]],
+    *,
+    id_getter: Callable[[dict[str, Any]], Any],
+) -> list[dict[str, Any]]:
+    """Deduplicate row dictionaries using a caller-provided stable identity key."""
+    deduped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        row_id = id_getter(row)
+        if not row_id:
+            continue
+        deduped[tuple(row_id)] = row
     return list(deduped.values())
 
 
@@ -1559,6 +1575,57 @@ async def list_shared_workspaces(
         )
         rows_with_readiness.append(enriched)
     return [_shared_workspace_row_to_response(row) for row in rows_with_readiness]
+
+
+@router.get("/audit/findings", response_model=GovernanceAuditFindingListResponse)
+async def list_governance_audit_findings(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    severity: str | None = None,
+    finding_type: str | None = None,
+    object_kind: str | None = None,
+    scope_type: str | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> GovernanceAuditFindingListResponse:
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    all_items: list[dict[str, Any]] = []
+    for visible_scope_type, visible_scope_id in filters:
+        result = await svc.list_governance_audit_findings(
+            actor_id=principal.user_id,
+            owner_scope_type=visible_scope_type,
+            owner_scope_id=visible_scope_id,
+            severity=severity,
+            finding_type=finding_type,
+            object_kind=object_kind,
+            scope_type=scope_type,
+        )
+        all_items.extend(list(result.get("items") or []))
+    deduped_items = _dedupe_rows_by_id(
+        all_items,
+        id_getter=lambda row: (
+            str(row.get("finding_type") or ""),
+            str(row.get("object_kind") or ""),
+            str(row.get("object_id") or ""),
+            str(row.get("scope_type") or ""),
+            str(row.get("scope_id") or ""),
+            str(row.get("message") or ""),
+        ),
+    )
+    counts = {"error": 0, "warning": 0}
+    for item in deduped_items:
+        severity_key = str(item.get("severity") or "warning").strip().lower()
+        if severity_key in counts:
+            counts[severity_key] += 1
+    return GovernanceAuditFindingListResponse(
+        items=deduped_items,
+        total=len(deduped_items),
+        counts=counts,
+    )
 
 
 @router.put("/shared-workspaces/{shared_workspace_id}", response_model=SharedWorkspaceResponse)

@@ -195,6 +195,7 @@ class McpHubService:
         self.repo = repo
         self.legacy_inventory_service = legacy_inventory_service
         self.workspace_root_resolver = workspace_root_resolver or McpHubWorkspaceRootResolver(repo=repo)
+        self.external_access_resolver = McpHubExternalAccessResolver(repo=repo)
 
     @staticmethod
     def _normalize_credential_slot_privilege_class(value: str) -> str:
@@ -489,6 +490,367 @@ class McpHubService:
                     workspace_source_mode=source_mode,
                     workspace_trust_source=trust_source,
                 )
+
+    async def inspect_multi_root_assignment_readiness(
+        self,
+        *,
+        actor_id: int | None,
+        assignment_row: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        try:
+            await self.validate_multi_root_assignment_readiness(
+                actor_id=actor_id,
+                assignment_id=int(assignment_row.get("id")) if assignment_row.get("id") is not None else None,
+                owner_scope_type=str(assignment_row.get("owner_scope_type") or "global"),
+                owner_scope_id=assignment_row.get("owner_scope_id"),
+                profile_id=assignment_row.get("profile_id"),
+                path_scope_object_id=assignment_row.get("path_scope_object_id"),
+                inline_policy_document=_as_dict(assignment_row.get("inline_policy_document")),
+                workspace_source_mode=str(assignment_row.get("workspace_source_mode") or "").strip().lower() or None,
+                workspace_set_object_id=assignment_row.get("workspace_set_object_id"),
+                inline_workspace_ids=None,
+            )
+        except McpHubValidationError as exc:
+            return dict(exc.detail)
+        return None
+
+    @staticmethod
+    def _make_governance_audit_finding(
+        *,
+        finding_type: str,
+        severity: str,
+        scope_type: str,
+        scope_id: int | None,
+        object_kind: str,
+        object_id: str,
+        object_label: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+        navigate_to: dict[str, Any] | None = None,
+        related_object_kind: str | None = None,
+        related_object_id: str | None = None,
+        related_object_label: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "finding_type": finding_type,
+            "severity": severity,
+            "scope_type": str(scope_type or "global"),
+            "scope_id": scope_id,
+            "object_kind": object_kind,
+            "object_id": object_id,
+            "object_label": object_label,
+            "message": message,
+            "details": dict(details or {}),
+            "navigate_to": dict(
+                navigate_to
+                or {
+                    "tab": "profiles",
+                    "object_kind": object_kind,
+                    "object_id": object_id,
+                }
+            ),
+            "related_object_kind": related_object_kind,
+            "related_object_id": related_object_id,
+            "related_object_label": related_object_label,
+        }
+
+    @staticmethod
+    def _sort_governance_audit_findings(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        severity_rank = {"error": 0, "warning": 1}
+        return sorted(
+            items,
+            key=lambda item: (
+                severity_rank.get(str(item.get("severity") or "warning"), 9),
+                str(item.get("scope_type") or ""),
+                str(item.get("object_kind") or ""),
+                str(item.get("object_label") or ""),
+                str(item.get("finding_type") or ""),
+            ),
+        )
+
+    async def list_governance_audit_findings(
+        self,
+        *,
+        actor_id: int | None,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+        severity: str | None = None,
+        finding_type: str | None = None,
+        object_kind: str | None = None,
+        scope_type: str | None = None,
+    ) -> dict[str, Any]:
+        findings: list[dict[str, Any]] = []
+
+        workspace_sets = await self.repo.list_workspace_set_objects(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+        for workspace_set in workspace_sets:
+            summary = await self.get_workspace_set_readiness_summary(
+                workspace_set_object_id=int(workspace_set.get("id")),
+            )
+            if summary.get("is_multi_root_ready", True):
+                continue
+            findings.append(
+                self._make_governance_audit_finding(
+                    finding_type="workspace_source_readiness_warning",
+                    severity="warning",
+                    scope_type=str(workspace_set.get("owner_scope_type") or "user"),
+                    scope_id=workspace_set.get("owner_scope_id"),
+                    object_kind="workspace_set_object",
+                    object_id=str(workspace_set.get("id") or ""),
+                    object_label=str(workspace_set.get("name") or ""),
+                    message=str(summary.get("warning_message") or "Multi-root readiness warning"),
+                    details={
+                        "warning_codes": list(summary.get("warning_codes") or []),
+                        "conflicting_workspace_ids": list(summary.get("conflicting_workspace_ids") or []),
+                        "conflicting_workspace_roots": list(summary.get("conflicting_workspace_roots") or []),
+                        "unresolved_workspace_ids": list(summary.get("unresolved_workspace_ids") or []),
+                        "advisory_kind": "multi_root_readiness",
+                    },
+                    navigate_to={
+                        "tab": "workspace-sets",
+                        "object_kind": "workspace_set_object",
+                        "object_id": str(workspace_set.get("id") or ""),
+                    },
+                )
+            )
+
+        shared_workspaces = await self.repo.list_shared_workspace_entries(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+        for shared_workspace in shared_workspaces:
+            summary = await self.get_shared_workspace_readiness_summary(
+                shared_workspace_id=int(shared_workspace.get("id")),
+            )
+            if summary.get("is_multi_root_ready", True):
+                continue
+            findings.append(
+                self._make_governance_audit_finding(
+                    finding_type="shared_workspace_overlap_warning",
+                    severity="warning",
+                    scope_type=str(shared_workspace.get("owner_scope_type") or "team"),
+                    scope_id=shared_workspace.get("owner_scope_id"),
+                    object_kind="shared_workspace",
+                    object_id=str(shared_workspace.get("id") or ""),
+                    object_label=str(
+                        shared_workspace.get("display_name")
+                        or shared_workspace.get("workspace_id")
+                        or shared_workspace.get("id")
+                        or ""
+                    ),
+                    message=str(
+                        summary.get("warning_message")
+                        or "May conflict with other visible shared roots in multi-root assignments."
+                    ),
+                    details={
+                        "warning_codes": list(summary.get("warning_codes") or []),
+                        "conflicting_workspace_ids": list(summary.get("conflicting_workspace_ids") or []),
+                        "conflicting_workspace_roots": list(summary.get("conflicting_workspace_roots") or []),
+                    },
+                    navigate_to={
+                        "tab": "shared-workspaces",
+                        "object_kind": "shared_workspace",
+                        "object_id": str(shared_workspace.get("id") or ""),
+                    },
+                )
+            )
+
+        assignments = await self.repo.list_policy_assignments(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+        for assignment in assignments:
+            blocker = await self.inspect_multi_root_assignment_readiness(
+                actor_id=actor_id,
+                assignment_row=assignment,
+            )
+            if blocker:
+                assignment_label = str(
+                    assignment.get("target_id")
+                    or assignment.get("target_type")
+                    or assignment.get("id")
+                    or ""
+                )
+                findings.append(
+                    self._make_governance_audit_finding(
+                        finding_type="assignment_validation_blocker",
+                        severity="error",
+                        scope_type=str(assignment.get("owner_scope_type") or "global"),
+                        scope_id=assignment.get("owner_scope_id"),
+                        object_kind="policy_assignment",
+                        object_id=str(assignment.get("id") or ""),
+                        object_label=assignment_label,
+                        message=str(
+                            blocker.get("message")
+                            or "Assignment is not ready for its current governance configuration."
+                        ),
+                        details=blocker,
+                        navigate_to={
+                            "tab": "assignments",
+                            "object_kind": "policy_assignment",
+                            "object_id": str(assignment.get("id") or ""),
+                        },
+                        related_object_kind=(
+                            "workspace_set_object"
+                            if assignment.get("workspace_source_mode") == "named"
+                            and assignment.get("workspace_set_object_id") is not None
+                            else None
+                        ),
+                        related_object_id=(
+                            str(assignment.get("workspace_set_object_id"))
+                            if assignment.get("workspace_source_mode") == "named"
+                            and assignment.get("workspace_set_object_id") is not None
+                            else None
+                        ),
+                    )
+                )
+
+            resolver_fn = getattr(self.external_access_resolver, "resolve", None)
+            if callable(resolver_fn):
+                external_access = await resolver_fn(
+                    assignment_id=int(assignment.get("id")),
+                    effective_policy={
+                        "capabilities": list(
+                            _as_dict(assignment.get("inline_policy_document")).get("capabilities") or []
+                        )
+                    },
+                )
+            else:
+                fallback_resolver_fn = getattr(
+                    self.external_access_resolver,
+                    "resolve_assignment_external_access",
+                    None,
+                )
+                if not callable(fallback_resolver_fn):
+                    external_access = {"servers": []}
+                else:
+                    external_access = await fallback_resolver_fn(
+                        assignment_id=int(assignment.get("id")),
+                        owner_scope_type=str(assignment.get("owner_scope_type") or "global"),
+                        owner_scope_id=assignment.get("owner_scope_id"),
+                        profile_id=assignment.get("profile_id"),
+                    )
+            for server in list(external_access.get("servers") or []):
+                blocked_reason = str(server.get("blocked_reason") or "").strip().lower()
+                if blocked_reason not in {
+                    "required_slot_not_granted",
+                    "required_slot_secret_missing",
+                    "disabled_by_assignment",
+                    "missing_secret",
+                }:
+                    continue
+                findings.append(
+                    self._make_governance_audit_finding(
+                        finding_type="external_binding_issue",
+                        severity="error",
+                        scope_type=str(assignment.get("owner_scope_type") or "global"),
+                        scope_id=assignment.get("owner_scope_id"),
+                        object_kind="policy_assignment",
+                        object_id=str(assignment.get("id") or ""),
+                        object_label=str(
+                            assignment.get("target_id")
+                            or assignment.get("target_type")
+                            or assignment.get("id")
+                            or ""
+                        ),
+                        message=str(
+                            server.get("blocked_reason")
+                            or "External binding issue detected for this assignment."
+                        ),
+                        details={
+                            "server_id": server.get("server_id"),
+                            "server_name": server.get("server_name"),
+                            "requested_slots": list(server.get("requested_slots") or []),
+                            "bound_slots": list(server.get("bound_slots") or []),
+                            "missing_bound_slots": list(server.get("missing_bound_slots") or []),
+                            "missing_secret_slots": list(server.get("missing_secret_slots") or []),
+                            "blocked_reason": server.get("blocked_reason"),
+                        },
+                        navigate_to={
+                            "tab": "assignments",
+                            "object_kind": "policy_assignment",
+                            "object_id": str(assignment.get("id") or ""),
+                        },
+                        related_object_kind="external_server",
+                        related_object_id=str(server.get("server_id") or ""),
+                        related_object_label=(
+                            str(server.get("server_name") or "") or str(server.get("server_id") or "")
+                        ),
+                    )
+                )
+
+        external_servers = await self.list_external_servers(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+        for server in external_servers:
+            if str(server.get("server_source") or "managed") != "managed":
+                continue
+            blocked_reason = str(server.get("auth_template_blocked_reason") or "").strip()
+            runtime_executable = bool(server.get("runtime_executable"))
+            if runtime_executable and not blocked_reason:
+                continue
+            findings.append(
+                self._make_governance_audit_finding(
+                    finding_type="external_server_configuration_issue",
+                    severity="error",
+                    scope_type=str(server.get("owner_scope_type") or "global"),
+                    scope_id=server.get("owner_scope_id"),
+                    object_kind="external_server",
+                    object_id=str(server.get("id") or ""),
+                    object_label=str(server.get("name") or server.get("id") or ""),
+                    message=blocked_reason or "Managed external server is not runtime executable.",
+                    details={
+                        "runtime_executable": runtime_executable,
+                        "auth_template_present": bool(server.get("auth_template_present")),
+                        "auth_template_valid": bool(server.get("auth_template_valid")),
+                        "auth_template_blocked_reason": blocked_reason or None,
+                    },
+                    navigate_to={
+                        "tab": "credentials",
+                        "object_kind": "external_server",
+                        "object_id": str(server.get("id") or ""),
+                    },
+                )
+            )
+
+        filtered = self._sort_governance_audit_findings(findings)
+        if severity:
+            filtered = [
+                item for item in filtered if str(item.get("severity") or "").strip().lower() == str(severity).strip().lower()
+            ]
+        if finding_type:
+            filtered = [
+                item
+                for item in filtered
+                if str(item.get("finding_type") or "").strip().lower() == str(finding_type).strip().lower()
+            ]
+        if object_kind:
+            filtered = [
+                item
+                for item in filtered
+                if str(item.get("object_kind") or "").strip().lower() == str(object_kind).strip().lower()
+            ]
+        if scope_type:
+            filtered = [
+                item
+                for item in filtered
+                if str(item.get("scope_type") or "").strip().lower() == str(scope_type).strip().lower()
+            ]
+
+        counts = {"error": 0, "warning": 0}
+        for item in filtered:
+            severity_key = str(item.get("severity") or "warning").strip().lower()
+            if severity_key in counts:
+                counts[severity_key] += 1
+
+        return {
+            "items": filtered,
+            "total": len(filtered),
+            "counts": counts,
+        }
 
     async def _validate_workspace_id_for_user(self, *, owner_scope_id: int | None, workspace_id: str) -> None:
         if owner_scope_id is None:

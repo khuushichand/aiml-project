@@ -282,6 +282,39 @@ class WorkspaceSourceReadinessSummaryResponse(BaseModel):
     unresolved_workspace_ids: list[str] = Field(default_factory=list)
 
 
+class GovernanceAuditNavigateTargetResponse(BaseModel):
+    tab: str
+    object_kind: str
+    object_id: str
+
+
+class GovernanceAuditFindingResponse(BaseModel):
+    finding_type: str
+    severity: str
+    scope_type: ScopeType
+    scope_id: int | None = None
+    object_kind: str
+    object_id: str
+    object_label: str
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    navigate_to: GovernanceAuditNavigateTargetResponse
+    related_object_kind: str | None = None
+    related_object_id: str | None = None
+    related_object_label: str | None = None
+
+
+class GovernanceAuditCountsResponse(BaseModel):
+    error: int = 0
+    warning: int = 0
+
+
+class GovernanceAuditFindingListResponse(BaseModel):
+    items: list[GovernanceAuditFindingResponse] = Field(default_factory=list)
+    total: int = 0
+    counts: GovernanceAuditCountsResponse = Field(default_factory=GovernanceAuditCountsResponse)
+
+
 class PolicyOverrideUpsertRequest(BaseModel):
     override_policy_document: dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True

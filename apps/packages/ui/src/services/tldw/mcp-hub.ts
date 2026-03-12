@@ -21,6 +21,30 @@ export type McpHubCredentialBindingMode = "grant" | "disable"
 export type McpHubWorkspaceSourceMode = "inline" | "named"
 export type McpHubWorkspaceTrustSource = "user_local" | "shared_registry"
 export type McpHubCredentialSlotPrivilegeClass = "read" | "write" | "admin" | "custom" | string
+export type McpHubGovernanceAuditSeverity = "error" | "warning"
+export type McpHubGovernanceAuditFindingType =
+  | "assignment_validation_blocker"
+  | "workspace_source_readiness_warning"
+  | "shared_workspace_overlap_warning"
+  | "external_server_configuration_issue"
+  | "external_binding_issue"
+export type McpHubGovernanceAuditObjectKind =
+  | "policy_assignment"
+  | "workspace_set_object"
+  | "shared_workspace"
+  | "external_server"
+  | "permission_profile"
+  | string
+export type McpHubGovernanceAuditTabKey =
+  | "profiles"
+  | "assignments"
+  | "path-scopes"
+  | "workspace-sets"
+  | "shared-workspaces"
+  | "audit"
+  | "approvals"
+  | "tool-catalogs"
+  | "credentials"
 
 export type McpHubProfile = {
   id: number
@@ -572,6 +596,37 @@ export type McpHubEffectiveExternalAccessSlot = {
 
 export type McpHubEffectiveExternalAccess = {
   servers: McpHubEffectiveExternalAccessEntry[]
+}
+
+export type McpHubGovernanceAuditNavigateTarget = {
+  tab: McpHubGovernanceAuditTabKey
+  object_kind: McpHubGovernanceAuditObjectKind
+  object_id: string
+}
+
+export type McpHubGovernanceAuditFinding = {
+  finding_type: McpHubGovernanceAuditFindingType
+  severity: McpHubGovernanceAuditSeverity
+  scope_type: McpHubScopeType
+  scope_id?: number | null
+  object_kind: McpHubGovernanceAuditObjectKind
+  object_id: string
+  object_label: string
+  message: string
+  details?: Record<string, unknown> | null
+  related_object_kind?: string | null
+  related_object_id?: string | null
+  related_object_label?: string | null
+  navigate_to: McpHubGovernanceAuditNavigateTarget
+}
+
+export type McpHubGovernanceAuditFindingList = {
+  items: McpHubGovernanceAuditFinding[]
+  total: number
+  counts: {
+    error: number
+    warning: number
+  }
 }
 
 const withQuery = (
@@ -1246,6 +1301,27 @@ export const getEffectivePolicy = async (params: {
       group_id: params.group_id,
       org_id: params.org_id,
       team_id: params.team_id
+    }),
+    method: "GET"
+  })
+}
+
+export const listGovernanceAuditFindings = async (params: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  severity?: McpHubGovernanceAuditSeverity
+  finding_type?: McpHubGovernanceAuditFindingType
+  object_kind?: McpHubGovernanceAuditObjectKind
+  scope_type?: McpHubScopeType
+} = {}): Promise<McpHubGovernanceAuditFindingList> => {
+  return await bgRequestClient<McpHubGovernanceAuditFindingList>({
+    path: withQuery("/api/v1/mcp/hub/audit/findings", {
+      owner_scope_type: params.owner_scope_type,
+      owner_scope_id: params.owner_scope_id,
+      severity: params.severity,
+      finding_type: params.finding_type,
+      object_kind: params.object_kind,
+      scope_type: params.scope_type
     }),
     method: "GET"
   })
