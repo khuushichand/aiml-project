@@ -9,6 +9,7 @@ from tldw_Server_API.app.api.v1.endpoints import chat as chat_router
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 
 
 pytestmark = pytest.mark.unit
@@ -470,6 +471,13 @@ def test_conversation_alias_passes_deleted_filters_to_paged_search(tmp_path, mon
         "include_deleted": True,
         "deleted_only": True,
     }
+
+
+def test_conversation_search_metrics_registered():
+    registry = get_metrics_registry()
+
+    assert "chat_conversation_search_requests_total" in registry.metrics
+    assert "chat_conversation_search_duration_seconds" in registry.metrics
 
 
 def test_conversation_alias_emits_success_metrics_and_debug_shape(tmp_path, monkeypatch):
