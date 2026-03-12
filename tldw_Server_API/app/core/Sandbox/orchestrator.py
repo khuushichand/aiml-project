@@ -1361,6 +1361,16 @@ class SandboxOrchestrator:
             self._session_roots[sid] = ws_str
         return ws_str
 
+    def get_session_workspace_path_for_user(self, session_id: str, user_id: str) -> str | None:
+        sid = str(session_id or "").strip()
+        owner_key = str(user_id or "").strip()
+        if not sid or not owner_key:
+            return None
+        owner = self.get_session_owner(sid)
+        if str(owner or "").strip() != owner_key:
+            return None
+        return self.get_session_workspace_path(sid)
+
     def list_workspace_paths_for_user_workspace(self, *, user_id: str, workspace_id: str) -> list[str]:
         owner_key = str(user_id or "").strip()
         workspace_key = str(workspace_id or "").strip()

@@ -388,9 +388,8 @@ def _grant_authority_delta(base_policy_document: dict[str, Any], merged_policy_d
     base_allowlist = _normalized_path_allowlist_for_comparison(base_policy_document)
     merged_allowlist = _normalized_path_allowlist_for_comparison(merged_policy_document)
     broadened_path_scope = merged_scope_rank > base_scope_rank
-    broadened_allowlist = (
-        (bool(base_allowlist) and not merged_allowlist)
-        or bool(merged_allowlist - base_allowlist)
+    broadened_allowlist = bool(base_allowlist) and (
+        (not merged_allowlist) or bool(merged_allowlist - base_allowlist)
     )
     if broadened_path_scope or broadened_allowlist:
         existing_caps = {

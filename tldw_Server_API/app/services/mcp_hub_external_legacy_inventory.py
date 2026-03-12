@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ class McpHubExternalLegacyInventoryService:
     config_path: str | None = None
 
     async def list_inventory(self) -> list[dict[str, Any]]:
-        registry = load_external_server_registry(self.config_path)
+        registry = await asyncio.to_thread(load_external_server_registry, self.config_path)
         rows: list[dict[str, Any]] = []
         for server in registry.servers:
             model_dump = server.model_dump if hasattr(server, "model_dump") else server.dict  # type: ignore[attr-defined]

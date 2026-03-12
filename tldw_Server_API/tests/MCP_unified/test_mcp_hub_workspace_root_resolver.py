@@ -10,9 +10,11 @@ class _FakeSandboxService:
         self,
         *,
         session_roots: dict[str, str] | None = None,
+        session_owners: dict[str, str] | None = None,
         workspace_paths: dict[tuple[str, str], list[str]] | None = None,
     ) -> None:
         self.session_roots = dict(session_roots or {})
+        self.session_owners = {str(key): str(value) for key, value in dict(session_owners or {}).items()}
         self.workspace_paths = {
             (str(user_id), str(workspace_id)): list(paths)
             for (user_id, workspace_id), paths in dict(workspace_paths or {}).items()
@@ -20,6 +22,11 @@ class _FakeSandboxService:
 
     def get_session_workspace_path(self, session_id: str) -> str | None:
         return self.session_roots.get(session_id)
+
+    def get_session_workspace_path_for_user(self, session_id: str, user_id: str) -> str | None:
+        if self.session_owners.get(str(session_id)) != str(user_id):
+            return None
+        return self.get_session_workspace_path(session_id)
 
     def list_workspace_paths_for_user_workspace(self, *, user_id: str, workspace_id: str) -> list[str]:
         return list(self.workspace_paths.get((str(user_id), str(workspace_id)), []))
@@ -52,6 +59,7 @@ async def test_workspace_root_resolver_prefers_session_root() -> None:
     resolver = McpHubWorkspaceRootResolver(
         sandbox_service=_FakeSandboxService(
             session_roots={"sess-1": "/tmp/mcp-hub-workspace/session-root"},
+            session_owners={"sess-1": "7"},
             workspace_paths={("7", "workspace-direct"): ["/tmp/mcp-hub-workspace/direct-root"]},
         )
     )
@@ -64,6 +72,31 @@ async def test_workspace_root_resolver_prefers_session_root() -> None:
 
     assert result["workspace_root"] == str(Path("/tmp/mcp-hub-workspace/session-root").resolve())
     assert result["source"] == "sandbox_session"
+    assert result["reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_workspace_root_resolver_ignores_session_root_owned_by_other_user() -> None:
+    from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import (
+        McpHubWorkspaceRootResolver,
+    )
+
+    resolver = McpHubWorkspaceRootResolver(
+        sandbox_service=_FakeSandboxService(
+            session_roots={"sess-1": "/tmp/mcp-hub-workspace/session-root"},
+            session_owners={"sess-1": "99"},
+            workspace_paths={("7", "workspace-direct"): ["/tmp/mcp-hub-workspace/direct-root"]},
+        )
+    )
+
+    result = await resolver.resolve_for_context(
+        session_id="sess-1",
+        user_id="7",
+        workspace_id="workspace-direct",
+    )
+
+    assert result["workspace_root"] == str(Path("/tmp/mcp-hub-workspace/direct-root").resolve())
+    assert result["source"] == "sandbox_workspace_lookup"
     assert result["reason"] is None
 
 
