@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -17,8 +17,14 @@ from tldw_Server_API.app.core.Storage.backup_schedule_jobs import (
 from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.services.admin_data_ops_service import create_backup_snapshot
 
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import (
+        AuthnzBackupSchedulesRepo,
+    )
 
-async def _get_repo():
+
+async def _get_repo() -> AuthnzBackupSchedulesRepo:
+    """Build the backup schedules repository for worker execution."""
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import (
         AuthnzBackupSchedulesRepo,

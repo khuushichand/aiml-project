@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -32,6 +32,11 @@ from tldw_Server_API.app.services.admin_backup_schedules_service import (
     AdminBackupSchedulesService,
 )
 
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import (
+        AuthnzBackupSchedulesRepo,
+    )
+
 
 _NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -46,6 +51,7 @@ _MIN_RESCAN_SECONDS = 30
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
+    """Parse an ISO timestamp into a timezone-aware UTC-capable datetime."""
     if not value:
         return None
     try:
@@ -67,7 +73,8 @@ class _AdminBackupScheduler:
         self._rescan_task: asyncio.Task | None = None
         self._service = AdminBackupSchedulesService(repo=repo)
 
-    async def _ensure_repo(self):
+    async def _ensure_repo(self) -> AuthnzBackupSchedulesRepo:
+        """Return the schedules repository, initializing it on first use."""
         if self._repo is not None:
             return self._repo
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -103,8 +110,8 @@ class _AdminBackupScheduler:
                         await self._rescan_once()
                     except asyncio.CancelledError:
                         break
-                    except _NONCRITICAL_EXCEPTIONS as exc:
-                        logger.debug("Admin backup scheduler rescan error: {}", exc)
+                    except _NONCRITICAL_EXCEPTIONS:
+                        logger.debug("Admin backup scheduler rescan error")
 
             self._rescan_task = asyncio.create_task(_rescan_loop(), name="admin_backup_scheduler_rescan")
             self._started = True
@@ -208,8 +215,8 @@ class _AdminBackupScheduler:
                 coalesce=True,
                 misfire_grace_time=300,
             )
-        except _NONCRITICAL_EXCEPTIONS as exc:
-            logger.warning("Admin backup scheduler failed to add job {}: {}", item.get("id"), exc)
+        except _NONCRITICAL_EXCEPTIONS:
+            logger.warning("Admin backup scheduler failed to add job {}", item.get("id"))
 
     async def _run_schedule(self, schedule_id: str) -> None:
         repo = await self._ensure_repo()
@@ -275,8 +282,17 @@ class _AdminBackupScheduler:
             if updated and updated.get("deleted_at") is None and not bool(updated.get("is_paused")):
                 self._add_job(updated)
         except _NONCRITICAL_EXCEPTIONS as exc:
-            logger.warning("Admin backup schedule enqueue failed for {}: {}", schedule_id, exc)
-            await repo.mark_run_failed(run_id=str(claim["id"]), error=str(exc), last_status="error")
+            logger.warning("Admin backup schedule enqueue failed for {}", schedule_id)
+            await repo.mark_run_failed(
+                run_id=str(claim["id"]),
+                error=str(exc),
+                last_status="error",
+                next_run_at=next_run_at,
+                last_run_at=run_slot_utc,
+            )
+            updated = await repo.get_schedule(schedule_id, include_deleted=True)
+            if updated and updated.get("deleted_at") is None and not bool(updated.get("is_paused")):
+                self._add_job(updated)
 
 
 _INSTANCE: _AdminBackupScheduler | None = None

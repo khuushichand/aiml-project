@@ -30,6 +30,22 @@ async def _reset_authnz_state() -> None:
     await reset_session_manager()
 
 
+async def _build_backup_repo(tmp_path):
+    from pathlib import Path
+
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import (
+        AuthnzBackupSchedulesRepo,
+    )
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(tmp_path / "users_test_backup_schedules.db")))
+    repo = AuthnzBackupSchedulesRepo(pool)
+    await repo.ensure_schema()
+    return repo
+
+
 @pytest.mark.asyncio
 async def test_backup_schedule_roundtrip_crud(tmp_path) -> None:
     _setup_env(tmp_path)
@@ -169,6 +185,61 @@ async def test_create_backup_schedule_rejects_out_of_scope_user(tmp_path, monkey
             )
             assert response.status_code == 403, response.text
             assert response.json()["detail"] == "Not authorized to manage users outside your organization or team"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_backup_schedules_hides_platform_rows_and_reports_visible_total(
+    tmp_path,
+) -> None:
+    _setup_env(tmp_path)
+    await _reset_authnz_state()
+
+    repo = await _build_backup_repo(tmp_path)
+    await repo.create_schedule(
+        dataset="authnz",
+        target_user_id=None,
+        frequency="daily",
+        time_of_day="02:00",
+        timezone="UTC",
+        anchor_day_of_week=None,
+        anchor_day_of_month=None,
+        retention_count=30,
+        created_by_user_id=1,
+        updated_by_user_id=1,
+        next_run_at="2026-03-12T02:00:00+00:00",
+    )
+    media_schedule = await repo.create_schedule(
+        dataset="media",
+        target_user_id=41,
+        frequency="daily",
+        time_of_day="03:00",
+        timezone="UTC",
+        anchor_day_of_week=None,
+        anchor_day_of_month=None,
+        retention_count=7,
+        created_by_user_id=1,
+        updated_by_user_id=1,
+        next_run_at="2026-03-12T03:00:00+00:00",
+    )
+
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=77,
+        subject="user:77",
+        roles=["admin"],
+        is_admin=True,
+    )
+    app.dependency_overrides[get_auth_principal] = lambda: principal
+
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/v1/admin/backup-schedules?limit=100&offset=0")
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["total"] == 1
+            assert [item["id"] for item in payload["items"]] == [media_schedule["id"]]
     finally:
         app.dependency_overrides.clear()
 

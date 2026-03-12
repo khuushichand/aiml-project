@@ -122,6 +122,52 @@ async def test_due_schedule_concurrent_schedulers_enqueue_single_job(backup_sche
 
 
 @pytest.mark.asyncio
+async def test_due_schedule_enqueue_failure_advances_next_run_and_reschedules(
+    backup_scheduler_repo,
+    monkeypatch,
+):
+    from tldw_Server_API.app.services.admin_backup_scheduler import _AdminBackupScheduler
+
+    due = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    created = await backup_scheduler_repo.create_schedule(
+        dataset="authnz",
+        target_user_id=None,
+        frequency="daily",
+        time_of_day="02:00",
+        timezone="UTC",
+        anchor_day_of_week=None,
+        anchor_day_of_month=None,
+        retention_count=30,
+        created_by_user_id=1,
+        updated_by_user_id=1,
+        next_run_at=due.isoformat(),
+    )
+
+    scheduler = _AdminBackupScheduler(repo=backup_scheduler_repo)
+
+    def _failing_create_job(**kwargs):
+        raise RuntimeError("queue write failed")
+
+    scheduled_ids: list[str] = []
+
+    def _capture_add(item):
+        scheduled_ids.append(str(item["id"]))
+
+    monkeypatch.setattr(scheduler._jobs, "create_job", _failing_create_job)
+    monkeypatch.setattr(scheduler, "_add_job", _capture_add)
+
+    await scheduler._run_schedule(str(created["id"]))
+
+    updated = await backup_scheduler_repo.get_schedule(str(created["id"]))
+    assert updated is not None
+    assert updated["last_status"] == "error"
+    assert updated["last_error"] == "queue write failed"
+    assert updated["next_run_at"] is not None
+    assert datetime.fromisoformat(updated["next_run_at"]) > due
+    assert scheduled_ids == [str(created["id"])]
+
+
+@pytest.mark.asyncio
 async def test_rescan_skips_paused_schedule(backup_scheduler_repo, monkeypatch):
     from tldw_Server_API.app.services.admin_backup_scheduler import _AdminBackupScheduler
 

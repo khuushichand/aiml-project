@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
@@ -50,6 +50,12 @@ from tldw_Server_API.app.services.admin_data_subject_requests_service import (
 from tldw_Server_API.app.services.admin_backup_schedules_service import (
     AdminBackupSchedulesService,
 )
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+    from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import (
+        AuthnzBackupSchedulesRepo,
+    )
 
 router = APIRouter()
 
@@ -127,16 +133,19 @@ _PER_USER_BACKUP_DATASETS = _BACKUP_DATASETS - {"authnz"}
 
 
 def _require_user_id_for_dataset(dataset: str, user_id: int | None) -> None:
+    """Require a target user for per-user datasets."""
     if dataset in _PER_USER_BACKUP_DATASETS and user_id is None:
         raise HTTPException(status_code=400, detail="user_id_required")
 
 
 def _build_schedule_description(item: dict[str, Any]) -> str:
+    """Return human-readable schedule copy for an API response row."""
     service = AdminBackupSchedulesService(repo=None)
     return service.describe_schedule(item)
 
 
 def _serialize_backup_schedule_item(item: dict[str, Any]) -> BackupScheduleItem:
+    """Convert a repository schedule row into the public API schema."""
     return BackupScheduleItem(
         id=str(item["id"]),
         dataset=str(item["dataset"]),
@@ -160,19 +169,21 @@ def _serialize_backup_schedule_item(item: dict[str, Any]) -> BackupScheduleItem:
     )
 
 
-async def _get_backup_schedules_repo():
-    from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import (
-        AuthnzBackupSchedulesRepo,
-    )
+async def _get_backup_schedules_repo(
+    pool: DatabasePool = Depends(get_db_pool),
+) -> AuthnzBackupSchedulesRepo:
+    """Build the backup schedules repository from the shared AuthNZ pool."""
+    from tldw_Server_API.app.core.AuthNZ.repos.backup_schedules_repo import AuthnzBackupSchedulesRepo
 
-    pool = await get_db_pool()
     repo = AuthnzBackupSchedulesRepo(pool)
     await repo.ensure_schema()
     return repo
 
 
-async def _get_backup_schedule_service() -> AdminBackupSchedulesService:
-    repo = await _get_backup_schedules_repo()
+async def _get_backup_schedule_service(
+    repo: AuthnzBackupSchedulesRepo = Depends(_get_backup_schedules_repo),
+) -> AdminBackupSchedulesService:
+    """Build the backup schedules service from the injected repository."""
     return AdminBackupSchedulesService(repo=repo)
 
 
@@ -327,19 +338,22 @@ async def list_backup_schedules(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminBackupSchedulesService = Depends(_get_backup_schedule_service),
 ) -> BackupScheduleListResponse:
     try:
-        service = await _get_backup_schedule_service()
         repo = service.repo
-        items, total = await repo.list_schedules(limit=limit, offset=offset)
+        items, total = await repo.list_schedules(
+            limit=limit,
+            offset=offset,
+            exclude_authnz=not service.is_platform_admin(principal),
+        )
         items = service.filter_visible_items(items, principal=principal)
-        total = len(items)
         payload = [_serialize_backup_schedule_item(item) for item in items]
         return BackupScheduleListResponse(items=payload, total=total, limit=limit, offset=offset)
     except HTTPException:
         raise
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to list backup schedules: {exc}")
+        logger.error("Failed to list backup schedules")
         raise HTTPException(status_code=500, detail="Failed to list backup schedules") from exc
 
 
@@ -348,9 +362,9 @@ async def create_backup_schedule(
     payload: BackupScheduleCreateRequest,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminBackupSchedulesService = Depends(_get_backup_schedule_service),
 ) -> BackupScheduleMutationResponse:
     try:
-        service = await _get_backup_schedule_service()
         dataset = service.normalize_dataset(payload.dataset)
         service.validate_target_rules(dataset, payload.target_user_id)
         if service.requires_platform_admin(dataset):
@@ -386,7 +400,7 @@ async def create_backup_schedule(
     except HTTPException:
         raise
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to create backup schedule: {exc}")
+        logger.error("Failed to create backup schedule")
         raise HTTPException(status_code=500, detail="Failed to create backup schedule") from exc
 
 
@@ -396,9 +410,9 @@ async def update_backup_schedule(
     payload: BackupScheduleUpdateRequest,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminBackupSchedulesService = Depends(_get_backup_schedule_service),
 ) -> BackupScheduleMutationResponse:
     try:
-        service = await _get_backup_schedule_service()
         repo = service.repo
         current = await repo.get_schedule(schedule_id)
         if not current:
@@ -438,7 +452,7 @@ async def update_backup_schedule(
     except HTTPException:
         raise
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to update backup schedule: {exc}")
+        logger.error("Failed to update backup schedule")
         raise HTTPException(status_code=500, detail="Failed to update backup schedule") from exc
 
 
@@ -447,9 +461,9 @@ async def pause_backup_schedule(
     schedule_id: str,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminBackupSchedulesService = Depends(_get_backup_schedule_service),
 ) -> BackupScheduleMutationResponse:
     try:
-        service = await _get_backup_schedule_service()
         repo = service.repo
         current = await repo.get_schedule(schedule_id)
         if not current:
@@ -477,7 +491,7 @@ async def pause_backup_schedule(
     except HTTPException:
         raise
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to pause backup schedule: {exc}")
+        logger.error("Failed to pause backup schedule")
         raise HTTPException(status_code=500, detail="Failed to pause backup schedule") from exc
 
 
@@ -486,9 +500,9 @@ async def resume_backup_schedule(
     schedule_id: str,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminBackupSchedulesService = Depends(_get_backup_schedule_service),
 ) -> BackupScheduleMutationResponse:
     try:
-        service = await _get_backup_schedule_service()
         repo = service.repo
         current = await repo.get_schedule(schedule_id)
         if not current:
@@ -516,7 +530,7 @@ async def resume_backup_schedule(
     except HTTPException:
         raise
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to resume backup schedule: {exc}")
+        logger.error("Failed to resume backup schedule")
         raise HTTPException(status_code=500, detail="Failed to resume backup schedule") from exc
 
 
@@ -525,9 +539,9 @@ async def delete_backup_schedule(
     schedule_id: str,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminBackupSchedulesService = Depends(_get_backup_schedule_service),
 ) -> BackupScheduleMutationResponse:
     try:
-        service = await _get_backup_schedule_service()
         repo = service.repo
         current = await repo.get_schedule(schedule_id)
         if not current:
@@ -561,7 +575,7 @@ async def delete_backup_schedule(
     except HTTPException:
         raise
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to delete backup schedule: {exc}")
+        logger.error("Failed to delete backup schedule")
         raise HTTPException(status_code=500, detail="Failed to delete backup schedule") from exc
 
 
