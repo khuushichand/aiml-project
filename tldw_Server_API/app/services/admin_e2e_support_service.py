@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import os
 import secrets
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, status
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
 
 _ADMIN_USERNAME = "admin"
@@ -115,6 +119,194 @@ async def _ensure_org(
     )
 
 
+async def _build_scope_claims_for_user(user_id: int) -> dict[str, Any]:
+    memberships = await list_memberships_for_user(int(user_id))
+    team_ids = sorted({membership.get("team_id") for membership in memberships if membership.get("team_id") is not None})
+    org_ids = sorted({membership.get("org_id") for membership in memberships if membership.get("org_id") is not None})
+
+    claims: dict[str, Any] = {}
+    if team_ids:
+        claims["team_ids"] = team_ids
+    if org_ids:
+        claims["org_ids"] = org_ids
+    if len(team_ids) == 1:
+        claims["active_team_id"] = team_ids[0]
+    if len(org_ids) == 1:
+        claims["active_org_id"] = org_ids[0]
+    return claims
+
+
+def _recreate_sqlite_db(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.unlink()
+    return sqlite3.connect(path)
+
+
+def _seed_media_store(*, user_id: int, media_count: int) -> None:
+    media_db_path = DatabasePaths.get_media_db_path(user_id)
+    with _recreate_sqlite_db(media_db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS Media (
+                id INTEGER PRIMARY KEY,
+                deleted INTEGER DEFAULT 0,
+                is_trash INTEGER DEFAULT 0
+            )
+            """
+        )
+        for index in range(media_count):
+            conn.execute(
+                "INSERT INTO Media (id, deleted, is_trash) VALUES (?, 0, 0)",
+                (index + 1,),
+            )
+        conn.execute("INSERT INTO Media (id, deleted, is_trash) VALUES (?, 1, 0)", (9001,))
+        conn.execute("INSERT INTO Media (id, deleted, is_trash) VALUES (?, 0, 1)", (9002,))
+        conn.commit()
+
+
+def _seed_chacha_store(*, user_id: int, note_count: int, message_count: int) -> None:
+    chacha_db_path = DatabasePaths.get_chacha_db_path(user_id)
+    with _recreate_sqlite_db(chacha_db_path) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, deleted INTEGER DEFAULT 0)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                deleted INTEGER DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                deleted INTEGER DEFAULT 0
+            )
+            """
+        )
+        for index in range(note_count):
+            conn.execute("INSERT INTO notes (id, deleted) VALUES (?, 0)", (f"note-{index}",))
+        conn.execute("INSERT INTO notes (id, deleted) VALUES (?, 1)", ("note-deleted",))
+        conn.execute(
+            "INSERT INTO conversations (id, client_id, deleted) VALUES (?, ?, 0)",
+            ("conv-1", str(user_id)),
+        )
+        conn.execute(
+            "INSERT INTO conversations (id, client_id, deleted) VALUES (?, ?, 1)",
+            ("conv-deleted", str(user_id)),
+        )
+        for index in range(message_count):
+            conn.execute(
+                "INSERT INTO messages (id, conversation_id, deleted) VALUES (?, ?, 0)",
+                (f"msg-{index}", "conv-1"),
+            )
+        conn.execute(
+            "INSERT INTO messages (id, conversation_id, deleted) VALUES (?, ?, 1)",
+            ("msg-deleted", "conv-1"),
+        )
+        conn.commit()
+
+
+def _seed_audit_store(*, user_id: int, audit_count: int) -> None:
+    from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import _resolve_audit_storage_mode
+
+    audit_mode = _resolve_audit_storage_mode()
+    if audit_mode == "shared":
+        audit_db_path = DatabasePaths.get_shared_audit_db_path()
+        audit_db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(audit_db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    event_id TEXT PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    context_user_id TEXT,
+                    tenant_user_id TEXT
+                )
+                """
+            )
+            conn.execute("DELETE FROM audit_events WHERE tenant_user_id = ?", (str(user_id),))
+            for index in range(audit_count):
+                conn.execute(
+                    """
+                    INSERT INTO audit_events (
+                        event_id,
+                        timestamp,
+                        category,
+                        event_type,
+                        severity,
+                        context_user_id,
+                        tenant_user_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"evt-{user_id}-{index}",
+                        f"2026-03-11T20:00:0{index}Z",
+                        "system",
+                        "admin.e2e.seeded",
+                        "low",
+                        str(user_id),
+                        str(user_id),
+                    ),
+                )
+            conn.commit()
+        return
+
+    audit_db_path = DatabasePaths.get_audit_db_path(user_id)
+    with _recreate_sqlite_db(audit_db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_events (
+                event_id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                category TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                context_user_id TEXT,
+                tenant_user_id TEXT
+            )
+            """
+        )
+        for index in range(audit_count):
+            conn.execute(
+                """
+                INSERT INTO audit_events (
+                    event_id,
+                    timestamp,
+                    category,
+                    event_type,
+                    severity,
+                    context_user_id,
+                    tenant_user_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"evt-{user_id}-{index}",
+                    f"2026-03-11T20:00:0{index}Z",
+                    "system",
+                    "admin.e2e.seeded",
+                    "low",
+                    str(user_id),
+                    str(user_id),
+                ),
+            )
+        conn.commit()
+
+
+def _seed_dsr_subject_store_data(*, user_id: int) -> None:
+    _seed_media_store(user_id=user_id, media_count=3)
+    _seed_chacha_store(user_id=user_id, note_count=2, message_count=2)
+    _seed_audit_store(user_id=user_id, audit_count=2)
+
+
 async def seed_admin_e2e_scenario(scenario: str) -> dict[str, Any]:
     """Create deterministic users and fixtures for admin-ui real-backend browser tests."""
     settings = get_settings()
@@ -159,6 +351,9 @@ async def seed_admin_e2e_scenario(scenario: str) -> dict[str, Any]:
     await orgs_repo.add_org_member(org_id=org_id, user_id=int(admin_user["id"]), role="admin")
     await orgs_repo.add_org_member(org_id=org_id, user_id=int(member_user["id"]), role="member")
     await orgs_repo.add_org_member(org_id=org_id, user_id=int(requester_user["id"]), role="member")
+
+    if scenario == "dsr_jwt_admin":
+        _seed_dsr_subject_store_data(user_id=int(requester_user["id"]))
 
     _SEEDED_PRINCIPALS["jwt_admin"] = {
         "user_id": int(admin_user["id"]),
@@ -234,7 +429,8 @@ async def bootstrap_admin_e2e_jwt_session(principal_key: str) -> dict[str, Any]:
     )
     session_id = int(temp_session["session_id"])
 
-    additional_claims = {"session_id": session_id}
+    additional_claims = await _build_scope_claims_for_user(int(seeded["user_id"]))
+    additional_claims["session_id"] = session_id
     access_token = jwt_service.create_access_token(
         user_id=int(seeded["user_id"]),
         username=str(seeded["username"]),

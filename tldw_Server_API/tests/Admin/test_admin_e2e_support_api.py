@@ -96,3 +96,33 @@ def test_admin_e2e_bootstrap_jwt_session_returns_cookie_payload(e2e_client):
     assert response.status_code == 200
     payload = response.json()
     assert payload['cookies'][0]['name'] == 'access_token'
+
+
+def test_admin_e2e_dsr_seed_supports_real_preview(e2e_client):
+    seed = e2e_client.post(
+        '/api/v1/test-support/admin-e2e/seed',
+        json={'scenario': 'dsr_jwt_admin'},
+    ).json()
+    bootstrap = e2e_client.post(
+        '/api/v1/test-support/admin-e2e/bootstrap-jwt-session',
+        json={'principal_key': seed['users']['admin']['key']},
+    ).json()
+    access_token = next(
+        cookie['value']
+        for cookie in bootstrap['cookies']
+        if cookie['name'] == 'access_token'
+    )
+
+    response = e2e_client.post(
+        '/api/v1/admin/data-subject-requests/preview',
+        headers={'Authorization': f'Bearer {access_token}'},
+        json={'requester_identifier': seed['users']['requester']['email'], 'request_type': 'access'},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['resolved_user_id'] == seed['users']['requester']['id']
+    assert payload['counts']['media_records'] > 0
+    assert payload['counts']['chat_messages'] > 0
+    assert payload['counts']['notes'] > 0
+    assert payload['counts']['audit_events'] > 0

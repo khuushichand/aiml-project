@@ -1,6 +1,8 @@
 import { type Page } from '@playwright/test';
 
 export class LoginPage {
+  private redirectTarget = '/';
+
   constructor(readonly page: Page) {}
 
   private async waitForHydrated(): Promise<void> {
@@ -29,6 +31,7 @@ export class LoginPage {
       await this.page.getByRole('button', { name: buttonName }).click();
       const response = await responsePromise;
       if (response && response.status() !== 404 && response.status() < 500) {
+        await this.waitForPostAuthRedirect();
         return;
       }
       await this.page.goto(retryUrl);
@@ -38,15 +41,25 @@ export class LoginPage {
     throw new Error(`Authentication form ${endpoint} did not complete successfully after retries`);
   }
 
+  private async waitForPostAuthRedirect(): Promise<void> {
+    const expectedUrl = this.redirectTarget;
+    await this.page.waitForURL((url) => `${url.pathname}${url.search}` === expectedUrl, {
+      timeout: 10_000,
+    });
+    await this.page.waitForLoadState('domcontentloaded');
+  }
+
   async gotoJwtLogin(redirectTo = '/'): Promise<void> {
     const target = redirectTo === '/'
       ? '/login'
       : `/login?redirectTo=${encodeURIComponent(redirectTo)}`;
+    this.redirectTarget = redirectTo;
     await this.page.goto(target);
     await this.waitForHydrated();
   }
 
   async gotoSingleUserLogin(redirectTo: string): Promise<void> {
+    this.redirectTarget = redirectTo;
     await this.page.goto(`/login?redirectTo=${encodeURIComponent(redirectTo)}&mode=apikey`);
     await this.waitForHydrated();
   }
@@ -63,5 +76,32 @@ export class LoginPage {
       await this.page.getByRole('tab', { name: /api key/i }).click();
       await this.page.locator('#apiKey').fill(apiKey);
     });
+  }
+
+  async waitForAuthenticatedSession(): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const currentUser = await this.page.evaluate(async () => {
+        try {
+          const response = await fetch('/api/proxy/users/me', {
+            credentials: 'include',
+          });
+          const body = await response.json().catch(() => null);
+          if (response.ok && body) {
+            localStorage.setItem('user', JSON.stringify(body));
+          }
+          return response.ok;
+        } catch {
+          return false;
+        }
+      });
+
+      if (currentUser) {
+        return;
+      }
+
+      await this.page.waitForTimeout(100);
+    }
+
+    throw new Error('Login page did not reach an authenticated browser session');
   }
 }
