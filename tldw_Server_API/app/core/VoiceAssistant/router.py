@@ -5,9 +5,18 @@
 #
 #######################################################################################################################
 import time
+from base64 import b64encode
 from typing import Any, Callable, Optional
+from urllib.parse import urljoin, urlparse
 
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
+    decrypt_byok_payload,
+    loads_envelope,
+)
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 
 from .intent_parser import IntentParser, get_intent_parser
 from .registry import VoiceCommandRegistry, get_voice_command_registry
@@ -21,6 +30,115 @@ from .schemas import (
 )
 from .session import VoiceSessionManager, get_voice_session_manager
 from .workflow_handler import VoiceWorkflowHandler, get_voice_workflow_handler
+
+_PERSONA_CONNECTION_MEMORY_TYPE = "persona_connection"
+_EXTERNAL_ACTION_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
+
+
+def _normalize_hostname(host: str) -> str:
+    return str(host or "").strip().rstrip(".").lower()
+
+
+def _host_matches_allowlist(host: str, allowlist: list[str]) -> bool:
+    normalized_host = _normalize_hostname(host)
+    normalized_allowlist = [_normalize_hostname(item) for item in allowlist if _normalize_hostname(item)]
+    if not normalized_allowlist:
+        return True
+    for allowed in normalized_allowlist:
+        if normalized_host == allowed or normalized_host.endswith(f".{allowed}"):
+            return True
+    return False
+
+
+def _safe_template_context(*payloads: dict[str, Any]) -> dict[str, str]:
+    context: dict[str, str] = {}
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            if value is None:
+                continue
+            context[str(key)] = str(value)
+    return context
+
+
+class _SafeFormatDict(dict[str, str]):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _render_template_value(value: str, context: dict[str, str]) -> str:
+    rendered = str(value)
+    for key, replacement in context.items():
+        rendered = rendered.replace(f"{{{{{key}}}}}", replacement)
+    try:
+        return rendered.format_map(_SafeFormatDict(context))
+    except Exception:
+        return rendered
+
+
+def _render_nested_templates(value: Any, context: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return _render_template_value(value, context)
+    if isinstance(value, dict):
+        return {
+            str(key): _render_nested_templates(item, context)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_render_nested_templates(item, context) for item in value]
+    return value
+
+
+def _build_external_payload(
+    *,
+    action_config: dict[str, Any],
+    entities: dict[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+
+    raw_slot_map = action_config.get("slot_to_param_map") or action_config.get("param_map") or {}
+    if isinstance(raw_slot_map, dict):
+        for param_name, source in raw_slot_map.items():
+            if not isinstance(source, str):
+                continue
+            slot_name = source.strip().strip("{}")
+            if slot_name in entities:
+                payload[str(param_name)] = entities[slot_name]
+
+    if not payload:
+        payload.update(entities)
+
+    defaults = action_config.get("default_payload")
+    if isinstance(defaults, dict):
+        for key, value in defaults.items():
+            payload.setdefault(str(key), value)
+
+    return payload
+
+
+def _parse_external_response_body(response: Any) -> Any:
+    headers = getattr(response, "headers", {}) or {}
+    content_type = str(headers.get("content-type") or headers.get("Content-Type") or "").lower()
+    if "json" in content_type and callable(getattr(response, "json", None)):
+        try:
+            return response.json()
+        except Exception as exc:
+            logger.debug(f"Failed to parse external action response as JSON: {exc}")
+    text = getattr(response, "text", None)
+    if isinstance(text, str):
+        return text
+    return None
+
+
+async def _close_response(response: Any) -> None:
+    close = getattr(response, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(response, "close", None)
+    if callable(close):
+        close()
 
 
 class VoiceCommandRouter:
@@ -168,7 +286,12 @@ class VoiceCommandRouter:
             )
 
             # Execute action
-            result = await self._execute_intent(parsed.intent, session)
+            result = await self._execute_intent(
+                parsed.intent,
+                session,
+                db=db,
+                persona_id=persona_id,
+            )
 
             # Add assistant response to history
             await self.session_manager.add_turn(
@@ -280,6 +403,9 @@ class VoiceCommandRouter:
         self,
         intent: VoiceIntent,
         session: VoiceSessionContext,
+        *,
+        db: Optional[Any] = None,
+        persona_id: str | None = None,
     ) -> ActionResult:
         """Execute an intent and return the result."""
 
@@ -294,7 +420,7 @@ class VoiceCommandRouter:
 
         # Route to appropriate handler based on action type
         if intent.action_type == ActionType.CUSTOM:
-            return await self._execute_custom(intent, session)
+            return await self._execute_custom(intent, session, db=db, persona_id=persona_id)
         elif intent.action_type == ActionType.MCP_TOOL:
             return await self._execute_mcp_tool(intent, session)
         elif intent.action_type == ActionType.WORKFLOW:
@@ -327,8 +453,25 @@ class VoiceCommandRouter:
         self,
         intent: VoiceIntent,
         session: VoiceSessionContext,
+        *,
+        db: Optional[Any] = None,
+        persona_id: str | None = None,
     ) -> ActionResult:
         """Execute a custom action."""
+        external_command = self._get_external_connection_command(
+            intent=intent,
+            user_id=session.user_id,
+            persona_id=persona_id,
+        )
+        if external_command is not None:
+            return await self._execute_external_connection_action(
+                intent=intent,
+                session=session,
+                db=db,
+                persona_id=persona_id,
+                command=external_command,
+            )
+
         action = intent.action_config.get("action", "")
 
         handler = self._custom_handlers.get(action)
@@ -340,6 +483,308 @@ class VoiceCommandRouter:
             action_type=ActionType.CUSTOM,
             response_text="I don't recognize that command.",
             error_message=f"No handler for custom action: {action}",
+        )
+
+    def _get_external_connection_command(
+        self,
+        *,
+        intent: VoiceIntent,
+        user_id: int,
+        persona_id: str | None,
+    ) -> Any | None:
+        if not intent.command_id:
+            return None
+        command = self.registry.get_command(
+            intent.command_id,
+            user_id,
+            persona_id=persona_id,
+        )
+        if command is None or not getattr(command, "connection_id", None):
+            return None
+        return command
+
+    def _load_persona_connection(
+        self,
+        *,
+        db: Any,
+        user_id: int,
+        persona_id: str,
+        connection_id: str,
+    ) -> dict[str, Any] | None:
+        rows = db.list_persona_memory_entries(
+            user_id=str(user_id),
+            persona_id=persona_id,
+            memory_type=_PERSONA_CONNECTION_MEMORY_TYPE,
+            include_archived=False,
+            include_deleted=False,
+            limit=200,
+            offset=0,
+        )
+        for row in rows or []:
+            if str(row.get("id") or "").strip() != connection_id:
+                continue
+            raw_content = row.get("content")
+            if isinstance(raw_content, str):
+                try:
+                    import json
+
+                    content = json.loads(raw_content)
+                except Exception:
+                    content = {}
+            elif isinstance(raw_content, dict):
+                content = dict(raw_content)
+            else:
+                content = {}
+            content["id"] = connection_id
+            return content
+        return None
+
+    def _resolve_connection_secret(self, connection: dict[str, Any]) -> str | None:
+        encrypted_blob = str(connection.get("secret_envelope") or "").strip()
+        if not encrypted_blob:
+            return None
+        payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
+        secret = str(payload.get("api_key") or "").strip()
+        return secret or None
+
+    def _build_connection_headers(
+        self,
+        *,
+        connection: dict[str, Any],
+        action_config: dict[str, Any],
+        entities: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> dict[str, str]:
+        headers_template = connection.get("headers_template")
+        headers = {
+            str(key): str(value)
+            for key, value in (headers_template or {}).items()
+        }
+
+        secret = self._resolve_connection_secret(connection)
+        template_context = _safe_template_context(
+            entities,
+            payload,
+            {
+                "secret": secret or "",
+                "connection_id": str(connection.get("id") or ""),
+                "base_url": str(connection.get("base_url") or ""),
+            },
+        )
+        rendered_headers = {
+            key: _render_template_value(value, template_context)
+            for key, value in headers.items()
+        }
+
+        auth_type = str(connection.get("auth_type") or "none").strip().lower()
+        existing_header_names = {key.lower() for key in rendered_headers}
+        if secret:
+            if auth_type == "bearer" and "authorization" not in existing_header_names:
+                rendered_headers["Authorization"] = f"Bearer {secret}"
+            elif auth_type == "api_key" and "x-api-key" not in existing_header_names:
+                rendered_headers["X-API-Key"] = secret
+            elif auth_type == "basic" and "authorization" not in existing_header_names:
+                encoded = b64encode(secret.encode("utf-8")).decode("ascii")
+                rendered_headers["Authorization"] = f"Basic {encoded}"
+            elif auth_type == "custom_header" and not any(secret == value for value in rendered_headers.values()):
+                header_name = str(action_config.get("auth_header_name") or "X-API-Key").strip() or "X-API-Key"
+                if header_name.lower() not in existing_header_names:
+                    rendered_headers[header_name] = secret
+
+        return rendered_headers
+
+    def _format_external_action_result(
+        self,
+        *,
+        action_config: dict[str, Any],
+        status_code: int,
+        body: Any,
+    ) -> str:
+        explicit_message = str(action_config.get("success_message") or "").strip()
+        if explicit_message:
+            return explicit_message
+        if isinstance(body, dict):
+            for key in ("response_text", "message", "detail", "status", "result"):
+                value = body.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            results = body.get("results")
+            if isinstance(results, list):
+                if not results:
+                    return "The action completed but returned no results."
+                if len(results) == 1:
+                    return "The action completed and returned one result."
+                return f"The action completed and returned {len(results)} results."
+        if isinstance(body, list):
+            if not body:
+                return "The action completed but returned no results."
+            return f"The action completed and returned {len(body)} results."
+        if isinstance(body, str) and body.strip():
+            return body.strip()
+        if 200 <= status_code < 300:
+            return "Done."
+        return "The external action completed."
+
+    async def _execute_external_connection_action(
+        self,
+        *,
+        intent: VoiceIntent,
+        session: VoiceSessionContext,
+        db: Any | None,
+        persona_id: str | None,
+        command: Any,
+    ) -> ActionResult:
+        resolved_persona_id = str(
+            persona_id
+            or getattr(command, "persona_id", None)
+            or ""
+        ).strip()
+        connection_id = str(getattr(command, "connection_id", "") or "").strip()
+        if db is None:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't reach that external action right now.",
+                error_message="External actions require a database connection.",
+            )
+        if not resolved_persona_id or not connection_id:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't resolve that external action.",
+                error_message="Missing persona_id or connection_id for external action.",
+            )
+
+        connection = self._load_persona_connection(
+            db=db,
+            user_id=session.user_id,
+            persona_id=resolved_persona_id,
+            connection_id=connection_id,
+        )
+        if connection is None:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't find the configured connection for that command.",
+                error_message=f"Connection '{connection_id}' was not found for persona '{resolved_persona_id}'.",
+            )
+
+        action_config = dict(intent.action_config or {})
+        payload = _build_external_payload(
+            action_config=action_config,
+            entities=dict(intent.entities or {}),
+        )
+        template_context = _safe_template_context(intent.entities or {}, payload)
+
+        method = str(action_config.get("method") or action_config.get("http_method") or "POST").strip().upper()
+        if method not in _EXTERNAL_ACTION_METHODS:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't determine how to call that external action.",
+                error_message=f"Unsupported external action method: {method}",
+            )
+
+        base_url = str(connection.get("base_url") or "").strip()
+        path = str(action_config.get("path") or action_config.get("request_path") or "").strip()
+        rendered_path = _render_template_value(path, template_context) if path else ""
+        url = urljoin(base_url.rstrip("/") + "/", rendered_path.lstrip("/")) if rendered_path else base_url
+
+        parsed_url = urlparse(url)
+        final_host = _normalize_hostname(parsed_url.hostname or "")
+        allowed_hosts = [
+            _normalize_hostname(item)
+            for item in list(connection.get("allowed_hosts") or [])
+            if _normalize_hostname(item)
+        ]
+        if not _host_matches_allowlist(final_host, allowed_hosts):
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't complete that external action.",
+                error_message=f"Host '{final_host}' is not allowed for connection '{connection_id}'.",
+            )
+
+        policy = evaluate_url_policy(url, allowlist=allowed_hosts or None)
+        if not getattr(policy, "allowed", False):
+            reason = str(getattr(policy, "reason", None) or "egress policy denied")
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't complete that external action.",
+                error_message=f"Egress policy denied external action: {reason}",
+            )
+
+        rendered_payload = _render_nested_templates(payload, template_context)
+        headers = self._build_connection_headers(
+            connection=connection,
+            action_config=action_config,
+            entities=dict(intent.entities or {}),
+            payload=rendered_payload if isinstance(rendered_payload, dict) else {},
+        )
+        timeout_ms = int(connection.get("timeout_ms") or 15000)
+        timeout_seconds = max(0.1, timeout_ms / 1000.0)
+        retry_policy = RetryPolicy()
+        retry_policy.attempts = 1
+        retry_policy.retry_on_unsafe = False
+        request_kwargs: dict[str, Any] = {
+            "method": method,
+            "url": url,
+            "headers": headers or None,
+            "timeout": timeout_seconds,
+            "retry": retry_policy,
+        }
+        if method in {"GET", "DELETE", "HEAD"}:
+            request_kwargs["params"] = rendered_payload if isinstance(rendered_payload, dict) else None
+        else:
+            request_kwargs["json"] = rendered_payload
+
+        try:
+            response = await afetch(**request_kwargs)
+            try:
+                response_body = _parse_external_response_body(response)
+            finally:
+                await _close_response(response)
+        except Exception as exc:
+            logger.error(f"External connection action failed: {exc}")
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't reach that external action right now.",
+                error_message=str(exc),
+            )
+
+        if int(getattr(response, "status_code", 500)) >= 400:
+            error_detail = response_body if isinstance(response_body, str) else str(response_body)
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't complete that external action.",
+                error_message=error_detail,
+                result_data={
+                    "status_code": int(getattr(response, "status_code", 500)),
+                    "body": response_body,
+                    "connection_id": connection_id,
+                    "url": url,
+                },
+            )
+
+        response_text = self._format_external_action_result(
+            action_config=action_config,
+            status_code=int(getattr(response, "status_code", 200)),
+            body=response_body,
+        )
+        return ActionResult(
+            success=True,
+            action_type=intent.action_type,
+            response_text=response_text,
+            result_data={
+                "status_code": int(getattr(response, "status_code", 200)),
+                "body": response_body,
+                "connection_id": connection_id,
+                "url": url,
+                "request_payload": rendered_payload,
+            },
         )
 
     async def _execute_mcp_tool(
