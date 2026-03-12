@@ -41,6 +41,17 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      testIgnore: ['tests/e2e/real-backend/**'],
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'chromium-real-jwt',
+      testMatch: ['tests/e2e/real-backend/**/*.spec.ts'],
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'chromium-real-single-user',
+      testMatch: ['tests/e2e/real-backend/**/*.spec.ts'],
       use: { ...devices['Desktop Chrome'] },
     },
   ],
