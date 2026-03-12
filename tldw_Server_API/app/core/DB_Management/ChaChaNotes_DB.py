@@ -435,9 +435,11 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 35  # Schema v35 includes restart-safe persona session persistence
+    _CURRENT_SCHEMA_VERSION = 36  # Schema v36 adds lean chat overview list indexes
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
+    _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
+    _ALLOWED_CONVERSATION_SEARCH_ORDER: tuple[str, ...] = ("bm25", "recency", "hybrid", "topic")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
     _ALLOWED_PERSONA_MODES: tuple[str, ...] = ("session_scoped", "persistent_scoped")
     _DEFAULT_PERSONA_MODE = "session_scoped"
@@ -3044,6 +3046,22 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 35;
 """
+    _MIGRATION_SQL_V35_TO_V36 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 36 - Conversation list indexes (2026-03-11)
+───────────────────────────────────────────────────────────────*/
+CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified
+  ON conversations(client_id, deleted, last_modified DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified
+  ON conversations(client_id, character_id, deleted, last_modified DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at
+  ON conversations(client_id, deleted, created_at DESC);
+
+UPDATE db_schema_version
+   SET version = 36
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 36;
+"""
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4719,6 +4737,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V34->V35: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V35 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v35_to_v36(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V35 to V36 (conversation list indexes)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V35 to V36 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V35_TO_V36)
+            final_version = self._get_db_version(conn)
+            if final_version != 36:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V35->V36 failed version check. Expected 36, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V36 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V35->V36 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V35->V36 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V35->V36: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V36 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -4915,6 +4953,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         conn.execute(
                             "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)"
                         )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified "
+                            "ON conversations(client_id, deleted, last_modified DESC)"
+                        )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified "
+                            "ON conversations(client_id, character_id, deleted, last_modified DESC)"
+                        )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at "
+                            "ON conversations(client_id, deleted, created_at DESC)"
+                        )
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified)")
@@ -5041,6 +5091,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 35 and current_db_version == 34:
                         self._migrate_from_v34_to_v35(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 36 and current_db_version == 35:
+                        self._migrate_from_v35_to_v36(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -5052,6 +5105,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_topic_label ON conversations(topic_label)")
                     conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified "
+                        "ON conversations(client_id, deleted, last_modified DESC)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified "
+                        "ON conversations(client_id, character_id, deleted, last_modified DESC)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at "
+                        "ON conversations(client_id, deleted, created_at DESC)"
                     )
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
@@ -5353,6 +5418,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v33_to_v34(conn)
                             elif fallback_version == 34:
                                 self._migrate_from_v34_to_v35(conn)
+                            elif fallback_version == 35:
+                                self._migrate_from_v35_to_v36(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5433,6 +5500,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 35 and current_db_version == 34:
                     self._migrate_from_v34_to_v35(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 36 and current_db_version == 35:
+                    self._migrate_from_v35_to_v36(conn)
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
@@ -5780,6 +5850,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 35:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V34_TO_V35, conn, expected_version=35)
                 current_version = 35
+            if current_version < 36:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36, conn, expected_version=36)
+                current_version = 36
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -5836,6 +5909,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     self.backend.execute(
                         "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified "
+                        "ON conversations(client_id, deleted, last_modified DESC)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified "
+                        "ON conversations(client_id, character_id, deleted, last_modified DESC)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at "
+                        "ON conversations(client_id, deleted, created_at DESC)",
                         connection=conn,
                     )
                     self.backend.execute(
@@ -11488,6 +11576,52 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         return normalized
 
+    def _normalize_conversation_character_scope(self, character_scope: str | None) -> str:
+        """Normalize and validate conversation character scope."""
+        if character_scope is None:
+            return "all"
+        if not isinstance(character_scope, str):
+            raise InputError(f"Conversation character scope must be a string. Got: {character_scope!r}")  # noqa: TRY003
+        normalized = character_scope.strip().lower()
+        if not normalized:
+            raise InputError("Conversation character scope cannot be empty.")  # noqa: TRY003
+        if normalized not in self._ALLOWED_CONVERSATION_CHARACTER_SCOPES:
+            raise InputError(
+                "Invalid conversation character scope "
+                f"'{character_scope}'. Allowed: {', '.join(self._ALLOWED_CONVERSATION_CHARACTER_SCOPES)}"
+            )  # noqa: TRY003
+        return normalized
+
+    def _conversation_character_scope_clause(
+        self,
+        character_scope: str | None,
+        *,
+        column: str = "character_id",
+    ) -> str | None:
+        """Return the SQL clause for a conversation character-scope filter."""
+        normalized = self._normalize_conversation_character_scope(character_scope)
+        if normalized == "all":
+            return None
+        if normalized == "character":
+            return f"{column} IS NOT NULL"
+        return f"{column} IS NULL"
+
+    def _conversation_deleted_scope_clause(
+        self,
+        *,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+        column: str = "deleted",
+        true_literal: str = "1",
+        false_literal: str = "0",
+    ) -> str | None:
+        """Return the SQL clause for a conversation deleted-state filter."""
+        if deleted_only:
+            return f"{column} = {true_literal}"
+        if include_deleted:
+            return None
+        return f"{column} = {false_literal}"
+
     @staticmethod
     def _normalize_nullable_text(value: Any) -> str | None:
         """Normalize optional text fields; returns None for empty/whitespace."""
@@ -11725,6 +11859,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         client_id: str,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        character_scope: str | None = None,
     ) -> int:
         """
         Count total non-deleted conversations for a given user (client_id).
@@ -11744,9 +11879,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deleted_clause = "1 = 1"
         else:
             deleted_clause = "deleted = 0"
-        query = f"SELECT COUNT(*) as cnt FROM conversations WHERE client_id = ? AND {deleted_clause}"  # nosec B608
+        clauses = ["client_id = ?", deleted_clause]
+        params: list[Any] = [client_id]
+        character_scope_clause = self._conversation_character_scope_clause(character_scope)
+        if character_scope_clause:
+            clauses.append(character_scope_clause)
+        query = f"SELECT COUNT(*) as cnt FROM conversations WHERE {' AND '.join(clauses)}"  # nosec B608
         try:
-            cursor = self.execute_query(query, (client_id,))
+            cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
             return int(row[0] if row else 0)
         except CharactersRAGDBError as e:
@@ -11760,6 +11900,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        character_scope: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         List conversations for a given user (client_id), ordered by last_modified DESC.
@@ -11782,13 +11923,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             deleted_clause = "deleted = 0"
 
+        clauses = ["client_id = ?", deleted_clause]
+        params: list[Any] = [client_id]
+        character_scope_clause = self._conversation_character_scope_clause(character_scope)
+        if character_scope_clause:
+            clauses.append(character_scope_clause)
         query = (
             "SELECT * FROM conversations "  # nosec B608
-            f"WHERE client_id = ? AND {deleted_clause} "
+            f"WHERE {' AND '.join(clauses)} "
             "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
+        params.extend([limit, offset])
         try:
-            cursor = self.execute_query(query, (client_id, limit, offset))
+            cursor = self.execute_query(query, tuple(params))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
         except CharactersRAGDBError as e:
@@ -12536,6 +12683,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         title_query: str,
         character_id: int | None = None,
+        character_scope: str | None = None,
         limit: int = 10,
         offset: int = 0,
         client_id: str | None = None,
@@ -12567,6 +12715,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         client_filter = self.client_id if client_id is None else client_id
 
+        normalized_character_scope = self._normalize_conversation_character_scope(character_scope)
+
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(title_query, 'postgresql')
             if not tsquery:
@@ -12584,6 +12734,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if character_id is not None:
                 filters.append("c.character_id = ?")
                 params_list.append(character_id)
+            elif normalized_character_scope != "all":
+                filters.append(self._conversation_character_scope_clause(normalized_character_scope, column="c.character_id"))
             if client_filter is not None:
                 filters.append("c.client_id = ?")
                 params_list.append(client_filter)
@@ -12619,6 +12771,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if character_id is not None:
             filters.append("c.character_id = ?")
             params_filters.append(character_id)
+        elif normalized_character_scope != "all":
+            filters.append(self._conversation_character_scope_clause(normalized_character_scope, column="c.character_id"))
         if client_filter is not None:
             filters.append("c.client_id = ?")
             params_filters.append(client_filter)
@@ -12656,12 +12810,132 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
         return rows[offset: offset + limit]
 
+    def _normalize_conversation_search_order(self, order_by: str | None) -> str:
+        """Normalize and validate conversation search ordering."""
+        if order_by is None:
+            return "recency"
+        if not isinstance(order_by, str):
+            raise InputError(f"Conversation search order must be a string. Got: {order_by!r}")  # noqa: TRY003
+        normalized = order_by.strip().lower()
+        if not normalized:
+            raise InputError("Conversation search order cannot be empty.")  # noqa: TRY003
+        if normalized not in self._ALLOWED_CONVERSATION_SEARCH_ORDER:
+            raise InputError(
+                "Invalid conversation search order "
+                f"'{order_by}'. Allowed: {', '.join(self._ALLOWED_CONVERSATION_SEARCH_ORDER)}"
+            )  # noqa: TRY003
+        return normalized
+
+    def _build_conversation_search_filters(
+        self,
+        *,
+        alias: str,
+        client_filter: str | None,
+        include_deleted: bool,
+        deleted_only: bool,
+        character_id: int | None,
+        character_scope: str | None,
+        state: str | None,
+        topic_label: str | None,
+        topic_prefix: bool,
+        cluster_id: str | None,
+        keywords: list[str] | None,
+        start_date: str | None,
+        end_date: str | None,
+        date_expr: str,
+        keyword_table: str,
+        keyword_deleted_literal: str,
+        deleted_true_literal: str,
+        deleted_false_literal: str,
+    ) -> tuple[list[str], list[Any]]:
+        """Build shared conversation-search filter clauses and parameters."""
+        normalized_character_scope = self._normalize_conversation_character_scope(character_scope)
+        filters: list[str] = []
+        params: list[Any] = []
+
+        deleted_clause = self._conversation_deleted_scope_clause(
+            include_deleted=include_deleted,
+            deleted_only=deleted_only,
+            column=f"{alias}.deleted",
+            true_literal=deleted_true_literal,
+            false_literal=deleted_false_literal,
+        )
+        if deleted_clause:
+            filters.append(deleted_clause)
+
+        if character_id is not None:
+            filters.append(f"{alias}.character_id = ?")
+            params.append(character_id)
+        elif normalized_character_scope != "all":
+            filters.append(self._conversation_character_scope_clause(normalized_character_scope, column=f"{alias}.character_id"))
+
+        if client_filter is not None:
+            filters.append(f"{alias}.client_id = ?")
+            params.append(client_filter)
+
+        if state is not None:
+            filters.append(f"{alias}.state = ?")
+            params.append(self._normalize_conversation_state(state))
+
+        if topic_label:
+            normalized_topic = topic_label.rstrip("*").strip().lower()
+            if normalized_topic:
+                if topic_prefix:
+                    filters.append(f"LOWER({alias}.topic_label) LIKE ?")
+                    params.append(f"{normalized_topic}%")
+                else:
+                    filters.append(f"LOWER({alias}.topic_label) = ?")
+                    params.append(normalized_topic)
+
+        if cluster_id:
+            filters.append(f"{alias}.cluster_id = ?")
+            params.append(cluster_id)
+
+        if start_date:
+            filters.append(f"{date_expr} >= ?")
+            params.append(start_date)
+
+        if end_date:
+            filters.append(f"{date_expr} <= ?")
+            params.append(end_date)
+
+        if keywords:
+            for keyword in keywords:
+                filters.append(
+                    f"EXISTS (SELECT 1 FROM conversation_keywords ck "  # nosec B608
+                    f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
+                    f"WHERE ck.conversation_id = {alias}.id AND k.deleted = {keyword_deleted_literal} "
+                    "AND LOWER(k.keyword) = ?)"
+                )
+                params.append(keyword.lower())
+
+        return filters, params
+
+    def _conversation_deleted_text_search_clause(
+        self,
+        *,
+        alias: str,
+        query: str,
+    ) -> tuple[str, list[str]]:
+        """Build a deleted-state text-search clause that matches the old sidebar fallback."""
+        normalized_query = query.strip().lower()
+        like_pattern = f"%{normalized_query}%"
+        clause = (
+            f"(LOWER(COALESCE({alias}.title, '')) LIKE ? "
+            f"OR LOWER(COALESCE({alias}.topic_label, '')) LIKE ? "
+            f"OR LOWER(COALESCE({alias}.state, '')) LIKE ?)"
+        )
+        return clause, [like_pattern, like_pattern, like_pattern]
+
     def search_conversations(
         self,
         query: str | None,
         *,
         client_id: str | None = None,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
         character_id: int | None = None,
+        character_scope: str | None = None,
         state: str | None = None,
         topic_label: str | None = None,
         topic_prefix: bool = False,
@@ -12684,59 +12958,53 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if date_field not in {"last_modified", "created_at"}:
             raise InputError("date_field must be 'last_modified' or 'created_at'")  # noqa: TRY003
 
-        filters: list[str] = []
-        params: list[Any] = []
         keyword_table = self._map_table_for_backend("keywords")
+        use_deleted_text_search = safe_query is not None and (include_deleted or deleted_only)
 
         if self.backend_type == BackendType.POSTGRESQL:
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
-            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE c.deleted = FALSE"
+            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE TRUE"
+            params: list[Any] = []
             if safe_query:
-                tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
-                if not tsquery:
-                    return []
-                base_query = (
-                    "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS bm25_raw "
-                    "FROM conversations c "
-                    "WHERE c.deleted = FALSE AND c.conversations_fts_tsv @@ to_tsquery('english', ?)"
-                )
-                params.extend([tsquery, tsquery])
-
-            if character_id is not None:
-                filters.append("c.character_id = ?")
-                params.append(character_id)
-            if client_filter is not None:
-                filters.append("c.client_id = ?")
-                params.append(client_filter)
-            if state is not None:
-                filters.append("c.state = ?")
-                params.append(self._normalize_conversation_state(state))
-            if topic_label:
-                label = topic_label.rstrip("*")
-                if label:
-                    if topic_prefix:
-                        filters.append("LOWER(c.topic_label) LIKE ?")
-                        params.append(f"{label.lower()}%")
-                    else:
-                        filters.append("LOWER(c.topic_label) = ?")
-                        params.append(label.lower())
-            if cluster_id:
-                filters.append("c.cluster_id = ?")
-                params.append(cluster_id)
-            if start_date:
-                filters.append(f"{date_expr} >= ?")
-                params.append(start_date)
-            if end_date:
-                filters.append(f"{date_expr} <= ?")
-                params.append(end_date)
-            if keywords:
-                for kw in keywords:
-                    filters.append(
-                        f"EXISTS (SELECT 1 FROM conversation_keywords ck "  # nosec B608
-                        f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
-                        f"WHERE ck.conversation_id = c.id AND k.deleted = FALSE AND LOWER(k.keyword) = ?)"
+                if use_deleted_text_search:
+                    text_clause, text_params = self._conversation_deleted_text_search_clause(
+                        alias="c",
+                        query=safe_query,
                     )
-                    params.append(kw.lower())
+                    base_query += f" AND {text_clause}"
+                    params.extend(text_params)
+                else:
+                    tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
+                    if not tsquery:
+                        return []
+                    base_query = (
+                        "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS bm25_raw "
+                        "FROM conversations c "
+                        "WHERE c.conversations_fts_tsv @@ to_tsquery('english', ?)"
+                    )
+                    params.extend([tsquery, tsquery])
+
+            filters, filter_params = self._build_conversation_search_filters(
+                alias="c",
+                client_filter=client_filter,
+                include_deleted=include_deleted or deleted_only,
+                deleted_only=deleted_only,
+                character_id=character_id,
+                character_scope=character_scope,
+                state=state,
+                topic_label=topic_label,
+                topic_prefix=topic_prefix,
+                cluster_id=cluster_id,
+                keywords=keywords,
+                start_date=start_date,
+                end_date=end_date,
+                date_expr=date_expr,
+                keyword_table=keyword_table,
+                keyword_deleted_literal="FALSE",
+                deleted_true_literal="TRUE",
+                deleted_false_literal="FALSE",
+            )
+            params.extend(filter_params)
 
             if filters:
                 base_query += " AND " + " AND ".join(filters)
@@ -12749,53 +13017,51 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 raise
 
         date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(NULLIF(c.last_modified,''), c.created_at)"
+        params: list[Any] = []
+        filters: list[str] = []
 
         if safe_query:
-            filters.append("conversations_fts MATCH ?")
-            params.append(safe_query)
-            base_query = (
-                "SELECT c.*, (bm25(conversations_fts) * -1) AS bm25_raw "
-                "FROM conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid "
-                "WHERE c.deleted = 0"
-            )
-        else:
-            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE c.deleted = 0"
-
-        if character_id is not None:
-            filters.append("c.character_id = ?")
-            params.append(character_id)
-        if client_filter is not None:
-            filters.append("c.client_id = ?")
-            params.append(client_filter)
-        if state is not None:
-            filters.append("c.state = ?")
-            params.append(self._normalize_conversation_state(state))
-        if topic_label:
-            label = topic_label.rstrip("*")
-            if label:
-                if topic_prefix:
-                    filters.append("LOWER(c.topic_label) LIKE ?")
-                    params.append(f"{label.lower()}%")
-                else:
-                    filters.append("LOWER(c.topic_label) = ?")
-                    params.append(label.lower())
-        if cluster_id:
-            filters.append("c.cluster_id = ?")
-            params.append(cluster_id)
-        if start_date:
-            filters.append(f"{date_expr} >= ?")
-            params.append(start_date)
-        if end_date:
-            filters.append(f"{date_expr} <= ?")
-            params.append(end_date)
-        if keywords:
-            for kw in keywords:
-                filters.append(
-                    "EXISTS (SELECT 1 FROM conversation_keywords ck "  # nosec B608
-                    f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
-                    "WHERE ck.conversation_id = c.id AND k.deleted = 0 AND LOWER(k.keyword) = ?)"
+            if use_deleted_text_search:
+                text_clause, text_params = self._conversation_deleted_text_search_clause(
+                    alias="c",
+                    query=safe_query,
                 )
-                params.append(kw.lower())
+                filters.append(text_clause)
+                params.extend(text_params)
+                base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE 1 = 1"
+            else:
+                filters.append("conversations_fts MATCH ?")
+                params.append(safe_query)
+                base_query = (
+                    "SELECT c.*, (bm25(conversations_fts) * -1) AS bm25_raw "
+                    "FROM conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid "
+                    "WHERE 1 = 1"
+                )
+        else:
+            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE 1 = 1"
+
+        extra_filters, extra_params = self._build_conversation_search_filters(
+            alias="c",
+            client_filter=client_filter,
+            include_deleted=include_deleted or deleted_only,
+            deleted_only=deleted_only,
+            character_id=character_id,
+            character_scope=character_scope,
+            state=state,
+            topic_label=topic_label,
+            topic_prefix=topic_prefix,
+            cluster_id=cluster_id,
+            keywords=keywords,
+            start_date=start_date,
+            end_date=end_date,
+            date_expr=date_expr,
+            keyword_table=keyword_table,
+            keyword_deleted_literal="0",
+            deleted_true_literal="1",
+            deleted_false_literal="0",
+        )
+        filters.extend(extra_filters)
+        params.extend(extra_params)
 
         if filters:
             base_query += " AND " + " AND ".join(filters)
@@ -12806,6 +13072,274 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError as e:
             logger.error(f"Error searching conversations: {e}")
             raise
+
+    def search_conversations_page(
+        self,
+        query: str | None,
+        *,
+        client_id: str | None = None,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+        character_id: int | None = None,
+        character_scope: str | None = None,
+        state: str | None = None,
+        topic_label: str | None = None,
+        topic_prefix: bool = False,
+        cluster_id: str | None = None,
+        keywords: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_field: str = "last_modified",
+        order_by: str = "recency",
+        limit: int = 50,
+        offset: int = 0,
+        as_of: datetime | None = None,
+        half_life_days: float = 14.0,
+        bm25_weight: float = 0.65,
+        recency_weight: float = 0.35,
+    ) -> tuple[list[dict[str, Any]], int, float]:
+        """Search conversations using DB-side ordering and pagination."""
+        client_filter = self.client_id if client_id is None else client_id
+        safe_query = (query or "").strip()
+        if safe_query == "":
+            safe_query = None
+
+        if date_field not in {"last_modified", "created_at"}:
+            raise InputError("date_field must be 'last_modified' or 'created_at'")  # noqa: TRY003
+
+        normalized_order = self._normalize_conversation_search_order(order_by)
+        as_of_dt = as_of or datetime.now(timezone.utc)
+        if as_of_dt.tzinfo is None:
+            as_of_dt = as_of_dt.replace(tzinfo=timezone.utc)
+        else:
+            as_of_dt = as_of_dt.astimezone(timezone.utc)
+
+        normalized_limit = max(1, int(limit))
+        normalized_offset = max(0, int(offset))
+        total_weight = (bm25_weight or 0.0) + (recency_weight or 0.0)
+        if total_weight <= 0:
+            normalized_bm25_weight = 0.65
+            normalized_recency_weight = 0.35
+        else:
+            normalized_bm25_weight = (bm25_weight or 0.0) / total_weight
+            normalized_recency_weight = (recency_weight or 0.0) / total_weight
+
+        keyword_table = self._map_table_for_backend("keywords")
+        use_deleted_text_search = safe_query is not None and (include_deleted or deleted_only)
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
+            bm25_expr = "0.0"
+            where_clauses = ["TRUE"]
+            base_params: list[Any] = []
+            count_params: list[Any] = []
+            if safe_query:
+                if use_deleted_text_search:
+                    text_clause, text_params = self._conversation_deleted_text_search_clause(
+                        alias="c",
+                        query=safe_query,
+                    )
+                    where_clauses.append(text_clause)
+                    base_params.extend(text_params)
+                    count_params.extend(text_params)
+                else:
+                    tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
+                    if not tsquery:
+                        return [], 0, 0.0
+                    bm25_expr = "ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?))"
+                    base_params.append(tsquery)
+                    where_clauses.append("c.conversations_fts_tsv @@ to_tsquery('english', ?)")
+                    base_params.append(tsquery)
+                    count_params.append(tsquery)
+
+            extra_filters, extra_params = self._build_conversation_search_filters(
+                alias="c",
+                client_filter=client_filter,
+                include_deleted=include_deleted or deleted_only,
+                deleted_only=deleted_only,
+                character_id=character_id,
+                character_scope=character_scope,
+                state=state,
+                topic_label=topic_label,
+                topic_prefix=topic_prefix,
+                cluster_id=cluster_id,
+                keywords=keywords,
+                start_date=start_date,
+                end_date=end_date,
+                date_expr=date_expr,
+                keyword_table=keyword_table,
+                keyword_deleted_literal="FALSE",
+                deleted_true_literal="TRUE",
+                deleted_false_literal="FALSE",
+            )
+            where_clauses.extend(extra_filters)
+            base_params.extend(extra_params)
+            count_params.extend(extra_params)
+            topic_sort_expr = "NULLIF(LOWER(BTRIM(c.topic_label)), '')"
+            recency_expr = (
+                "CASE WHEN sort_timestamp IS NULL OR ? <= 0 THEN 0.0 "
+                "ELSE EXP(-GREATEST(EXTRACT(EPOCH FROM (?::timestamptz - sort_timestamp)) / 86400.0, 0.0) / ?) END"
+            )
+            from_clause = "conversations c"
+        else:
+            date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(NULLIF(c.last_modified,''), c.created_at)"
+            bm25_expr = "0.0"
+            where_clauses = ["1 = 1"]
+            base_params = []
+            count_params = []
+            if safe_query:
+                if use_deleted_text_search:
+                    text_clause, text_params = self._conversation_deleted_text_search_clause(
+                        alias="c",
+                        query=safe_query,
+                    )
+                    where_clauses.append(text_clause)
+                    base_params.extend(text_params)
+                    count_params.extend(text_params)
+                else:
+                    bm25_expr = "(bm25(conversations_fts) * -1)"
+                    where_clauses.append("conversations_fts MATCH ?")
+                    base_params.append(safe_query)
+                    count_params.append(safe_query)
+
+            extra_filters, extra_params = self._build_conversation_search_filters(
+                alias="c",
+                client_filter=client_filter,
+                include_deleted=include_deleted or deleted_only,
+                deleted_only=deleted_only,
+                character_id=character_id,
+                character_scope=character_scope,
+                state=state,
+                topic_label=topic_label,
+                topic_prefix=topic_prefix,
+                cluster_id=cluster_id,
+                keywords=keywords,
+                start_date=start_date,
+                end_date=end_date,
+                date_expr=date_expr,
+                keyword_table=keyword_table,
+                keyword_deleted_literal="0",
+                deleted_true_literal="1",
+                deleted_false_literal="0",
+            )
+            where_clauses.extend(extra_filters)
+            base_params.extend(extra_params)
+            count_params.extend(extra_params)
+            topic_sort_expr = "NULLIF(LOWER(TRIM(c.topic_label)), '')"
+            recency_expr = (
+                "CASE WHEN sort_timestamp IS NULL OR ? <= 0 THEN 0.0 "
+                "ELSE exp(-MAX(julianday(?) - julianday(sort_timestamp), 0.0) / ?) END"
+            )
+            from_clause = (
+                "conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid"
+                if safe_query and not use_deleted_text_search
+                else "conversations c"
+            )
+
+        base_query = (
+            "SELECT c.*, "
+            f"{date_expr} AS sort_timestamp, "
+            f"{topic_sort_expr} AS topic_sort_key, "
+            f"{bm25_expr} AS bm25_raw "
+            f"FROM {from_clause} "  # nosec B608
+            f"WHERE {' AND '.join(where_clauses)}"
+        )  # nosec B608
+        count_query = (
+            "SELECT COUNT(*) AS total "
+            f"FROM {from_clause} "  # nosec B608
+            f"WHERE {' AND '.join(where_clauses)}"
+        )  # nosec B608
+
+        needs_global_bm25 = (
+            safe_query is not None
+            and not use_deleted_text_search
+            and normalized_order in {"bm25", "hybrid", "topic"}
+        )
+        try:
+            count_cursor = self.execute_query(count_query, tuple(count_params))
+            count_row = count_cursor.fetchone()
+        except CharactersRAGDBError as exc:
+            logger.error("Error counting paged conversation search rows: {}", exc)
+            raise
+
+        if count_row is None:
+            return [], 0, 0.0
+
+        try:
+            total = int(count_row[0] or 0)
+        except _CHACHA_NONCRITICAL_EXCEPTIONS:
+            total = int(count_row.get("total") or count_row.get("count") or 0)
+
+        max_bm25 = 0.0
+        if total > 0 and needs_global_bm25:
+            if self.backend_type == BackendType.POSTGRESQL:
+                max_query = (
+                    f"WITH candidate_rows AS ({base_query}) "  # nosec B608
+                    "SELECT COALESCE(MAX(bm25_raw), 0.0) AS max_bm25 FROM candidate_rows"
+                )
+                max_params = list(base_params)
+            else:
+                max_query = (
+                    f"WITH candidate_rows AS ({base_query}) "  # nosec B608
+                    "SELECT bm25_raw FROM candidate_rows "
+                    "ORDER BY bm25_raw DESC, sort_timestamp DESC, id ASC LIMIT 1"
+                )
+                max_params = list(base_params)
+
+            try:
+                max_cursor = self.execute_query(max_query, tuple(max_params))
+                max_row = max_cursor.fetchone()
+            except CharactersRAGDBError as exc:
+                logger.error("Error fetching paged conversation search max bm25: {}", exc)
+                raise
+
+            if max_row is not None:
+                try:
+                    max_bm25 = float(max_row[0] or 0.0)
+                except _CHACHA_NONCRITICAL_EXCEPTIONS:
+                    max_bm25 = float(max_row.get("max_bm25") or max_row.get("bm25_raw") or 0.0)
+
+        if total == 0:
+            return [], 0, max_bm25
+
+        page_params = list(base_params)
+        page_params.extend([half_life_days, as_of_dt.isoformat(), half_life_days, max_bm25, max_bm25])
+
+        if normalized_order == "bm25" and safe_query:
+            order_clause = "bm25_norm DESC, sort_timestamp DESC, id ASC"
+        elif normalized_order == "topic":
+            if safe_query:
+                order_clause = "topic_sort_is_null ASC, topic_sort_key ASC, bm25_norm DESC, recency_score DESC, id ASC"
+            else:
+                order_clause = "topic_sort_is_null ASC, topic_sort_key ASC, recency_score DESC, id ASC"
+        elif normalized_order == "hybrid" and safe_query:
+            order_clause = "((bm25_norm * ?) + (recency_score * ?)) DESC, sort_timestamp DESC, id ASC"
+            page_params.extend([normalized_bm25_weight, normalized_recency_weight])
+        else:
+            order_clause = "recency_score DESC, sort_timestamp DESC, id ASC"
+
+        page_params.extend([normalized_limit, normalized_offset])
+        page_query = (
+            f"WITH candidate_rows AS ({base_query}), "  # nosec B608
+            "scored_rows AS ("
+            "SELECT candidate_rows.*, "
+            f"{recency_expr} AS recency_score, "
+            "CASE WHEN topic_sort_key IS NULL THEN 1 ELSE 0 END AS topic_sort_is_null, "
+            "CASE WHEN ? > 0 THEN bm25_raw / ? ELSE 0.0 END AS bm25_norm "
+            "FROM candidate_rows"
+            ") "
+            "SELECT * FROM scored_rows "
+            f"ORDER BY {order_clause} LIMIT ? OFFSET ?"
+        )  # nosec B608
+
+        try:
+            cursor = self.execute_query(page_query, tuple(page_params))
+            rows = [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError as exc:
+            logger.error("Error fetching paged conversation search rows: {}", exc)
+            raise
+
+        return rows, total, max_bm25
 
     # --- Message Methods ---
     def add_message(self, msg_data: dict[str, Any]) -> str | None:

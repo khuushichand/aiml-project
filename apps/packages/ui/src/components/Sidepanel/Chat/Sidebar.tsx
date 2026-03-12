@@ -32,6 +32,7 @@ import type { HistoryInfo } from "@/db/dexie/types"
 import { useFolderStore } from "@/store/folder"
 import { useBulkChatOperations } from "@/hooks/useBulkChatOperations"
 import { useStorage } from "@plasmohq/storage/hook"
+import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
 import { ModeToggle } from "./ModeToggle"
 import { ConversationContextMenu } from "./ConversationContextMenu"
 import { FolderPickerModal } from "./FolderPickerModal"
@@ -225,6 +226,15 @@ export const SidepanelChatSidebar = ({
     "sidepanelSidebarWidth",
     DEFAULT_SIDEBAR_WIDTH
   )
+  const setRouteContext = useChatSurfaceCoordinatorStore(
+    (state) => state.setRouteContext
+  )
+  const setPanelVisible = useChatSurfaceCoordinatorStore(
+    (state) => state.setPanelVisible
+  )
+  const markPanelEngaged = useChatSurfaceCoordinatorStore(
+    (state) => state.markPanelEngaged
+  )
   const [isResizing, setIsResizing] = React.useState(false)
   const resizeOriginRef = React.useRef<{ startX: number; startWidth: number } | null>(
     null
@@ -326,11 +336,34 @@ export const SidepanelChatSidebar = ({
   const [folderPickerTabId, setFolderPickerTabId] = React.useState<string | null>(null)
 
   const debouncedSearchQuery = useDebounce(searchQuery, 250)
+  const hasDebouncedSearchQuery = debouncedSearchQuery.trim().length > 0
   const dbRef = React.useRef<PageAssistDatabase | null>(null)
   const [localSearchResults, setLocalSearchResults] = React.useState<HistoryInfo[]>([])
   const { data: serverSearchResults = [] } = useServerChatHistory(
-    debouncedSearchQuery
+    debouncedSearchQuery,
+    {
+      enabled: hasDebouncedSearchQuery,
+      mode: "search"
+    }
   )
+
+  React.useEffect(() => {
+    setRouteContext({ routeId: "chat", surface: "extension" })
+  }, [setRouteContext])
+
+  React.useEffect(() => {
+    setPanelVisible("server-history", open)
+
+    return () => {
+      setPanelVisible("server-history", false)
+    }
+  }, [open, setPanelVisible])
+
+  React.useEffect(() => {
+    if (hasDebouncedSearchQuery) {
+      markPanelEngaged("server-history")
+    }
+  }, [hasDebouncedSearchQuery, markPanelEngaged])
 
   React.useEffect(() => {
     if (!focusSearchTrigger) return

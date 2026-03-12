@@ -1,7 +1,10 @@
 """Personalization helpers and adapter utilities."""
 
 from tldw_Server_API.app.core.Personalization.companion_activity import (
+    build_note_bulk_import_activity,
+    build_watchlist_source_bulk_import_activity,
     record_companion_activity,
+    record_companion_activity_events_bulk,
     record_note_created,
     record_note_deleted,
     record_note_restored,
@@ -33,8 +36,11 @@ from tldw_Server_API.app.core.Personalization.companion_derivations import deriv
 
 __all__ = [
     "record_companion_activity",
+    "record_companion_activity_events_bulk",
     "load_companion_context",
     "derive_companion_knowledge_cards",
+    "build_note_bulk_import_activity",
+    "build_watchlist_source_bulk_import_activity",
     "record_note_created",
     "record_note_deleted",
     "record_note_restored",

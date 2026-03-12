@@ -26,6 +26,9 @@ class PersonalizationProfile(BaseModel):
     proactive_frequency: str = "normal"
     response_style: str = "balanced"
     preferred_format: str = "auto"
+    companion_reflections_enabled: bool = True
+    companion_daily_reflections_enabled: bool = True
+    companion_weekly_reflections_enabled: bool = True
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -40,6 +43,9 @@ class PreferencesUpdate(BaseModel):
     quiet_hours: dict[str, str] | None = None
     response_style: str | None = None
     preferred_format: str | None = None
+    companion_reflections_enabled: bool | None = None
+    companion_daily_reflections_enabled: bool | None = None
+    companion_weekly_reflections_enabled: bool | None = None
 
     @field_validator("alpha", "beta", "gamma", mode="before")
     @classmethod

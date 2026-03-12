@@ -78,6 +78,10 @@ import { ControlRow } from "@/components/Sidepanel/Chat/ControlRow"
 import { ContextChips } from "@/components/Sidepanel/Chat/ContextChips"
 import { SlashCommandMenu } from "@/components/Sidepanel/Chat/SlashCommandMenu"
 import { MentionsMenu, type MentionMenuItem } from "@/components/Sidepanel/Chat/MentionsMenu"
+import {
+  shouldEnableOptionalResource,
+  useChatSurfaceCoordinatorStore
+} from "@/store/chat-surface-coordinator"
 import { ModelParamsPanel } from "@/components/Sidepanel/Chat/ModelParamsPanel"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
@@ -157,6 +161,15 @@ export const SidepanelForm = ({
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const contextFileInputRef = React.useRef<HTMLInputElement>(null)
   const { sendWhenEnter, setSendWhenEnter } = useWebUI()
+  const setOptionalPanelVisible = useChatSurfaceCoordinatorStore(
+    (state) => state.setPanelVisible
+  )
+  const markOptionalPanelEngaged = useChatSurfaceCoordinatorStore(
+    (state) => state.markPanelEngaged
+  )
+  const audioHealthEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "audio-health")
+  )
   const [typing, setTyping] = React.useState<boolean>(false)
   const { t } = useTranslation(["playground", "common", "option", "sidepanel"])
   const notification = useAntdNotification()
@@ -199,7 +212,8 @@ export const SidepanelForm = ({
   )
   const { data: voiceChatModels } = useQuery({
     queryKey: ["voiceChatModels"],
-    queryFn: async () => fetchChatModels({ returnEmpty: true })
+    queryFn: async () => fetchChatModels({ returnEmpty: true }),
+    enabled: audioHealthEnabled
   })
   const voiceChatModelOptions = React.useMemo(() => {
     const options = [
@@ -458,7 +472,9 @@ export const SidepanelForm = ({
     isConnectionReady &&
     !capsLoading &&
     Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
-  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus()
+  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus({
+    enabled: audioHealthEnabled
+  })
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"
   const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
@@ -492,6 +508,17 @@ export const SidepanelForm = ({
       })
     }
   })
+
+  React.useEffect(() => {
+    setOptionalPanelVisible("audio-health", voiceChatEnabled)
+    if (voiceChatEnabled) {
+      markOptionalPanelEngaged("audio-health")
+    }
+
+    return () => {
+      setOptionalPanelVisible("audio-health", false)
+    }
+  }, [markOptionalPanelEngaged, setOptionalPanelVisible, voiceChatEnabled])
 
   const [debouncedPlaceholder, setDebouncedPlaceholder] = React.useState<string>(
     t("form.textarea.placeholder")

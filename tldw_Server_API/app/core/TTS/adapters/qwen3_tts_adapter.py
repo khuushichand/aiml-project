@@ -32,7 +32,7 @@ from ..tts_exceptions import (
     TTSStreamingError,
     TTSValidationError,
 )
-from ..utils import parse_bool
+from ..utils import parse_bool, resolve_qwen3_runtime_name
 from .base import (
     AudioFormat,
     TTSAdapter,
@@ -41,6 +41,7 @@ from .base import (
     TTSResponse,
     VoiceInfo,
 )
+from .qwen3_runtime_base import Qwen3Runtime
 
 _QWEN3_COERCE_EXCEPTIONS = (
     TypeError,
@@ -158,6 +159,7 @@ class Qwen3TTSAdapter(TTSAdapter):
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config=config)
         cfg = config or {}
+        self.runtime = (cfg.get("runtime") or "auto").strip().lower()
         self.model = (cfg.get("model") or "auto").strip()
         self.model_path = cfg.get("model_path")
         self.tokenizer_model = cfg.get("tokenizer_model") or "Qwen/Qwen3-TTS-Tokenizer-12Hz"
@@ -170,6 +172,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         self.sample_rate = self._coerce_int(cfg.get("sample_rate")) or 24000
         self._backend = None
         self._backend_module = None
+        self._runtime_impl: Qwen3Runtime | None = None
         self._pipeline_builders: list[tuple[str, Callable[[str], Any]]] = []
         self._pipelines: dict[str, Any] = {}
         self._pipeline_lock = asyncio.Lock()
@@ -181,6 +184,33 @@ class Qwen3TTSAdapter(TTSAdapter):
             self.MODEL_BASE_17B.lower(): self.MODEL_BASE_17B,
             self.MODEL_BASE_06B.lower(): self.MODEL_BASE_06B,
         }
+
+    def _resolve_runtime_name(self) -> str:
+        return resolve_qwen3_runtime_name(self.runtime)
+
+    def _build_runtime(self) -> Qwen3Runtime:
+        runtime_name = self._resolve_runtime_name()
+        if runtime_name == "mlx":
+            from .qwen3_runtime_mlx import Qwen3MlxRuntime
+
+            return Qwen3MlxRuntime(self)
+        if runtime_name == "remote":
+            from .qwen3_runtime_remote import RemoteQwenRuntime
+
+            return RemoteQwenRuntime(self)
+        if runtime_name != "upstream":
+            logger.warning(
+                f"{self.provider_name}: runtime '{runtime_name}' is not implemented yet; "
+                "falling back to upstream runtime"
+            )
+        from .qwen3_runtime_upstream import Qwen3UpstreamRuntime
+
+        return Qwen3UpstreamRuntime(self)
+
+    def _get_runtime(self) -> Qwen3Runtime:
+        if self._runtime_impl is None:
+            self._runtime_impl = self._build_runtime()
+        return self._runtime_impl
 
     def _coerce_int(self, value: Any) -> int | None:
         try:
@@ -803,8 +833,8 @@ class Qwen3TTSAdapter(TTSAdapter):
                 yield payload[idx:idx + size]
         return _iterator()
 
-    async def initialize(self) -> bool:
-        """Initialize adapter; verify dependency presence."""
+    async def _initialize_upstream_runtime(self) -> bool:
+        """Initialize the upstream qwen_tts runtime."""
         try:
             module = importlib.import_module("qwen_tts")
         except Exception as exc:
@@ -823,7 +853,12 @@ class Qwen3TTSAdapter(TTSAdapter):
         self._backend = module
         return True
 
-    async def get_capabilities(self) -> TTSCapabilities:
+    async def initialize(self) -> bool:
+        """Initialize the selected Qwen3 runtime."""
+        runtime = self._get_runtime()
+        return await runtime.initialize()
+
+    async def _get_upstream_capabilities(self) -> TTSCapabilities:
         max_text_length = self._coerce_int(self.config.get("max_text_length")) or 5000
         voices = [VoiceInfo(id=speaker, name=speaker) for speaker in self.CUSTOMVOICE_SPEAKERS]
         return TTSCapabilities(
@@ -843,7 +878,20 @@ class Qwen3TTSAdapter(TTSAdapter):
             supports_emotion_control=True,
             sample_rate=self.sample_rate,
             default_format=AudioFormat.PCM,
+            metadata={
+                "runtime": "upstream",
+                "supported_modes": [
+                    "custom_voice_preset",
+                    "uploaded_custom_voice",
+                    "voice_design",
+                ],
+                "supports_uploaded_custom_voices": True,
+            },
         )
+
+    async def get_capabilities(self) -> TTSCapabilities:
+        runtime = self._get_runtime()
+        return await runtime.get_capabilities()
 
     def _is_voice_design_request(self, request: TTSRequest) -> bool:
         voice = request.voice
@@ -1401,15 +1449,13 @@ class Qwen3TTSAdapter(TTSAdapter):
             if cleanup_path:
                 Path(cleanup_path).unlink(missing_ok=True)
 
-    async def generate(self, request: TTSRequest) -> TTSResponse:
-        """Generate speech from text (backend integration required)."""
-        if not await self.ensure_initialized():
-            raise TTSProviderInitializationError(
-                "Qwen3-TTS adapter not initialized",
-                provider=self.PROVIDER_KEY,
-            )
-        resolved_model = self._resolve_model(request)
-        mode = self._resolve_mode(resolved_model)
+    async def _generate_with_upstream_runtime(
+        self,
+        *,
+        request: TTSRequest,
+        resolved_model: str,
+        mode: str,
+    ) -> TTSResponse:
         logger.info(
             f"{self.provider_name}: request model={resolved_model}, mode={mode}, device={self.device}, "
             f"format={request.format.value}, stream={bool(request.stream)}"
@@ -1499,3 +1545,15 @@ class Qwen3TTSAdapter(TTSAdapter):
             provider=self.PROVIDER_KEY,
             model=resolved_model,
         )
+
+    async def generate(self, request: TTSRequest) -> TTSResponse:
+        """Generate speech from text using the selected runtime."""
+        if not await self.ensure_initialized():
+            raise TTSProviderInitializationError(
+                "Qwen3-TTS adapter not initialized",
+                provider=self.PROVIDER_KEY,
+            )
+        resolved_model = self._resolve_model(request)
+        mode = self._resolve_mode(resolved_model)
+        runtime = self._get_runtime()
+        return await runtime.generate(request, resolved_model, mode)

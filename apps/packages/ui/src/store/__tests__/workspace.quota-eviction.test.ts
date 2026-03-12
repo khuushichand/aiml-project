@@ -70,6 +70,7 @@ describe("workspace storage quota eviction recovery", () => {
           id: "workspace-active",
           name: "Active",
           tag: "workspace:active",
+          collectionId: null,
           createdAt: "2026-02-22T00:00:00.000Z",
           lastAccessedAt: "2026-02-22T00:00:00.000Z",
           sourceCount: 1
@@ -80,6 +81,7 @@ describe("workspace storage quota eviction recovery", () => {
           id: "workspace-archived-old",
           name: "Archived Old",
           tag: "workspace:archived-old",
+          collectionId: null,
           createdAt: "2026-01-01T00:00:00.000Z",
           lastAccessedAt: "2026-01-01T00:00:00.000Z",
           sourceCount: 0
@@ -88,11 +90,13 @@ describe("workspace storage quota eviction recovery", () => {
           id: "workspace-archived-new",
           name: "Archived New",
           tag: "workspace:archived-new",
+          collectionId: null,
           createdAt: "2026-02-01T00:00:00.000Z",
           lastAccessedAt: "2026-02-01T00:00:00.000Z",
           sourceCount: 0
         }
       ],
+      workspaceCollections: [],
       workspaceSnapshots: {
         "workspace-active": {
           workspaceId: "workspace-active",

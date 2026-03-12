@@ -221,6 +221,11 @@ That means:
   - advertise only preset-speaker `CustomVoice`, or
   - fail configuration validation rather than silently dropping Qwen-only fields
 
+Implementation note as of March 11, 2026:
+
+- the MLX runtime uses `mlx_audio.tts.utils.load_model(...)` for preset-speaker synthesis
+- the remote runtime sends Qwen extension data in `extra_body` using `ref_audio_b64`, `ref_text`, `voice_clone_prompt`, `x_vector_only_mode`, and `description`
+
 ## Configuration
 
 Avoid unnecessary config sprawl. Reuse existing generic provider fields where possible.
@@ -336,4 +341,3 @@ Document a manual Apple Silicon smoke checklist:
 - Remote mode must preserve Qwen-specific semantics or advertise a reduced capability set
 - Capability reporting must become runtime-aware
 - Health and breaker state must carry runtime identity
-

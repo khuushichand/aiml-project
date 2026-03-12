@@ -447,6 +447,66 @@ export const mapServerChatMessagesToPlaygroundMessages = ({
   })
 }
 
+type ApplyAssistantPresentationArgs = {
+  messages: Message[]
+  assistantName: string
+  assistantAvatarUrl?: string | null
+}
+
+export const applyAssistantPresentationToMessages = ({
+  messages,
+  assistantName,
+  assistantAvatarUrl
+}: ApplyAssistantPresentationArgs): Message[] =>
+  messages.map((message) => {
+    if (!message.isBot || message.role !== "assistant") {
+      return message
+    }
+
+    const hasExplicitName =
+      typeof message.name === "string" &&
+      message.name.trim().length > 0 &&
+      message.name !== "Assistant"
+    const hasExplicitModelName =
+      typeof message.modelName === "string" &&
+      message.modelName.trim().length > 0 &&
+      message.modelName !== "Assistant"
+
+    return {
+      ...message,
+      name: hasExplicitName ? message.name : assistantName,
+      modelName: hasExplicitModelName ? message.modelName : assistantName,
+      modelImage:
+        message.modelImage ??
+        (typeof assistantAvatarUrl === "string" &&
+        assistantAvatarUrl.trim().length > 0
+          ? assistantAvatarUrl
+          : undefined)
+    }
+  })
+
+export const reportDeferredAssistantPresentationError = ({
+  stage,
+  assistantKind,
+  assistantId,
+  characterId,
+  error
+}: {
+  stage: "persona-profile" | "character-profile" | "presentation-apply"
+  assistantKind: string | null
+  assistantId: string | null
+  characterId: number | null
+  error: unknown
+}): void => {
+  console.warn("[useServerChatLoader] Deferred assistant presentation failed", {
+    stage,
+    assistantKind,
+    assistantId,
+    characterId,
+    error
+  })
+}
+
 export const useServerChatLoader = ({
   ensureServerChatHistoryId,
   notification,
@@ -649,46 +709,90 @@ export const useServerChatLoader = ({
             }
           }
 
-          if (assistantKind === "persona" && assistantId) {
-            try {
-              const persona = await tldwClient.getPersonaProfile(assistantId)
-              if (persona) {
-                assistantName = persona.name || assistantName
-                await setSelectedAssistant(
-                  personaToAssistantSelection({
+          const deferredAssistantPresentationPromise = (async () => {
+            if (assistantKind === "persona" && assistantId) {
+              try {
+                const persona = await tldwClient.getPersonaProfile(assistantId)
+                if (persona) {
+                  if (!canCommitCurrentLoad()) {
+                    return null
+                  }
+                  const nextAssistantName = persona.name || "Persona"
+                  const selection = personaToAssistantSelection({
                     ...persona,
                     id: assistantId,
-                    name: persona.name || assistantName
+                    name: nextAssistantName
                   })
-                )
-              }
-            } catch {
-              await setSelectedAssistant(
-                personaToAssistantSelection({
-                  id: assistantId,
-                  name: assistantName
+                  await setSelectedAssistant(selection)
+                  return {
+                    assistantName: nextAssistantName,
+                    assistantAvatarUrl: selection?.avatar_url ?? null
+                  }
+                }
+              } catch (error) {
+                reportDeferredAssistantPresentationError({
+                  stage: "persona-profile",
+                  assistantKind,
+                  assistantId,
+                  characterId,
+                  error
                 })
-              )
-            }
-          } else if (characterId != null) {
-            try {
-              const character = await tldwClient.getCharacter(characterId)
-              if (character) {
-                assistantName = character.name || character.title || assistantName
-                await setSelectedAssistant(
-                  characterToAssistantSelection({
+                if (!canCommitCurrentLoad()) {
+                  return null
+                }
+                const selection = personaToAssistantSelection({
+                  id: assistantId,
+                  name: "Persona"
+                })
+                await setSelectedAssistant(selection)
+                return {
+                  assistantName: selection?.name || "Persona",
+                  assistantAvatarUrl: selection?.avatar_url ?? null
+                }
+              }
+            } else if (characterId != null) {
+              try {
+                const character = await tldwClient.getCharacter(characterId)
+                if (character) {
+                  if (!canCommitCurrentLoad()) {
+                    return null
+                  }
+                  const selection = characterToAssistantSelection({
                     ...character,
                     id: String(character.id ?? characterId)
                   })
-                )
+                  await setSelectedAssistant(selection)
+                  return {
+                    assistantName:
+                      selection?.name ||
+                      character.name ||
+                      character.title ||
+                      assistantName,
+                    assistantAvatarUrl: selection?.avatar_url ?? null
+                  }
+                }
+              } catch (error) {
+                reportDeferredAssistantPresentationError({
+                  stage: "character-profile",
+                  assistantKind,
+                  assistantId,
+                  characterId,
+                  error
+                })
               }
-            } catch {
-              // ignore character lookup failures
+              if (!canCommitCurrentLoad()) {
+                return null
+              }
               await setSelectedAssistant(null)
+              return null
             }
-          } else {
+
+            if (!canCommitCurrentLoad()) {
+              return null
+            }
             await setSelectedAssistant(null)
-          }
+            return null
+          })()
 
           const list = await fetchAllServerChatMessages(
             ({ limit, offset, signal }) =>
@@ -739,6 +843,32 @@ export const useServerChatLoader = ({
           if (!shouldPreserveLocal && !shouldPreserveAtCommit) {
             setHistory(history)
             setMessages(mappedMessages)
+          }
+          const shouldApplyDeferredAssistantPresentation =
+            !shouldPreserveLocal && !shouldPreserveAtCommit
+          if (shouldApplyDeferredAssistantPresentation) {
+            void deferredAssistantPresentationPromise
+              .then((presentation) => {
+                if (!presentation || !canCommitCurrentLoad()) {
+                  return
+                }
+                setMessages((currentMessages) =>
+                  applyAssistantPresentationToMessages({
+                    messages: currentMessages,
+                    assistantName: presentation.assistantName,
+                    assistantAvatarUrl: presentation.assistantAvatarUrl
+                  })
+                )
+              })
+              .catch((error) => {
+                reportDeferredAssistantPresentationError({
+                  stage: "presentation-apply",
+                  assistantKind,
+                  assistantId,
+                  characterId,
+                  error
+                })
+              })
           }
           if (!temporaryChat && !shouldPreserveLocal && !shouldPreserveAtCommit) {
             try {

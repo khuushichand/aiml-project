@@ -37,6 +37,7 @@ The route must open the shared Speech Playground in TTS-only mode and keep route
 ### Route mapping
 
 - Change `apps/packages/ui/src/routes/option-tts.tsx` to render `SpeechPlaygroundPage`
+- Wrap `/tts` in the same `RouteErrorBoundary` pattern used by `/speech` so both entrypoints fail consistently when the shared page throws
 - Keep `apps/packages/ui/src/routes/option-speech.tsx` rendering the same shared page in unlocked mode
 - Leave `apps/tldw-frontend/pages/tts.tsx` and the extension options entrypoint unchanged, since they already consume the shared route layer
 
@@ -74,6 +75,14 @@ When the page is rendered by `/tts`:
 - route-locked TTS mode takes precedence over persisted `speechPlaygroundMode`
 - the top mode selector is hidden
 - attempts to switch into non-TTS modes are ignored by the page
+- all mode-dependent behavior must respect the locked route mode, not just the visible layout
+
+This includes:
+
+- keyboard shortcuts
+- mode-based effects
+- mode-specific handlers
+- conditional workspace layout
 
 This preserves clean route meaning:
 
@@ -107,8 +116,10 @@ This separates two concerns cleanly:
 
 - Deep-linking to `/tts` must always land in the redesigned TTS surface, even if local storage previously remembered STT or Round-trip
 - Missing or invalid stored mode must not break `/tts`, because the locked route prop wins
+- `/tts` must not overwrite the shared remembered mode just by loading
 - If future code tries to call `setMode` while route-locked, the page should stay in the locked mode
 - `/speech` must still expose the mode switcher and remembered-mode behavior exactly as today
+- `/tts` should retain the same route-level failure handling as `/speech`
 
 ---
 
@@ -120,6 +131,7 @@ Update `apps/packages/ui/src/routes/__tests__/option-audio-route-identity.test.t
 
 - `/tts` renders `SpeechPlaygroundPage`
 - `/tts` no longer renders `TtsPlaygroundPage`
+- `/tts` uses the same route-level error boundary semantics as `/speech`
 - `/speech` still renders the shared Speech Playground in unlocked mode
 - `/stt` remains unchanged unless intentionally refactored separately
 
@@ -129,6 +141,8 @@ Update `apps/packages/ui/src/components/Option/Speech/__tests__/SpeechPlayground
 
 - locked TTS mode hides the mode switcher
 - locked TTS mode suppresses non-TTS regions
+- locked TTS mode does not call the persisted `speechPlaygroundMode` setter on mount
+- locked TTS mode still honors TTS-specific behavior such as play shortcuts
 - unlocked mode still renders the normal mode selector
 
 ### Regression boundary

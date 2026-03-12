@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   Navigate,
+  UNSAFE_DataRouterContext,
   useNavigate,
   useParams,
   useSearchParams
@@ -123,5 +124,9 @@ describe("react-router-dom Next.js shim transitions", () => {
     render(<ParamsReader />)
 
     expect(screen.getByText("source-123")).toBeInTheDocument()
+  })
+
+  it("exports UNSAFE_DataRouterContext for shared route modules", () => {
+    expect(UNSAFE_DataRouterContext).toBeDefined()
   })
 })

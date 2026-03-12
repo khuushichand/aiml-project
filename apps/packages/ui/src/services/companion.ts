@@ -41,6 +41,11 @@ export type CompanionKnowledgeCard = {
   updated_at: string
 }
 
+export type CompanionKnowledgeDetail = CompanionKnowledgeCard & {
+  evidence_events: CompanionActivityItem[]
+  evidence_goals: CompanionGoal[]
+}
+
 export type CompanionGoal = {
   id: string
   title: string
@@ -70,14 +75,46 @@ export type CompanionGoalUpdate = {
   status?: string
 }
 
+export type CompanionFollowUpPrompt = {
+  prompt_id: string
+  label: string
+  prompt_text: string
+  prompt_type: string
+  source_reflection_id?: string | null
+  source_evidence_ids: string[]
+}
+
 export type CompanionReflection = {
   id: string
   cadence: string | null
   title: string | null
   summary: string
   evidence: Array<Record<string, unknown>>
+  delivery_decision?: string | null
+  delivery_reason?: string | null
+  theme_key?: string | null
+  signal_strength?: number | null
+  follow_up_prompts: CompanionFollowUpPrompt[]
   provenance: Record<string, unknown>
   created_at: string
+}
+
+export type CompanionReflectionDetail = {
+  id: string
+  title: string
+  cadence: string | null
+  summary: string
+  evidence: Array<Record<string, unknown>>
+  delivery_decision?: string | null
+  delivery_reason?: string | null
+  theme_key?: string | null
+  signal_strength?: number | null
+  follow_up_prompts: CompanionFollowUpPrompt[]
+  provenance: Record<string, unknown>
+  created_at: string
+  activity_events: CompanionActivityItem[]
+  knowledge_cards: CompanionKnowledgeCard[]
+  goals: CompanionGoal[]
 }
 
 export type CompanionNotification = {
@@ -96,7 +133,33 @@ export type CompanionNotification = {
 
 export type PersonalizationProfile = {
   enabled: boolean
+  proactive_enabled?: boolean
+  companion_reflections_enabled?: boolean
+  companion_daily_reflections_enabled?: boolean
+  companion_weekly_reflections_enabled?: boolean
   updated_at: string
+}
+
+export type CompanionPreferencesUpdate = {
+  proactive_enabled?: boolean
+  companion_reflections_enabled?: boolean
+  companion_daily_reflections_enabled?: boolean
+  companion_weekly_reflections_enabled?: boolean
+}
+
+export type CompanionLifecycleScope =
+  | "knowledge"
+  | "reflections"
+  | "derived_goals"
+  | "goal_progress"
+
+export type CompanionLifecycleResponse = {
+  status: string
+  scope: CompanionLifecycleScope
+  deleted_counts?: Record<string, number>
+  rebuilt_counts?: Record<string, number>
+  job_id?: number | null
+  job_uuid?: string | null
 }
 
 type CompanionActivityListResponse = {
@@ -119,6 +182,12 @@ type CompanionGoalListResponse = {
 type NotificationsListResponse = {
   items: CompanionNotification[]
   total: number
+}
+
+export type CompanionConversationPromptsResponse = {
+  prompt_source_kind: string
+  prompt_source_id?: string | null
+  prompts: CompanionFollowUpPrompt[]
 }
 
 export type CompanionWorkspaceSnapshot = {
@@ -208,12 +277,29 @@ const toReflection = (item: CompanionActivityItem): CompanionReflection => {
   const evidence = Array.isArray(metadata.evidence)
     ? (metadata.evidence as Array<Record<string, unknown>>)
     : []
+  const followUpPrompts = Array.isArray(metadata.follow_up_prompts)
+    ? (metadata.follow_up_prompts as CompanionFollowUpPrompt[])
+    : []
   return {
     id: item.id,
     cadence,
     title,
     summary,
     evidence,
+    delivery_decision:
+      typeof metadata.delivery_decision === "string"
+        ? metadata.delivery_decision
+        : null,
+    delivery_reason:
+      typeof metadata.delivery_reason === "string"
+        ? metadata.delivery_reason
+        : null,
+    theme_key: typeof metadata.theme_key === "string" ? metadata.theme_key : null,
+    signal_strength:
+      typeof metadata.signal_strength === "number"
+        ? metadata.signal_strength
+        : null,
+    follow_up_prompts: followUpPrompts,
     provenance: item.provenance || {},
     created_at: item.created_at
   }
@@ -245,6 +331,17 @@ export const updatePersonalizationOptIn = async (
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: { enabled }
+  })
+}
+
+export const updateCompanionPreferences = async (
+  payload: CompanionPreferencesUpdate
+): Promise<PersonalizationProfile> => {
+  return bgRequest<PersonalizationProfile>({
+    path: "/api/v1/personalization/preferences" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: payload
   })
 }
 
@@ -280,12 +377,40 @@ export const fetchCompanionKnowledge = async (params?: {
   })
 }
 
+export const fetchCompanionKnowledgeDetail = async (
+  cardId: string
+): Promise<CompanionKnowledgeDetail> => {
+  return bgRequest<CompanionKnowledgeDetail>({
+    path: `/api/v1/companion/knowledge/${cardId}` as any,
+    method: "GET"
+  })
+}
+
 export const fetchCompanionGoals = async (params?: {
   status?: string
 }): Promise<CompanionGoalListResponse> => {
   const qs = buildQuery(params || {})
   return bgRequest<CompanionGoalListResponse>({
     path: `/api/v1/companion/goals${qs}` as any,
+    method: "GET"
+  })
+}
+
+export const fetchCompanionReflectionDetail = async (
+  reflectionId: string
+): Promise<CompanionReflectionDetail> => {
+  return bgRequest<CompanionReflectionDetail>({
+    path: `/api/v1/companion/reflections/${reflectionId}` as any,
+    method: "GET"
+  })
+}
+
+export const fetchCompanionConversationPrompts = async (
+  query: string
+): Promise<CompanionConversationPromptsResponse> => {
+  const qs = buildQuery({ query })
+  return bgRequest<CompanionConversationPromptsResponse>({
+    path: `/api/v1/companion/conversation-prompts${qs}` as any,
     method: "GET"
   })
 }
@@ -371,4 +496,26 @@ export const fetchCompanionWorkspaceSnapshot = async (
       (item) => item.kind === "companion_reflection"
     )
   }
+}
+
+export const purgeCompanionScope = async (
+  scope: CompanionLifecycleScope
+): Promise<CompanionLifecycleResponse> => {
+  return bgRequest<CompanionLifecycleResponse>({
+    path: "/api/v1/companion/purge" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { scope }
+  })
+}
+
+export const queueCompanionRebuild = async (
+  scope: CompanionLifecycleScope
+): Promise<CompanionLifecycleResponse> => {
+  return bgRequest<CompanionLifecycleResponse>({
+    path: "/api/v1/companion/rebuild" as any,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { scope }
+  })
 }

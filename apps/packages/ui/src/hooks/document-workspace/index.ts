@@ -81,6 +81,7 @@ export {
 export type { CitationFormat } from "./useCitation"
 export {
   useDocumentQuiz,
+  useQuizHistory,
   QUESTION_TYPE_INFO,
   DIFFICULTY_INFO,
 } from "./useDocumentQuiz"
@@ -91,3 +92,5 @@ export type {
   QuizQuestion,
   QuizResponse,
 } from "./useDocumentQuiz"
+export type { QuizHistoryEntry } from "./offlineQueue"
+export { useResizablePanel } from "./useResizablePanel"

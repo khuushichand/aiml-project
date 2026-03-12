@@ -93,6 +93,32 @@ const DUPLICATE_SUBMISSION_WINDOW_MS = 12_000
 const LOREBOOK_DEBUG_ENTRYPOINT_HREF = buildChatLorebookDebugPath({
   from: "workspace-playground"
 })
+const EMPTY_STRING_ARRAY: string[] = []
+
+const useEffectiveSelectedSources = (): WorkspaceSource[] => {
+  const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const selectedSourceFolderIds =
+    useWorkspaceStore((s) => s.selectedSourceFolderIds) ?? EMPTY_STRING_ARRAY
+  const sources = useWorkspaceStore((s) => s.sources)
+  const getSelectedSources = useWorkspaceStore((s) => s.getSelectedSources)
+  const getEffectiveSelectedSources = useWorkspaceStore(
+    (s) => s.getEffectiveSelectedSources
+  )
+
+  return React.useMemo(
+    () =>
+      typeof getEffectiveSelectedSources === "function"
+        ? getEffectiveSelectedSources()
+        : getSelectedSources(),
+    [
+      getEffectiveSelectedSources,
+      getSelectedSources,
+      selectedSourceFolderIds,
+      selectedSourceIds,
+      sources
+    ]
+  )
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null
@@ -524,13 +550,14 @@ const buildRetrievalDiagnostics = (
 const ChatContextIndicator: React.FC = () => {
   const { t } = useTranslation(["playground"])
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
-  const getSelectedSources = useWorkspaceStore((s) => s.getSelectedSources)
-  const selectedSources = getSelectedSources()
+  const selectedSourceFolderIds =
+    useWorkspaceStore((s) => s.selectedSourceFolderIds) ?? EMPTY_STRING_ARRAY
+  const selectedSources = useEffectiveSelectedSources()
   const [showAllSources, setShowAllSources] = React.useState(false)
 
   React.useEffect(() => {
     setShowAllSources(false)
-  }, [selectedSourceIds])
+  }, [selectedSourceFolderIds, selectedSourceIds, selectedSources])
 
   if (selectedSources.length === 0) return null
 
@@ -1135,9 +1162,13 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
   // Workspace store
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const selectedSourceFolderIds =
+    useWorkspaceStore((s) => s.selectedSourceFolderIds) ?? EMPTY_STRING_ARRAY
   const sources = useWorkspaceStore((s) => s.sources)
-  const getSelectedSources = useWorkspaceStore((s) => s.getSelectedSources)
   const getSelectedMediaIds = useWorkspaceStore((s) => s.getSelectedMediaIds)
+  const getEffectiveSelectedMediaIds = useWorkspaceStore(
+    (s) => s.getEffectiveSelectedMediaIds
+  )
   const setSelectedSourceIds = useWorkspaceStore((s) => s.setSelectedSourceIds)
   const focusSourceById = useWorkspaceStore((s) => s.focusSourceById)
   const focusSourceByMediaId = useWorkspaceStore((s) => s.focusSourceByMediaId)
@@ -1247,6 +1278,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   )
   const previousSelectedSourcesRef = React.useRef<string[]>(selectedSourceIds)
   const selectedSourceIdsRef = React.useRef<string[]>(selectedSourceIds)
+  const effectiveSelectedSourceIdsRef = React.useRef<string[]>([])
   const temporarySourceScopeRef = React.useRef<TemporarySourceScope | null>(null)
   const suppressSourceContextWarningRef = React.useRef(false)
   const selectedSourcesInitializedRef = React.useRef(false)
@@ -1267,7 +1299,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const { containerRef, isAutoScrollToBottom, autoScrollToBottom } =
     useSmartScroll(messages, streaming, 120)
 
-  const selectedSources = getSelectedSources()
+  const selectedSources = useEffectiveSelectedSources()
+  const effectiveSelectedSourceIds = React.useMemo(
+    () => selectedSources.map((source) => source.id),
+    [selectedSources]
+  )
   const hasMessages = messages.length > 0
   const hasSelectedSources = selectedSources.length > 0
 
@@ -1468,6 +1504,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   }, [selectedSourceIds])
 
   React.useEffect(() => {
+    effectiveSelectedSourceIdsRef.current = effectiveSelectedSourceIds
+  }, [effectiveSelectedSourceIds])
+
+  React.useEffect(() => {
     temporarySourceScopeRef.current = temporarySourceScope
   }, [temporarySourceScope])
 
@@ -1509,20 +1549,20 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
   React.useEffect(() => {
     if (!selectedSourcesInitializedRef.current) {
-      previousSelectedSourcesRef.current = selectedSourceIds
+      previousSelectedSourcesRef.current = effectiveSelectedSourceIds
       selectedSourcesInitializedRef.current = true
       return
     }
 
     if (suppressSourceContextWarningRef.current) {
       suppressSourceContextWarningRef.current = false
-      previousSelectedSourcesRef.current = selectedSourceIds
+      previousSelectedSourcesRef.current = effectiveSelectedSourceIds
       return
     }
 
     const previous = previousSelectedSourcesRef.current
     const removedSourceCount = previous.filter(
-      (sourceId) => !selectedSourceIds.includes(sourceId)
+      (sourceId) => !effectiveSelectedSourceIds.includes(sourceId)
     ).length
 
     if (removedSourceCount > 0 && hasMessages) {
@@ -1536,12 +1576,15 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       })
     }
 
-    previousSelectedSourcesRef.current = selectedSourceIds
-  }, [hasMessages, messageApi, selectedSourceIds, t])
+    previousSelectedSourcesRef.current = effectiveSelectedSourceIds
+  }, [effectiveSelectedSourceIds, hasMessages, messageApi, t])
 
   // Sync selected sources + user mode preference with RAG context
   React.useEffect(() => {
-    const mediaIds = getSelectedMediaIds()
+    const mediaIds =
+      typeof getEffectiveSelectedMediaIds === "function"
+        ? getEffectiveSelectedMediaIds()
+        : getSelectedMediaIds()
     const hasScopedMediaIds = mediaIds.length > 0
     const autoMode: ChatModePreference = hasScopedMediaIds ? "rag" : "normal"
     const resolvedMode = preferredChatMode ?? autoMode
@@ -1558,8 +1601,9 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       setFileRetrievalEnabled(false)
     }
   }, [
-    selectedSourceIds,
+    effectiveSelectedSourceIds,
     preferredChatMode,
+    getEffectiveSelectedMediaIds,
     getSelectedMediaIds,
     setChatMode,
     setFileRetrievalEnabled,
@@ -1766,7 +1810,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const handleSubmit = async (message: string) => {
     if (preparingSourceContext) return
     const normalizedMessage = message.trim().replace(/\s+/g, " ").toLowerCase()
-    const sourceScopeSignature = [...selectedSourceIdsRef.current]
+    const sourceScopeSignature = [...effectiveSelectedSourceIdsRef.current]
       .sort((a, b) => a.localeCompare(b))
       .join(",")
     const submissionSignature = `${effectiveChatMode}|${sourceScopeSignature}|${normalizedMessage}`
@@ -1789,7 +1833,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
           workspace_id: workspaceSessionId || null,
           duplicate_count: nextCount,
           window_ms: DUPLICATE_SUBMISSION_WINDOW_MS,
-          source_scope_count: selectedSourceIdsRef.current.length,
+          source_scope_count: effectiveSelectedSourceIdsRef.current.length,
           message_length: normalizedMessage.length
         })
       }

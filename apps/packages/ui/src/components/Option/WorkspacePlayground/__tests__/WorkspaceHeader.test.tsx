@@ -20,6 +20,9 @@ const mockDuplicateWorkspace = vi.fn()
 const mockArchiveWorkspace = vi.fn()
 const mockRestoreArchivedWorkspace = vi.fn()
 const mockDeleteWorkspace = vi.fn()
+const mockCreateWorkspaceCollection = vi.fn()
+const mockDeleteWorkspaceCollection = vi.fn()
+const mockAssignWorkspaceToCollection = vi.fn()
 const mockSaveCurrentWorkspace = vi.fn()
 const mockSetWorkspaceName = vi.fn()
 const mockSetWorkspaceBanner = vi.fn()
@@ -74,6 +77,7 @@ const mockStoreState = {
       id: "workspace-alpha",
       name: "Alpha Research",
       tag: "workspace:alpha-research",
+      collectionId: "collection-topic-a",
       createdAt: new Date("2026-02-10T10:00:00.000Z"),
       lastAccessedAt: now,
       sourceCount: 3
@@ -82,6 +86,7 @@ const mockStoreState = {
       id: "workspace-beta",
       name: "Beta Deep Dive",
       tag: "workspace:beta-deep-dive",
+      collectionId: null,
       createdAt: new Date("2026-02-09T10:00:00.000Z"),
       lastAccessedAt: new Date("2026-02-18T11:00:00.000Z"),
       sourceCount: 5
@@ -90,15 +95,28 @@ const mockStoreState = {
       id: "workspace-gamma",
       name: "Gamma Notes",
       tag: "workspace:gamma-notes",
+      collectionId: null,
       createdAt: new Date("2026-02-08T10:00:00.000Z"),
       lastAccessedAt: new Date("2026-02-18T09:00:00.000Z"),
       sourceCount: 2
     }
   ],
   archivedWorkspaces: [],
+  workspaceCollections: [
+    {
+      id: "collection-topic-a",
+      name: "Topic A",
+      description: null,
+      createdAt: new Date("2026-02-01T10:00:00.000Z"),
+      updatedAt: new Date("2026-02-01T10:00:00.000Z")
+    }
+  ],
   createNewWorkspace: mockCreateNewWorkspace,
   exportWorkspaceBundle: mockExportWorkspaceBundle,
   importWorkspaceBundle: mockImportWorkspaceBundle,
+  createWorkspaceCollection: mockCreateWorkspaceCollection,
+  deleteWorkspaceCollection: mockDeleteWorkspaceCollection,
+  assignWorkspaceToCollection: mockAssignWorkspaceToCollection,
   switchWorkspace: mockSwitchWorkspace,
   duplicateWorkspace: mockDuplicateWorkspace,
   archiveWorkspace: mockArchiveWorkspace,
@@ -221,6 +239,44 @@ describe("WorkspaceHeader workspace browser modal", () => {
     vi.clearAllMocks()
     window.localStorage.clear()
     clearWorkspaceUndoActionsForTests()
+    mockStoreState.savedWorkspaces = [
+      {
+        id: "workspace-alpha",
+        name: "Alpha Research",
+        tag: "workspace:alpha-research",
+        collectionId: "collection-topic-a",
+        createdAt: new Date("2026-02-10T10:00:00.000Z"),
+        lastAccessedAt: now,
+        sourceCount: 3
+      },
+      {
+        id: "workspace-beta",
+        name: "Beta Deep Dive",
+        tag: "workspace:beta-deep-dive",
+        collectionId: null,
+        createdAt: new Date("2026-02-09T10:00:00.000Z"),
+        lastAccessedAt: new Date("2026-02-18T11:00:00.000Z"),
+        sourceCount: 5
+      },
+      {
+        id: "workspace-gamma",
+        name: "Gamma Notes",
+        tag: "workspace:gamma-notes",
+        collectionId: null,
+        createdAt: new Date("2026-02-08T10:00:00.000Z"),
+        lastAccessedAt: new Date("2026-02-18T09:00:00.000Z"),
+        sourceCount: 2
+      }
+    ]
+    mockStoreState.workspaceCollections = [
+      {
+        id: "collection-topic-a",
+        name: "Topic A",
+        description: null,
+        createdAt: new Date("2026-02-01T10:00:00.000Z"),
+        updatedAt: new Date("2026-02-01T10:00:00.000Z")
+      }
+    ]
     mockCaptureUndoSnapshot.mockReturnValue({
       workspaceId: "workspace-alpha",
       workspaceName: "Alpha Research"
@@ -420,6 +476,72 @@ describe("WorkspaceHeader workspace browser modal", () => {
     fireEvent.click(targetWorkspaceRow)
 
     expect(mockSwitchWorkspace).toHaveBeenCalledWith("workspace-beta")
+  })
+
+  it("renders collection groups and assigns workspaces from the browser modal", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("View all workspaces"))
+
+    const modal = await screen.findByRole("dialog", {
+      name: "All Workspaces"
+    })
+    expect(
+      within(modal).getByLabelText("Collection group Topic A")
+    ).toBeInTheDocument()
+    expect(
+      within(modal).getByLabelText("Collection group Unassigned")
+    ).toBeInTheDocument()
+
+    fireEvent.change(
+      within(modal).getByLabelText("Collection for Beta Deep Dive"),
+      { target: { value: "collection-topic-a" } }
+    )
+
+    expect(mockAssignWorkspaceToCollection).toHaveBeenCalledWith(
+      "workspace-beta",
+      "collection-topic-a"
+    )
+  })
+
+  it("creates and deletes collections from the browser modal", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("View all workspaces"))
+
+    const modal = await screen.findByRole("dialog", {
+      name: "All Workspaces"
+    })
+
+    fireEvent.change(
+      within(modal).getByPlaceholderText("New collection name"),
+      { target: { value: "Topic B" } }
+    )
+    fireEvent.click(within(modal).getByRole("button", { name: "Add collection" }))
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "Delete collection Topic A" })
+    )
+
+    expect(mockCreateWorkspaceCollection).toHaveBeenCalledWith("Topic B", null)
+    expect(mockDeleteWorkspaceCollection).toHaveBeenCalledWith(
+      "collection-topic-a"
+    )
   })
 
   it("exports workspace bundle from the settings menu", async () => {

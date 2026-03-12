@@ -4,16 +4,19 @@ import asyncio
 import contextlib
 import os
 from datetime import datetime, timezone
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Personalization.companion_reflection_jobs import (
     COMPANION_REFLECTION_DOMAIN,
     COMPANION_REFLECTION_JOB_TYPE,
+    companion_reflection_enabled_for_profile,
     companion_reflection_queue,
 )
 from tldw_Server_API.app.core.testing import env_flag_enabled
@@ -83,7 +86,16 @@ class _CompanionReflectionScheduler:
             slot_key = f"{slot_time.isocalendar().year}-W{slot_time.isocalendar().week:02d}"
         else:
             slot_key = slot_time.date().isoformat()
-        for user_id in sorted(self._enumerate_user_ids()):
+        for user_id, profile in self._iter_user_profiles():
+            allowed, reason = companion_reflection_enabled_for_profile(profile, cadence)
+            if not allowed:
+                logger.debug(
+                    "Companion reflection scheduler skipped user_id={} cadence={} reason={}",
+                    user_id,
+                    cadence,
+                    reason,
+                )
+                continue
             payload = {
                 "user_id": user_id,
                 "cadence": cadence,
@@ -96,7 +108,7 @@ class _CompanionReflectionScheduler:
                     queue=companion_reflection_queue(),
                     job_type=COMPANION_REFLECTION_JOB_TYPE,
                     payload=payload,
-                    owner_user_id=int(user_id),
+                    owner_user_id=str(user_id),
                     idempotency_key=idempotency_key,
                 )
                 logger.info(
@@ -108,22 +120,27 @@ class _CompanionReflectionScheduler:
             except _NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning("Companion reflection enqueue failed user_id={} cadence={}: {}", user_id, cadence, exc)
 
-    def _enumerate_user_ids(self) -> set[int]:
-        user_ids: set[int] = set()
+    def _iter_user_profiles(self) -> list[tuple[str, dict[str, Any]]]:
+        user_profiles: list[tuple[str, dict[str, Any]]] = []
+        seen_user_ids: set[str] = set()
         try:
             base = DatabasePaths.get_user_db_base_dir()
             for path in base.iterdir():
                 if not path.is_dir():
                     continue
-                try:
-                    user_ids.add(int(path.name))
-                except _NONCRITICAL_EXCEPTIONS:
+                db_path = path / DatabasePaths.PERSONALIZATION_DB_NAME
+                if not db_path.exists():
                     continue
+                db = PersonalizationDB(str(db_path))
+                for user_id in db.list_profile_user_ids():
+                    normalized_user_id = str(user_id).strip()
+                    if not normalized_user_id or normalized_user_id in seen_user_ids:
+                        continue
+                    user_profiles.append((normalized_user_id, db.get_or_create_profile(normalized_user_id)))
+                    seen_user_ids.add(normalized_user_id)
         except _NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Companion reflection scheduler failed to enumerate users: {}", exc)
-        with contextlib.suppress(_NONCRITICAL_EXCEPTIONS):
-            user_ids.add(int(DatabasePaths.get_single_user_id()))
-        return user_ids
+        return sorted(user_profiles, key=lambda item: item[0])
 
 
 _INSTANCE: _CompanionReflectionScheduler | None = None

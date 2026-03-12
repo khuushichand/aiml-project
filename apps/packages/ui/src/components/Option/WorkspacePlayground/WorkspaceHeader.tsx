@@ -33,7 +33,11 @@ import {
   Settings,
   Star
 } from "lucide-react"
-import type { SavedWorkspace, WorkspaceBannerImage } from "@/types/workspace"
+import type {
+  SavedWorkspace,
+  WorkspaceBannerImage,
+  WorkspaceCollection
+} from "@/types/workspace"
 import { useWorkspaceStore } from "@/store/workspace"
 import { useConnectionStore } from "@/store/connection"
 import { deriveConnectionUxState } from "@/types/connection"
@@ -59,7 +63,8 @@ import {
   buildWorkspaceBibtex,
   createWorkspaceBibtexFilename,
   filterSavedWorkspaces,
-  formatWorkspaceLastAccessed
+  formatWorkspaceLastAccessed,
+  groupWorkspacesByCollection
 } from "./workspace-header.utils"
 import {
   normalizeWorkspaceBannerImage,
@@ -167,6 +172,9 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     research_studio_status_guardrails_v1: 100
   })
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = React.useState("")
+  const [workspaceCollectionDraft, setWorkspaceCollectionDraft] = React.useState("")
+  const [workspaceCollectionFilter, setWorkspaceCollectionFilter] =
+    React.useState("all")
   const PINNED_STORAGE_KEY = "tldw:workspace-playground:pinned-workspaces:v1"
   const [pinnedWorkspaceIds, setPinnedWorkspaceIds] = React.useState<Set<string>>(() => {
     try {
@@ -406,7 +414,17 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   const setCurrentNote = useWorkspaceStore((s) => s.setCurrentNote)
   const savedWorkspaces = useWorkspaceStore((s) => s.savedWorkspaces)
   const archivedWorkspaces = useWorkspaceStore((s) => s.archivedWorkspaces)
+  const workspaceCollections = useWorkspaceStore((s) => s.workspaceCollections)
   const createNewWorkspace = useWorkspaceStore((s) => s.createNewWorkspace)
+  const createWorkspaceCollection = useWorkspaceStore(
+    (s) => s.createWorkspaceCollection
+  )
+  const deleteWorkspaceCollection = useWorkspaceStore(
+    (s) => s.deleteWorkspaceCollection
+  )
+  const assignWorkspaceToCollection = useWorkspaceStore(
+    (s) => s.assignWorkspaceToCollection
+  )
   const exportWorkspaceBundle = useWorkspaceStore((s) => s.exportWorkspaceBundle)
   const importWorkspaceBundle = useWorkspaceStore((s) => s.importWorkspaceBundle)
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace)
@@ -1210,6 +1228,88 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   const savedRelativeLabel = (workspace: SavedWorkspace) =>
     formatWorkspaceLastAccessed(new Date(workspace.lastAccessedAt))
 
+  const filteredWorkspaceBrowserItems = React.useMemo(() => {
+    const searchFiltered = filterSavedWorkspaces(
+      savedWorkspaces,
+      workspaceSearchQuery
+    ).sort((a, b) => {
+      const aPinned = pinnedWorkspaceIds.has(a.id) ? 0 : 1
+      const bPinned = pinnedWorkspaceIds.has(b.id) ? 0 : 1
+      return aPinned - bPinned
+    })
+
+    if (workspaceCollectionFilter === "all") {
+      return searchFiltered
+    }
+
+    if (workspaceCollectionFilter === "unassigned") {
+      return searchFiltered.filter((workspace) => workspace.collectionId === null)
+    }
+
+    return searchFiltered.filter(
+      (workspace) => workspace.collectionId === workspaceCollectionFilter
+    )
+  }, [
+    pinnedWorkspaceIds,
+    savedWorkspaces,
+    workspaceCollectionFilter,
+    workspaceSearchQuery
+  ])
+
+  const visibleWorkspaceGroups = React.useMemo(
+    () =>
+      groupWorkspacesByCollection(
+        workspaceCollections,
+        filteredWorkspaceBrowserItems
+      ).filter(
+        (group) =>
+          group.workspaces.length > 0 ||
+          (workspaceSearchQuery.trim().length === 0 &&
+            workspaceCollectionFilter === "all")
+      ),
+    [
+      filteredWorkspaceBrowserItems,
+      workspaceCollectionFilter,
+      workspaceCollections,
+      workspaceSearchQuery
+    ]
+  )
+
+  const handleCreateWorkspaceCollection = () => {
+    const nextName = workspaceCollectionDraft.trim()
+    if (!nextName) return
+    createWorkspaceCollection(nextName, null)
+    setWorkspaceCollectionDraft("")
+  }
+
+  const handleDeleteWorkspaceCollection = (collectionId: string) => {
+    deleteWorkspaceCollection(collectionId)
+    if (workspaceCollectionFilter === collectionId) {
+      setWorkspaceCollectionFilter("all")
+    }
+  }
+
+  const handleWorkspaceCollectionAssignment = (
+    workspaceIdToAssign: string,
+    nextCollectionId: string
+  ) => {
+    assignWorkspaceToCollection(
+      workspaceIdToAssign,
+      nextCollectionId ? nextCollectionId : null
+    )
+  }
+
+  const workspaceCollectionOptions = React.useMemo<
+    Array<Pick<WorkspaceCollection, "id" | "name">>
+  >(
+    () =>
+      workspaceCollections.map((collection) => ({
+        id: collection.id,
+        name: collection.name
+      })),
+    [workspaceCollections]
+  )
+
   // ── Workspace Switcher dropdown: recent/pinned workspaces + navigation ──
   const workspaceSwitcherItems: MenuProps["items"] = [
     // Recent workspaces section
@@ -1690,81 +1790,188 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             allowClear
           />
 
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-sm text-text-muted">
+              <span>{t("playground:workspace.collectionFilter", "Collection")}</span>
+              <select
+                aria-label={t(
+                  "playground:workspace.collectionFilterLabel",
+                  "Filter by collection"
+                )}
+                value={workspaceCollectionFilter}
+                onChange={(event) =>
+                  setWorkspaceCollectionFilter(event.target.value)
+                }
+                className="rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
+              >
+                <option value="all">
+                  {t("playground:workspace.collectionFilterAll", "All collections")}
+                </option>
+                <option value="unassigned">
+                  {t(
+                    "playground:workspace.collectionFilterUnassigned",
+                    "Unassigned"
+                  )}
+                </option>
+                {workspaceCollectionOptions.map((collection) => (
+                  <option key={collection.id} value={collection.id}>
+                    {collection.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="flex min-w-[240px] flex-1 items-center gap-2">
+              <Input
+                value={workspaceCollectionDraft}
+                onChange={(event) =>
+                  setWorkspaceCollectionDraft(event.target.value)
+                }
+                placeholder={t(
+                  "playground:workspace.collectionCreatePlaceholder",
+                  "New collection name"
+                )}
+              />
+              <Button type="default" onClick={handleCreateWorkspaceCollection}>
+                {t("playground:workspace.collectionCreate", "Add collection")}
+              </Button>
+            </div>
+          </div>
+
           <div className="custom-scrollbar max-h-[360px] space-y-1 overflow-y-auto rounded-lg border border-border p-1">
-            {filterSavedWorkspaces(savedWorkspaces, workspaceSearchQuery)
-              .sort((a, b) => {
-                const aPinned = pinnedWorkspaceIds.has(a.id) ? 0 : 1
-                const bPinned = pinnedWorkspaceIds.has(b.id) ? 0 : 1
-                return aPinned - bPinned
-              })
-              .map(
-              (workspace) => {
-                const isCurrent = workspace.id === workspaceId
-                const isPinned = pinnedWorkspaceIds.has(workspace.id)
-                return (
-                  <div
-                    key={workspace.id}
-                    className={`flex w-full items-center gap-1 rounded-md border px-3 py-2 transition ${
-                      isCurrent
-                        ? "cursor-default border-primary/30 bg-primary/10"
-                        : "border-border hover:bg-surface2"
-                    }`}
+            {visibleWorkspaceGroups.map((group) => (
+              <div key={group.id} className="space-y-1">
+                <div className="flex items-center justify-between px-2 pt-2 text-xs font-semibold uppercase tracking-[0.08em] text-text-muted">
+                  <span
+                    aria-label={t(
+                      "playground:workspace.collectionGroupLabel",
+                      `Collection group ${group.name}`
+                    )}
                   >
-                    <button
-                      type="button"
-                      disabled={isCurrent}
-                      onClick={() => {
-                        handleCloseWorkspaceBrowser()
-                        handleSwitchWorkspace(workspace.id)
-                      }}
-                      className="min-w-0 flex-1 text-left"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate font-medium text-text">
-                            {workspace.name}
-                          </div>
-                          <div className="truncate text-xs text-text-muted">
-                            {workspace.tag}
-                          </div>
-                        </div>
-                        <div className="shrink-0 text-right text-xs text-text-muted">
-                          <div>{savedCountLabel(workspace)}</div>
-                          <div>
-                            {t("playground:workspace.lastAccessed", "Last accessed")}{" "}
-                            {savedRelativeLabel(workspace)}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                    <Tooltip title={isPinned
-                      ? t("playground:workspace.unpin", "Unpin")
-                      : t("playground:workspace.pin", "Pin to top")
-                    }>
+                    {group.name}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span>{group.workspaces.length}</span>
+                    {group.collection && (
                       <button
                         type="button"
-                        data-testid={`pin-workspace-${workspace.id}`}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          togglePinWorkspace(workspace.id)
-                        }}
-                        className={`shrink-0 rounded p-1 transition ${
-                          isPinned
-                            ? "text-warning"
-                            : "text-text-muted opacity-0 group-hover:opacity-100 hover:text-warning"
-                        }`}
-                        style={isPinned ? undefined : { opacity: 1 }}
+                        onClick={() =>
+                          handleDeleteWorkspaceCollection(group.collection.id)
+                        }
+                        className="rounded p-1 text-text-muted transition hover:bg-error/10 hover:text-error"
+                        aria-label={t(
+                          "playground:workspace.collectionDeleteLabel",
+                          `Delete collection ${group.name}`
+                        )}
                       >
-                        <Star className={`h-3.5 w-3.5 ${isPinned ? "fill-current" : ""}`} />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </button>
-                    </Tooltip>
+                    )}
                   </div>
-                )
-              }
-            )}
+                </div>
 
-            {filterSavedWorkspaces(savedWorkspaces, workspaceSearchQuery)
-              .length === 0 && (
+                {group.workspaces.map((workspace) => {
+                  const isCurrent = workspace.id === workspaceId
+                  const isPinned = pinnedWorkspaceIds.has(workspace.id)
+                  return (
+                    <div
+                      key={workspace.id}
+                      className={`flex w-full items-center gap-2 rounded-md border px-3 py-2 transition ${
+                        isCurrent
+                          ? "cursor-default border-primary/30 bg-primary/10"
+                          : "border-border hover:bg-surface2"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        disabled={isCurrent}
+                        onClick={() => {
+                          handleCloseWorkspaceBrowser()
+                          handleSwitchWorkspace(workspace.id)
+                        }}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-text">
+                              {workspace.name}
+                            </div>
+                            <div className="truncate text-xs text-text-muted">
+                              {workspace.tag}
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right text-xs text-text-muted">
+                            <div>{savedCountLabel(workspace)}</div>
+                            <div>
+                              {t("playground:workspace.lastAccessed", "Last accessed")}{" "}
+                              {savedRelativeLabel(workspace)}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+
+                      <select
+                        aria-label={t(
+                          "playground:workspace.collectionAssignmentLabel",
+                          `Collection for ${workspace.name}`
+                        )}
+                        value={workspace.collectionId || ""}
+                        onChange={(event) =>
+                          handleWorkspaceCollectionAssignment(
+                            workspace.id,
+                            event.target.value
+                          )
+                        }
+                        className="max-w-[150px] rounded-md border border-border bg-surface px-2 py-1 text-xs text-text"
+                      >
+                        <option value="">
+                          {t(
+                            "playground:workspace.collectionUnassigned",
+                            "Unassigned"
+                          )}
+                        </option>
+                        {workspaceCollectionOptions.map((collection) => (
+                          <option key={collection.id} value={collection.id}>
+                            {collection.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      <Tooltip
+                        title={
+                          isPinned
+                            ? t("playground:workspace.unpin", "Unpin")
+                            : t("playground:workspace.pin", "Pin to top")
+                        }
+                      >
+                        <button
+                          type="button"
+                          data-testid={`pin-workspace-${workspace.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePinWorkspace(workspace.id)
+                          }}
+                          className={`shrink-0 rounded p-1 transition ${
+                            isPinned
+                              ? "text-warning"
+                              : "text-text-muted opacity-0 group-hover:opacity-100 hover:text-warning"
+                          }`}
+                          style={isPinned ? undefined : { opacity: 1 }}
+                        >
+                          <Star
+                            className={`h-3.5 w-3.5 ${
+                              isPinned ? "fill-current" : ""
+                            }`}
+                          />
+                        </button>
+                      </Tooltip>
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+
+            {filteredWorkspaceBrowserItems.length === 0 && (
               <div className="px-3 py-6 text-center text-sm text-text-muted">
                 {t(
                   "playground:workspace.noMatches",
