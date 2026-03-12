@@ -17,13 +17,13 @@ Current request pressure comes from a combination of frontend behaviors:
 
 Relevant current anchors:
 
-- [`apps/packages/ui/src/components/Layouts/Layout.tsx`](apps/packages/ui/src/components/Layouts/Layout.tsx)
-- [`apps/packages/ui/src/components/Common/ChatSidebar.tsx`](apps/packages/ui/src/components/Common/ChatSidebar.tsx)
-- [`apps/packages/ui/src/hooks/useServerChatHistory.ts`](apps/packages/ui/src/hooks/useServerChatHistory.ts)
-- [`apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`](apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx)
-- [`apps/packages/ui/src/hooks/useMessage.tsx`](apps/packages/ui/src/hooks/useMessage.tsx)
-- [`apps/packages/ui/src/hooks/chat/useServerChatLoader.ts`](apps/packages/ui/src/hooks/chat/useServerChatLoader.ts)
-- [`apps/tldw-frontend/extension/routes/sidepanel-chat.tsx`](apps/tldw-frontend/extension/routes/sidepanel-chat.tsx)
+- [`apps/packages/ui/src/components/Layouts/Layout.tsx`](../../apps/packages/ui/src/components/Layouts/Layout.tsx)
+- [`apps/packages/ui/src/components/Common/ChatSidebar.tsx`](../../apps/packages/ui/src/components/Common/ChatSidebar.tsx)
+- [`apps/packages/ui/src/hooks/useServerChatHistory.ts`](../../apps/packages/ui/src/hooks/useServerChatHistory.ts)
+- [`apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`](../../apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx)
+- [`apps/packages/ui/src/hooks/useMessage.tsx`](../../apps/packages/ui/src/hooks/useMessage.tsx)
+- [`apps/packages/ui/src/hooks/chat/useServerChatLoader.ts`](../../apps/packages/ui/src/hooks/chat/useServerChatLoader.ts)
+- [`apps/tldw-frontend/extension/routes/sidepanel-chat.tsx`](../../apps/tldw-frontend/extension/routes/sidepanel-chat.tsx)
 
 ## Goals
 
