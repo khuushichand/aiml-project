@@ -7,7 +7,7 @@ import base64
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 
-from tldw_Server_API.app.core.http_client import apost
+from tldw_Server_API.app.core.http_client import RetryPolicy, apost, astream_bytes
 from tldw_Server_API.app.core.exceptions import NetworkError as CoreNetworkError
 from tldw_Server_API.app.core.exceptions import RetryExhaustedError
 
@@ -277,28 +277,28 @@ class RemoteQwenRuntime:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def _build_stream_retry_policy(self) -> RetryPolicy:
+        return RetryPolicy(retry_on_unsafe=True)
+
     async def _stream_audio(
         self,
         headers: dict[str, str],
         payload: dict[str, Any],
     ) -> AsyncGenerator[bytes, None]:
-        response = None
         try:
-            response = await apost(
+            async for chunk in astream_bytes(
+                method="POST",
                 url=self.base_url,
                 client=self.client,
                 headers=headers,
                 json=payload,
-            )
-            response.raise_for_status()
-            async for chunk in response.aiter_bytes(chunk_size=1024):
+                retry=self._build_stream_retry_policy(),
+                chunk_size=1024,
+            ):
                 if chunk:
                     yield chunk
         except Exception as exc:
             await self._raise_remote_error(exc)
-        finally:
-            if response is not None and hasattr(response, "aclose"):
-                await response.aclose()  # type: ignore[func-returns-value]
 
     async def _generate_complete(self, headers: dict[str, str], payload: dict[str, Any]) -> bytes:
         response = await apost(

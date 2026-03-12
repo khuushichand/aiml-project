@@ -134,11 +134,13 @@ async def test_remote_runtime_stream_maps_http_401_to_auth_error(monkeypatch):
     )
     request = TTSRequest(text="hello", format=AudioFormat.PCM, stream=True)
 
-    async def fake_apost(**_kwargs):
+    async def fake_astream_bytes(**_kwargs):
         req = httpx.Request("POST", "http://127.0.0.1:8001/v1/audio/speech")
-        return httpx.Response(401, request=req, content=b'{"error":"bad key"}')
+        response = httpx.Response(401, request=req, content=b'{"error":"bad key"}')
+        raise httpx.HTTPStatusError("401", request=req, response=response)
+        yield b""  # pragma: no cover
 
-    monkeypatch.setattr(remote_runtime_mod, "apost", fake_apost)
+    monkeypatch.setattr(remote_runtime_mod, "astream_bytes", fake_astream_bytes)
 
     response = await runtime.generate(
         request,
@@ -151,31 +153,49 @@ async def test_remote_runtime_stream_maps_http_401_to_auth_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_remote_runtime_stream_uses_astream_bytes_with_retry_policy(monkeypatch):
+    runtime = RemoteQwenRuntime(
+        {"base_url": "http://127.0.0.1:8001/v1/audio/speech", "api_key": "test-key"}
+    )
+    request = TTSRequest(text="hello", format=AudioFormat.PCM, stream=True)
+    captured = {}
+
+    async def fake_astream_bytes(**kwargs):
+        captured.update(kwargs)
+        yield b"chunk-one"
+
+    async def fail_if_apost_used(**_kwargs):
+        raise AssertionError("streaming path should use astream_bytes")
+
+    monkeypatch.setattr(remote_runtime_mod, "astream_bytes", fake_astream_bytes, raising=False)
+    monkeypatch.setattr(remote_runtime_mod, "apost", fail_if_apost_used)
+
+    response = await runtime.generate(
+        request,
+        resolved_model="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+        mode="custom_voice",
+    )
+    chunks = [chunk async for chunk in response.audio_stream]
+
+    assert chunks == [b"chunk-one"]
+    assert captured["method"] == "POST"
+    assert captured["url"] == "http://127.0.0.1:8001/v1/audio/speech"
+    assert captured["retry"].retry_on_unsafe is True
+    assert captured["retry"].attempts >= 2
+
+
+@pytest.mark.asyncio
 async def test_remote_runtime_stream_maps_iterator_timeout_to_tts_timeout_error(monkeypatch):
     runtime = RemoteQwenRuntime(
         {"base_url": "http://127.0.0.1:8001/v1/audio/speech", "api_key": "test-key"}
     )
     request = TTSRequest(text="hello", format=AudioFormat.PCM, stream=True)
 
-    class _FakeStreamResponse:
-        status_code = 200
-        headers = {}
+    async def fake_astream_bytes(**_kwargs):
+        raise httpx.ReadTimeout("timed out during stream")
+        yield b""  # pragma: no cover
 
-        def raise_for_status(self):
-            return None
-
-        async def aiter_bytes(self, chunk_size=1024):
-            _ = chunk_size
-            raise httpx.ReadTimeout("timed out during stream")
-            yield b""  # pragma: no cover
-
-        async def aclose(self):
-            return None
-
-    async def fake_apost(**_kwargs):
-        return _FakeStreamResponse()
-
-    monkeypatch.setattr(remote_runtime_mod, "apost", fake_apost)
+    monkeypatch.setattr(remote_runtime_mod, "astream_bytes", fake_astream_bytes)
 
     response = await runtime.generate(
         request,
