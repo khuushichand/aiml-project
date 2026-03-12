@@ -14,6 +14,18 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 pytestmark = pytest.mark.unit
 
 
+class _FakeMetricsRegistry:
+    def __init__(self) -> None:
+        self.increment_calls: list[tuple[str, dict[str, str] | None, int | float | None]] = []
+        self.observe_calls: list[tuple[str, float, dict[str, str] | None]] = []
+
+    def increment(self, name: str, value: int | float = 1, labels: dict[str, str] | None = None) -> None:
+        self.increment_calls.append((name, labels, value))
+
+    def observe(self, name: str, value: float, labels: dict[str, str] | None = None) -> None:
+        self.observe_calls.append((name, value, labels))
+
+
 def _build_app(db: CharactersRAGDB) -> TestClient:
     app = FastAPI()
     app.include_router(chat_router.router, prefix="/api/v1/chat")
@@ -21,6 +33,25 @@ def _build_app(db: CharactersRAGDB) -> TestClient:
     app.dependency_overrides[get_chacha_db_for_user] = lambda: db
     app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id="user-1")
     return TestClient(app)
+
+
+def _install_conversation_observability_spies(monkeypatch: pytest.MonkeyPatch):
+    registry = _FakeMetricsRegistry()
+    debug_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    error_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def capture_debug(*args, **kwargs):  # noqa: ANN002, ANN003
+        if args and isinstance(args[0], str) and args[0].startswith("Conversation search completed:"):
+            debug_calls.append((args, kwargs))
+
+    def capture_error(*args, **kwargs):  # noqa: ANN002, ANN003
+        if args and isinstance(args[0], str) and args[0].startswith("Conversation list failed:"):
+            error_calls.append((args, kwargs))
+
+    monkeypatch.setattr(chat_router, "get_metrics_registry", lambda: registry, raising=False)
+    monkeypatch.setattr(chat_router.logger, "debug", capture_debug)
+    monkeypatch.setattr(chat_router.logger, "error", capture_error)
+    return registry, debug_calls, error_calls
 
 
 def test_conversation_list_bm25_and_keywords(tmp_path):
@@ -439,3 +470,149 @@ def test_conversation_alias_passes_deleted_filters_to_paged_search(tmp_path, mon
         "include_deleted": True,
         "deleted_only": True,
     }
+
+
+def test_conversation_alias_emits_success_metrics_and_debug_shape(tmp_path, monkeypatch):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+    registry, debug_calls, _error_calls = _install_conversation_observability_spies(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+
+    def fake_page_search(*args, **kwargs):  # noqa: ANN002, ANN003
+        return (
+            [
+                {
+                    "id": "plain-conv",
+                    "assistant_kind": "persona",
+                    "assistant_id": "plain-helper",
+                    "persona_memory_mode": "read_only",
+                    "character_id": None,
+                    "title": "Quota review",
+                    "state": "in-progress",
+                    "topic_label": "quota",
+                    "bm25_norm": 0.5,
+                    "last_modified": now.isoformat(),
+                    "created_at": now.isoformat(),
+                    "version": 1,
+                    "cluster_id": None,
+                    "source": None,
+                    "external_ref": None,
+                }
+            ],
+            3,
+            1.0,
+        )
+
+    monkeypatch.setattr(db, "search_conversations_page", fake_page_search, raising=False)
+
+    resp = app.get(
+        "/api/v1/chats/conversations",
+        params={"query": "Quota", "order_by": "recency", "limit": 1, "offset": 0},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert registry.increment_calls == [
+        (
+            "chat_conversation_search_requests_total",
+            {
+                "query_strategy": "fts",
+                "order_by": "recency",
+                "deleted_scope": "active",
+                "outcome": "success",
+            },
+            1,
+        )
+    ]
+    assert len(registry.observe_calls) == 1
+    metric_name, metric_value, metric_labels = registry.observe_calls[0]
+    assert metric_name == "chat_conversation_search_duration_seconds"
+    assert metric_value >= 0.0
+    assert metric_labels == {
+        "query_strategy": "fts",
+        "order_by": "recency",
+        "deleted_scope": "active",
+        "outcome": "success",
+    }
+    assert len(debug_calls) == 1
+    debug_repr = repr(debug_calls[0])
+    assert "query_strategy" in debug_repr
+    assert "returned" in debug_repr
+    assert "total" in debug_repr
+    assert "Quota" not in debug_repr
+
+
+def test_conversation_alias_emits_validation_outcome_metric(tmp_path, monkeypatch):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+    registry, debug_calls, error_calls = _install_conversation_observability_spies(monkeypatch)
+
+    resp = app.get(
+        "/api/v1/chats/conversations",
+        params={"character_scope": "non_character", "character_id": 12},
+    )
+
+    assert resp.status_code == 400
+    assert registry.increment_calls == [
+        (
+            "chat_conversation_search_requests_total",
+            {
+                "query_strategy": "none",
+                "order_by": "recency",
+                "deleted_scope": "active",
+                "outcome": "validation",
+            },
+            1,
+        )
+    ]
+    assert len(registry.observe_calls) == 1
+    assert registry.observe_calls[0][2] == {
+        "query_strategy": "none",
+        "order_by": "recency",
+        "deleted_scope": "active",
+        "outcome": "validation",
+    }
+    assert debug_calls == []
+    assert error_calls == []
+
+
+def test_conversation_alias_emits_server_error_outcome_metric(tmp_path, monkeypatch):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+    registry, _debug_calls, error_calls = _install_conversation_observability_spies(monkeypatch)
+
+    def blow_up(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("db exploded")
+
+    monkeypatch.setattr(db, "search_conversations_page", blow_up, raising=False)
+
+    resp = app.get(
+        "/api/v1/chats/conversations",
+        params={"query": "Quota", "deleted_only": "true"},
+    )
+
+    assert resp.status_code == 500
+    assert registry.increment_calls == [
+        (
+            "chat_conversation_search_requests_total",
+            {
+                "query_strategy": "deleted_text",
+                "order_by": "recency",
+                "deleted_scope": "deleted_only",
+                "outcome": "server_error",
+            },
+            1,
+        )
+    ]
+    assert len(registry.observe_calls) == 1
+    assert registry.observe_calls[0][2] == {
+        "query_strategy": "deleted_text",
+        "order_by": "recency",
+        "deleted_scope": "deleted_only",
+        "outcome": "server_error",
+    }
+    assert len(error_calls) == 1
+    assert "deleted_text" in repr(error_calls[0])
