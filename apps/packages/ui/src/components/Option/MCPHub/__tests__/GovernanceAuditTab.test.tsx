@@ -138,6 +138,16 @@ describe("GovernanceAuditTab", () => {
     expect(screen.getByRole("button", { name: "Clear related object focus" })).toBeTruthy()
     expect(screen.getByText("researcher")).toBeTruthy()
     expect(screen.getByText("writer")).toBeTruthy()
+    const focusedBlockerSection = screen.getByTestId("audit-group-assignment_validation_blocker")
+    expect(within(focusedBlockerSection).getByText("Suggested next steps")).toBeTruthy()
+    expect(
+      within(focusedBlockerSection).getByText("Open the assignment configuration.")
+    ).toBeTruthy()
+    expect(
+      within(focusedBlockerSection).getByText(
+        "Remove one conflicting workspace or change the path scope to a non-multi-root mode."
+      )
+    ).toBeTruthy()
     expect(screen.queryByText("Docs Managed")).toBeNull()
     expect(
       screen.getByRole("button", { name: "Docs Managed · external_server · 1 finding" })
@@ -204,6 +214,12 @@ describe("GovernanceAuditTab", () => {
       warning: 1
     })
     expect(jsonPayload.items).toHaveLength(2)
+    expect(jsonPayload.items[0].suggested_steps).toEqual([
+      "Open the assignment configuration.",
+      "Remove one conflicting workspace or change the path scope to a non-multi-root mode.",
+      "Save again to re-run readiness validation."
+    ])
+    expect(jsonPayload.items[0].suggestion_note).toBeNull()
     expect(screen.getByText("JSON export downloaded.")).toBeTruthy()
 
     await user.click(screen.getByRole("button", { name: "Download Markdown" }))
@@ -218,6 +234,8 @@ describe("GovernanceAuditTab", () => {
       "Top related objects in current filtered findings"
     )
     await expect(markdownBlob.text()).resolves.toContain("Primary Workspace Set")
+    await expect(markdownBlob.text()).resolves.toContain("Suggested next steps")
+    await expect(markdownBlob.text()).resolves.toContain("Open the assignment configuration.")
     expect(screen.getByText("Markdown export downloaded.")).toBeTruthy()
   })
 

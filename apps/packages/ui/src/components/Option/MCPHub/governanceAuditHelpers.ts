@@ -36,6 +36,11 @@ export type GovernanceAuditCounts = {
   warning: number
 }
 
+export type GovernanceAuditRemediation = {
+  steps: string[]
+  note?: string | null
+}
+
 export const FINDING_TYPE_ORDER: McpHubGovernanceAuditFindingType[] = [
   "assignment_validation_blocker",
   "workspace_source_readiness_warning",
@@ -66,6 +71,13 @@ const _relatedObjectLabel = (item: McpHubGovernanceAuditFinding) =>
   _safeString(item.related_object_label) ||
   _safeString(item.related_object_id) ||
   "Unknown related object"
+
+const _arrayValues = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.map((item) => String(item || "").trim()).filter((item) => item.length > 0)
+    : []
+
+const _messageToken = (item: McpHubGovernanceAuditFinding) => _safeString(item.message).toLowerCase()
 
 export const dedupeAuditValues = (values: string[]) =>
   Array.from(new Set(values.filter((value) => value.trim().length > 0))).sort((a, b) =>
@@ -140,6 +152,124 @@ export const groupAuditFindings = (
   }))
 }
 
+export const buildAuditRemediationSteps = (
+  item: McpHubGovernanceAuditFinding
+): GovernanceAuditRemediation => {
+  const details = (item.details ?? {}) as Record<string, unknown>
+  const conflictingWorkspaceIds = _arrayValues(details.conflicting_workspace_ids)
+  const unresolvedWorkspaceIds = _arrayValues(details.unresolved_workspace_ids)
+  const missingSlotNames =
+    _arrayValues(details.missing_slot_names).length > 0
+      ? _arrayValues(details.missing_slot_names)
+      : _arrayValues(details.required_slot_names)
+  const relatedLabel = _safeString(item.related_object_label)
+  const messageToken = _messageToken(item)
+
+  if (item.finding_type === "assignment_validation_blocker") {
+    if (conflictingWorkspaceIds.length > 0) {
+      return {
+        steps: [
+          "Open the assignment configuration.",
+          "Remove one conflicting workspace or change the path scope to a non-multi-root mode.",
+          "Save again to re-run readiness validation."
+        ]
+      }
+    }
+    if (unresolvedWorkspaceIds.length > 0) {
+      return {
+        steps: [
+          "Open the assignment workspace source.",
+          "Correct or remove the unresolved workspace ids.",
+          "Save again to re-run readiness validation."
+        ]
+      }
+    }
+  }
+
+  if (item.finding_type === "workspace_source_readiness_warning") {
+    return {
+      steps: [
+        "Open the workspace source configuration.",
+        "Review the overlapping or unresolved workspace members before using it for multi-root assignments.",
+        "Re-check the assignment after updating the workspace source."
+      ],
+      note: "This affects multi-root readiness only."
+    }
+  }
+
+  if (item.finding_type === "shared_workspace_overlap_warning") {
+    return {
+      steps: [
+        "Open the shared workspace configuration.",
+        "Review the overlapping root against the visible shared workspace set before using it in multi-root assignments.",
+        "Re-run the audit after adjusting the shared workspace registry entry."
+      ],
+      note: "This affects multi-root readiness only."
+    }
+  }
+
+  if (item.finding_type === "external_server_configuration_issue") {
+    if (
+      missingSlotNames.length > 0 ||
+      messageToken.includes("required_slot_secret_missing") ||
+      messageToken.includes("missing secret")
+    ) {
+      return {
+        steps: [
+          "Open the managed external server.",
+          "Configure the missing credential slot secret.",
+          "Re-run the audit or revisit assignment bindings if the server remains non-executable."
+        ]
+      }
+    }
+    if (
+      messageToken.includes("invalid auth template") ||
+      messageToken.includes("auth_template_invalid") ||
+      messageToken.includes("unsupported_template_transport_target")
+    ) {
+      return {
+        steps: [
+          "Open the managed external server.",
+          "Fix the auth template mappings for the current transport.",
+          "Re-run the audit after saving the template."
+        ]
+      }
+    }
+    if (messageToken.includes("no auth template")) {
+      return {
+        steps: [
+          "Open the managed external server.",
+          "Add an auth template that matches the current transport and credential slots.",
+          "Re-run the audit after saving the server configuration."
+        ]
+      }
+    }
+  }
+
+  if (item.finding_type === "external_binding_issue" && (item.object_kind === "policy_assignment" || relatedLabel)) {
+    return {
+      steps: [
+        "Open the affected assignment.",
+        `Review the assignment-effective binding${relatedLabel ? ` and the related object '${relatedLabel}'.` : "."}`,
+        "Re-run the audit after updating the binding or related configuration."
+      ]
+    }
+  }
+
+  return {
+    steps: [
+      "Open the linked MCP Hub object.",
+      "Review the current configuration and any related object.",
+      "Re-run the audit after updating the configuration."
+    ]
+  }
+}
+
+type GovernanceAuditExportItem = McpHubGovernanceAuditFinding & {
+  suggested_steps: string[]
+  suggestion_note: string | null
+}
+
 type GovernanceAuditReportInput = {
   generated_at: string
   items: McpHubGovernanceAuditFinding[]
@@ -196,6 +326,7 @@ export const buildAuditMarkdownReport = ({
       ""
     )
     for (const finding of section.items) {
+      const remediation = buildAuditRemediationSteps(finding)
       lines.push(`### ${finding.object_label}`, `- Severity: ${finding.severity}`)
       lines.push(`- Object kind: ${finding.object_kind}`)
       lines.push(`- Scope: ${finding.scope_type}${finding.scope_id != null ? `/${finding.scope_id}` : ""}`)
@@ -208,6 +339,15 @@ export const buildAuditMarkdownReport = ({
               : ""
           }`
         )
+      }
+      if (remediation.steps.length > 0) {
+        lines.push("- Suggested next steps:")
+        remediation.steps.forEach((step, index) => {
+          lines.push(`  ${index + 1}. ${step}`)
+        })
+      }
+      if (remediation.note) {
+        lines.push(`- Note: ${remediation.note}`)
       }
       lines.push("")
     }
@@ -233,5 +373,12 @@ export const buildAuditJsonExport = ({
           label: related_object_focus.label
         },
   counts,
-  items
+  items: items.map<GovernanceAuditExportItem>((item) => {
+    const remediation = buildAuditRemediationSteps(item)
+    return {
+      ...item,
+      suggested_steps: remediation.steps,
+      suggestion_note: remediation.note ?? null
+    }
+  })
 })

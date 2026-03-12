@@ -12,6 +12,7 @@ import {
   buildAuditCounts,
   buildAuditJsonExport,
   buildAuditMarkdownReport,
+  buildAuditRemediationSteps,
   dedupeAuditValues,
   FINDING_TYPE_LABELS,
   FINDING_TYPE_ORDER,
@@ -443,6 +444,27 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
                         }`}
                       </Typography.Text>
                     ) : null}
+                    {(() => {
+                      const remediation = buildAuditRemediationSteps(finding)
+                      if (remediation.steps.length === 0) {
+                        return null
+                      }
+                      return (
+                        <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+                          <Typography.Text strong>Suggested next steps</Typography.Text>
+                          <ol style={{ margin: 0, paddingLeft: 18 }}>
+                            {remediation.steps.map((step) => (
+                              <li key={step}>
+                                <Typography.Text>{step}</Typography.Text>
+                              </li>
+                            ))}
+                          </ol>
+                          {remediation.note ? (
+                            <Typography.Text type="secondary">{remediation.note}</Typography.Text>
+                          ) : null}
+                        </Space>
+                      )
+                    })()}
                   </Space>
                 </List.Item>
               )}
