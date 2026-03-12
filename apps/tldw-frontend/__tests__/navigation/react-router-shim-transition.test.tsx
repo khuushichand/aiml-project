@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   Navigate,
+  UNSAFE_DataRouterContext,
   useNavigate,
+  useParams,
   useSearchParams
 } from "@web/extension/shims/react-router-dom"
 
@@ -15,6 +17,7 @@ const mockBack = vi.fn()
 const mockRouter = {
   asPath: "/current?tab=one",
   pathname: "/current",
+  query: {} as Record<string, string | string[] | undefined>,
   push: mockPush,
   replace: mockReplace,
   back: mockBack
@@ -54,6 +57,11 @@ const SearchParamsButton = () => {
   )
 }
 
+const ParamsReader = () => {
+  const params = useParams<{ sourceId?: string }>()
+  return <span>{params.sourceId ?? "missing"}</span>
+}
+
 describe("react-router-dom Next.js shim transitions", () => {
   let startTransitionSpy: ReturnType<typeof vi.spyOn>
 
@@ -63,6 +71,7 @@ describe("react-router-dom Next.js shim transitions", () => {
     mockBack.mockReset()
     mockRouter.asPath = "/current?tab=one"
     mockRouter.pathname = "/current"
+    mockRouter.query = {}
     startTransitionSpy = vi.spyOn(React, "startTransition")
   })
 
@@ -107,5 +116,17 @@ describe("react-router-dom Next.js shim transitions", () => {
       expect(mockReplace).toHaveBeenCalledWith("/redirected")
     })
     expect(startTransitionSpy).toHaveBeenCalled()
+  })
+
+  it("exposes Next router query params through useParams", () => {
+    mockRouter.query = { sourceId: "source-123" }
+
+    render(<ParamsReader />)
+
+    expect(screen.getByText("source-123")).toBeInTheDocument()
+  })
+
+  it("exports UNSAFE_DataRouterContext for shared route modules", () => {
+    expect(UNSAFE_DataRouterContext).toBeDefined()
   })
 })

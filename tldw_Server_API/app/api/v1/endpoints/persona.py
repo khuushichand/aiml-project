@@ -19,9 +19,16 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, W
 from loguru import logger
 from starlette.requests import Request as StarletteRequest
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaDeleteResponse,
+    PersonaExemplarCreate,
+    PersonaExemplarDeleteResponse,
+    PersonaExemplarImportRequest,
+    PersonaExemplarReviewRequest,
+    PersonaExemplarResponse,
+    PersonaExemplarUpdate,
     PersonaInfo,
     PersonaPolicyRulesReplaceRequest,
     PersonaPolicyRulesResponse,
@@ -50,7 +57,10 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTok
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.feature_flags import is_persona_enabled
+from tldw_Server_API.app.core.feature_flags import (
+    is_mcp_hub_policy_enforcement_enabled,
+    is_persona_enabled,
+)
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -66,6 +76,22 @@ from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_persona_turn,
     persist_tool_outcome,
     retrieve_top_memories,
+)
+from tldw_Server_API.app.core.Personalization.companion_activity import (
+    normalize_persona_activity_surface,
+    record_persona_session_started,
+    record_persona_session_summarized,
+    record_persona_tool_executed,
+)
+from tldw_Server_API.app.core.Personalization.companion_context import load_companion_context
+from tldw_Server_API.app.core.Persona.exemplar_runtime import (
+    append_persona_exemplar_sections,
+    resolve_persona_exemplar_runtime_context,
+)
+from tldw_Server_API.app.core.Persona.exemplar_turn_classifier import classify_persona_turn
+from tldw_Server_API.app.core.Persona.exemplar_ingestion import (
+    append_exemplar_review_note,
+    build_transcript_exemplar_candidates,
 )
 from tldw_Server_API.app.core.Persona.policy_evaluator import (
     default_allow_rules,
@@ -338,6 +364,29 @@ def _normalize_persona_step_type(value: Any, *, tool_name: str) -> str:
     return "mcp_tool"
 
 
+async def _run_persona_db_call(func, *args, **kwargs):
+    """Offload synchronous persona DB calls from async HTTP handlers."""
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
+async def _get_persona_profile_or_404(
+    db: CharactersRAGDB,
+    *,
+    persona_id: str,
+    user_id: str,
+    include_deleted: bool,
+) -> dict[str, Any]:
+    profile = await _run_persona_db_call(
+        db.get_persona_profile,
+        persona_id,
+        user_id=user_id,
+        include_deleted=include_deleted,
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Persona profile not found")
+    return profile
+
+
 def _default_session_policy_rules() -> list[dict[str, Any]]:
     # Explicit session rules keep the intersection model deterministic.
     return [
@@ -350,6 +399,51 @@ def _session_policy_rules_from_preferences(preferences: dict[str, Any] | None) -
     if isinstance(preferences, dict) and "session_policy_rules" in preferences:
         return normalize_policy_rules(preferences.get("session_policy_rules"))
     return _default_session_policy_rules()
+
+
+def _normalize_persisted_persona_session_preferences(preferences: Any) -> dict[str, Any]:
+    if not isinstance(preferences, dict):
+        return {}
+    normalized: dict[str, Any] = {}
+    if "use_memory_context" in preferences:
+        normalized["use_memory_context"] = _coerce_bool(preferences.get("use_memory_context"), default=True)
+    if "use_companion_context" in preferences:
+        normalized["use_companion_context"] = _coerce_bool(preferences.get("use_companion_context"), default=True)
+    if "use_persona_state_context" in preferences:
+        normalized["use_persona_state_context"] = _coerce_bool(
+            preferences.get("use_persona_state_context"),
+            default=True,
+        )
+    if "memory_top_k" in preferences:
+        try:
+            normalized_top_k = int(preferences.get("memory_top_k"))
+        except (TypeError, ValueError):
+            normalized_top_k = _get_persona_memory_top_k()
+        normalized["memory_top_k"] = max(1, normalized_top_k)
+    if "session_policy_rules" in preferences:
+        normalized["session_policy_rules"] = normalize_policy_rules(preferences.get("session_policy_rules"))
+    return normalized
+
+
+def _merge_persisted_persona_session_preferences(*payloads: Any) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for payload in payloads:
+        merged.update(_normalize_persisted_persona_session_preferences(payload))
+    return merged
+
+
+def _default_persisted_persona_session_preferences(profile: dict[str, Any] | None) -> dict[str, Any]:
+    return _merge_persisted_persona_session_preferences(
+        {
+            "use_memory_context": True,
+            "use_companion_context": True,
+            "use_persona_state_context": _coerce_bool(
+                (profile or {}).get("use_persona_state_context_default"),
+                default=True,
+            ),
+            "memory_top_k": _get_persona_memory_top_k(),
+        }
+    )
 
 
 def _resolve_step_action_name(
@@ -377,6 +471,8 @@ def _load_persona_policy_rules_for_session(
         "scope_snapshot_id": None,
         "policy_rules": normalize_policy_rules(_DEFAULT_PERSONA_POLICY_RULES),
         "persona_state_context_default": True,
+        "preferences": {},
+        "activity_surface": normalize_persona_activity_surface(None),
         "session_exists": False,
     }
     sid = str(session_id or "").strip()
@@ -406,6 +502,8 @@ def _load_persona_policy_rules_for_session(
             "scope_snapshot_id": scope_snapshot_id,
             "policy_rules": normalize_policy_rules(policy_rules),
             "persona_state_context_default": persona_state_context_default,
+            "preferences": _normalize_persisted_persona_session_preferences(session_row.get("preferences")),
+            "activity_surface": normalize_persona_activity_surface(session_row.get("activity_surface")),
             "session_exists": True,
         }
     except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
@@ -415,6 +513,77 @@ def _load_persona_policy_rules_for_session(
             exc,
         )
         return dict(default_payload)
+
+
+def _get_session_preferences_with_activity_surface(
+    *,
+    session_manager: Any,
+    session_id: str,
+    user_id: str,
+    persisted_preferences: Any = None,
+    persisted_activity_surface: Any = None,
+) -> tuple[dict[str, Any], str]:
+    runtime_preferences = dict(
+        session_manager.get_preferences(
+            session_id=session_id,
+            user_id=user_id,
+        )
+    )
+    merged_preferences = dict(runtime_preferences)
+    merged_preferences.update(
+        _normalize_persisted_persona_session_preferences(persisted_preferences)
+    )
+    activity_surface = normalize_persona_activity_surface(
+        runtime_preferences.get("companion_activity_surface", persisted_activity_surface)
+    )
+    merged_preferences["companion_activity_surface"] = activity_surface
+    if merged_preferences == runtime_preferences:
+        return merged_preferences, activity_surface
+
+    updated_preferences = merged_preferences
+    with contextlib.suppress(Exception):
+        updated_preferences = session_manager.update_preferences(
+            session_id=session_id,
+            user_id=user_id,
+            preferences=merged_preferences,
+        )
+    return dict(updated_preferences), activity_surface
+
+
+def _persist_persona_session_preferences(
+    db: CharactersRAGDB | None,
+    *,
+    session_id: str,
+    user_id: str,
+    base_preferences: Any = None,
+    patch_preferences: Any = None,
+) -> dict[str, Any]:
+    merged_preferences = _merge_persisted_persona_session_preferences(
+        base_preferences,
+        patch_preferences,
+    )
+    sid = str(session_id or "").strip()
+    uid = str(user_id or "").strip()
+    if db is None or not sid or not uid:
+        return merged_preferences
+
+    current_preferences = _normalize_persisted_persona_session_preferences(base_preferences)
+    if current_preferences == merged_preferences:
+        return merged_preferences
+
+    try:
+        _ = db.update_persona_session(
+            session_id=session_id,
+            user_id=user_id,
+            update_data={"preferences_json": merged_preferences},
+        )
+    except (OSError, RuntimeError, ValueError, CharactersRAGDBError) as exc:
+        logger.debug(
+            "persona session preference persistence skipped for session_hash {}: {}",
+            _redacted_id_for_logs(sid),
+            exc,
+        )
+    return merged_preferences
 
 
 def _skill_policy_rules_for_step(
@@ -460,6 +629,7 @@ def _build_tool_result(
     error: str | None = None,
     reason_code: str | None = None,
     policy: dict[str, Any] | None = None,
+    approval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "ok": bool(ok),
@@ -473,6 +643,8 @@ def _build_tool_result(
         payload["reason_code"] = str(reason_code)
     if isinstance(policy, dict):
         payload["policy"] = dict(policy)
+    if isinstance(approval, dict):
+        payload["approval"] = dict(approval)
     return payload
 
 
@@ -788,6 +960,9 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
         id=str(profile.get("id") or ""),
         name=str(profile.get("name") or ""),
         character_card_id=profile.get("character_card_id"),
+        origin_character_id=profile.get("origin_character_id"),
+        origin_character_name=profile.get("origin_character_name"),
+        origin_character_snapshot_at=profile.get("origin_character_snapshot_at"),
         mode=str(profile.get("mode") or "session_scoped"),
         system_prompt=profile.get("system_prompt"),
         is_active=bool(profile.get("is_active", True)),
@@ -798,6 +973,28 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
         created_at=str(profile.get("created_at") or _utc_now_iso()),
         last_modified=str(profile.get("last_modified") or _utc_now_iso()),
         version=int(profile.get("version") or 1),
+    )
+
+
+def _persona_exemplar_to_response(exemplar: dict[str, Any]) -> PersonaExemplarResponse:
+    return PersonaExemplarResponse(
+        id=str(exemplar.get("id") or ""),
+        persona_id=str(exemplar.get("persona_id") or ""),
+        user_id=str(exemplar.get("user_id") or ""),
+        kind=str(exemplar.get("kind") or "style"),
+        content=str(exemplar.get("content") or ""),
+        tone=None if exemplar.get("tone") is None else str(exemplar.get("tone")),
+        scenario_tags=[str(item) for item in list(exemplar.get("scenario_tags") or [])],
+        capability_tags=[str(item) for item in list(exemplar.get("capability_tags") or [])],
+        priority=int(exemplar.get("priority") or 0),
+        enabled=bool(exemplar.get("enabled", True)),
+        source_type=str(exemplar.get("source_type") or "manual"),
+        source_ref=None if exemplar.get("source_ref") is None else str(exemplar.get("source_ref")),
+        notes=None if exemplar.get("notes") is None else str(exemplar.get("notes")),
+        created_at=str(exemplar.get("created_at") or _utc_now_iso()),
+        last_modified=str(exemplar.get("last_modified") or exemplar.get("created_at") or _utc_now_iso()),
+        deleted=bool(exemplar.get("deleted", False)),
+        version=int(exemplar.get("version") or 1),
     )
 
 
@@ -985,6 +1182,17 @@ def _build_persona_state_hint_lines(state_hints: dict[str, str]) -> list[str]:
     return lines
 
 
+def _join_applied_context_labels(labels: list[str]) -> str:
+    compact = [str(label or "").strip() for label in labels if str(label or "").strip()]
+    if not compact:
+        return ""
+    if len(compact) == 1:
+        return compact[0]
+    if len(compact) == 2:
+        return f"{compact[0]} and {compact[1]}"
+    return f"{', '.join(compact[:-1])}, and {compact[-1]}"
+
+
 def _replace_persona_state_docs(
     db: CharactersRAGDB,
     *,
@@ -1157,6 +1365,10 @@ def _persona_session_summary_from_db(
     manager_row: dict[str, Any] | None = None,
 ) -> PersonaSessionSummary:
     scope_snapshot = row.get("scope_snapshot") or {}
+    preferences = dict(row.get("preferences") or {})
+    runtime_preferences = (manager_row or {}).get("preferences")
+    if isinstance(runtime_preferences, dict):
+        preferences.update(runtime_preferences)
     return PersonaSessionSummary(
         session_id=str(row.get("id") or ""),
         persona_id=str(row.get("persona_id") or ""),
@@ -1164,7 +1376,7 @@ def _persona_session_summary_from_db(
         updated_at=str(row.get("last_modified") or row.get("created_at") or _utc_now_iso()),
         turn_count=int((manager_row or {}).get("turn_count") or 0),
         pending_plan_count=int((manager_row or {}).get("pending_plan_count") or 0),
-        preferences=dict((manager_row or {}).get("preferences") or {}),
+        preferences=preferences,
         runtime_mode=str(row.get("mode") or "session_scoped"),
         status=str(row.get("status") or "active"),
         reuse_allowed=bool(row.get("reuse_allowed", False)),
@@ -1181,6 +1393,10 @@ def _persona_session_detail_from_db(
     scope_snapshot = row.get("scope_snapshot") or {}
     turns = list((manager_snapshot or {}).get("turns") or [])
     turn_count = int((manager_snapshot or {}).get("turn_count") or len(turns))
+    preferences = dict(row.get("preferences") or {})
+    runtime_preferences = (manager_snapshot or {}).get("preferences")
+    if isinstance(runtime_preferences, dict):
+        preferences.update(runtime_preferences)
     return PersonaSessionDetail(
         session_id=str(row.get("id") or ""),
         persona_id=str(row.get("persona_id") or ""),
@@ -1188,7 +1404,7 @@ def _persona_session_detail_from_db(
         updated_at=str(row.get("last_modified") or row.get("created_at") or _utc_now_iso()),
         turn_count=turn_count,
         pending_plan_count=int((manager_snapshot or {}).get("pending_plan_count") or 0),
-        preferences=dict((manager_snapshot or {}).get("preferences") or {}),
+        preferences=preferences,
         runtime_mode=str(row.get("mode") or "session_scoped"),
         status=str(row.get("status") or "active"),
         reuse_allowed=bool(row.get("reuse_allowed", False)),
@@ -1603,6 +1819,351 @@ async def delete_persona_profile(
 
 
 @router.get(
+    "/profiles/{persona_id}/exemplars",
+    response_model=list[PersonaExemplarResponse],
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def list_persona_exemplars(
+    persona_id: str,
+    include_disabled: bool = Query(default=False),
+    include_deleted: bool = Query(default=False),
+    include_deleted_personas: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> list[PersonaExemplarResponse]:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=include_deleted_personas,
+        )
+        exemplars = await _run_persona_db_call(
+            db.list_persona_exemplars,
+            user_id=user_id,
+            persona_id=persona_id,
+            include_disabled=include_disabled,
+            include_deleted=include_deleted,
+            include_deleted_personas=include_deleted_personas,
+            limit=limit,
+            offset=offset,
+        )
+        return [_persona_exemplar_to_response(exemplar) for exemplar in exemplars]
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="list persona exemplars") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/exemplars",
+    response_model=PersonaExemplarResponse,
+    tags=["persona"],
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def create_persona_exemplar(
+    persona_id: str,
+    payload: PersonaExemplarCreate = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        create_data = payload.model_dump(exclude_none=True)
+        create_data["persona_id"] = persona_id
+        create_data["user_id"] = user_id
+        exemplar_id = await _run_persona_db_call(db.create_persona_exemplar, create_data)
+        exemplar = await _run_persona_db_call(
+            db.get_persona_exemplar,
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=True,
+            include_deleted=False,
+        )
+        if exemplar is None:
+            raise HTTPException(status_code=500, detail="Failed to load created persona exemplar")
+        return _persona_exemplar_to_response(exemplar)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="create persona exemplar") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/exemplars/import",
+    response_model=list[PersonaExemplarResponse],
+    tags=["persona"],
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def import_persona_exemplars(
+    persona_id: str,
+    payload: PersonaExemplarImportRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> list[PersonaExemplarResponse]:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        candidate_rows = build_transcript_exemplar_candidates(
+            transcript=payload.transcript,
+            source_ref=payload.source_ref,
+            notes=payload.notes,
+            max_candidates=payload.max_candidates,
+        )
+        created: list[PersonaExemplarResponse] = []
+        for candidate in candidate_rows:
+            create_data = dict(candidate)
+            create_data["persona_id"] = persona_id
+            create_data["user_id"] = user_id
+            exemplar_id = await _run_persona_db_call(db.create_persona_exemplar, create_data)
+            exemplar = await _run_persona_db_call(
+                db.get_persona_exemplar,
+                exemplar_id=exemplar_id,
+                persona_id=persona_id,
+                user_id=user_id,
+                include_disabled=True,
+                include_deleted=False,
+            )
+            if exemplar is None:
+                raise HTTPException(status_code=500, detail="Failed to load imported persona exemplar")
+            created.append(_persona_exemplar_to_response(exemplar))
+        return created
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError, ValueError) as exc:
+        raise _to_http_exception(exc, action="import persona exemplars") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/exemplars/{exemplar_id}",
+    response_model=PersonaExemplarResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def get_persona_exemplar(
+    persona_id: str,
+    exemplar_id: str,
+    include_disabled: bool = Query(default=False),
+    include_deleted: bool = Query(default=False),
+    include_deleted_personas: bool = Query(default=False),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=include_deleted_personas,
+        )
+        exemplar = await _run_persona_db_call(
+            db.get_persona_exemplar,
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=include_disabled,
+            include_deleted=include_deleted,
+            include_deleted_personas=include_deleted_personas,
+        )
+        if exemplar is None:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        return _persona_exemplar_to_response(exemplar)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="get persona exemplar") from exc
+
+
+@router.patch(
+    "/profiles/{persona_id}/exemplars/{exemplar_id}",
+    response_model=PersonaExemplarResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def update_persona_exemplar(
+    persona_id: str,
+    exemplar_id: str,
+    payload: PersonaExemplarUpdate = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No exemplar fields provided for update")
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        ok = await _run_persona_db_call(
+            db.update_persona_exemplar,
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            update_data=update_data,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        exemplar = await _run_persona_db_call(
+            db.get_persona_exemplar,
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=True,
+            include_deleted=False,
+        )
+        if exemplar is None:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        return _persona_exemplar_to_response(exemplar)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="update persona exemplar") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/exemplars/{exemplar_id}/review",
+    response_model=PersonaExemplarResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def review_persona_exemplar(
+    persona_id: str,
+    exemplar_id: str,
+    payload: PersonaExemplarReviewRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        exemplar = await _run_persona_db_call(
+            db.get_persona_exemplar,
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=True,
+            include_deleted=False,
+        )
+        if exemplar is None:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        if str(exemplar.get("source_type") or "") != "generated_candidate":
+            raise HTTPException(status_code=400, detail="Only generated candidates can be reviewed")
+        ok = await _run_persona_db_call(
+            db.update_persona_exemplar,
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            update_data={
+                "enabled": payload.action == "approve",
+                "notes": append_exemplar_review_note(
+                    existing_notes=exemplar.get("notes"),
+                    action=payload.action,
+                    review_note=payload.notes,
+                ),
+            },
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        updated = await _run_persona_db_call(
+            db.get_persona_exemplar,
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_disabled=True,
+            include_deleted=False,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        return _persona_exemplar_to_response(updated)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError, ValueError) as exc:
+        raise _to_http_exception(exc, action="review persona exemplar") from exc
+
+
+@router.delete(
+    "/profiles/{persona_id}/exemplars/{exemplar_id}",
+    response_model=PersonaExemplarDeleteResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def delete_persona_exemplar(
+    persona_id: str,
+    exemplar_id: str,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaExemplarDeleteResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        ok = await _run_persona_db_call(
+            db.soft_delete_persona_exemplar,
+            exemplar_id=exemplar_id,
+            persona_id=persona_id,
+            user_id=user_id,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Persona exemplar not found")
+        return PersonaExemplarDeleteResponse(status="deleted", persona_id=persona_id, exemplar_id=exemplar_id)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        raise _to_http_exception(exc, action="delete persona exemplar") from exc
+
+
+@router.get(
     "/profiles/{persona_id}/state",
     response_model=PersonaStateResponse,
     tags=["persona"],
@@ -1974,6 +2535,7 @@ async def persona_session(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     requested_persona_id = str(req.persona_id or "").strip() or _DEFAULT_PERSONA_ID
+    requested_activity_surface = normalize_persona_activity_surface(req.surface)
     session_manager = get_session_manager()
 
     try:
@@ -2011,6 +2573,7 @@ async def persona_session(
                         entity_id=str(req.resume_session_id),
                     )
 
+        created_new_session = session_row is None
         if session_row is None:
             scope_rules = db.list_persona_scope_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
             scope_snapshot, scope_audit = _build_scope_snapshot(scope_rules)
@@ -2020,6 +2583,8 @@ async def persona_session(
                 "conversation_id": req.project_id,
                 "mode": str(profile.get("mode") or "session_scoped"),
                 "scope_snapshot_json": scope_snapshot,
+                "preferences_json": _default_persisted_persona_session_preferences(profile),
+                "activity_surface": requested_activity_surface,
             }
             if req.resume_session_id:
                 create_data["id"] = str(req.resume_session_id)
@@ -2029,6 +2594,21 @@ async def persona_session(
                 raise HTTPException(status_code=500, detail="Failed to load created persona session")
         else:
             scope_audit = _scope_audit_from_snapshot(session_row.get("scope_snapshot") or {})
+            if req.surface is not None:
+                current_surface = normalize_persona_activity_surface(session_row.get("activity_surface"))
+                if current_surface != requested_activity_surface:
+                    _ = db.update_persona_session(
+                        session_id=str(session_row.get("id") or req.resume_session_id or ""),
+                        user_id=user_id,
+                        update_data={"activity_surface": requested_activity_surface},
+                    )
+                    refreshed_row = db.get_persona_session(
+                        str(session_row.get("id") or req.resume_session_id or ""),
+                        user_id=user_id,
+                        include_deleted=False,
+                    )
+                    if refreshed_row is not None:
+                        session_row = refreshed_row
 
         session_id = str(session_row.get("id") or req.resume_session_id or "").strip()
         if not session_id:
@@ -2041,13 +2621,26 @@ async def persona_session(
                 persona_id=persona_id,
                 resume_session_id=session_id,
             )
+            if created_new_session or req.surface is not None:
+                session_manager.update_preferences(
+                    session_id=session_id,
+                    user_id=user_id,
+                    preferences={"companion_activity_surface": requested_activity_surface},
+                )
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        _session_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+            session_manager=session_manager,
+            session_id=session_id,
+            user_id=user_id,
+            persisted_preferences=session_row.get("preferences"),
+            persisted_activity_surface=session_row.get("activity_surface"),
+        )
 
         allow_export, allow_delete = _get_persona_rbac_flags()
         scopes = sorted(_get_persona_session_scopes(allow_export=allow_export, allow_delete=allow_delete))
         scope_snapshot = session_row.get("scope_snapshot") or {}
-        return PersonaSessionResponse(
+        response = PersonaSessionResponse(
             session_id=session_id,
             persona=persona,
             scopes=scopes,
@@ -2055,6 +2648,16 @@ async def persona_session(
             scope_snapshot_id=_scope_snapshot_id_from_snapshot(scope_snapshot),
             scope_audit=scope_audit,
         )
+        if created_new_session:
+            record_persona_session_started(
+                user_id=_current_user.id,
+                session_id=response.session_id,
+                persona_id=response.persona.id,
+                runtime_mode=response.runtime_mode,
+                scope_snapshot_id=response.scope_snapshot_id,
+                surface=activity_surface,
+            )
+        return response
     except HTTPException:
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
@@ -2064,6 +2667,7 @@ async def persona_session(
 @router.get("/sessions", response_model=list[PersonaSessionSummary], tags=["persona"], status_code=status.HTTP_200_OK)
 async def persona_sessions(
     persona_id: str | None = Query(default=None),
+    surface: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     _current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
@@ -2077,6 +2681,7 @@ async def persona_sessions(
         rows = db.list_persona_sessions(
             user_id=user_id,
             persona_id=persona_id,
+            activity_surface=surface,
             include_deleted=False,
             limit=limit,
             offset=0,
@@ -2317,6 +2922,7 @@ async def persona_stream(
             plan_id: str,
             steps: list[dict[str, Any]],
             memory: dict[str, Any],
+            companion: dict[str, Any],
             persona_id_value: str,
         ) -> None:
             payload: dict[str, Any] = {
@@ -2325,6 +2931,7 @@ async def persona_stream(
                 "plan_id": str(plan_id or ""),
                 "steps": list(steps),
                 "memory": dict(memory or {}),
+                "companion": dict(companion or {}),
                 "persona_id": str(persona_id_value or ""),
             }
             await stream.send_json(payload)
@@ -2450,6 +3057,77 @@ async def persona_stream(
                     scope_snapshot_id=effective_scope_snapshot_id,
                 )
 
+        def _pending_retry_key(*, plan_id: str, step_idx: int, tool_name: str) -> str:
+            """Return the stable storage key for a pending approval-backed retry."""
+            return f"{str(plan_id or '').strip()}|{int(step_idx)}|{str(tool_name or '').strip()}"
+
+        def _load_pending_retry_approvals(session_id: str) -> dict[str, dict[str, Any]]:
+            """Load sanitized pending retry approvals from session preferences."""
+            preferences = session_manager.get_preferences(
+                session_id=session_id,
+                user_id=connection_user_id,
+            )
+            raw = preferences.get("pending_retry_approvals")
+            if not isinstance(raw, dict):
+                return {}
+            out: dict[str, dict[str, Any]] = {}
+            for key, value in raw.items():
+                if not isinstance(key, str) or not isinstance(value, dict):
+                    continue
+                out[key] = dict(value)
+            return out
+
+        def _store_pending_retry_approval(
+            *,
+            session_id: str,
+            plan_id: str,
+            step_idx: int,
+            step_type: str,
+            tool_name: str,
+            args: dict[str, Any],
+            why: str | None,
+            description: str | None,
+        ) -> None:
+            """Persist approval retry state so the client cannot tamper with retried args."""
+            retries = _load_pending_retry_approvals(session_id)
+            key = _pending_retry_key(plan_id=plan_id, step_idx=step_idx, tool_name=tool_name)
+            retries[key] = {
+                "plan_id": str(plan_id or ""),
+                "step_idx": int(step_idx),
+                "step_type": _bounded_label(
+                    step_type,
+                    allowed=_PERSONA_WS_ALLOWED_STEP_TYPES,
+                    fallback="mcp_tool",
+                ),
+                "tool": str(tool_name or ""),
+                "args": dict(args or {}),
+                "why": str(why or ""),
+                "description": str(description or ""),
+            }
+            session_manager.update_preferences(
+                session_id=session_id,
+                user_id=connection_user_id,
+                preferences={"pending_retry_approvals": retries},
+            )
+
+        def _consume_pending_retry_approval(
+            *,
+            session_id: str,
+            plan_id: str,
+            step_idx: int,
+            tool_name: str,
+        ) -> dict[str, Any] | None:
+            """Remove and return a stored retry approval entry for one tool step."""
+            retries = _load_pending_retry_approvals(session_id)
+            key = _pending_retry_key(plan_id=plan_id, step_idx=step_idx, tool_name=tool_name)
+            entry = retries.pop(key, None)
+            session_manager.update_preferences(
+                session_id=session_id,
+                user_id=connection_user_id,
+                preferences={"pending_retry_approvals": retries},
+            )
+            return dict(entry) if isinstance(entry, dict) else None
+
         async def _call_mcp_tool(
             name: str,
             arguments: dict,
@@ -2506,6 +3184,8 @@ async def persona_stream(
             if not server.initialized:
                 await server.initialize()
             audit_metadata = {
+                "mcp_policy_context_enabled": is_mcp_hub_policy_enforcement_enabled(),
+                "persona_id": runtime_persona_id,
                 "session_id": session_id,
                 "persona_audit": {
                     "source": "persona_ws",
@@ -2540,6 +3220,12 @@ async def persona_stream(
                 )
             resp = await server.handle_http_request(req, user_id=authenticated_user_id, metadata=audit_metadata)
             if resp.error:
+                error_data = getattr(resp.error, "data", None)
+                approval_payload = (
+                    dict(error_data.get("approval") or {})
+                    if isinstance(error_data, dict) and isinstance(error_data.get("approval"), dict)
+                    else None
+                )
                 _increment_persona_metric(
                     "persona_ws_tool_calls_total",
                     {"kind": "mcp", "status": "error"},
@@ -2548,8 +3234,9 @@ async def persona_stream(
                     ok=False,
                     output=None,
                     error=resp.error.message,
-                    reason_code="TOOL_EXECUTION_ERROR",
+                    reason_code="APPROVAL_REQUIRED" if approval_payload else "TOOL_EXECUTION_ERROR",
                     policy=policy,
+                    approval=approval_payload,
                 )
             _increment_persona_metric(
                 "persona_ws_tool_calls_total",
@@ -2651,10 +3338,179 @@ async def persona_stream(
             )
             return _build_tool_result(ok=True, output=skill_result, policy=policy)
 
+        async def _emit_and_persist_tool_step_result(
+            *,
+            session_id: str,
+            plan_id: str,
+            step_idx: int,
+            step_type: str,
+            tool_name: str,
+            result: dict[str, Any],
+            persona_id: str,
+            runtime_mode_value: str,
+            scope_snapshot_id: str | None,
+        ) -> None:
+            """Emit a tool result and persist its retention/audit side effects."""
+            await _emit_tool_result(
+                session_id=session_id,
+                plan_id=plan_id,
+                step_idx=step_idx,
+                step_type=step_type,
+                tool=tool_name,
+                result=result,
+            )
+            await _record_turn(
+                session_id=session_id,
+                role="tool",
+                content=_summarize_tool_result_for_retention(result),
+                turn_type="tool_result",
+                metadata={"tool": tool_name, "step_idx": step_idx, "step_type": step_type},
+                persist_as_memory=False,
+                persist_personalization=False,
+                persona_id_override=persona_id,
+                runtime_mode_override=runtime_mode_value,
+                scope_snapshot_id_override=scope_snapshot_id,
+            )
+            _ = await asyncio.to_thread(
+                persist_tool_outcome,
+                user_id=authenticated_user_id,
+                session_id=session_id,
+                persona_id=persona_id,
+                tool_name=tool_name,
+                step_idx=step_idx,
+                outcome=result,
+                store_as_memory=False,
+                runtime_mode=runtime_mode_value,
+                scope_snapshot_id=scope_snapshot_id,
+            )
+
+        async def _emit_denied_tool_step(
+            *,
+            session_id: str,
+            plan_id: str,
+            step_idx: int,
+            step_type: str,
+            tool_name: str,
+            step_policy: dict[str, Any],
+            persona_id: str,
+            runtime_mode_value: str,
+            scope_snapshot_id: str | None,
+        ) -> dict[str, Any]:
+            """Emit, persist, and return a denied tool step result."""
+            deny_reason = str(step_policy.get("reason") or f"Tool '{tool_name}' not permitted by policy")
+            reason_code = str(step_policy.get("reason_code") or "POLICY_DENIED")
+            _increment_persona_metric(
+                "persona_ws_policy_denials_total",
+                {
+                    "step_type": _bounded_label(step_type, allowed=_PERSONA_WS_ALLOWED_STEP_TYPES, fallback="mcp_tool"),
+                    "reason": _metric_reason_bucket(reason_code),
+                },
+            )
+            await _emit_notice(
+                session_id=session_id,
+                step_idx=step_idx,
+                tool=tool_name,
+                step_type=step_type,
+                level="warning",
+                reason_code=reason_code,
+                message=deny_reason,
+            )
+            result = _build_tool_result(
+                ok=False,
+                output=None,
+                error=deny_reason,
+                reason_code=reason_code,
+                policy=step_policy,
+            )
+            await _emit_and_persist_tool_step_result(
+                session_id=session_id,
+                plan_id=plan_id,
+                step_idx=step_idx,
+                step_type=step_type,
+                tool_name=tool_name,
+                result=result,
+                persona_id=persona_id,
+                runtime_mode_value=runtime_mode_value,
+                scope_snapshot_id=scope_snapshot_id,
+            )
+            return result
+
+        async def _execute_persona_tool_step(
+            *,
+            session_id: str,
+            plan_id: str,
+            step_idx: int,
+            step_type: str,
+            tool_name: str,
+            step_args: dict[str, Any],
+            step_policy: dict[str, Any],
+            why: str | None,
+            description: str | None,
+            persona_id: str,
+            runtime_mode_value: str,
+            scope_snapshot_id: str | None,
+        ) -> dict[str, Any]:
+            """Execute, emit, and persist one non-final persona tool step."""
+            await _emit_tool_call(
+                session_id=session_id,
+                plan_id=plan_id,
+                step_idx=step_idx,
+                step_type=step_type,
+                tool=tool_name,
+                args=step_args,
+                why=why,
+                policy=step_policy,
+            )
+            if step_type == "skill":
+                result = await _call_skill(
+                    tool_name,
+                    str(step_args.get("args") or ""),
+                    policy=step_policy,
+                )
+            else:
+                result = await _call_mcp_tool(
+                    tool_name,
+                    step_args,
+                    session_id=session_id,
+                    plan_id=plan_id,
+                    step_idx=step_idx,
+                    policy=step_policy,
+                    why=why,
+                    description=description,
+                    allowed_tools=step_policy.get("effective_allowed_tools")
+                    if isinstance(step_policy.get("effective_allowed_tools"), list)
+                    else None,
+                )
+            if isinstance(result.get("approval"), dict):
+                _store_pending_retry_approval(
+                    session_id=session_id,
+                    plan_id=plan_id,
+                    step_idx=step_idx,
+                    step_type=step_type,
+                    tool_name=tool_name,
+                    args=step_args,
+                    why=why,
+                    description=description,
+                )
+            await _emit_and_persist_tool_step_result(
+                session_id=session_id,
+                plan_id=plan_id,
+                step_idx=step_idx,
+                step_type=step_type,
+                tool_name=tool_name,
+                result=result,
+                persona_id=persona_id,
+                runtime_mode_value=runtime_mode_value,
+                scope_snapshot_id=scope_snapshot_id,
+            )
+            return result
+
         async def _propose_plan(
             text: str,
             memory_context: list[str] | None = None,
             persona_state_hints: dict[str, str] | None = None,
+            companion_context: dict[str, Any] | None = None,
+            persona_exemplar_sections: list[tuple[str, str, int]] | None = None,
         ) -> dict:
             steps = []
             text_clean = str(text or "").strip()
@@ -2717,20 +3573,61 @@ async def persona_stream(
                 query_text = text
                 compact_memories = [m.strip() for m in (memory_context or []) if str(m or "").strip()]
                 compact_state_lines = _build_persona_state_hint_lines(compact_state_hints)
+                companion_payload = dict(companion_context or {})
+                companion_knowledge_lines = [
+                    str(line).strip()
+                    for line in companion_payload.get("knowledge_lines", [])
+                    if str(line or "").strip()
+                ]
+                companion_goal_lines = [
+                    str(line).strip()
+                    for line in companion_payload.get("goal_lines", [])
+                    if str(line or "").strip()
+                ]
+                companion_activity_lines = [
+                    str(line).strip()
+                    for line in companion_payload.get("activity_lines", [])
+                    if str(line or "").strip()
+                ]
                 if compact_state_lines:
                     query_text = f"{query_text}\n\nPersistent persona state hints:\n" + "\n".join(compact_state_lines)
                 if compact_memories:
                     memory_lines = "\n".join(f"- {m}" for m in compact_memories[: _get_persona_memory_top_k()])
                     query_text = f"{query_text}\n\nPersona memory hints:\n{memory_lines}"
-                if compact_memories and compact_state_lines:
-                    why_text = (
-                        "Input appears to be a knowledge query with applied persistent persona state and "
-                        "personalization memories."
+                if companion_knowledge_lines:
+                    query_text = (
+                        f"{query_text}\n\nCompanion knowledge:\n"
+                        + "\n".join(companion_knowledge_lines)
                     )
-                elif compact_state_lines:
-                    why_text = "Input appears to be a knowledge query with applied persistent persona state."
-                elif compact_memories:
-                    why_text = "Input appears to be a knowledge query with applied personalization memories."
+                if companion_goal_lines:
+                    query_text = (
+                        f"{query_text}\n\nActive companion goals:\n"
+                        + "\n".join(companion_goal_lines)
+                    )
+                if companion_activity_lines:
+                    query_text = (
+                        f"{query_text}\n\nRecent explicit companion activity:\n"
+                        + "\n".join(companion_activity_lines)
+                    )
+                applied_context_labels: list[str] = []
+                if compact_state_lines:
+                    applied_context_labels.append("persistent persona state")
+                if compact_memories:
+                    applied_context_labels.append("personalization memories")
+                if companion_knowledge_lines or companion_goal_lines or companion_activity_lines:
+                    applied_context_labels.append("companion context")
+                query_text = append_persona_exemplar_sections(query_text, persona_exemplar_sections)
+                has_exemplar_guidance = any(
+                    str(content or "").strip()
+                    for _, content, _ in list(persona_exemplar_sections or [])
+                )
+                if has_exemplar_guidance:
+                    applied_context_labels.append("persona exemplar guidance")
+                if applied_context_labels:
+                    why_text = (
+                        "Input appears to be a knowledge query with applied "
+                        f"{_join_applied_context_labels(applied_context_labels)}."
+                    )
                 else:
                     why_text = "Input appears to be a knowledge query."
                 steps.append(
@@ -2801,9 +3698,12 @@ async def persona_stream(
                     persona_id=runtime_persona_id,
                     resume_session_id=session_id,
                 )
-                existing_preferences = session_manager.get_preferences(
+                existing_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+                    session_manager=session_manager,
                     session_id=session_id,
                     user_id=connection_user_id,
+                    persisted_preferences=runtime_context.get("preferences"),
+                    persisted_activity_surface=runtime_context.get("activity_surface"),
                 )
                 configured_top_k = _get_persona_memory_top_k()
                 default_use_memory = _coerce_bool(
@@ -2815,6 +3715,15 @@ async def persona_stream(
                     default=default_use_memory,
                 )
                 use_memory_context = requested_use_memory_context
+                default_use_companion_context = _coerce_bool(
+                    existing_preferences.get("use_companion_context"),
+                    default=True,
+                )
+                requested_use_companion_context = _coerce_bool(
+                    msg.get("use_companion_context"),
+                    default=default_use_companion_context,
+                )
+                use_companion_context = requested_use_companion_context
                 runtime_persona_state_context_default = _coerce_bool(
                     runtime_context.get("persona_state_context_default"),
                     default=True,
@@ -2855,6 +3764,7 @@ async def persona_stream(
                     session_policy_rules = _session_policy_rules_from_preferences(existing_preferences)
                 preferences_patch: dict[str, Any] = {
                     "use_memory_context": use_memory_context,
+                    "use_companion_context": use_companion_context,
                     "use_persona_state_context": use_persona_state_context,
                     "memory_top_k": memory_top_k,
                 }
@@ -2866,6 +3776,24 @@ async def persona_stream(
                         user_id=connection_user_id,
                         preferences=preferences_patch,
                     )
+                _ = _persist_persona_session_preferences(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                    base_preferences=runtime_context.get("preferences"),
+                    patch_preferences=preferences_patch,
+                )
+                persona_turn_classifier = classify_persona_turn(text)
+                persona_exemplar_context = await resolve_persona_exemplar_runtime_context(
+                    persona_scope_db=persona_scope_db,
+                    user_id=authenticated_user_id,
+                    persona_id=runtime_persona_id,
+                    classifier=persona_turn_classifier,
+                    current_turn_text=text,
+                    lookup_limit=50,
+                )
+                persona_exemplar_assembly = persona_exemplar_context.assembly
+                persona_exemplar_selection = persona_exemplar_context.selection_metadata
                 await _record_turn(
                     session_id=session_id,
                     role="user",
@@ -2874,11 +3802,13 @@ async def persona_stream(
                     metadata={
                         "source": "ws",
                         "use_memory_context": use_memory_context,
+                        "use_companion_context": use_companion_context,
                         "use_persona_state_context": use_persona_state_context,
                         "memory_top_k": memory_top_k,
                         "session_policy_rule_count": len(session_policy_rules),
                         "runtime_mode": runtime_mode,
                         "session_exists": session_exists,
+                        "persona_exemplar_selection": persona_exemplar_selection,
                     },
                     persist_as_memory=False,
                     persona_id_override=runtime_persona_id,
@@ -2897,6 +3827,18 @@ async def persona_stream(
                         session_id=session_id,
                     )
                     memory_context = [m.content for m in memories]
+                companion_context = {
+                    "knowledge_lines": [],
+                    "activity_lines": [],
+                    "card_count": 0,
+                    "activity_count": 0,
+                }
+                if use_companion_context:
+                    companion_context = await asyncio.to_thread(
+                        load_companion_context,
+                        user_id=authenticated_user_id,
+                        query=text,
+                    )
                 persona_state_hints: dict[str, str] = {}
                 if use_persona_state_context and state_context_allowed_by_mode:
                     persona_state_hints = _load_persona_state_hints_for_runtime(
@@ -2919,6 +3861,14 @@ async def persona_stream(
                     "persona_state_applied_count": len(persona_state_fields),
                     "persona_state_fields": persona_state_fields,
                 }
+                companion_usage = {
+                    "enabled": use_companion_context,
+                    "requested_enabled": requested_use_companion_context,
+                    "mode": str(companion_context.get("mode") or "recent_fallback"),
+                    "applied_card_count": int(companion_context.get("card_count", 0) or 0),
+                    "applied_goal_count": int(companion_context.get("goal_count", 0) or 0),
+                    "applied_activity_count": int(companion_context.get("activity_count", 0) or 0),
+                }
                 if use_memory_context and memory_context:
                     await _emit_notice(
                         session_id=session_id,
@@ -2939,6 +3889,29 @@ async def persona_stream(
                         level="info",
                         reason_code="MEMORY_CONTEXT_DISABLED",
                         message="Memory context disabled for this message",
+                    )
+                if use_companion_context and (
+                    companion_usage["applied_card_count"]
+                    or companion_usage["applied_goal_count"]
+                    or companion_usage["applied_activity_count"]
+                ):
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="COMPANION_CONTEXT_APPLIED",
+                        message=(
+                            "Applied companion context from "
+                            f"{companion_usage['applied_card_count']} knowledge cards and "
+                            f"{companion_usage['applied_goal_count']} goals and "
+                            f"{companion_usage['applied_activity_count']} recent activities"
+                        ),
+                    )
+                elif not use_companion_context:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="COMPANION_CONTEXT_DISABLED",
+                        message="Companion context disabled for this message",
                     )
                 if persona_state_fields:
                     await _emit_notice(
@@ -2965,6 +3938,8 @@ async def persona_stream(
                     text,
                     memory_context=memory_context,
                     persona_state_hints=persona_state_hints,
+                    companion_context=companion_context,
+                    persona_exemplar_sections=persona_exemplar_assembly.sections,
                 )
                 plan_id = uuid.uuid4().hex
                 max_tool_steps = _get_persona_max_tool_steps()
@@ -3030,6 +4005,7 @@ async def persona_stream(
                     plan_id=plan_id,
                     steps=stored_steps,
                     memory=memory_usage,
+                    companion=companion_usage,
                     persona_id_value=runtime_persona_id,
                 )
             elif mtype == "audio_chunk":
@@ -3268,9 +4244,12 @@ async def persona_stream(
                 )
                 runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
                 persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
-                current_preferences = session_manager.get_preferences(
+                current_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+                    session_manager=session_manager,
                     session_id=session_id,
                     user_id=connection_user_id,
+                    persisted_preferences=runtime_context.get("preferences"),
+                    persisted_activity_surface=runtime_context.get("activity_surface"),
                 )
                 if "session_policy_rules" in msg:
                     session_policy_rules = normalize_policy_rules(msg.get("session_policy_rules"))
@@ -3280,6 +4259,13 @@ async def persona_stream(
                             user_id=connection_user_id,
                             preferences={"session_policy_rules": session_policy_rules},
                         )
+                    _ = _persist_persona_session_preferences(
+                        persona_scope_db,
+                        session_id=session_id,
+                        user_id=authenticated_user_id,
+                        base_preferences=runtime_context.get("preferences"),
+                        patch_preferences={"session_policy_rules": session_policy_rules},
+                    )
                 else:
                     session_policy_rules = _session_policy_rules_from_preferences(current_preferences)
 
@@ -3299,61 +4285,15 @@ async def persona_stream(
                         allow_delete=allow_delete,
                     )
                     if not bool(step_policy.get("allow", False)):
-                        deny_reason = str(step_policy.get("reason") or f"Tool '{step.tool}' not permitted by policy")
-                        reason_code = str(step_policy.get("reason_code") or "POLICY_DENIED")
-                        _increment_persona_metric(
-                            "persona_ws_policy_denials_total",
-                            {
-                                "step_type": _bounded_label(step_type, allowed=_PERSONA_WS_ALLOWED_STEP_TYPES, fallback="mcp_tool"),
-                                "reason": _metric_reason_bucket(reason_code),
-                            },
-                        )
-                        await _emit_notice(
-                            session_id=session_id,
-                            step_idx=step.idx,
-                            tool=step.tool,
-                            step_type=step_type,
-                            level="warning",
-                            reason_code=reason_code,
-                            message=deny_reason,
-                        )
-                        result = _build_tool_result(
-                            ok=False,
-                            output=None,
-                            error=deny_reason,
-                            reason_code=reason_code,
-                            policy=step_policy,
-                        )
-                        await _emit_tool_result(
+                        await _emit_denied_tool_step(
                             session_id=session_id,
                             plan_id=plan_id,
                             step_idx=step.idx,
                             step_type=step_type,
-                            tool=step.tool,
-                            result=result,
-                        )
-                        await _record_turn(
-                            session_id=session_id,
-                            role="tool",
-                            content=_summarize_tool_result_for_retention(result),
-                            turn_type="tool_result",
-                            metadata={"tool": step.tool, "step_idx": step.idx, "step_type": step_type},
-                            persist_as_memory=False,
-                            persist_personalization=False,
-                            persona_id_override=runtime_persona_id,
-                            runtime_mode_override=runtime_mode,
-                            scope_snapshot_id_override=runtime_scope_snapshot_id,
-                        )
-                        _ = await asyncio.to_thread(
-                            persist_tool_outcome,
-                            user_id=authenticated_user_id,
-                            session_id=session_id,
-                            persona_id=runtime_persona_id,
                             tool_name=step.tool,
-                            step_idx=step.idx,
-                            outcome=result,
-                            store_as_memory=False,
-                            runtime_mode=runtime_mode,
+                            step_policy=step_policy,
+                            persona_id=runtime_persona_id,
+                            runtime_mode_value=runtime_mode,
                             scope_snapshot_id=runtime_scope_snapshot_id,
                         )
                         executed_steps += 1
@@ -3365,6 +4305,18 @@ async def persona_stream(
                             (step.args or {}).get("text")
                             or step.description
                             or "Final answer step executed."
+                        )
+                        _ = await asyncio.to_thread(
+                            record_persona_session_summarized,
+                            user_id=authenticated_user_id,
+                            session_id=session_id,
+                            persona_id=runtime_persona_id,
+                            plan_id=plan_id,
+                            step_idx=step.idx,
+                            runtime_mode=runtime_mode,
+                            scope_snapshot_id=runtime_scope_snapshot_id,
+                            summary_text=assistant_text,
+                            surface=activity_surface,
                         )
                         await _emit_assistant_delta(
                             session_id=session_id,
@@ -3386,67 +4338,33 @@ async def persona_stream(
                         continue
 
                     executed_steps += 1
-                    await _emit_tool_call(
+                    result = await _execute_persona_tool_step(
                         session_id=session_id,
                         plan_id=plan_id,
                         step_idx=step.idx,
                         step_type=step_type,
-                        tool=step.tool,
-                        args=step.args or {},
+                        tool_name=step.tool,
+                        step_args=step.args or {},
+                        step_policy=step_policy,
                         why=step.why,
-                        policy=step_policy,
-                    )
-                    if step_type == "skill":
-                        result = await _call_skill(
-                            step.tool,
-                            str((step.args or {}).get("args") or ""),
-                            policy=step_policy,
-                        )
-                    else:
-                        result = await _call_mcp_tool(
-                            step.tool,
-                            step.args or {},
-                            session_id=session_id,
-                            plan_id=plan_id,
-                            step_idx=step.idx,
-                            policy=step_policy,
-                            why=step.why,
-                            description=step.description,
-                            allowed_tools=step_policy.get("effective_allowed_tools")
-                            if isinstance(step_policy.get("effective_allowed_tools"), list)
-                            else None,
-                        )
-                    await _emit_tool_result(
-                        session_id=session_id,
-                        plan_id=plan_id,
-                        step_idx=step.idx,
-                        step_type=step_type,
-                        tool=step.tool,
-                        result=result,
-                    )
-                    await _record_turn(
-                        session_id=session_id,
-                        role="tool",
-                        content=_summarize_tool_result_for_retention(result),
-                        turn_type="tool_result",
-                        metadata={"tool": step.tool, "step_idx": step.idx, "step_type": step_type},
-                        persist_as_memory=False,
-                        persist_personalization=False,
-                        persona_id_override=runtime_persona_id,
-                        runtime_mode_override=runtime_mode,
-                        scope_snapshot_id_override=runtime_scope_snapshot_id,
+                        description=step.description,
+                        persona_id=runtime_persona_id,
+                        runtime_mode_value=runtime_mode,
+                        scope_snapshot_id=runtime_scope_snapshot_id,
                     )
                     _ = await asyncio.to_thread(
-                        persist_tool_outcome,
+                        record_persona_tool_executed,
                         user_id=authenticated_user_id,
                         session_id=session_id,
                         persona_id=runtime_persona_id,
-                        tool_name=step.tool,
+                        plan_id=plan_id,
                         step_idx=step.idx,
-                        outcome=result,
-                        store_as_memory=False,
+                        step_type=step_type,
+                        tool_name=step.tool,
                         runtime_mode=runtime_mode,
                         scope_snapshot_id=runtime_scope_snapshot_id,
+                        outcome=result,
+                        surface=activity_surface,
                     )
                 if executed_steps == 0:
                     await _emit_notice(
@@ -3455,6 +4373,121 @@ async def persona_stream(
                         message="No approved steps matched plan",
                         reason_code="APPROVED_STEPS_NO_MATCH",
                     )
+            elif mtype == "retry_tool_call":
+                if not await _is_stream_auth_valid():
+                    await _close_for_auth_revocation()
+                    break
+                session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
+                plan_id = _normalize_ws_identifier(msg.get("plan_id"), fallback="")
+                tool_name = str(msg.get("tool") or "").strip()
+                if not tool_name:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        message="tool is required",
+                        reason_code="TOOL_REQUIRED",
+                    )
+                    continue
+                try:
+                    step_idx = int(msg.get("step_idx"))
+                except (TypeError, ValueError):
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="error",
+                        message="step_idx must be an integer",
+                        reason_code="STEP_IDX_INVALID",
+                    )
+                    continue
+                step_type = _normalize_persona_step_type(
+                    str(msg.get("step_type") or "mcp_tool"),
+                    tool_name=tool_name,
+                )
+                pending_retry = _consume_pending_retry_approval(
+                    session_id=session_id,
+                    plan_id=plan_id,
+                    step_idx=step_idx,
+                    tool_name=tool_name,
+                )
+                if pending_retry is None:
+                    await _emit_notice(
+                        session_id=session_id,
+                        step_idx=step_idx,
+                        tool=tool_name,
+                        step_type=step_type,
+                        level="warning",
+                        message="No pending approval retry found for this tool step",
+                        reason_code="APPROVAL_RETRY_NOT_FOUND",
+                    )
+                    continue
+                plan_id = str(pending_retry.get("plan_id") or plan_id)
+                step_idx = int(pending_retry.get("step_idx") or step_idx)
+                tool_name = str(pending_retry.get("tool") or tool_name)
+                step_type = _normalize_persona_step_type(
+                    pending_retry.get("step_type"),
+                    tool_name=tool_name,
+                )
+                step_args = pending_retry.get("args")
+                if not isinstance(step_args, dict):
+                    step_args = {}
+                why = str(pending_retry.get("why") or "").strip() or None
+                description = str(pending_retry.get("description") or "").strip() or None
+
+                runtime_context = _load_persona_policy_rules_for_session(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                )
+                runtime_persona_id = str(runtime_context.get("persona_id") or _DEFAULT_PERSONA_ID).strip() or _DEFAULT_PERSONA_ID
+                runtime_mode = _bounded_label(
+                    runtime_context.get("runtime_mode"),
+                    allowed=_PERSONA_RUNTIME_MODES,
+                    fallback="session_scoped",
+                )
+                runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
+                persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
+                current_preferences = session_manager.get_preferences(
+                    session_id=session_id,
+                    user_id=connection_user_id,
+                )
+                session_policy_rules = _session_policy_rules_from_preferences(current_preferences)
+                step_policy = _evaluate_step_policy(
+                    step_type=step_type,
+                    tool_name=tool_name,
+                    args=step_args,
+                    persona_policy_rules=persona_policy_rules,
+                    session_policy_rules=session_policy_rules,
+                    session_scopes=session_scopes,
+                    allow_export=allow_export,
+                    allow_delete=allow_delete,
+                )
+                if not bool(step_policy.get("allow", False)):
+                    await _emit_denied_tool_step(
+                        session_id=session_id,
+                        plan_id=plan_id,
+                        step_idx=step_idx,
+                        step_type=step_type,
+                        tool_name=tool_name,
+                        step_policy=step_policy,
+                        persona_id=runtime_persona_id,
+                        runtime_mode_value=runtime_mode,
+                        scope_snapshot_id=runtime_scope_snapshot_id,
+                    )
+                    continue
+
+                await _execute_persona_tool_step(
+                    session_id=session_id,
+                    plan_id=plan_id,
+                    step_idx=step_idx,
+                    step_type=step_type,
+                    tool_name=tool_name,
+                    step_args=step_args,
+                    step_policy=step_policy,
+                    why=why,
+                    description=description,
+                    persona_id=runtime_persona_id,
+                    runtime_mode_value=runtime_mode,
+                    scope_snapshot_id=runtime_scope_snapshot_id,
+                )
             elif mtype == "cancel":
                 session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
                 reason = str(msg.get("reason") or "user_cancelled")

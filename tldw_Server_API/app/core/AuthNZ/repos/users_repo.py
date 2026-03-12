@@ -108,6 +108,20 @@ class AuthnzUsersRepo:
             logger.error(f"AuthnzUsersRepo.get_user_by_username failed: {exc}")
             raise
 
+    async def get_user_by_email(self, email: str) -> dict[str, Any] | None:
+        """Fetch a user row by email address."""
+        db = await self._users_db()
+        try:
+            row = await db.get_user_by_email(email)
+            if row is None:
+                return None
+            return self._normalize_user_record(row)
+        except DatabaseError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(f"AuthnzUsersRepo.get_user_by_email failed: {exc}")
+            raise
+
     async def create_user(
         self,
         *,

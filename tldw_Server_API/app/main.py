@@ -1032,6 +1032,7 @@ else:
         logger.warning(f"Items endpoints unavailable; skipping import: {_items_err}")
         _HAS_ITEMS = False
     # Notes / Prompts / Translation
+    from tldw_Server_API.app.api.v1.endpoints.ingestion_sources import router as ingestion_sources_router
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
     from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
     from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
@@ -2242,6 +2243,7 @@ async def lifespan(app: FastAPI):
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
     reminder_jobs_task = None
+    admin_backup_jobs_task = None
     jobs_notifications_bridge_task = None
     chatbooks_cleanup_stop_event = None
     files_jobs_stop_event = None
@@ -2612,6 +2614,28 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reading digest Jobs worker: {e}")
 
+    # Companion reflection Jobs worker
+    try:
+        import asyncio as _asyncio
+
+        _enabled = _should_start_worker("COMPANION_REFLECTION_JOBS_WORKER_ENABLED", "companion")
+        if _enabled:
+            from tldw_Server_API.app.core.Personalization.companion_reflection_jobs_worker import (
+                run_companion_reflection_jobs_worker as _run_companion_reflection_jobs,
+            )
+
+            companion_reflection_jobs_stop_event = _asyncio.Event()
+            companion_reflection_jobs_task = _asyncio.create_task(
+                _run_companion_reflection_jobs(companion_reflection_jobs_stop_event)
+            )
+            logger.info("Companion reflection Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info(
+                "Companion reflection Jobs worker disabled by flag (COMPANION_REFLECTION_JOBS_WORKER_ENABLED)"
+            )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Companion reflection Jobs worker: {e}")
+
     # Reminder Jobs worker
     try:
         if _sidecar_mode:
@@ -2626,6 +2650,21 @@ async def lifespan(app: FastAPI):
                 logger.info("Reminder Jobs worker disabled (REMINDER_JOBS_WORKER_ENABLED != true)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reminder Jobs worker: {e}")
+
+    # Admin backup Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Admin backup Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.services.admin_backup_jobs_worker import start_admin_backup_jobs_worker
+
+            admin_backup_jobs_task = await start_admin_backup_jobs_worker()
+            if admin_backup_jobs_task:
+                logger.info("Admin backup Jobs worker started")
+            else:
+                logger.info("Admin backup Jobs worker disabled (ADMIN_BACKUP_JOBS_WORKER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Admin backup Jobs worker: {e}")
 
     # Jobs notifications bridge worker
     try:
@@ -3072,6 +3111,27 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Kanban activity cleanup scheduler: {e}")
 
+    # Start ingestion source archive cleanup scheduler (retention cleanup)
+    try:
+        _enable_ingestion_sources_cleanup = _shared_is_truthy(
+            _env_os.getenv("INGESTION_SOURCES_CLEANUP_ENABLED", "false")
+        )
+        if not _enable_ingestion_sources_cleanup:
+            logger.info(
+                "Ingestion source archive cleanup scheduler disabled "
+                "(INGESTION_SOURCES_CLEANUP_ENABLED != true)"
+            )
+        else:
+            from tldw_Server_API.app.services.ingestion_sources_cleanup_service import (
+                start_ingestion_sources_cleanup_scheduler,
+            )
+
+            _ingestion_sources_cleanup_task = await start_ingestion_sources_cleanup_scheduler()
+            if _ingestion_sources_cleanup_task:
+                logger.info("Ingestion source archive cleanup scheduler started")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start ingestion source archive cleanup scheduler: {e}")
+
     # Start Kanban soft-delete purge scheduler
     try:
         _enable_kanban_purge = _shared_is_truthy(_env_os.getenv("KANBAN_PURGE_ENABLED", "false"))
@@ -3192,6 +3252,43 @@ async def lifespan(app: FastAPI):
             logger.info("Reading digest scheduler disabled (READING_DIGEST_SCHEDULER_ENABLED != true)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reading digest scheduler: {e}")
+
+    # Start Admin backup scheduler (platform backup schedule submission into Jobs)
+    admin_backup_sched_task = None
+    try:
+        from tldw_Server_API.app.services.admin_backup_scheduler import start_admin_backup_scheduler
+
+        admin_backup_sched_task = await start_admin_backup_scheduler()
+        if admin_backup_sched_task:
+            logger.info("Admin backup scheduler started")
+        else:
+            logger.info("Admin backup scheduler disabled (ADMIN_BACKUP_SCHEDULER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Admin backup scheduler: {e}")
+
+    # Start Companion reflection scheduler (cron-based submission into Jobs)
+    companion_reflection_sched_task = None
+    try:
+        try:
+            _companion_reflection_sched_enabled = _env_flag("COMPANION_REFLECTION_SCHEDULER_ENABLED", False)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            _companion_reflection_sched_enabled = _shared_is_truthy(
+                _os.getenv("COMPANION_REFLECTION_SCHEDULER_ENABLED", "false")
+            )
+        if _companion_reflection_sched_enabled:
+            from tldw_Server_API.app.services.companion_reflection_scheduler import (
+                start_companion_reflection_scheduler,
+            )
+
+            companion_reflection_sched_task = await start_companion_reflection_scheduler(enabled=True)
+            if companion_reflection_sched_task:
+                logger.info("Companion reflection scheduler started")
+            else:
+                logger.info("Companion reflection scheduler disabled (COMPANION_REFLECTION_SCHEDULER_ENABLED != true)")
+        else:
+            logger.info("Companion reflection scheduler disabled (COMPANION_REFLECTION_SCHEDULER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Companion reflection scheduler: {e}")
 
     # Start Reminders scheduler (cron/date based submission into Jobs)
     try:
@@ -3548,6 +3645,16 @@ async def lifespan(app: FastAPI):
                     reading_digest_jobs_task.cancel()
             else:
                 reading_digest_jobs_task.cancel()
+        if "companion_reflection_jobs_task" in locals() and companion_reflection_jobs_task:
+            if "companion_reflection_jobs_stop_event" in locals() and companion_reflection_jobs_stop_event:
+                try:
+                    companion_reflection_jobs_stop_event.set()
+                    await _asyncio.wait_for(companion_reflection_jobs_task, timeout=5.0)
+                    logger.info("Companion reflection Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    companion_reflection_jobs_task.cancel()
+            else:
+                companion_reflection_jobs_task.cancel()
         if "reminder_jobs_task" in locals() and reminder_jobs_task:
             try:
                 reminder_jobs_task.cancel()
@@ -3558,6 +3665,16 @@ async def lifespan(app: FastAPI):
             except _STARTUP_GUARD_EXCEPTIONS:
                 with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     reminder_jobs_task.cancel()
+        if "admin_backup_jobs_task" in locals() and admin_backup_jobs_task:
+            try:
+                admin_backup_jobs_task.cancel()
+                await _asyncio.wait_for(admin_backup_jobs_task, timeout=5.0)
+                logger.info("Admin backup Jobs worker cancelled")
+            except _asyncio.CancelledError:
+                pass
+            except _STARTUP_GUARD_EXCEPTIONS:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                    admin_backup_jobs_task.cancel()
         if "jobs_notifications_bridge_task" in locals() and jobs_notifications_bridge_task:
             try:
                 jobs_notifications_bridge_task.cancel()
@@ -3640,6 +3757,34 @@ async def lifespan(app: FastAPI):
             try:
                 if "reading_digest_sched_task" in locals() and reading_digest_sched_task:
                     reading_digest_sched_task.cancel()
+            except _STARTUP_GUARD_EXCEPTIONS:
+                pass
+        # Stop Admin backup scheduler
+        try:
+            if "admin_backup_sched_task" in locals() and admin_backup_sched_task:
+                from tldw_Server_API.app.services.admin_backup_scheduler import (
+                    stop_admin_backup_scheduler as _stop_admin_backup_scheduler,
+                )
+
+                await _stop_admin_backup_scheduler(admin_backup_sched_task)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            try:
+                if "admin_backup_sched_task" in locals() and admin_backup_sched_task:
+                    admin_backup_sched_task.cancel()
+            except _STARTUP_GUARD_EXCEPTIONS:
+                pass
+        # Stop Companion reflection scheduler
+        try:
+            if "companion_reflection_sched_task" in locals() and companion_reflection_sched_task:
+                from tldw_Server_API.app.services.companion_reflection_scheduler import (
+                    stop_companion_reflection_scheduler as _stop_companion_reflection_scheduler,
+                )
+
+                await _stop_companion_reflection_scheduler(companion_reflection_sched_task)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            try:
+                if "companion_reflection_sched_task" in locals() and companion_reflection_sched_task:
+                    companion_reflection_sched_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
                 pass
         # Stop Reminders scheduler
@@ -5544,6 +5689,12 @@ elif _MINIMAL_TEST_APP:
         app.include_router(personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"])
     except _IMPORT_EXCEPTIONS as _pers_min_err:
         logger.debug(f"Skipping personalization router in minimal test app: {_pers_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.companion import router as companion_router
+
+        app.include_router(companion_router, prefix=f"{API_V1_PREFIX}/companion", tags=["companion"])
+    except _IMPORT_EXCEPTIONS as _companion_min_err:
+        logger.debug(f"Skipping companion router in minimal test app: {_companion_min_err}")
     # Guardian controls (parental/supervised account controls)
     try:
         from tldw_Server_API.app.api.v1.endpoints.guardian_controls import router as guardian_controls_router
@@ -5772,6 +5923,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"])
     except _IMPORT_EXCEPTIONS as _acp_min_err:
         logger.debug(f"Skipping ACP router in minimal test app: {_acp_min_err}")
+    # Agent Orchestration endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import router as orch_router
+
+        app.include_router(orch_router, prefix=f"{API_V1_PREFIX}", tags=["agent-orchestration"])
+    except _IMPORT_EXCEPTIONS as _orch_min_err:
+        logger.debug(f"Skipping orchestration router in minimal test app: {_orch_min_err}")
     # Include admin router in minimal mode if available (ensure not gated by MCP import)
     try:
         if "admin_router" not in locals():
@@ -5866,6 +6024,15 @@ elif _MINIMAL_TEST_APP:
             logger.info("Route disabled by policy: evaluations (minimal test app)")
     except _STARTUP_GUARD_EXCEPTIONS as _evals_min_err:
         logger.debug(f"Skipping evaluations routers in minimal test app: {_evals_min_err}")
+    try:
+        if route_enabled("monitoring"):
+            from tldw_Server_API.app.api.v1.endpoints.monitoring import router as _monitoring_router
+
+            app.include_router(_monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
+        else:
+            logger.info("Route disabled by policy: monitoring (minimal test app)")
+    except _STARTUP_GUARD_EXCEPTIONS as _monitoring_min_err:
+        logger.debug(f"Skipping monitoring router in minimal test app: {_monitoring_min_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(
@@ -6111,6 +6278,13 @@ else:
         )
     except _IMPORT_EXCEPTIONS as _conn_e:
         logger.warning(f"Connectors endpoints unavailable; skipping import: {_conn_e}")
+    _include_if_enabled(
+        "ingestion-sources",
+        ingestion_sources_router,
+        prefix=f"{API_V1_PREFIX}",
+        tags=["ingestion-sources"],
+        default_stable=False,
+    )
     if "claims_router" in locals():
         _include_if_enabled("claims", claims_router, prefix=f"{API_V1_PREFIX}")
     if "media_embeddings_router" in locals():
@@ -6342,12 +6516,22 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.personalization import (
         router as personalization_router,
     )
+    from tldw_Server_API.app.api.v1.endpoints.companion import (
+        router as companion_router,
+    )
 
     _include_if_enabled(
         "personalization",
         personalization_router,
         prefix=f"{API_V1_PREFIX}/personalization",
         tags=["personalization"],
+        default_stable=False,
+    )
+    _include_if_enabled(
+        "companion",
+        companion_router,
+        prefix=f"{API_V1_PREFIX}/companion",
+        tags=["companion"],
         default_stable=False,
     )
     try:

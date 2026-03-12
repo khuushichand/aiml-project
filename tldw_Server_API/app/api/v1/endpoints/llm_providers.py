@@ -36,6 +36,7 @@ from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
     get_model_extra_body_compat,
     get_provider_extra_body_compat,
 )
+from tldw_Server_API.app.core.LLM_Calls.llamacpp_request_extensions import resolve_llamacpp_runtime_caps
 from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
     resolve_tokenizer_metadata,
     strict_token_counting_enabled as _strict_token_counting_enabled_shared,
@@ -1236,16 +1237,56 @@ def _should_probe_model_tokenizer(
 
 def _build_runtime_context(config_parser: Any) -> dict[str, Any]:
     strict_openai_compat = False
+    thinking_budget_request_key = ""
     try:
         if config_parser.has_section("Local-API") and config_parser.has_option("Local-API", "strict_openai_compat"):
             strict_openai_compat = _truthy(config_parser.get("Local-API", "strict_openai_compat", fallback="false"))
+        if config_parser.has_section("Local-API") and config_parser.has_option("Local-API", "llama_cpp_thinking_budget_param"):
+            thinking_budget_request_key = (
+                config_parser.get("Local-API", "llama_cpp_thinking_budget_param", fallback="") or ""
+            ).strip()
     except Exception:  # noqa: BLE001 - capability metadata should fail open
         strict_openai_compat = False
+        thinking_budget_request_key = ""
 
     env_override = os.getenv("LOCAL_LLM_STRICT_OPENAI_COMPAT")
     if env_override is not None:
         strict_openai_compat = _truthy(env_override)
-    return {"strict_openai_compat": strict_openai_compat}
+    thinking_budget_env = os.getenv("LLAMA_CPP_THINKING_BUDGET_PARAM")
+    if thinking_budget_env is not None:
+        thinking_budget_request_key = thinking_budget_env.strip()
+    return {
+        "strict_openai_compat": strict_openai_compat,
+        "thinking_budget_request_key": thinking_budget_request_key or None,
+    }
+
+
+def _resolve_llama_cpp_control_caps(runtime_context: dict[str, Any]) -> dict[str, Any]:
+    runtime_caps = resolve_llamacpp_runtime_caps(runtime_context=runtime_context)
+    strict_mode = bool(runtime_caps.get("strict_openai_compat"))
+    thinking_budget = runtime_caps.get("thinking_budget") or {}
+    request_key = str(thinking_budget.get("request_key") or "").strip()
+    return {
+        "grammar": {
+            "supported": not strict_mode,
+            "effective_reason": (
+                "disabled by strict_openai_compat runtime setting"
+                if strict_mode else "supported in current deployment"
+            ),
+            "source": "first_class+extra_body",
+        },
+        "thinking_budget": {
+            "supported": (not strict_mode) and bool(request_key),
+            "request_key": request_key or None,
+            "effective_reason": (
+                "disabled by strict_openai_compat runtime setting"
+                if strict_mode
+                else "no configured thinking-budget mapping for this deployment"
+                if not request_key else "supported in current deployment"
+            ),
+        },
+        "reserved_extra_body_keys": list(runtime_caps.get("reserved_extra_body_keys") or ["grammar"]),
+    }
 
 
 def _fallback_extra_body_compat() -> dict[str, Any]:
@@ -1627,6 +1668,7 @@ def get_configured_providers(
                 models_info = filtered
                 models = [mi['name'] for mi in models_info]
 
+            llama_cpp_controls = _resolve_llama_cpp_control_caps(runtime_context) if provider_name == "llama" else None
             strict_mode_effective = _strict_token_counting_enabled_shared(default=False)
             for model_index, model_info in enumerate(models_info):
                 model_name = str(model_info.get("name") or model_info.get("id") or "").strip()
@@ -1635,6 +1677,8 @@ def get_configured_providers(
                     model_name,
                     runtime_context,
                 )
+                if llama_cpp_controls is not None:
+                    model_info["llama_cpp_controls"] = dict(llama_cpp_controls)
                 should_probe_tokenizer, skip_reason = _should_probe_model_tokenizer(
                     provider_type=provider_info["type"],
                     model_info=model_info,
@@ -1691,6 +1735,8 @@ def get_configured_providers(
                 'extra_body_compat': _safe_provider_extra_body_compat(provider_name, runtime_context),
                 'tokenizers': tokenizers_by_model or None,
             }
+            if llama_cpp_controls is not None:
+                provider_data['llama_cpp_controls'] = llama_cpp_controls
 
             # Add endpoint for local providers
             if provider_info['type'] == 'local':

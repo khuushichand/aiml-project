@@ -677,7 +677,7 @@ class TopicMonitoringDB:
                 rows = cur.fetchall()
                 out: list[dict[str, Any]] = []
                 for r in rows:
-                    item = {k: r[k] for k in r}
+                    item = {key: r[key] for key in r.keys()}
                     out.append(item)
                 return out
             finally:

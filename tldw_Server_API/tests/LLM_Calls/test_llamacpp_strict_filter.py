@@ -1,7 +1,9 @@
 import pytest
 from unittest.mock import patch
 
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionRequest
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
+from tldw_Server_API.app.core.Chat.chat_service import build_call_params_from_request
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 
@@ -82,4 +84,25 @@ def test_llamacpp_tools_rejected_by_contract():
                 "messages": [{"role": "user", "content": "hi"}],
                 "tools": [{"type": "function", "function": {"name": "x", "parameters": {}}}],
             },
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.strict_mode
+def test_build_call_params_rejects_llamacpp_advanced_fields_in_strict_mode():
+    request = ChatCompletionRequest(
+        model="llama.cpp/local-model",
+        messages=[{"role": "user", "content": "hello"}],
+        grammar_mode="inline",
+        grammar_inline='root ::= "x"',
+    )
+
+    with pytest.raises(ChatBadRequestError):
+        build_call_params_from_request(
+            request_data=request,
+            target_api_provider="llama.cpp",
+            provider_api_key="test-key",
+            templated_llm_payload=[{"role": "user", "content": "hello"}],
+            final_system_message=None,
+            app_config={"llama_api": {"strict_openai_compat": True}},
         )

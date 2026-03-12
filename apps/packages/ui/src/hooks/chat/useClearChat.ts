@@ -125,8 +125,6 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
     setRagEnableCitations(false)
     setRagSources([])
     clearQueuedMessages()
-    setServerChatId(null)
-    setServerChatVersion(null)
     setCompareMode(false)
     setCompareSelectedModels([])
     useStoreMessageOption.setState({
@@ -134,7 +132,8 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
       compareCanonicalByCluster: {},
       compareContinuationModeByCluster: {},
       compareSplitChats: {},
-      compareActiveModelsByCluster: {}
+      compareActiveModelsByCluster: {},
+      compareParentByHistory: {}
     })
     clearReplyTarget()
     usePlaygroundSessionStore.getState().clearSession()

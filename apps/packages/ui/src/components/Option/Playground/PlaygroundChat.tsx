@@ -861,7 +861,7 @@ export const PlaygroundChat = ({
               {selectedServerChatLoadFailureMessage}
             </div>
           </div>
-        ) : messages.length === 0 && (
+        ) : messages.length === 0 && serverChatLoadState !== "loading" && (
           <div className="mt-32 w-full">
             <PlaygroundEmpty />
           </div>

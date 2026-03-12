@@ -474,6 +474,76 @@ class BackupCreateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class BackupScheduleItem(BaseModel):
+    """Authoritative backup schedule record for admin surfaces."""
+
+    id: str
+    dataset: str
+    target_user_id: int | None = None
+    frequency: Literal["daily", "weekly", "monthly"]
+    time_of_day: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    timezone: str
+    anchor_day_of_week: int | None = Field(default=None, ge=0, le=6)
+    anchor_day_of_month: int | None = Field(default=None, ge=1, le=31)
+    retention_count: int = Field(..., ge=1, le=1000)
+    is_paused: bool = False
+    schedule_description: str
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    last_status: str | None = None
+    last_job_id: str | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleListResponse(BaseModel):
+    """Response for backup schedule listing."""
+
+    items: list[BackupScheduleItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleCreateRequest(BaseModel):
+    """Request to create a platform-owned backup schedule."""
+
+    dataset: str
+    target_user_id: int | None = Field(default=None, ge=1)
+    frequency: Literal["daily", "weekly", "monthly"]
+    time_of_day: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    timezone: str | None = None
+    retention_count: int = Field(..., ge=1, le=1000)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleUpdateRequest(BaseModel):
+    """Request to update mutable backup schedule fields."""
+
+    frequency: Literal["daily", "weekly", "monthly"] | None = None
+    time_of_day: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    timezone: str | None = None
+    retention_count: int | None = Field(default=None, ge=1, le=1000)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleMutationResponse(BaseModel):
+    """Response for backup schedule create/update/pause/resume/delete operations."""
+
+    status: str
+    item: BackupScheduleItem
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class BackupRestoreRequest(BaseModel):
     """Request to restore a backup snapshot."""
     dataset: str
@@ -510,6 +580,272 @@ class RetentionPoliciesResponse(BaseModel):
 class RetentionPolicyUpdateRequest(BaseModel):
     """Request to update a retention policy."""
     days: int = Field(..., ge=1, le=3650)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestSummaryItem(BaseModel):
+    """Authoritative per-category summary entry for a DSR preview/request."""
+
+    key: str
+    label: str
+    count: NonNegativeInt
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestPreviewRequest(BaseModel):
+    """Request payload for authoritative DSR preview."""
+
+    requester_identifier: str = Field(..., min_length=1, max_length=255)
+    request_type: Literal["access", "export", "erasure"] | None = None
+    categories: list[str] | None = None
+
+    @field_validator("requester_identifier")
+    @classmethod
+    def normalize_requester_identifier(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("requester_identifier is required")
+        return normalized
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def normalize_categories(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("categories must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("categories must contain strings")
+            item = entry.strip().lower()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        return normalized
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestPreviewResponse(BaseModel):
+    """Response payload for authoritative DSR preview."""
+
+    requester_identifier: str
+    resolved_user_id: int
+    request_type: Literal["access", "export", "erasure"] | None = None
+    selected_categories: list[str]
+    summary: list[DataSubjectRequestSummaryItem]
+    counts: dict[str, NonNegativeInt]
+    coverage_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestCreateRequest(BaseModel):
+    """Request payload to record a DSR for review."""
+
+    client_request_id: str = Field(..., min_length=3, max_length=128)
+    requester_identifier: str = Field(..., min_length=1, max_length=255)
+    request_type: Literal["access", "export", "erasure"]
+    categories: list[str] | None = None
+    notes: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("client_request_id", "requester_identifier")
+    @classmethod
+    def normalize_nonempty_string(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def normalize_categories(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("categories must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("categories must contain strings")
+            item = entry.strip().lower()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        return normalized
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestItem(BaseModel):
+    """Persisted DSR record returned by admin endpoints."""
+
+    id: int
+    client_request_id: str
+    requester_identifier: str
+    resolved_user_id: int | None = None
+    request_type: Literal["access", "export", "erasure"]
+    status: str
+    selected_categories: list[str]
+    preview_summary: list[DataSubjectRequestSummaryItem]
+    coverage_metadata: dict[str, Any] = Field(default_factory=dict)
+    requested_by_user_id: int | None = None
+    requested_at: datetime
+    notes: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestCreateResponse(BaseModel):
+    """Response payload for DSR record creation."""
+
+    item: DataSubjectRequestItem
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestListResponse(BaseModel):
+    """Response payload for DSR request log listing."""
+
+    items: list[DataSubjectRequestItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Admin Monitoring Schemas
+
+class AdminAlertRuleResponse(BaseModel):
+    """Admin alert-rule response payload."""
+
+    id: int
+    metric: str
+    operator: str
+    threshold: float
+    duration_minutes: int
+    severity: str
+    enabled: bool = True
+    created_by_user_id: int | None = None
+    updated_by_user_id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleListResponse(BaseModel):
+    """List response for admin alert rules."""
+
+    items: list[AdminAlertRuleResponse]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleCreateRequest(BaseModel):
+    """Create request for an admin alert rule."""
+
+    metric: str = Field(..., min_length=1, max_length=100)
+    operator: str = Field(..., min_length=1, max_length=32)
+    threshold: float
+    duration_minutes: int = Field(..., ge=1, le=1440)
+    severity: str = Field(..., min_length=1, max_length=32)
+    enabled: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleCreateResponse(BaseModel):
+    """Create response for an admin alert rule."""
+
+    item: AdminAlertRuleResponse
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleDeleteResponse(BaseModel):
+    """Delete response for an admin alert rule."""
+
+    status: str
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertStateResponse(BaseModel):
+    """Authoritative admin overlay state for a runtime alert."""
+
+    alert_identity: str
+    assigned_to_user_id: int | None = None
+    snoozed_until: datetime | None = None
+    escalated_severity: str | None = None
+    acknowledged_at: datetime | None = None
+    dismissed_at: datetime | None = None
+    updated_by_user_id: int | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertStateMutationResponse(BaseModel):
+    """Mutation response for admin alert overlay changes."""
+
+    item: AdminAlertStateResponse
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertAssignRequest(BaseModel):
+    """Assign request for a monitoring alert."""
+
+    assigned_to_user_id: int | None = Field(default=None, ge=1)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertSnoozeRequest(BaseModel):
+    """Snooze request for a monitoring alert."""
+
+    snoozed_until: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertEscalateRequest(BaseModel):
+    """Escalate request for a monitoring alert."""
+
+    severity: Literal["warning", "critical"] = "critical"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertEventResponse(BaseModel):
+    """History item for admin monitoring alert actions."""
+
+    id: int
+    alert_identity: str
+    action: str
+    actor_user_id: int | None = None
+    details: dict[str, Any] | None = None
+    created_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertHistoryListResponse(BaseModel):
+    """List response for admin monitoring alert history."""
+
+    items: list[AdminAlertEventResponse]
 
     model_config = ConfigDict(from_attributes=True)
 

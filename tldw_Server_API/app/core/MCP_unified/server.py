@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenE
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.feature_flags import is_mcp_hub_policy_enforcement_enabled
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _env_flag_enabled,
     is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
@@ -1057,6 +1058,7 @@ class MCPServer:
             # Create request context
             context_metadata = dict(connection.metadata)
             try:
+                context_metadata["mcp_policy_context_enabled"] = is_mcp_hub_policy_enforcement_enabled()
                 if sess and sess.safe_config:
                     context_metadata["safe_config"] = dict(sess.safe_config)
                 if sess:

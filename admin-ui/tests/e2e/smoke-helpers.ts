@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import { createHmac } from 'node:crypto';
 import type { Page, Route } from '@playwright/test';
 
@@ -18,7 +19,9 @@ type AdminUserRecord = {
 };
 
 const origin = (process.env.TLDW_ADMIN_UI_URL || 'http://127.0.0.1:3001').replace('localhost', '127.0.0.1');
+const apiOrigin = new URL(process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:5999');
 const jwtSecret = process.env.JWT_SECRET_KEY || 'playwright-test-secret';
+export const singleUserApiKey = 'single-user-admin-key';
 
 export const adminUser: AdminUserRecord = {
   id: 1,
@@ -107,6 +110,38 @@ export const setAuthenticatedSession = async (page: Page) => {
       sameSite: 'Lax',
     },
   ]);
+};
+
+export const startSingleUserBackendStub = async (): Promise<() => Promise<void>> => {
+  const server = createServer((request, response) => {
+    if (request.url === '/api/v1/users/me' && request.headers['x-api-key'] === singleUserApiKey) {
+      response.writeHead(200, jsonHeaders);
+      response.end(JSON.stringify(adminUser));
+      return;
+    }
+
+    response.writeHead(401, jsonHeaders);
+    response.end(JSON.stringify({ detail: 'Invalid API key.' }));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(Number(apiOrigin.port || '80'), apiOrigin.hostname, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+
+  return async () =>
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
 };
 
 export const installAdminApiRoutes = async (page: Page) => {

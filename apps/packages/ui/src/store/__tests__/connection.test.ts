@@ -304,4 +304,44 @@ describe("connection store stability", () => {
     expect(state.serverUrl).toBe("http://192.168.5.184:8000")
     expect(mockedApiSend).toHaveBeenCalledTimes(2)
   })
+
+  it("preserves persisted first-run completion when offline bypass is enabled", async () => {
+    setConnectionState({
+      hasCompletedFirstRun: false,
+      phase: ConnectionPhase.SEARCHING,
+      isConnected: false,
+      isChecking: false
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    localStorage.setItem("__tldw_allow_offline", "true")
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.CONNECTED)
+    expect(state.offlineBypass).toBe(true)
+    expect(state.hasCompletedFirstRun).toBe(true)
+  })
+
+  it("preserves persisted first-run completion through a successful health check", async () => {
+    setConnectionState({
+      hasCompletedFirstRun: false,
+      phase: ConnectionPhase.SEARCHING,
+      isConnected: false,
+      isChecking: false
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    mockedApiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { status: "alive" }
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.CONNECTED)
+    expect(state.isConnected).toBe(true)
+    expect(state.hasCompletedFirstRun).toBe(true)
+  })
 })

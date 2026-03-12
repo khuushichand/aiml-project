@@ -2,7 +2,7 @@
 # Project and prompt schemas for Prompt Studio
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -114,6 +114,19 @@ class PromptBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Prompt name")
     system_prompt: Optional[str] = Field(None, max_length=50000, description="System prompt")
     user_prompt: Optional[str] = Field(None, max_length=50000, description="User prompt template")
+    prompt_format: Literal["legacy", "structured"] = Field(
+        "legacy",
+        description="Whether the prompt stores raw legacy fields or a structured definition.",
+    )
+    prompt_schema_version: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Structured prompt schema version when prompt_format is 'structured'.",
+    )
+    prompt_definition: Optional[dict[str, Any]] = Field(
+        None,
+        description="Structured prompt definition when prompt_format is 'structured'.",
+    )
     few_shot_examples: Optional[list[FewShotExample]] = Field(None, description="Few-shot examples")
     modules_config: Optional[list[PromptModule]] = Field(None, description="Module configurations")
     change_description: Optional[str] = Field(None, max_length=500, description="Description of changes")
@@ -129,6 +142,9 @@ class PromptUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     system_prompt: Optional[str] = Field(None, max_length=50000)
     user_prompt: Optional[str] = Field(None, max_length=50000)
+    prompt_format: Optional[Literal["legacy", "structured"]] = None
+    prompt_schema_version: Optional[int] = Field(None, ge=1)
+    prompt_definition: Optional[dict[str, Any]] = None
     few_shot_examples: Optional[list[FewShotExample]] = None
     modules_config: Optional[list[PromptModule]] = None
     change_description: str = Field(..., min_length=1, max_length=500, description="Required change description")
@@ -167,6 +183,46 @@ class PromptCompareResponse(BaseModel):
     prompt_2: PromptResponse
     differences: dict[str, Any]
     metrics_comparison: Optional[dict[str, Any]] = None
+
+
+class StructuredPromptPreviewRequest(BaseModel):
+    """Request to preview assembled prompt messages."""
+    project_id: int
+    signature_id: Optional[int] = None
+    prompt_format: Literal["legacy", "structured"] = "legacy"
+    system_prompt: Optional[str] = Field(None, max_length=50000)
+    user_prompt: Optional[str] = Field(None, max_length=50000)
+    prompt_schema_version: Optional[int] = Field(None, ge=1)
+    prompt_definition: Optional[dict[str, Any]] = None
+    few_shot_examples: Optional[list[FewShotExample]] = None
+    modules_config: Optional[list[PromptModule]] = None
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class StructuredPromptPreviewResponse(BaseModel):
+    """Preview response with assembled messages and legacy compatibility text."""
+    prompt_format: Literal["legacy", "structured"]
+    prompt_schema_version: Optional[int] = None
+    assembled_messages: list[dict[str, str]] = Field(default_factory=list)
+    legacy_system_prompt: str = ""
+    legacy_user_prompt: str = ""
+
+
+class StructuredPromptConvertRequest(BaseModel):
+    """Convert raw prompt fields into a structured prompt definition."""
+    project_id: int
+    system_prompt: Optional[str] = Field(None, max_length=50000)
+    user_prompt: Optional[str] = Field(None, max_length=50000)
+
+
+class StructuredPromptConvertResponse(BaseModel):
+    """Structured prompt conversion result."""
+    prompt_format: Literal["structured"] = "structured"
+    prompt_schema_version: int = 1
+    prompt_definition: dict[str, Any]
+    extracted_variables: list[str] = Field(default_factory=list)
+    legacy_system_prompt: str = ""
+    legacy_user_prompt: str = ""
 
 ########################################################################################################################
 # Generation Requests

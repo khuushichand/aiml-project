@@ -1,6 +1,6 @@
 import {
   buildAssignableUsers,
-  ensureTriggeredHistoryEntries,
+  normalizeAdminAlertHistoryPayload,
   normalizeMonitoringAlertsPayload,
 } from '@/lib/monitoring-alerts';
 import { buildMonitoringSystemStatus, type TimedEndpointResult } from '@/lib/monitoring-health';
@@ -22,6 +22,7 @@ export type MonitoringSettledResults = {
   metricsData: PromiseSettledResult<unknown>;
   watchlistsData: PromiseSettledResult<unknown>;
   alertsData: PromiseSettledResult<unknown>;
+  adminAlertHistoryData: PromiseSettledResult<unknown>;
   healthTimedResult: TimedEndpointResult<unknown>;
   llmHealthTimedResult: TimedEndpointResult<unknown>;
   ragHealthTimedResult: TimedEndpointResult<unknown>;
@@ -38,6 +39,7 @@ export type MonitoringApiClient = {
   getMetrics: () => Promise<unknown>;
   getWatchlists: () => Promise<unknown>;
   getAlerts: () => Promise<unknown>;
+  getAdminAlertHistory: (params: { limit: string }) => Promise<unknown>;
   getHealth: () => Promise<unknown>;
   getLlmHealth: () => Promise<unknown>;
   getRagHealth: () => Promise<unknown>;
@@ -69,6 +71,7 @@ export const fetchMonitoringSettledResults = async ({
     metricsData,
     watchlistsData,
     alertsData,
+    adminAlertHistoryData,
     healthTimedResult,
     llmHealthTimedResult,
     ragHealthTimedResult,
@@ -83,6 +86,7 @@ export const fetchMonitoringSettledResults = async ({
     apiClient.getMetrics(),
     apiClient.getWatchlists(),
     apiClient.getAlerts(),
+    apiClient.getAdminAlertHistory({ limit: '100' }),
     measureTimedRequest(() => apiClient.getHealth()),
     measureTimedRequest(() => apiClient.getLlmHealth()),
     measureTimedRequest(() => apiClient.getRagHealth()),
@@ -99,6 +103,7 @@ export const fetchMonitoringSettledResults = async ({
     metricsData,
     watchlistsData,
     alertsData,
+    adminAlertHistoryData,
     healthTimedResult,
     llmHealthTimedResult,
     ragHealthTimedResult,
@@ -123,6 +128,7 @@ export const monitoringLoadResultEntries = (
   { name: 'metrics', result: settledResults.metricsData },
   { name: 'watchlists', result: settledResults.watchlistsData },
   { name: 'alerts', result: settledResults.alertsData },
+  { name: 'adminAlertHistory', result: settledResults.adminAlertHistoryData },
   { name: 'health', result: settledResults.healthTimedResult },
   { name: 'llmHealth', result: settledResults.llmHealthTimedResult },
   { name: 'ragHealth', result: settledResults.ragHealthTimedResult },
@@ -150,7 +156,6 @@ export type MonitoringLoadResolution = {
 type ResolveMonitoringLoadStateArgs = {
   settledResults: MonitoringSettledResults;
   previousAlerts: SystemAlert[];
-  previousAlertHistory: AlertHistoryEntry[];
   metricWarningThreshold: number;
   metricCriticalThreshold: number;
 };
@@ -158,7 +163,6 @@ type ResolveMonitoringLoadStateArgs = {
 export const resolveMonitoringLoadState = ({
   settledResults,
   previousAlerts,
-  previousAlertHistory,
   metricWarningThreshold,
   metricCriticalThreshold,
 }: ResolveMonitoringLoadStateArgs): MonitoringLoadResolution => {
@@ -189,11 +193,14 @@ export const resolveMonitoringLoadState = ({
     : null;
 
   const alerts = normalizedAlerts
-    ? mergeAlertsWithLocalState(normalizedAlerts, previousAlerts)
+    ? mergeAlertsWithLocalState(
+      normalizedAlerts.filter((alert) => !alert.dismissed_at),
+      previousAlerts
+    )
     : null;
 
-  const alertHistory = normalizedAlerts
-    ? ensureTriggeredHistoryEntries(previousAlertHistory, normalizedAlerts)
+  const alertHistory = settledResults.adminAlertHistoryData.status === 'fulfilled'
+    ? normalizeAdminAlertHistoryPayload(settledResults.adminAlertHistoryData.value)
     : null;
 
   const assignableUsers = settledResults.usersData.status === 'fulfilled'

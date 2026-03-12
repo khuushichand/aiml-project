@@ -4538,6 +4538,23 @@ class CollectionsDatabase:
         res = self.backend.execute(q, (_utcnow_iso(), notification_id, self.user_id))
         return bool(res.rowcount and res.rowcount > 0)
 
+    def delete_user_notifications_by_link(
+        self,
+        *,
+        link_type: str,
+        link_ids: list[str],
+    ) -> int:
+        """Hard-delete notifications matching one link type and a bounded list of link ids."""
+        if not link_ids:
+            return 0
+        placeholders = ",".join(["?"] * len(link_ids))
+        q = (
+            f"DELETE FROM user_notifications WHERE user_id = ? AND link_type = ? AND link_id IN ({placeholders})"  # nosec B608
+        )
+        params: list[Any] = [self.user_id, str(link_type), *[str(link_id) for link_id in link_ids]]
+        res = self.backend.execute(q, tuple(params))
+        return int(res.rowcount or 0)
+
     def count_unread_user_notifications(self) -> int:
         q = (
             "SELECT COUNT(*) AS cnt FROM user_notifications "

@@ -430,15 +430,18 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     const bypass = await getOfflineBypassFlag()
     console.log('[CONN_DEBUG] flags loaded', { persistedFirstRun, persistedServerUrl, forceUnconfigured, bypass })
 
+    const currentState =
+      !prev.hasCompletedFirstRun && persistedFirstRun
+        ? {
+            ...prev,
+            hasCompletedFirstRun: true
+          }
+        : prev
+
     // Apply persisted first-run flag if not already set
-    let stateSnapshot = prev
-    if (!prev.hasCompletedFirstRun && persistedFirstRun) {
-      stateSnapshot = {
-        ...prev,
-        hasCompletedFirstRun: true
-      }
+    if (currentState !== prev) {
       set({
-        state: stateSnapshot
+        state: currentState
       })
     }
 
@@ -446,7 +449,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     if (forceUnconfigured) {
       set({
         state: {
-          ...stateSnapshot,
+          ...currentState,
           errorKind: "none",
           phase: ConnectionPhase.UNCONFIGURED,
           serverUrl: persistedServerUrl,
@@ -472,12 +475,12 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       const serverUrl =
         persistedServerUrl ??
         (await ensurePlaceholderConfig()) ??
-        stateSnapshot.serverUrl ??
+        currentState.serverUrl ??
         "offline://local"
 
       set({
         state: {
-          ...stateSnapshot,
+          ...currentState,
           phase: ConnectionPhase.CONNECTED,
           serverUrl,
           isConnected: true,
@@ -499,29 +502,29 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     // Throttle repeated checks when already connected recently.
     // This prevents the landing page/header from hammering the server.
     const now = Date.now()
-    const nextChecksSinceConfigChange = stateSnapshot.checksSinceConfigChange + 1
+    const nextChecksSinceConfigChange = currentState.checksSinceConfigChange + 1
     if (
-      stateSnapshot.isConnected &&
-      stateSnapshot.phase === ConnectionPhase.CONNECTED &&
-      stateSnapshot.lastCheckedAt != null &&
-      now - stateSnapshot.lastCheckedAt < CONNECTED_THROTTLE_MS
+      currentState.isConnected &&
+      currentState.phase === ConnectionPhase.CONNECTED &&
+      currentState.lastCheckedAt != null &&
+      now - currentState.lastCheckedAt < CONNECTED_THROTTLE_MS
     ) {
       return
     }
 
     const isBackgroundRefresh =
-      stateSnapshot.isConnected && stateSnapshot.phase === ConnectionPhase.CONNECTED
+      currentState.isConnected && currentState.phase === ConnectionPhase.CONNECTED
     set({
       state: {
-        ...stateSnapshot,
+        ...currentState,
         phase: isBackgroundRefresh
           ? ConnectionPhase.CONNECTED
           : ConnectionPhase.SEARCHING,
-        serverUrl: persistedServerUrl ?? stateSnapshot.serverUrl,
-        errorKind: isBackgroundRefresh ? stateSnapshot.errorKind : "none",
+        serverUrl: persistedServerUrl ?? currentState.serverUrl,
+        errorKind: isBackgroundRefresh ? currentState.errorKind : "none",
         isChecking: true,
         offlineBypass: false,
-        lastError: isBackgroundRefresh ? stateSnapshot.lastError : null,
+        lastError: isBackgroundRefresh ? currentState.lastError : null,
         checksSinceConfigChange: nextChecksSinceConfigChange
       }
     })
@@ -559,7 +562,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       if (!serverUrl) {
         set({
           state: {
-            ...stateSnapshot,
+            ...currentState,
             phase: ConnectionPhase.UNCONFIGURED,
             serverUrl: null,
             isConnected: false,
@@ -674,13 +677,13 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         serverUrl
       })
 
-      let knowledgeStatus: KnowledgeStatus = stateSnapshot.knowledgeStatus
-      let knowledgeLastCheckedAt = stateSnapshot.knowledgeLastCheckedAt
-      let knowledgeError = stateSnapshot.knowledgeError
+      let knowledgeStatus: KnowledgeStatus = currentState.knowledgeStatus
+      let knowledgeLastCheckedAt = currentState.knowledgeLastCheckedAt
+      let knowledgeError = currentState.knowledgeError
       const shouldRefreshKnowledge =
-        !stateSnapshot.knowledgeLastCheckedAt ||
-        now - stateSnapshot.knowledgeLastCheckedAt >= KNOWLEDGE_RECHECK_INTERVAL_MS ||
-        stateSnapshot.knowledgeStatus !== "ready"
+        !currentState.knowledgeLastCheckedAt ||
+        now - currentState.knowledgeLastCheckedAt >= KNOWLEDGE_RECHECK_INTERVAL_MS ||
+        currentState.knowledgeStatus !== "ready"
 
       if (ok && shouldRefreshKnowledge) {
         try {
@@ -716,7 +719,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       }
 
       let errorKind: ConnectionState["errorKind"] = "none"
-      const nextConsecutiveFailures = ok ? 0 : stateSnapshot.consecutiveFailures + 1
+      const nextConsecutiveFailures = ok ? 0 : currentState.consecutiveFailures + 1
 
       if (ok) {
         if (knowledgeStatus === "offline") {
@@ -736,14 +739,14 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       const holdConnectedOnTransientFailure =
         !ok &&
         errorKind === "unreachable" &&
-        stateSnapshot.isConnected &&
-        stateSnapshot.phase === ConnectionPhase.CONNECTED &&
+        currentState.isConnected &&
+        currentState.phase === ConnectionPhase.CONNECTED &&
         nextConsecutiveFailures < CONNECTED_FAILURE_THRESHOLD
 
       if (holdConnectedOnTransientFailure) {
         set({
           state: {
-            ...stateSnapshot,
+            ...currentState,
             phase: ConnectionPhase.CONNECTED,
             isConnected: true,
             isChecking: false,
@@ -767,7 +770,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       })
       set({
         state: {
-          ...stateSnapshot,
+          ...currentState,
           phase: ok ? ConnectionPhase.CONNECTED : ConnectionPhase.ERROR,
           serverUrl,
           isConnected: ok,
@@ -795,15 +798,15 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         maybeAnnotateCorsMismatchError({
           error: (error as Error)?.message ?? "unknown-error",
           status: 0,
-          serverUrl: stateSnapshot.serverUrl
+          serverUrl: currentState.serverUrl
         }) ?? "unknown-error"
       set({
         state: {
-          ...stateSnapshot,
+          ...currentState,
           phase: ConnectionPhase.ERROR,
           isConnected: false,
           isChecking: false,
-          consecutiveFailures: stateSnapshot.consecutiveFailures + 1,
+          consecutiveFailures: currentState.consecutiveFailures + 1,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
           lastError: fallbackError,

@@ -24,6 +24,9 @@ class RuntimePreflightResult:
     runtime: RuntimeType
     available: bool
     reasons: list[str] = field(default_factory=list)
+    supported_trust_levels: list[str] = field(
+        default_factory=lambda: ["trusted", "standard", "untrusted"]
+    )
     host: dict[str, Any] = field(default_factory=dict)
     enforcement_ready: dict[str, bool] = field(
         default_factory=lambda: {"deny_all": False, "allowlist": False}
@@ -39,6 +42,9 @@ def collect_runtime_preflights(
     from .runners.docker_runner import docker_available
     from .runners.firecracker_runner import firecracker_available
     from .runners.lima_runner import LimaRunner
+    from .runners.seatbelt_runner import SeatbeltRunner
+    from .runners.vz_linux_runner import VZLinuxRunner
+    from .runners.vz_macos_runner import VZMacOSRunner
 
     requested_policy = str(network_policy or "deny_all").strip().lower() or "deny_all"
 
@@ -57,4 +63,7 @@ def collect_runtime_preflights(
             reasons=[] if firecracker_ok else ["firecracker_unavailable"],
         ),
         RuntimeType.lima: LimaRunner().preflight(network_policy=requested_policy),
+        RuntimeType.seatbelt: SeatbeltRunner().preflight(network_policy=requested_policy),
+        RuntimeType.vz_linux: VZLinuxRunner().preflight(network_policy=requested_policy),
+        RuntimeType.vz_macos: VZMacOSRunner().preflight(network_policy=requested_policy),
     }

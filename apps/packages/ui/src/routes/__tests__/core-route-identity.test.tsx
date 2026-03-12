@@ -1,13 +1,16 @@
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import OptionIndex from "../option-index"
 import OptionSetup from "../option-setup"
 import OptionOnboardingTest from "../option-onboarding-test"
+import { ConnectionPhase } from "@/types/connection"
 
 const state = {
   hasCompletedFirstRun: false
 }
+let phase: ConnectionPhase | null = null
+const toggleDarkModeMock = vi.fn()
 
 const optionLayoutMock = vi.fn(
   ({
@@ -35,7 +38,7 @@ vi.mock("~/components/Layouts/Layout", () => ({
 
 vi.mock("@/hooks/useConnectionState", () => ({
   useConnectionState: () => ({
-    phase: null
+    phase
   }),
   useConnectionUxState: () => ({
     uxState: null,
@@ -50,6 +53,13 @@ vi.mock("@/hooks/useConnectionState", () => ({
 
 vi.mock("@/hooks/useComposerFocus", () => ({
   useFocusComposerOnConnect: () => undefined
+}))
+
+vi.mock("@/hooks/useDarkmode", () => ({
+  useDarkMode: () => ({
+    mode: "dark",
+    toggleDarkMode: toggleDarkModeMock
+  })
 }))
 
 vi.mock("react-router-dom", () => ({
@@ -87,7 +97,9 @@ describe("core route identity guardrails", () => {
     checkOnceMock.mockReset().mockResolvedValue(undefined)
     beginOnboardingMock.mockReset().mockResolvedValue(undefined)
     markFirstRunCompleteMock.mockReset().mockResolvedValue(undefined)
+    toggleDarkModeMock.mockReset()
     state.hasCompletedFirstRun = false
+    phase = null
   })
 
   it("provides unique route-intent headings for home/setup/onboarding-test", () => {
@@ -152,5 +164,39 @@ describe("core route identity guardrails", () => {
 
     // Prevent unresolved Promise leakage in this test process.
     resolveCheck?.()
+  })
+
+  it("does not auto-restart onboarding after hydration when the connection is already resolved", async () => {
+    phase = ConnectionPhase.CONNECTED
+
+    let resolveCheck: (() => void) | null = null
+    checkOnceMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCheck = resolve
+        })
+    )
+
+    render(<OptionIndex />)
+
+    await act(async () => {
+      resolveCheck?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(checkOnceMock).toHaveBeenCalledTimes(1)
+    expect(beginOnboardingMock).not.toHaveBeenCalled()
+  })
+
+  it("keeps an explicit theme toggle available on the home onboarding shell", () => {
+    render(<OptionIndex />)
+
+    const toggle = screen.getByTestId("chat-header-theme-toggle")
+    expect(toggle).toBeInTheDocument()
+
+    fireEvent.click(toggle)
+
+    expect(toggleDarkModeMock).toHaveBeenCalledTimes(1)
   })
 })

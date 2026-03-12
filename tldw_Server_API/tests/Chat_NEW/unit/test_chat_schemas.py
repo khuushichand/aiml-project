@@ -212,6 +212,34 @@ class TestChatCompletionRequest:
         )
         assert request.stream is False
 
+    @pytest.mark.unit
+    def test_llamacpp_extension_fields_are_first_class_schema_fields(self):
+        """Test llama.cpp extension fields round-trip through the request schema."""
+        request = ChatCompletionRequest(
+            model="llama.cpp/local-model",
+            messages=[{"role": "user", "content": "test"}],
+            grammar_mode="library",
+            grammar_id="grammar_1",
+            grammar_override='root ::= "ok"',
+            thinking_budget_tokens=64,
+        )
+        dumped = request.model_dump()
+        assert dumped["grammar_mode"] == "library"
+        assert dumped["grammar_id"] == "grammar_1"
+        assert dumped["thinking_budget_tokens"] == 64
+
+    @pytest.mark.unit
+    def test_llamacpp_inline_mode_requires_inline_grammar(self):
+        """Test llama.cpp inline grammar mode validation."""
+        with pytest.raises(ValidationError) as exc_info:
+            ChatCompletionRequest(
+                model="llama.cpp/local-model",
+                messages=[{"role": "user", "content": "test"}],
+                grammar_mode="inline",
+            )
+
+        assert "grammar_inline is required" in str(exc_info.value)
+
 # ========================================================================
 # Response Format Tests
 # ========================================================================

@@ -119,6 +119,7 @@ import {
   getPromptImportErrorNotice,
   parseImportPromptsPayload
 } from "./prompt-import-error-utils"
+import { renderStructuredPromptLegacySnapshot } from "./structured-prompt-utils"
 import { buildBulkCountSummary, collectFailedIds } from "./bulk-result-utils"
 import {
   filterTrashPromptsByName,
@@ -555,6 +556,10 @@ export const PromptBody = () => {
         lastSyncedAt: promptRecord?.lastSyncedAt,
         fewShotExamples: promptRecord?.fewShotExamples,
         modulesConfig: promptRecord?.modulesConfig,
+        promptFormat: promptRecord?.promptFormat ?? "legacy",
+        promptSchemaVersion: promptRecord?.promptSchemaVersion ?? null,
+        structuredPromptDefinition:
+          promptRecord?.structuredPromptDefinition ?? null,
         changeDescription: promptRecord?.changeDescription,
         versionNumber: promptRecord?.versionNumber
       })
@@ -808,12 +813,24 @@ export const PromptBody = () => {
   const normalizePromptPayload = React.useCallback((values: any) => {
     const keywords = values?.keywords ?? values?.tags ?? []
     const promptName = values?.name || values?.title
-    const hasSystemPrompt = !!(values?.system_prompt?.trim())
+    const promptFormat = values?.promptFormat === "structured" ? "structured" : "legacy"
+    const structuredPromptDefinition =
+      promptFormat === "structured" ? values?.structuredPromptDefinition ?? null : null
+    const structuredSnapshot =
+      promptFormat === "structured"
+        ? renderStructuredPromptLegacySnapshot(structuredPromptDefinition)
+        : null
+    const normalizedSystemPrompt =
+      structuredSnapshot?.systemPrompt ?? values?.system_prompt
+    const normalizedUserPrompt =
+      structuredSnapshot?.userPrompt ?? values?.user_prompt
+    const hasSystemPrompt = !!(normalizedSystemPrompt?.trim())
     const resolvedContent =
       values?.content ??
-      (hasSystemPrompt ? values?.system_prompt : values?.user_prompt) ??
-      values?.system_prompt ??
-      values?.user_prompt
+      structuredSnapshot?.content ??
+      (hasSystemPrompt ? normalizedSystemPrompt : normalizedUserPrompt) ??
+      normalizedSystemPrompt ??
+      normalizedUserPrompt
 
     return {
       ...values,
@@ -822,8 +839,11 @@ export const PromptBody = () => {
       tags: keywords,
       keywords,
       content: resolvedContent,
-      system_prompt: values?.system_prompt,
-      user_prompt: values?.user_prompt,
+      promptFormat,
+      promptSchemaVersion: promptFormat === "structured" ? values?.promptSchemaVersion ?? 1 : null,
+      structuredPromptDefinition,
+      system_prompt: normalizedSystemPrompt,
+      user_prompt: normalizedUserPrompt,
       author: values?.author,
       details: values?.details,
       is_system: hasSystemPrompt
@@ -2447,6 +2467,10 @@ export const PromptBody = () => {
           details: promptRecord?.details,
           system_prompt: systemText,
           user_prompt: userText,
+          promptFormat: promptRecord?.promptFormat ?? "legacy",
+          promptSchemaVersion: promptRecord?.promptSchemaVersion ?? null,
+          structuredPromptDefinition:
+            promptRecord?.structuredPromptDefinition ?? null,
           keywords: promptRecord?.keywords ?? promptRecord?.tags ?? [],
           changeDescription: promptRecord?.changeDescription,
         })
@@ -2900,6 +2924,9 @@ export const PromptBody = () => {
       details: record?.details,
       system_prompt: systemText,
       user_prompt: userText,
+      promptFormat: record?.promptFormat ?? "legacy",
+      promptSchemaVersion: record?.promptSchemaVersion ?? null,
+      structuredPromptDefinition: record?.structuredPromptDefinition ?? null,
       keywords: getPromptKeywords(record),
       // Sync fields for progressive disclosure
       serverId: record?.serverId,

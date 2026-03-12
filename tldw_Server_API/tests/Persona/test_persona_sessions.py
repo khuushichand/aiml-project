@@ -73,6 +73,87 @@ def test_persona_sessions_list_and_detail_roundtrip(monkeypatch, persona_db: Cha
     fastapi_app.dependency_overrides.clear()
 
 
+def test_persona_sessions_list_and_detail_fall_back_to_persisted_preferences(
+    monkeypatch,
+    persona_db: CharactersRAGDB,
+):
+    manager = SessionManager()
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+
+    with _client_for_user(1, persona_db) as client:
+        created = client.post("/api/v1/persona/session", json={"persona_id": "research_assistant"})
+        assert created.status_code == 200
+        session_id = created.json()["session_id"]
+
+    session_row = persona_db.get_persona_session(session_id, user_id="1", include_deleted=False)
+    assert session_row is not None
+    assert persona_db.update_persona_session(
+        session_id=session_id,
+        user_id="1",
+        update_data={
+            "preferences_json": {
+                "use_memory_context": True,
+                "use_companion_context": False,
+                "use_persona_state_context": False,
+                "memory_top_k": 3,
+            }
+        },
+        expected_version=int(session_row["version"]),
+    )
+
+    restarted_manager = SessionManager()
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: restarted_manager)
+
+    with _client_for_user(1, persona_db) as client:
+        listed = client.get("/api/v1/persona/sessions")
+        assert listed.status_code == 200
+        payload = listed.json()
+        matched = next(item for item in payload if item["session_id"] == session_id)
+        assert matched["preferences"]["use_companion_context"] is False
+        assert matched["preferences"]["use_persona_state_context"] is False
+        assert matched["preferences"]["memory_top_k"] == 3
+
+        detail = client.get(f"/api/v1/persona/sessions/{session_id}?limit_turns=10")
+        assert detail.status_code == 200
+        detail_payload = detail.json()
+        assert detail_payload["preferences"]["use_companion_context"] is False
+        assert detail_payload["preferences"]["use_persona_state_context"] is False
+        assert detail_payload["preferences"]["memory_top_k"] == 3
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_sessions_list_filters_by_surface(monkeypatch, persona_db: CharactersRAGDB):
+    manager = SessionManager()
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+
+    with _client_for_user(1, persona_db) as client:
+        generic = client.post("/api/v1/persona/session", json={"persona_id": "research_assistant"})
+        assert generic.status_code == 200
+        generic_session_id = generic.json()["session_id"]
+
+        companion = client.post(
+            "/api/v1/persona/session",
+            json={
+                "persona_id": "research_assistant",
+                "surface": "companion.conversation",
+            },
+        )
+        assert companion.status_code == 200
+        companion_session_id = companion.json()["session_id"]
+
+        filtered = client.get(
+            "/api/v1/persona/sessions?persona_id=research_assistant&surface=companion.conversation"
+        )
+        assert filtered.status_code == 200
+        payload = filtered.json()
+        assert [item["session_id"] for item in payload] == [companion_session_id]
+        assert companion_session_id in {item["session_id"] for item in payload}
+        assert generic_session_id not in {item["session_id"] for item in payload}
+
+    fastapi_app.dependency_overrides.clear()
+
+
 def test_persona_session_resume_rejects_ownership_mismatch(monkeypatch, persona_db: CharactersRAGDB):
     manager = SessionManager()
     _ = manager.create(user_id="1", persona_id="research_assistant", resume_session_id="sess_owned_by_1")
