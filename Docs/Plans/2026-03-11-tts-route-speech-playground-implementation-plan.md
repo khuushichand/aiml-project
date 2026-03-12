@@ -1,7 +1,5 @@
 # `/tts` Speech Playground Reuse Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Make `/tts` reuse the redesigned `SpeechPlaygroundPage` in TTS-only mode instead of rendering the legacy `TtsPlaygroundPage`.
 
 **Architecture:** Repoint the shared `/tts` route to `SpeechPlaygroundPage`, then add an explicit locked-mode contract so the shared page can behave as a dedicated TTS entrypoint without mutating or depending on the remembered multi-mode state used by `/speech`. Keep `/speech` unchanged and leave `TtsPlaygroundPage` in place as an unused follow-up cleanup candidate.

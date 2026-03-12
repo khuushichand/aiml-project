@@ -8,6 +8,7 @@ type UseTranscriptionModelsCatalogOptions = {
   activeModel?: string
   autoRetryOnFailureCount?: number
   defaultModel?: string
+  enabled?: boolean
   onInitialModel?: (model: string) => void
   warnLabel?: string
 }
@@ -31,6 +32,7 @@ export function useTranscriptionModelsCatalog(
     activeModel,
     autoRetryOnFailureCount = 0,
     defaultModel,
+    enabled = true,
     onInitialModel,
     warnLabel
   } = options
@@ -44,6 +46,14 @@ export function useTranscriptionModelsCatalog(
 
   React.useEffect(() => {
     let cancelled = false
+
+    if (!enabled) {
+      setServerModelsLoading(false)
+      setServerModelsError(null)
+      return () => {
+        cancelled = true
+      }
+    }
 
     const fetchModels = async () => {
       setServerModelsLoading(true)
@@ -110,6 +120,7 @@ export function useTranscriptionModelsCatalog(
     activeModel,
     autoRetryOnFailureCount,
     defaultModel,
+    enabled,
     modelsLoadAttempt,
     onInitialModel,
     t,

@@ -308,6 +308,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   } = useTranscriptionModelsCatalog({
     activeModel,
     defaultModel: sttModel,
+    enabled: effectiveMode !== "listen",
     onInitialModel: setActiveModel,
     warnLabel: "Speech Playground"
   })

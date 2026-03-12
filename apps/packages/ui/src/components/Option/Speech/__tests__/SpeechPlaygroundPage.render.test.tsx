@@ -307,6 +307,7 @@ describe("SpeechPlaygroundPage", () => {
     expect(screen.queryByText("Mode")).not.toBeInTheDocument()
     expect(screen.queryByText("Current transcription model")).not.toBeInTheDocument()
     expect(screen.getByTestId("tts-provider-strip")).toBeInTheDocument()
+    expect(getTranscriptionModelsMock).not.toHaveBeenCalled()
   })
 
   it("uses TTS-specific page copy and history controls when locked to listen mode", (): void => {
@@ -357,5 +358,6 @@ describe("SpeechPlaygroundPage", () => {
     expect(screen.getByText("Speech Playground")).toBeInTheDocument()
     expect(screen.getByText("Mode")).toBeInTheDocument()
     expect(screen.getByTestId("speech-history-type-filter")).toBeInTheDocument()
+    expect(getTranscriptionModelsMock).toHaveBeenCalled()
   })
 })
