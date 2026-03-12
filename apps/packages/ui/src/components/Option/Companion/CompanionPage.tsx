@@ -6,15 +6,24 @@ import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import {
   createCompanionGoal,
+  fetchCompanionKnowledgeDetail,
+  fetchCompanionReflectionDetail,
   fetchPersonalizationProfile,
   fetchCompanionWorkspaceSnapshot,
+  purgeCompanionScope,
+  queueCompanionRebuild,
   recordCompanionCheckIn,
   setCompanionGoalStatus,
   type CompanionActivityItem,
   type CompanionGoal,
+  type CompanionKnowledgeDetail,
+  type CompanionLifecycleResponse,
+  type CompanionLifecycleScope,
   type PersonalizationProfile,
   type CompanionReflection,
+  type CompanionReflectionDetail,
   type CompanionWorkspaceSnapshot,
+  updateCompanionPreferences,
   updatePersonalizationOptIn
 } from "@/services/companion"
 
@@ -64,6 +73,21 @@ const summarizeProgress = (goal: CompanionGoal): string => {
   return "Progress tracked from explicit activity."
 }
 
+const lifecycleScopeLabel = (scope: CompanionLifecycleScope): string => {
+  switch (scope) {
+    case "knowledge":
+      return "knowledge"
+    case "reflections":
+      return "reflections"
+    case "derived_goals":
+      return "derived goals"
+    case "goal_progress":
+      return "goal progress"
+    default:
+      return scope
+  }
+}
+
 const reflectionInboxLabel = (
   reflection: CompanionReflection,
   snapshot: CompanionWorkspaceSnapshot
@@ -74,6 +98,18 @@ const reflectionInboxLabel = (
   if (!linkedNotification) return null
   return linkedNotification.read_at ? "In inbox" : "New in inbox"
 }
+
+const normalizeFollowUpPrompts = (
+  value: CompanionReflectionDetail["follow_up_prompts"]
+): CompanionReflectionDetail["follow_up_prompts"] =>
+  Array.isArray(value)
+    ? value.filter(
+        (item) =>
+          item &&
+          typeof item.prompt_text === "string" &&
+          item.prompt_text.trim().length > 0
+      )
+    : []
 
 type CompanionPageProps = {
   surface?: "options" | "sidepanel"
@@ -90,6 +126,24 @@ type GoalFormState = {
   title: string
   description: string
 }
+
+type ProvenanceState =
+  | { kind: "knowledge"; detail: CompanionKnowledgeDetail }
+  | { kind: "reflection"; detail: CompanionReflectionDetail }
+  | null
+
+type CompanionPreferenceToggleKey =
+  | "proactive_enabled"
+  | "companion_reflections_enabled"
+  | "companion_daily_reflections_enabled"
+  | "companion_weekly_reflections_enabled"
+
+type PendingLifecycleAction =
+  | {
+      mode: "purge" | "rebuild"
+      scope: CompanionLifecycleScope
+    }
+  | null
 
 export const CompanionPage = ({
   surface = "options",
@@ -119,6 +173,18 @@ export const CompanionPage = ({
   const [creatingGoal, setCreatingGoal] = React.useState(false)
   const [updatingGoalId, setUpdatingGoalId] = React.useState<string | null>(null)
   const [enablingCompanion, setEnablingCompanion] = React.useState(false)
+  const [savingPreferenceKey, setSavingPreferenceKey] =
+    React.useState<CompanionPreferenceToggleKey | null>(null)
+  const [provenance, setProvenance] = React.useState<ProvenanceState>(null)
+  const [loadingProvenanceId, setLoadingProvenanceId] = React.useState<string | null>(
+    null
+  )
+  const [pendingLifecycleAction, setPendingLifecycleAction] =
+    React.useState<PendingLifecycleAction>(null)
+  const [runningLifecycleAction, setRunningLifecycleAction] =
+    React.useState<string | null>(null)
+  const [lifecycleResult, setLifecycleResult] =
+    React.useState<CompanionLifecycleResponse | null>(null)
 
   const updateCheckInForm = (field: keyof CheckInFormState, value: string) => {
     setCheckInForm((current) => ({
@@ -199,6 +265,96 @@ export const CompanionPage = ({
       )
     } finally {
       setEnablingCompanion(false)
+    }
+  }
+
+  const handlePreferenceToggle = async (
+    key: CompanionPreferenceToggleKey,
+    value: boolean
+  ) => {
+    setSavingPreferenceKey(key)
+    setError(null)
+    try {
+      const nextProfile = await updateCompanionPreferences({ [key]: value })
+      setProfile(nextProfile)
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Failed to update companion settings."
+      )
+    } finally {
+      setSavingPreferenceKey(null)
+    }
+  }
+
+  const handleOpenKnowledgeProvenance = async (cardId: string) => {
+    setLoadingProvenanceId(cardId)
+    setError(null)
+    try {
+      const detail = await fetchCompanionKnowledgeDetail(cardId)
+      setProvenance({ kind: "knowledge", detail })
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Failed to load knowledge provenance."
+      )
+    } finally {
+      setLoadingProvenanceId(null)
+    }
+  }
+
+  const handleOpenReflectionProvenance = async (reflectionId: string) => {
+    setLoadingProvenanceId(reflectionId)
+    setError(null)
+    try {
+      const detail = await fetchCompanionReflectionDetail(reflectionId)
+      setProvenance({ kind: "reflection", detail })
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Failed to load reflection provenance."
+      )
+    } finally {
+      setLoadingProvenanceId(null)
+    }
+  }
+
+  const handleLifecycleRequest = (
+    mode: "purge" | "rebuild",
+    scope: CompanionLifecycleScope
+  ) => {
+    setPendingLifecycleAction({ mode, scope })
+    setLifecycleResult(null)
+    setError(null)
+  }
+
+  const handleConfirmLifecycleAction = async () => {
+    if (!pendingLifecycleAction) return
+    const actionKey = `${pendingLifecycleAction.mode}:${pendingLifecycleAction.scope}`
+    setRunningLifecycleAction(actionKey)
+    setError(null)
+    try {
+      const result =
+        pendingLifecycleAction.mode === "purge"
+          ? await purgeCompanionScope(pendingLifecycleAction.scope)
+          : await queueCompanionRebuild(pendingLifecycleAction.scope)
+      setLifecycleResult(result)
+      setPendingLifecycleAction(null)
+      if (pendingLifecycleAction.mode === "purge") {
+        setProvenance(null)
+        handleRefresh()
+      }
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Failed to update companion lifecycle state."
+      )
+    } finally {
+      setRunningLifecycleAction(null)
     }
   }
 
@@ -356,6 +512,7 @@ export const CompanionPage = ({
   const goals = snapshot?.goals ?? []
   const reflections = snapshot?.reflections ?? []
   const showAdjacentLinks = surface === "options"
+  const showLifecycleControls = surface === "options"
 
   return (
     <section className="mx-auto max-w-7xl px-6 py-8" data-testid="companion-page">
@@ -544,6 +701,16 @@ export const CompanionPage = ({
                     <p className="mt-3 text-xs text-slate-500">
                       Evidence: {card.evidence.length} · Updated {formatTimestamp(card.updated_at)}
                     </p>
+                    <div className="mt-4">
+                      <button
+                        className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={loadingProvenanceId === card.id}
+                        onClick={() => handleOpenKnowledgeProvenance(card.id)}
+                        type="button"
+                      >
+                        View knowledge provenance
+                      </button>
+                    </div>
                   </article>
                 ))
               ) : (
@@ -557,6 +724,356 @@ export const CompanionPage = ({
         </div>
 
         <div className="space-y-6">
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-xl font-semibold text-slate-950">Settings</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Decide whether companion reflections are active before anything is
+              queued or surfaced back to you.
+            </p>
+            <div className="mt-5 space-y-3">
+              <label className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">Companion reflections</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Master switch for daily and weekly companion reflection jobs.
+                  </p>
+                </div>
+                <input
+                  aria-label="Companion reflections"
+                  checked={profile?.companion_reflections_enabled !== false}
+                  disabled={savingPreferenceKey === "companion_reflections_enabled"}
+                  onChange={(event) =>
+                    handlePreferenceToggle(
+                      "companion_reflections_enabled",
+                      event.target.checked
+                    )
+                  }
+                  type="checkbox"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">Daily reflections</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Allow the daily reflection cadence to enqueue when activity is present.
+                  </p>
+                </div>
+                <input
+                  aria-label="Daily reflections"
+                  checked={profile?.companion_daily_reflections_enabled !== false}
+                  disabled={
+                    profile?.companion_reflections_enabled === false ||
+                    savingPreferenceKey === "companion_daily_reflections_enabled"
+                  }
+                  onChange={(event) =>
+                    handlePreferenceToggle(
+                      "companion_daily_reflections_enabled",
+                      event.target.checked
+                    )
+                  }
+                  type="checkbox"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">Weekly reflections</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Keep the weekly synthesis available for longer-running focus shifts.
+                  </p>
+                </div>
+                <input
+                  aria-label="Weekly reflections"
+                  checked={profile?.companion_weekly_reflections_enabled !== false}
+                  disabled={
+                    profile?.companion_reflections_enabled === false ||
+                    savingPreferenceKey === "companion_weekly_reflections_enabled"
+                  }
+                  onChange={(event) =>
+                    handlePreferenceToggle(
+                      "companion_weekly_reflections_enabled",
+                      event.target.checked
+                    )
+                  }
+                  type="checkbox"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">Proactive delivery</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Control whether companion reflections can be delivered into the inbox.
+                  </p>
+                </div>
+                <input
+                  aria-label="Proactive delivery"
+                  checked={profile?.proactive_enabled !== false}
+                  disabled={savingPreferenceKey === "proactive_enabled"}
+                  onChange={(event) =>
+                    handlePreferenceToggle("proactive_enabled", event.target.checked)
+                  }
+                  type="checkbox"
+                />
+              </label>
+            </div>
+          </section>
+
+          <section
+            className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"
+            data-testid="companion-provenance"
+          >
+            <h2 className="text-xl font-semibold text-slate-950">Provenance</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Inspect the exact ids and resolved records behind a knowledge card or reflection.
+            </p>
+            <div className="mt-5">
+              {!provenance ? (
+                <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-6 text-sm text-slate-500">
+                  Choose “View provenance” on a knowledge card or reflection to inspect its
+                  source event ids, linked cards, and goals.
+                </p>
+              ) : provenance.kind === "reflection" ? (
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Reflection detail
+                    </p>
+                    <h3 className="mt-1 text-base font-semibold text-slate-950">
+                      {provenance.detail.title}
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {provenance.detail.summary}
+                    </p>
+                  </div>
+                  {normalizeFollowUpPrompts(provenance.detail.follow_up_prompts).length ? (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Follow-up prompts
+                      </p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        These stay visible only after you open a reflection detail.
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {normalizeFollowUpPrompts(provenance.detail.follow_up_prompts).map(
+                          (prompt) => (
+                            <button
+                              className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-800"
+                              key={prompt.prompt_id}
+                              type="button"
+                            >
+                              {prompt.label}
+                            </button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Source event ids
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(Array.isArray(provenance.detail.provenance.source_event_ids)
+                        ? provenance.detail.provenance.source_event_ids
+                        : []
+                      ).map((item) => (
+                        <span
+                          className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+                          key={String(item)}
+                        >
+                          {String(item)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Knowledge cards
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {provenance.detail.knowledge_cards.map((card) => (
+                          <div
+                            className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                            key={card.id}
+                          >
+                            <span className="font-medium">{card.id}</span>
+                            <div className="mt-1 text-xs text-slate-500">{card.title}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Goals
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {provenance.detail.goals.map((goal) => (
+                          <div
+                            className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                            key={goal.id}
+                          >
+                            <span className="font-medium">{goal.id}</span>
+                            <div className="mt-1 text-xs text-slate-500">{goal.title}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Knowledge detail
+                    </p>
+                    <h3 className="mt-1 text-base font-semibold text-slate-950">
+                      {provenance.detail.title}
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {provenance.detail.summary}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Source event ids
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {provenance.detail.evidence_events.map((item) => (
+                        <span
+                          className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+                          key={item.id}
+                        >
+                          {item.id}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Evidence events
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {provenance.detail.evidence_events.map((item) => (
+                          <div
+                            className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                            key={item.id}
+                          >
+                            <span className="font-medium">{item.id}</span>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {describeActivity(item)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Evidence goals
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {provenance.detail.evidence_goals.map((goal) => (
+                          <div
+                            className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                            key={goal.id}
+                          >
+                            <span className="font-medium">{goal.id}</span>
+                            <div className="mt-1 text-xs text-slate-500">{goal.title}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {showLifecycleControls ? (
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-semibold text-slate-950">Lifecycle controls</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Purge or rebuild only derived companion state. Explicit activity remains intact.
+              </p>
+              <div className="mt-5 grid gap-3">
+                {(["knowledge", "reflections", "derived_goals", "goal_progress"] as CompanionLifecycleScope[]).map((scope) => (
+                  <div
+                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+                    key={scope}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-slate-900">
+                          {titleCase(lifecycleScopeLabel(scope))}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Scoped action only for {lifecycleScopeLabel(scope)}.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          className="rounded-full border border-rose-300 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-700 hover:border-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={runningLifecycleAction !== null}
+                          onClick={() => handleLifecycleRequest("purge", scope)}
+                          type="button"
+                        >
+                          {`Purge ${lifecycleScopeLabel(scope)}`}
+                        </button>
+                        <button
+                          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={runningLifecycleAction !== null}
+                          onClick={() => handleLifecycleRequest("rebuild", scope)}
+                          type="button"
+                        >
+                          {`Rebuild ${lifecycleScopeLabel(scope)}`}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {pendingLifecycleAction ? (
+                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                  <p className="text-sm font-medium text-amber-900">
+                    Confirm {pendingLifecycleAction.mode} for{" "}
+                    {lifecycleScopeLabel(pendingLifecycleAction.scope)}?
+                  </p>
+                  <p className="mt-1 text-xs text-amber-800">
+                    This only affects derived companion data. Explicit captured activity stays intact.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      className="rounded-full border border-amber-900 bg-amber-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={runningLifecycleAction !== null}
+                      onClick={handleConfirmLifecycleAction}
+                      type="button"
+                    >
+                      {`Confirm ${pendingLifecycleAction.mode} ${lifecycleScopeLabel(
+                        pendingLifecycleAction.scope
+                      )}`}
+                    </button>
+                    <button
+                      className="rounded-full border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-800 hover:border-amber-400"
+                      onClick={() => setPendingLifecycleAction(null)}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {lifecycleResult ? (
+                <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                  {lifecycleResult.status === "queued"
+                    ? `Rebuild queued for ${lifecycleScopeLabel(lifecycleResult.scope)}${lifecycleResult.job_id ? ` (job #${lifecycleResult.job_id})` : ""}.`
+                    : `${titleCase(lifecycleResult.status)} ${lifecycleScopeLabel(
+                        lifecycleResult.scope
+                      )}.`}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div>
               <h2 className="text-xl font-semibold text-slate-950">Manual check-in</h2>
@@ -766,6 +1283,16 @@ export const CompanionPage = ({
                             {inboxLabel}
                           </span>
                         ) : null}
+                      </div>
+                      <div className="mt-4">
+                        <button
+                          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={loadingProvenanceId === reflection.id}
+                          onClick={() => handleOpenReflectionProvenance(reflection.id)}
+                          type="button"
+                        >
+                          View reflection provenance
+                        </button>
                       </div>
                     </article>
                   )

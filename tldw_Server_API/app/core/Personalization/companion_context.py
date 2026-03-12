@@ -11,10 +11,12 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.feature_flags import is_personalization_enabled
+from tldw_Server_API.app.core.Personalization.companion_relevance import rank_companion_candidates
 
 _MAX_COMPANION_CONTEXT_TOTAL_CHARS = 1_200
 _MAX_COMPANION_CONTEXT_ITEM_CHARS = 240
 _MAX_COMPANION_CARD_COUNT = 3
+_MAX_COMPANION_GOAL_COUNT = 2
 _MAX_COMPANION_ACTIVITY_COUNT = 3
 
 
@@ -94,6 +96,23 @@ def _format_activity_line(event: dict[str, Any]) -> str:
     return ""
 
 
+def _format_goal_line(goal: dict[str, Any]) -> str:
+    title = _normalize_snippet(goal.get("title"), max_chars=80)
+    description = _normalize_snippet(goal.get("description"), max_chars=150)
+    status_value = _normalize_snippet(goal.get("status"), max_chars=24)
+    if title and description:
+        line = f"- {title}: {description}"
+    elif title:
+        line = f"- {title}"
+    elif description:
+        line = f"- {description}"
+    else:
+        line = ""
+    if line and status_value and status_value != "active":
+        line = f"{line} ({status_value})"
+    return line
+
+
 def _append_bounded_line(lines: list[str], candidate: str, *, total_used: int) -> tuple[list[str], int]:
     normalized = _normalize_snippet(candidate, max_chars=_MAX_COMPANION_CONTEXT_ITEM_CHARS)
     if not normalized:
@@ -110,19 +129,89 @@ def _append_bounded_line(lines: list[str], candidate: str, *, total_used: int) -
     return [*lines, normalized], projected
 
 
+def _load_ranked_companion_candidates(
+    *,
+    user_id: str,
+    query: str | None,
+    max_cards: int,
+    max_goals: int,
+    max_activities: int,
+    db: PersonalizationDB | None = None,
+) -> dict[str, Any]:
+    personalization_db = db
+    if personalization_db is None:
+        db_path = DatabasePaths.get_personalization_db_path(user_id)
+        personalization_db = PersonalizationDB(str(db_path))
+    profile = personalization_db.get_or_create_profile(user_id)
+    if not bool(profile.get("enabled", 0)):
+        return {
+            "cards": [],
+            "goals": [],
+            "activity_rows": [],
+            "card_ids": [],
+            "goal_ids": [],
+            "activity_ids": [],
+            "mode": "recent_fallback",
+        }
+
+    cards = personalization_db.list_companion_knowledge_cards(user_id, status="active")
+    activity_rows, _ = personalization_db.list_companion_activity_events(
+        user_id,
+        limit=max(20, max_activities * 4),
+        offset=0,
+    )
+    explicit_activity_rows = [event for event in activity_rows if _is_explicit_activity(event)]
+    goals = [
+        goal
+        for goal in personalization_db.list_companion_goals(user_id)
+        if str(goal.get("status") or "").strip().lower() in {"active", "paused"}
+    ]
+    return rank_companion_candidates(
+        query=query,
+        cards=cards,
+        goals=goals,
+        activity_rows=explicit_activity_rows,
+        max_cards=max_cards,
+        max_goals=max_goals,
+        max_activities=max_activities,
+    )
+
+
 def load_companion_context(
     *,
     user_id: str | int | None,
+    query: str | None = None,
     max_cards: int = _MAX_COMPANION_CARD_COUNT,
+    max_goals: int = _MAX_COMPANION_GOAL_COUNT,
     max_activities: int = _MAX_COMPANION_ACTIVITY_COUNT,
+    include_candidates: bool = False,
+    db: PersonalizationDB | None = None,
 ) -> dict[str, Any]:
     """Load a compact companion context payload for a user."""
+    include_ranking_metadata = bool(str(query or "").strip())
     empty_payload = {
         "knowledge_lines": [],
         "activity_lines": [],
         "card_count": 0,
         "activity_count": 0,
     }
+    if include_ranking_metadata:
+        empty_payload = {
+            **empty_payload,
+            "goal_lines": [],
+            "goal_count": 0,
+            "card_ids": [],
+            "goal_ids": [],
+            "activity_ids": [],
+            "mode": "recent_fallback",
+        }
+        if include_candidates:
+            empty_payload = {
+                **empty_payload,
+                "cards": [],
+                "goals": [],
+                "activity_rows": [],
+            }
     if user_id is None or not is_personalization_enabled():
         return empty_payload
 
@@ -131,20 +220,75 @@ def load_companion_context(
         return empty_payload
 
     safe_max_cards = max(0, int(max_cards))
+    safe_max_goals = max(0, int(max_goals))
     safe_max_activities = max(0, int(max_activities))
 
     try:
-        db_path = DatabasePaths.get_personalization_db_path(normalized_user_id)
-        db = PersonalizationDB(str(db_path))
-        profile = db.get_or_create_profile(normalized_user_id)
-        if not bool(profile.get("enabled", 0)):
-            return empty_payload
-
         knowledge_lines: list[str] = []
+        goal_lines: list[str] = []
         activity_lines: list[str] = []
         total_used = 0
 
-        cards = db.list_companion_knowledge_cards(normalized_user_id, status="active")
+        ranked = _load_ranked_companion_candidates(
+            user_id=normalized_user_id,
+            query=query,
+            max_cards=safe_max_cards,
+            max_goals=safe_max_goals,
+            max_activities=safe_max_activities,
+            db=db,
+        )
+        cards = list(ranked["cards"])
+        goals = list(ranked["goals"])
+        explicit_activity_rows = list(ranked["activity_rows"])
+        if not include_ranking_metadata and str(ranked.get("mode") or "") == "recent_fallback":
+            # Preserve the prior non-query behavior by loading the already-bounded recent rows.
+            pass
+
+        if include_ranking_metadata:
+            for card in ranked["cards"]:
+                line = _format_card_line(card)
+                knowledge_lines, total_used = _append_bounded_line(
+                    knowledge_lines,
+                    line,
+                    total_used=total_used,
+                )
+            for goal in ranked["goals"]:
+                line = _format_goal_line(goal)
+                goal_lines, total_used = _append_bounded_line(
+                    goal_lines,
+                    line,
+                    total_used=total_used,
+                )
+            for event in ranked["activity_rows"]:
+                line = _format_activity_line(event)
+                activity_lines, total_used = _append_bounded_line(
+                    activity_lines,
+                    line,
+                    total_used=total_used,
+                )
+
+            payload = {
+                "knowledge_lines": knowledge_lines,
+                "goal_lines": goal_lines,
+                "activity_lines": activity_lines,
+                "card_count": len(knowledge_lines),
+                "goal_count": len(goal_lines),
+                "activity_count": len(activity_lines),
+                "card_ids": list(ranked["card_ids"]),
+                "goal_ids": list(ranked["goal_ids"]),
+                "activity_ids": list(ranked["activity_ids"]),
+                "mode": str(ranked["mode"]),
+            }
+            if include_candidates:
+                payload.update(
+                    {
+                        "cards": list(ranked["cards"]),
+                        "goals": list(ranked["goals"]),
+                        "activity_rows": list(ranked["activity_rows"]),
+                    }
+                )
+            return payload
+
         for card in cards:
             if len(knowledge_lines) >= safe_max_cards:
                 break
@@ -154,17 +298,9 @@ def load_companion_context(
                 line,
                 total_used=total_used,
             )
-
-        activity_rows, _ = db.list_companion_activity_events(
-            normalized_user_id,
-            limit=max(20, safe_max_activities * 4),
-            offset=0,
-        )
-        for event in activity_rows:
+        for event in explicit_activity_rows:
             if len(activity_lines) >= safe_max_activities:
                 break
-            if not _is_explicit_activity(event):
-                continue
             line = _format_activity_line(event)
             activity_lines, total_used = _append_bounded_line(
                 activity_lines,
