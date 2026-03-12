@@ -438,6 +438,7 @@ class CharactersRAGDB:
     _CURRENT_SCHEMA_VERSION = 35  # Schema v35 includes restart-safe persona session persistence
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
+    _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
     _ALLOWED_PERSONA_MODES: tuple[str, ...] = ("session_scoped", "persistent_scoped")
     _DEFAULT_PERSONA_MODE = "session_scoped"
@@ -11488,6 +11489,36 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         return normalized
 
+    def _normalize_conversation_character_scope(self, character_scope: str | None) -> str:
+        """Normalize and validate conversation character scope."""
+        if character_scope is None:
+            return "all"
+        if not isinstance(character_scope, str):
+            raise InputError(f"Conversation character scope must be a string. Got: {character_scope!r}")  # noqa: TRY003
+        normalized = character_scope.strip().lower()
+        if not normalized:
+            raise InputError("Conversation character scope cannot be empty.")  # noqa: TRY003
+        if normalized not in self._ALLOWED_CONVERSATION_CHARACTER_SCOPES:
+            raise InputError(
+                "Invalid conversation character scope "
+                f"'{character_scope}'. Allowed: {', '.join(self._ALLOWED_CONVERSATION_CHARACTER_SCOPES)}"
+            )  # noqa: TRY003
+        return normalized
+
+    def _conversation_character_scope_clause(
+        self,
+        character_scope: str | None,
+        *,
+        column: str = "character_id",
+    ) -> str | None:
+        """Return the SQL clause for a conversation character-scope filter."""
+        normalized = self._normalize_conversation_character_scope(character_scope)
+        if normalized == "all":
+            return None
+        if normalized == "character":
+            return f"{column} IS NOT NULL"
+        return f"{column} IS NULL"
+
     @staticmethod
     def _normalize_nullable_text(value: Any) -> str | None:
         """Normalize optional text fields; returns None for empty/whitespace."""
@@ -11725,6 +11756,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         client_id: str,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        character_scope: str | None = None,
     ) -> int:
         """
         Count total non-deleted conversations for a given user (client_id).
@@ -11744,9 +11776,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deleted_clause = "1 = 1"
         else:
             deleted_clause = "deleted = 0"
-        query = f"SELECT COUNT(*) as cnt FROM conversations WHERE client_id = ? AND {deleted_clause}"  # nosec B608
+        clauses = ["client_id = ?", deleted_clause]
+        params: list[Any] = [client_id]
+        character_scope_clause = self._conversation_character_scope_clause(character_scope)
+        if character_scope_clause:
+            clauses.append(character_scope_clause)
+        query = f"SELECT COUNT(*) as cnt FROM conversations WHERE {' AND '.join(clauses)}"  # nosec B608
         try:
-            cursor = self.execute_query(query, (client_id,))
+            cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
             return int(row[0] if row else 0)
         except CharactersRAGDBError as e:
@@ -11760,6 +11797,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        character_scope: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         List conversations for a given user (client_id), ordered by last_modified DESC.
@@ -11782,13 +11820,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             deleted_clause = "deleted = 0"
 
+        clauses = ["client_id = ?", deleted_clause]
+        params: list[Any] = [client_id]
+        character_scope_clause = self._conversation_character_scope_clause(character_scope)
+        if character_scope_clause:
+            clauses.append(character_scope_clause)
         query = (
             "SELECT * FROM conversations "  # nosec B608
-            f"WHERE client_id = ? AND {deleted_clause} "
+            f"WHERE {' AND '.join(clauses)} "
             "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
+        params.extend([limit, offset])
         try:
-            cursor = self.execute_query(query, (client_id, limit, offset))
+            cursor = self.execute_query(query, tuple(params))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
         except CharactersRAGDBError as e:
@@ -12536,6 +12580,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         title_query: str,
         character_id: int | None = None,
+        character_scope: str | None = None,
         limit: int = 10,
         offset: int = 0,
         client_id: str | None = None,
@@ -12567,6 +12612,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         client_filter = self.client_id if client_id is None else client_id
 
+        normalized_character_scope = self._normalize_conversation_character_scope(character_scope)
+
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(title_query, 'postgresql')
             if not tsquery:
@@ -12584,6 +12631,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if character_id is not None:
                 filters.append("c.character_id = ?")
                 params_list.append(character_id)
+            elif normalized_character_scope != "all":
+                filters.append(self._conversation_character_scope_clause(normalized_character_scope, column="c.character_id"))
             if client_filter is not None:
                 filters.append("c.client_id = ?")
                 params_list.append(client_filter)
@@ -12619,6 +12668,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if character_id is not None:
             filters.append("c.character_id = ?")
             params_filters.append(character_id)
+        elif normalized_character_scope != "all":
+            filters.append(self._conversation_character_scope_clause(normalized_character_scope, column="c.character_id"))
         if client_filter is not None:
             filters.append("c.client_id = ?")
             params_filters.append(client_filter)
@@ -12662,6 +12713,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         client_id: str | None = None,
         character_id: int | None = None,
+        character_scope: str | None = None,
         state: str | None = None,
         topic_label: str | None = None,
         topic_prefix: bool = False,
@@ -12684,6 +12736,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if date_field not in {"last_modified", "created_at"}:
             raise InputError("date_field must be 'last_modified' or 'created_at'")  # noqa: TRY003
 
+        normalized_character_scope = self._normalize_conversation_character_scope(character_scope)
         filters: list[str] = []
         params: list[Any] = []
         keyword_table = self._map_table_for_backend("keywords")
@@ -12705,6 +12758,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if character_id is not None:
                 filters.append("c.character_id = ?")
                 params.append(character_id)
+            elif normalized_character_scope != "all":
+                filters.append(self._conversation_character_scope_clause(normalized_character_scope, column="c.character_id"))
             if client_filter is not None:
                 filters.append("c.client_id = ?")
                 params.append(client_filter)
@@ -12764,6 +12819,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if character_id is not None:
             filters.append("c.character_id = ?")
             params.append(character_id)
+        elif normalized_character_scope != "all":
+            filters.append(self._conversation_character_scope_clause(normalized_character_scope, column="c.character_id"))
         if client_filter is not None:
             filters.append("c.client_id = ?")
             params.append(client_filter)

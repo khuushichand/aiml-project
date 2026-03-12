@@ -17,6 +17,7 @@ pytestmark = pytest.mark.unit
 def _build_app(db: CharactersRAGDB) -> TestClient:
     app = FastAPI()
     app.include_router(chat_router.router, prefix="/api/v1/chat")
+    app.include_router(chat_router.conversations_alias_router, prefix="/api/v1/chats")
     app.dependency_overrides[get_chacha_db_for_user] = lambda: db
     app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id="user-1")
     return TestClient(app)
@@ -156,3 +157,62 @@ def test_conversation_endpoints_expose_normalized_assistant_identity(tmp_path):
     assert metadata["assistant_kind"] == "persona"
     assert metadata["assistant_id"] == "garden-helper"
     assert metadata["character_id"] is None
+
+
+def test_conversation_alias_filters_character_scope(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    char_id = db.add_character_card(
+        {
+            "name": "Character Scope",
+            "description": "desc",
+            "personality": "helpful",
+            "system_prompt": "You are helpful.",
+            "client_id": "user-1",
+        }
+    )
+    db.add_conversation(
+        {
+            "id": "character-conv",
+            "character_id": char_id,
+            "title": "Quota review",
+            "client_id": "user-1",
+        }
+    )
+    db.add_conversation(
+        {
+            "id": "plain-conv",
+            "character_id": None,
+            "assistant_kind": "persona",
+            "assistant_id": "plain-helper",
+            "persona_memory_mode": "read_only",
+            "title": "Quota review",
+            "client_id": "user-1",
+        }
+    )
+
+    resp = app.get(
+        "/api/v1/chats/conversations",
+        params={"query": "Quota", "character_scope": "non_character"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert [item["id"] for item in payload["items"]] == ["plain-conv"]
+    assert payload["pagination"]["total"] == 1
+
+
+def test_conversation_alias_rejects_incompatible_character_scope_and_character_id(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    resp = app.get(
+        "/api/v1/chats/conversations",
+        params={"character_scope": "non_character", "character_id": 12},
+    )
+
+    assert resp.status_code == 400
+    assert "character_scope" in resp.json()["detail"]

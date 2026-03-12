@@ -258,6 +258,79 @@ describe("useServerChatHistory", () => {
     queryClient.clear()
   })
 
+  it("uses server-side paging for character overview when character scope is supported", async () => {
+    listChatsWithMetaMock.mockResolvedValueOnce({
+      chats: [createChat(1, { character_id: 7 })],
+      total: 10
+    })
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(
+      () =>
+        useServerChatHistory("", {
+          enabled: true,
+          mode: "overview",
+          page: 1,
+          limit: 25,
+          filterMode: "character"
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() =>
+      expect(result.current.data.map((chat) => chat.id)).toEqual(["chat-1"])
+    )
+
+    expect(listChatsWithMetaMock).toHaveBeenCalledTimes(1)
+    expect(listChatsWithMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 25,
+        offset: 0,
+        ordering: "-updated_at",
+        character_scope: "character"
+      }),
+      expect.anything()
+    )
+    expect(result.current.total).toBe(10)
+
+    queryClient.clear()
+  })
+
+  it("passes character scope through the server-side search path", async () => {
+    searchConversationsWithMetaMock.mockResolvedValueOnce({
+      chats: [createChat(12, { character_id: null, title: "Quota plain" })],
+      total: 1
+    })
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(
+      () =>
+        useServerChatHistory("quota", {
+          enabled: true,
+          mode: "search",
+          filterMode: "non_character"
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() =>
+      expect(result.current.data.map((chat) => chat.id)).toEqual(["chat-12"])
+    )
+
+    expect(searchConversationsWithMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "quota",
+        limit: 50,
+        offset: 0,
+        order_by: "recency",
+        character_scope: "non_character"
+      }),
+      expect.anything()
+    )
+
+    queryClient.clear()
+  })
+
   it("falls back to deleted-chat overview filtering when search mode targets trash chats", async () => {
     listChatsWithMetaMock.mockResolvedValueOnce({
       chats: [createChat(9, { title: "Quota cleanup" })],

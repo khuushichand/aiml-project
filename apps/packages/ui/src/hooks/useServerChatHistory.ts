@@ -181,9 +181,25 @@ type ServerChatHistoryQueryData = {
   total: number
 }
 
+const getCharacterScopeForFilterMode = (
+  filterMode: NonNullable<UseServerChatHistoryOptions["filterMode"]>
+): "character" | "non_character" | undefined => {
+  if (filterMode === "character") {
+    return "character"
+  }
+  if (filterMode === "non_character") {
+    return "non_character"
+  }
+  return undefined
+}
+
 const supportsServerPagedOverview = (
   filterMode: NonNullable<UseServerChatHistoryOptions["filterMode"]>
-): boolean => filterMode === "all" || filterMode === "trash"
+): boolean =>
+  filterMode === "all" ||
+  filterMode === "trash" ||
+  filterMode === "character" ||
+  filterMode === "non_character"
 
 export const useServerChatHistory = (
   searchQuery: string,
@@ -196,6 +212,7 @@ export const useServerChatHistory = (
   const includeDeleted = options?.includeDeleted ?? false
   const deletedOnly = options?.deletedOnly ?? false
   const filterMode = options?.filterMode ?? (deletedOnly ? "trash" : "all")
+  const characterScope = getCharacterScopeForFilterMode(filterMode)
   const overviewPage = Math.max(1, Math.trunc(options?.page ?? 1))
   const overviewLimit = Math.max(
     1,
@@ -247,7 +264,8 @@ export const useServerChatHistory = (
               query: normalizedQuery,
               limit: SERVER_CHAT_SEARCH_LIMIT,
               offset: 0,
-              order_by: "recency"
+              order_by: "recency",
+              ...(characterScope ? { character_scope: characterScope } : {})
             },
             { signal }
           )
@@ -265,6 +283,7 @@ export const useServerChatHistory = (
               limit: overviewLimit,
               offset: (overviewPage - 1) * overviewLimit,
               ordering: "-updated_at",
+              ...(characterScope ? { character_scope: characterScope } : {}),
               ...(includeDeleted ? { include_deleted: true } : {}),
               ...(deletedOnly ? { deleted_only: true } : {})
             },
@@ -284,6 +303,7 @@ export const useServerChatHistory = (
                 limit,
                 offset,
                 ordering: "-updated_at",
+                ...(characterScope ? { character_scope: characterScope } : {}),
                 ...(includeDeleted ? { include_deleted: true } : {}),
                 ...(deletedOnly ? { deleted_only: true } : {})
               },

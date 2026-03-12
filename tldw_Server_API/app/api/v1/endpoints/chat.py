@@ -4484,6 +4484,10 @@ async def list_chat_conversations(
     keywords: list[str] | None = Query(None, description="Keyword filters (repeatable)"),
     cluster_id: str | None = Query(None, description="Cluster ID filter"),
     character_id: int | None = Query(None, description="Character ID filter"),
+    character_scope: Literal["all", "character", "non_character"] = Query(
+        "all",
+        description="Filter conversations by whether they are character-backed or not",
+    ),
     start_date: str | None = Query(None, description="ISO-8601 start date"),
     end_date: str | None = Query(None, description="ISO-8601 end date"),
     date_field: Literal["last_modified", "created_at"] = Query("last_modified", description="Date field for filtering"),
@@ -4508,10 +4512,17 @@ async def list_chat_conversations(
         start_iso = _parse_iso_datetime(start_date, "start_date").isoformat() if start_date else None
         end_iso = _parse_iso_datetime(end_date, "end_date").isoformat() if end_date else None
 
+        if character_id is not None and character_scope == "non_character":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="character_scope=non_character cannot be combined with character_id",
+            )
+
         rows = db.search_conversations(
             query,
             client_id=str(current_user.id),
             character_id=character_id,
+            character_scope=character_scope,
             state=state,
             topic_label=topic_filter,
             topic_prefix=topic_prefix,
