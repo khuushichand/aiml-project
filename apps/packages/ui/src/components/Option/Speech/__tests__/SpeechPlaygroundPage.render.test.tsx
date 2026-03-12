@@ -17,6 +17,13 @@ const { invalidateQueriesMock, transcribeAudioMock, getTranscriptionModelsMock }
     })),
   }))
 
+const { speechModeState, setSpeechModeMock } = vi.hoisted(() => ({
+  speechModeState: {
+    value: "roundtrip" as "roundtrip" | "speak" | "listen",
+  },
+  setSpeechModeMock: vi.fn(),
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (_key: string, fallback?: string) => fallback || _key,
@@ -24,8 +31,12 @@ vi.mock("react-i18next", () => ({
 }))
 
 vi.mock("@plasmohq/storage/hook", () => ({
-  useStorage: (_key: string, defaultValue: unknown) =>
-    [defaultValue, vi.fn(), { isLoading: false }] as const,
+  useStorage: (key: string, defaultValue: unknown) => {
+    if (key === "speechPlaygroundMode") {
+      return [speechModeState.value ?? defaultValue, setSpeechModeMock, { isLoading: false }] as const
+    }
+    return [defaultValue, vi.fn(), { isLoading: false }] as const
+  },
 }))
 
 vi.mock("@tanstack/react-query", () => ({
@@ -263,11 +274,37 @@ describe("SpeechPlaygroundPage", () => {
     invalidateQueriesMock.mockReset()
     transcribeAudioMock.mockReset()
     getTranscriptionModelsMock.mockClear()
+    speechModeState.value = "roundtrip"
+    setSpeechModeMock.mockReset()
   })
 
   it("renders without triggering a temporal dead zone error", (): void => {
     render(<SpeechPlaygroundPage />)
 
     expect(screen.getByTestId("speech-page-shell")).toBeInTheDocument()
+  })
+
+  it("hides the mode switcher and STT region when locked to listen mode", (): void => {
+    speechModeState.value = "speak"
+
+    render(<SpeechPlaygroundPage lockedMode="listen" hideModeSwitcher />)
+
+    expect(screen.queryByText("Mode")).not.toBeInTheDocument()
+    expect(screen.queryByText("Current transcription model")).not.toBeInTheDocument()
+    expect(screen.getByTestId("tts-provider-strip")).toBeInTheDocument()
+  })
+
+  it("does not overwrite stored mode when locked mode is provided", (): void => {
+    speechModeState.value = "speak"
+
+    render(<SpeechPlaygroundPage lockedMode="listen" hideModeSwitcher />)
+
+    expect(setSpeechModeMock).not.toHaveBeenCalled()
+  })
+
+  it("keeps the mode switcher visible when unlocked", (): void => {
+    render(<SpeechPlaygroundPage />)
+
+    expect(screen.getByText("Mode")).toBeInTheDocument()
   })
 })

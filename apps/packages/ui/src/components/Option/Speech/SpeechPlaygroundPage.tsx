@@ -200,10 +200,14 @@ const buildHistoryDetailTooltip = (item: SpeechHistoryItem) => {
 
 type SpeechPlaygroundPageProps = {
   initialMode?: SpeechMode
+  lockedMode?: SpeechMode
+  hideModeSwitcher?: boolean
 }
 
 export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
-  initialMode
+  initialMode,
+  lockedMode,
+  hideModeSwitcher = false
 }) => {
   const { t } = useTranslation(["playground", "settings", "option", "common"])
   const queryClient = useQueryClient()
@@ -219,12 +223,22 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [historyFavoritesOnly, setHistoryFavoritesOnly] = React.useState(false)
   const [historyQuery, setHistoryQuery] = React.useState("")
   const [ttsPreset, setTtsPreset] = useStorage<TtsPresetKey>("ttsPreset", "balanced")
+  const effectiveMode = lockedMode ?? mode
 
   React.useEffect(() => {
+    if (lockedMode) return
     if (initialMode && mode !== initialMode) {
       setMode(initialMode)
     }
-  }, [initialMode, mode, setMode])
+  }, [initialMode, lockedMode, mode, setMode])
+
+  const handleModeChange = React.useCallback(
+    (value: SpeechMode) => {
+      if (lockedMode) return
+      setMode(value)
+    },
+    [lockedMode, setMode]
+  )
 
   const addHistoryItem = React.useCallback(
     (item: SpeechHistoryItem) => {
@@ -1688,7 +1702,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   // Keyboard shortcuts: Ctrl/Cmd+Enter (play/stop), Escape (stop), Ctrl/Cmd+. (toggle inspector)
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (mode === "speak") return
+      if (effectiveMode === "speak") return
       const mod = e.metaKey || e.ctrlKey
       if (mod && e.key === "Enter") {
         e.preventDefault()
@@ -1708,7 +1722,16 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     }
     document.addEventListener("keydown", handler)
     return () => document.removeEventListener("keydown", handler)
-  }, [handlePlay, handleStop, isPlayDisabled, isStreamingActive, isTtsJobRunning, mode, segments.length, setInspectorOpen])
+  }, [
+    effectiveMode,
+    handlePlay,
+    handleStop,
+    isPlayDisabled,
+    isStreamingActive,
+    isTtsJobRunning,
+    segments.length,
+    setInspectorOpen
+  ])
 
   const handleElevenLabsApiKeyFocus = React.useCallback(() => {
     const el = document.getElementById("elevenlabs-api-key")
@@ -1960,31 +1983,33 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
       </Text>
 
       <div className="mt-4 space-y-4">
-        <Card>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Space orientation="vertical" size={2}>
-              <Text strong>{t("playground:speech.modeLabel", "Mode")}</Text>
-              <Segmented
-                value={mode}
-                onChange={(value) => setMode(value as SpeechMode)}
-                options={[
-                  { label: t("playground:speech.modeRoundTrip", "Round-trip"), value: "roundtrip" },
-                  { label: t("playground:speech.modeSpeak", "Speak"), value: "speak" },
-                  { label: t("playground:speech.modeListen", "Listen"), value: "listen" }
-                ]}
-              />
-            </Space>
-            <Text type="secondary" className="text-xs">
-              {t(
-                "playground:speech.modeHint",
-                "Your last mode is remembered for this device."
-              )}
-            </Text>
-          </div>
-        </Card>
+        {!hideModeSwitcher && (
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <Space orientation="vertical" size={2}>
+                <Text strong>{t("playground:speech.modeLabel", "Mode")}</Text>
+                <Segmented
+                  value={effectiveMode}
+                  onChange={(value) => handleModeChange(value as SpeechMode)}
+                  options={[
+                    { label: t("playground:speech.modeRoundTrip", "Round-trip"), value: "roundtrip" },
+                    { label: t("playground:speech.modeSpeak", "Speak"), value: "speak" },
+                    { label: t("playground:speech.modeListen", "Listen"), value: "listen" }
+                  ]}
+                />
+              </Space>
+              <Text type="secondary" className="text-xs">
+                {t(
+                  "playground:speech.modeHint",
+                  "Your last mode is remembered for this device."
+                )}
+              </Text>
+            </div>
+          </Card>
+        )}
 
-        <div className={mode === "roundtrip" ? "grid gap-4 lg:grid-cols-2" : "space-y-4"}>
-          {mode !== "listen" && (
+        <div className={effectiveMode === "roundtrip" ? "grid gap-4 lg:grid-cols-2" : "space-y-4"}>
+          {effectiveMode !== "listen" && (
             <Card className="h-full">
               <Space orientation="vertical" className="w-full" size="middle">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2190,7 +2215,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   </div>
                 )}
 
-                {mode === "roundtrip" && (
+                {effectiveMode === "roundtrip" && (
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <Button
                       type="primary"
@@ -2212,7 +2237,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
             </Card>
           )}
 
-          {mode !== "speak" && (
+          {effectiveMode !== "speak" && (
             <Card className="h-full overflow-hidden">
               <div className="flex h-full">
                 {/* Zone 1: Workspace */}
