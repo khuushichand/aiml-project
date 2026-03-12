@@ -999,8 +999,24 @@ class WorkflowEngine:
                 e,
                 exc_info=True,
             )
-        if last_outputs:
+        try:
+            for prior_step in self.db.list_step_runs(run_id=run_id):
+                prior_status = str(prior_step.get("status") or "").strip().lower()
+                if prior_status != "succeeded":
+                    continue
+                prior_step_id = str(prior_step.get("step_id") or "").strip()
+                prior_outputs = prior_step.get("outputs_json")
+                if prior_step_id and isinstance(prior_outputs, dict):
+                    context[prior_step_id] = prior_outputs
+        except _WF_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(
+                "WorkflowEngine: continue_run failed to restore step context "
+                f"run_id={run_id}: {e}",
+                exc_info=True,
+            )
+        if last_outputs is not None:
             context["last"] = last_outputs
+            context[str(after_step_id)] = last_outputs
         # Mark running
         if not self._update_run_status_guarded(run_id, status="running", status_reason=None):
             _finalize(False)
@@ -1179,6 +1195,7 @@ class WorkflowEngine:
 
             last = outputs or {}
             context.update({"last": last})
+            context[str(sid)] = last
             if last.get("__status__") in {"waiting_human", "waiting_approval"}:
                 self._complete_step_attempt_record(
                     attempt_id=attempt_id,

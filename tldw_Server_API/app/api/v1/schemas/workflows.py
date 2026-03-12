@@ -276,7 +276,7 @@ class WorkflowValidationIssue(BaseModel):
 
 
 class WorkflowPreflightRequest(BaseModel):
-    definition: WorkflowDefinitionCreate
+    definition: Any
     validation_mode: Literal["block", "non-block"] = "block"
 
 

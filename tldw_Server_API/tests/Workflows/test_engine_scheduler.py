@@ -167,6 +167,51 @@ def test_continue_run_clears_secrets(workflows_db: WorkflowsDatabase):
     assert stats["active_workflows"] == 0
 
 
+def test_continue_run_restores_step_context_bindings(workflows_db: WorkflowsDatabase):
+    definition = {
+        "name": "resume-context-flow",
+        "steps": [
+            {"id": "prepare", "type": "prompt", "config": {"template": "Alpha"}},
+            {
+                "id": "wait",
+                "type": "wait_for_human",
+                "config": {"assigned_to_user_id": "user"},
+                "on_success": "render",
+            },
+            {
+                "id": "render",
+                "type": "prompt",
+                "config": {"template": "Prev={{ prepare.text }} Approved={{ wait.approved }}"},
+            },
+        ],
+    }
+    run_id = "resume-context-run"
+    workflows_db.create_run(
+        run_id=run_id,
+        tenant_id="tenant",
+        user_id="user",
+        inputs={},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot=definition,
+    )
+
+    engine = WorkflowEngine(workflows_db)
+    engine.submit(run_id, RunMode.ASYNC)
+    status = _wait_for_status(workflows_db, run_id)
+    assert status == "waiting_human"
+
+    asyncio.run(engine.continue_run(run_id, after_step_id="wait", last_outputs={"approved": True}))
+
+    status = _wait_for_status(workflows_db, run_id)
+    assert status == "succeeded"
+    run = workflows_db.get_run(run_id)
+    assert run is not None
+    assert run.outputs_json is not None
+    assert "Prev=Alpha" in run.outputs_json
+    assert "Approved=True" in run.outputs_json
+
+
 def test_run_saved_sync_waits_for_completion(workflows_db: WorkflowsDatabase, monkeypatch):
     definition_doc = {
         "name": "sync-run",

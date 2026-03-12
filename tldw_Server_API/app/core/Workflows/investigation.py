@@ -24,11 +24,18 @@ def build_run_investigation(
     events = db.get_events(run_id, limit=_MAX_EVENTS)
     artifacts = db.list_artifacts_for_run(run_id)
 
-    failed_step = _select_failed_step(step_runs)
-    failed_attempts = _attempts_for_step(
-        attempts,
-        step_id=failed_step.get("step_id") if failed_step else None,
-        step_run_id=failed_step.get("step_run_id") if failed_step else None,
+    failed_step = _select_failed_step(
+        step_runs,
+        allow_latest_fallback=str(getattr(run, "status", "") or "") == "failed",
+    )
+    failed_attempts = (
+        _attempts_for_step(
+            attempts,
+            step_id=failed_step.get("step_id") if failed_step else None,
+            step_run_id=failed_step.get("step_run_id") if failed_step else None,
+        )
+        if failed_step is not None
+        else []
     )
     primary_failure = _build_primary_failure(
         run=run,
@@ -112,11 +119,17 @@ def list_step_attempts(
     }
 
 
-def _select_failed_step(step_runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _select_failed_step(
+    step_runs: list[dict[str, Any]],
+    *,
+    allow_latest_fallback: bool = False,
+) -> dict[str, Any] | None:
     for step_run in reversed(step_runs):
         if str(step_run.get("status") or "") == "failed":
             return step_run
-    return step_runs[-1] if step_runs else None
+    if allow_latest_fallback and step_runs:
+        return step_runs[-1]
+    return None
 
 
 def _attempts_for_step(
@@ -159,6 +172,11 @@ def _build_primary_failure(
             "internal_detail": None,
         }
     else:
+        status = str(getattr(run, "status", "") or "").strip().lower()
+        run_error = getattr(run, "error", None)
+        run_reason = getattr(run, "status_reason", None)
+        if status != "failed" and not run_error and not run_reason:
+            return None
         envelope = build_failure_envelope(run.error or run.status_reason, step_type=step_type)
         failure = {
             "reason_code_core": envelope.reason_code_core,

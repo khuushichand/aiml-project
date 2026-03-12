@@ -516,6 +516,8 @@ def _classify_webhook_status(status_code: int) -> str:
 
 def _validate_definition_payload(defn: dict[str, Any]) -> None:
     import json
+    if not isinstance(defn, dict):
+        raise HTTPException(status_code=422, detail="Workflow definition must be an object")
     # Optional JSON Schema validator
     try:
         import jsonschema  # type: ignore
@@ -712,6 +714,8 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
         },
     }
     for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            raise HTTPException(status_code=422, detail=f"Step {i + 1} must be an object")
         t = (s.get("type") or "").strip()
         sid = str(s.get("id") or f"step_{i+1}")
         if not reg.has(t):
@@ -1155,6 +1159,8 @@ def _build_preflight_issue(
 
 def _collect_preflight_warnings(definition: dict[str, Any]) -> list[dict[str, Any]]:
     warnings: list[dict[str, Any]] = []
+    if not isinstance(definition, dict):
+        return warnings
     steps = definition.get("steps") or []
     if not isinstance(steps, list):
         return warnings
@@ -1177,6 +1183,85 @@ def _collect_preflight_warnings(definition: dict[str, Any]) -> list[dict[str, An
                     step_type=step_type,
                 )
             )
+    return warnings
+
+
+def _format_preflight_validation_message(error: dict[str, Any]) -> str:
+    loc = error.get("loc") or ()
+    if isinstance(loc, tuple):
+        loc_parts = [str(part) for part in loc]
+    elif isinstance(loc, list):
+        loc_parts = [str(part) for part in loc]
+    else:
+        loc_parts = [str(loc)] if loc else []
+    location = ".".join(part for part in loc_parts if part)
+    message = str(error.get("msg") or "Invalid workflow definition").strip()
+    return f"{location}: {message}" if location else message
+
+
+def _build_preflight_schema_issues(definition: Any) -> list[dict[str, Any]]:
+    if not isinstance(definition, dict):
+        return [
+            _build_preflight_issue(
+                code="definition_invalid",
+                message="definition: Workflow definition must be an object",
+            )
+        ]
+
+    try:
+        WorkflowDefinitionCreate.model_validate(definition)
+    except ValidationError as exc:
+        issues: list[dict[str, Any]] = []
+        steps = definition.get("steps") if isinstance(definition.get("steps"), list) else []
+        for error in exc.errors():
+            step_id = None
+            step_type = None
+            loc = error.get("loc") or ()
+            if len(loc) >= 2 and loc[0] == "steps" and isinstance(loc[1], int):
+                idx = int(loc[1])
+                if 0 <= idx < len(steps):
+                    step = steps[idx]
+                    if isinstance(step, dict):
+                        raw_step_id = step.get("id")
+                        raw_step_type = step.get("type")
+                        if raw_step_id is not None:
+                            step_id = str(raw_step_id)
+                        if raw_step_type is not None:
+                            step_type = str(raw_step_type)
+            issues.append(
+                _build_preflight_issue(
+                    code="definition_invalid",
+                    message=_format_preflight_validation_message(error),
+                    step_id=step_id,
+                    step_type=step_type,
+                )
+            )
+        return issues
+    return []
+
+
+def _build_preflight_validation_issues(definition: Any) -> list[dict[str, Any]]:
+    schema_issues = _build_preflight_schema_issues(definition)
+    if schema_issues:
+        return schema_issues
+    try:
+        _validate_definition_payload(definition)
+    except HTTPException as exc:
+        return [
+            _build_preflight_issue(
+                code="definition_invalid",
+                message=str(exc.detail),
+            )
+        ]
+    return []
+
+
+def _demote_preflight_issues_to_warnings(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for issue in issues:
+        warning = dict(issue)
+        warning["code"] = "definition_validation_warning"
+        warnings.append(warning)
     return warnings
 
 
@@ -1265,21 +1350,14 @@ async def preflight_definition(
     current_user: User = Depends(get_request_user),
 ):
     _ = current_user
-    definition = body.definition.model_dump()
+    definition = body.definition
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
-    try:
-        _validate_definition_payload(definition)
-    except HTTPException as exc:
-        issue = _build_preflight_issue(
-            code="definition_invalid",
-            message=str(exc.detail),
-        )
-        if body.validation_mode == "non-block":
-            issue["code"] = "definition_validation_warning"
-            warnings.append(issue)
-        else:
-            errors.append(issue)
+    issues = _build_preflight_validation_issues(definition)
+    if body.validation_mode == "non-block":
+        warnings.extend(_demote_preflight_issues_to_warnings(issues))
+    else:
+        errors.extend(issues)
 
     warnings.extend(_collect_preflight_warnings(definition))
 

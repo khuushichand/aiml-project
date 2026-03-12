@@ -118,6 +118,47 @@ def test_preflight_demotes_validation_errors_in_non_block_mode(client_for_prefli
     assert data["warnings"][0]["code"] == "definition_validation_warning"
 
 
+def test_preflight_accepts_malformed_drafts_in_non_block_mode(client_for_preflight: TestClient):
+    resp = client_for_preflight.post(
+        "/api/v1/workflows/preflight",
+        json={
+            "validation_mode": "non-block",
+            "definition": {
+                "name": "draft-preflight",
+                "version": 1,
+                "steps": [{"id": "s1", "config": {}}],
+            },
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["valid"] is True
+    assert data["errors"] == []
+    assert data["warnings"][0]["code"] == "definition_validation_warning"
+    assert "steps.0.type" in data["warnings"][0]["message"]
+
+
+def test_preflight_reports_malformed_drafts_in_block_mode(client_for_preflight: TestClient):
+    resp = client_for_preflight.post(
+        "/api/v1/workflows/preflight",
+        json={
+            "definition": {
+                "name": "draft-preflight-block",
+                "version": 1,
+                "steps": [{"id": "s1", "config": {}}],
+            },
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["valid"] is False
+    assert data["warnings"] == []
+    assert data["errors"][0]["code"] == "definition_invalid"
+    assert "steps.0.type" in data["errors"][0]["message"]
+
+
 def test_preflight_flags_unsafe_replay_steps(client_for_preflight: TestClient):
     resp = client_for_preflight.post(
         "/api/v1/workflows/preflight",
