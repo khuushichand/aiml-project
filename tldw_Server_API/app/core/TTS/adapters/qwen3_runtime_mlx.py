@@ -54,7 +54,7 @@ class Qwen3MlxRuntime:
                 AudioFormat.PCM,
             },
             max_text_length=max_text_length,
-            supports_streaming=False,
+            supports_streaming=True,
             supports_voice_cloning=False,
             supports_emotion_control=False,
             sample_rate=self.adapter.sample_rate,
@@ -63,6 +63,7 @@ class Qwen3MlxRuntime:
                 "runtime": self.runtime_name,
                 "supported_modes": ["custom_voice_preset"],
                 "supports_uploaded_custom_voices": False,
+                "streaming_mode": "buffered_fallback",
             },
         )
 

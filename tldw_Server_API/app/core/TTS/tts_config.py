@@ -45,6 +45,7 @@ class ProviderConfig(BaseModel):
     model: Optional[str] = None
     model_path: Optional[str] = None
     mlx_model: Optional[str] = None
+    capability_override: dict[str, Any] = Field(default_factory=dict)
     device: str = "cpu"
     timeout: int = 60
     max_retries: int = 3

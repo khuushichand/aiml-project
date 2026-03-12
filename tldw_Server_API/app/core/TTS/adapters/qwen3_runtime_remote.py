@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 
 from tldw_Server_API.app.core.http_client import apost
+from tldw_Server_API.app.core.exceptions import NetworkError as CoreNetworkError
+from tldw_Server_API.app.core.exceptions import RetryExhaustedError
 
-from ..tts_exceptions import TTSProviderInitializationError
+from ..tts_exceptions import (
+    TTSError,
+    TTSProviderError,
+    TTSProviderInitializationError,
+    auth_error,
+    network_error,
+    rate_limit_error,
+    timeout_error,
+)
 from ..tts_resource_manager import get_resource_manager
 from .base import AudioFormat, TTSCapabilities, TTSRequest, TTSResponse
 
@@ -42,6 +53,74 @@ class RemoteQwenRuntime:
         self.api_key = str(self.config.get("api_key") or "").strip() or None
         self.client = None
 
+    def _coerce_bool(self, value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return bool(value)
+
+    def _capability_override(self) -> dict[str, Any]:
+        override = self.config.get("capability_override")
+        if isinstance(override, dict):
+            return dict(override)
+        return {}
+
+    def _is_httpx_exception(self, exc: Exception) -> bool:
+        module = getattr(exc.__class__, "__module__", "")
+        return module.startswith("httpx")
+
+    def _is_http_status_error(self, exc: Exception) -> bool:
+        if not self._is_httpx_exception(exc):
+            return False
+        return exc.__class__.__name__ == "HTTPStatusError"
+
+    def _is_timeout_error(self, exc: Exception) -> bool:
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            return True
+        name = exc.__class__.__name__.lower()
+        return "timeout" in name
+
+    async def _handle_http_status_error(self, exc: Exception) -> None:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        headers = getattr(response, "headers", {}) if response is not None else {}
+        error_msg = ""
+        if response is not None:
+            try:
+                error_msg = response.text
+            except Exception:
+                try:
+                    error_msg = response.content.decode()
+                except Exception:
+                    error_msg = ""
+
+        if status_code == 401:
+            raise auth_error(self.provider_key, "Invalid API key")
+        if status_code == 429:
+            retry_after = headers.get("retry-after") if isinstance(headers, dict) else None
+            raise rate_limit_error(
+                self.provider_key,
+                retry_after=int(retry_after) if retry_after else None,
+            )
+        if status_code == 400:
+            raise TTSProviderError(
+                f"Invalid request to remote Qwen backend: {error_msg}",
+                provider=self.provider_key,
+                error_code="BAD_REQUEST",
+            )
+        raise TTSProviderError(
+            f"Remote Qwen API error: {error_msg}",
+            provider=self.provider_key,
+            error_code=str(status_code),
+        )
+
     async def initialize(self) -> bool:
         if not self.base_url:
             raise TTSProviderInitializationError(
@@ -56,11 +135,22 @@ class RemoteQwenRuntime:
         return True
 
     async def get_capabilities(self) -> TTSCapabilities:
+        override = self._capability_override()
         supported_voices = []
         if self.supported_voices:
             from .base import VoiceInfo
 
             supported_voices = [VoiceInfo(id=voice, name=voice) for voice in self.supported_voices]
+        supports_streaming = self._coerce_bool(override.get("supports_streaming"), default=False)
+        supports_voice_cloning = self._coerce_bool(override.get("supports_voice_cloning"), default=False)
+        supports_emotion_control = self._coerce_bool(override.get("supports_emotion_control"), default=False)
+        supported_modes = override.get("supported_modes")
+        if not isinstance(supported_modes, list) or not supported_modes:
+            supported_modes = ["custom_voice_preset"]
+        supports_uploaded_custom_voices = self._coerce_bool(
+            override.get("supports_uploaded_custom_voices"),
+            default=False,
+        )
         return TTSCapabilities(
             provider_name=self.provider_name,
             supported_languages=set(self.supported_languages),
@@ -73,19 +163,15 @@ class RemoteQwenRuntime:
                 AudioFormat.PCM,
             },
             max_text_length=int(self.config.get("max_text_length") or 5000),
-            supports_streaming=True,
-            supports_voice_cloning=True,
-            supports_emotion_control=True,
+            supports_streaming=supports_streaming,
+            supports_voice_cloning=supports_voice_cloning,
+            supports_emotion_control=supports_emotion_control,
             sample_rate=self.sample_rate,
             default_format=AudioFormat.PCM,
             metadata={
                 "runtime": self.runtime_name,
-                "supported_modes": [
-                    "custom_voice_preset",
-                    "uploaded_custom_voice",
-                    "voice_design",
-                ],
-                "supports_uploaded_custom_voices": True,
+                "supported_modes": supported_modes,
+                "supports_uploaded_custom_voices": supports_uploaded_custom_voices,
             },
         )
 
@@ -165,22 +251,37 @@ class RemoteQwenRuntime:
         payload = self._build_payload(request, resolved_model=resolved_model, mode=mode)
         headers = self._build_headers()
 
-        if request.stream:
+        try:
+            if request.stream:
+                return TTSResponse(
+                    audio_stream=self._stream_audio(headers, payload),
+                    format=request.format,
+                    sample_rate=self.sample_rate,
+                    provider=self.provider_key,
+                    model=resolved_model,
+                    metadata={"runtime": self.runtime_name},
+                )
+
+            audio_data = await self._generate_complete(headers, payload)
             return TTSResponse(
-                audio_stream=self._stream_audio(headers, payload),
+                audio_content=audio_data,
                 format=request.format,
                 sample_rate=self.sample_rate,
                 provider=self.provider_key,
                 model=resolved_model,
                 metadata={"runtime": self.runtime_name},
             )
-
-        audio_data = await self._generate_complete(headers, payload)
-        return TTSResponse(
-            audio_content=audio_data,
-            format=request.format,
-            sample_rate=self.sample_rate,
-            provider=self.provider_key,
-            model=resolved_model,
-            metadata={"runtime": self.runtime_name},
-        )
+        except Exception as exc:
+            if self._is_http_status_error(exc):
+                await self._handle_http_status_error(exc)
+            if isinstance(exc, (CoreNetworkError, RetryExhaustedError)) or self._is_httpx_exception(exc):
+                if self._is_timeout_error(exc):
+                    raise timeout_error(self.provider_key, timeout_seconds=int(self.config.get("timeout") or 60)) from exc
+                raise network_error(self.provider_key, exc) from exc
+            if not isinstance(exc, TTSError):
+                raise TTSProviderError(
+                    "Unexpected error in remote Qwen runtime",
+                    provider=self.provider_key,
+                    details={"error": str(exc), "error_type": type(exc).__name__},
+                ) from exc
+            raise

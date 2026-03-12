@@ -56,7 +56,7 @@ MLX v1 scope:
 - preset-speaker synthesis only
 - uploaded `custom:<voice_id>` voices are rejected
 - `Base` and `VoiceDesign` requests are rejected
-- stream requests return buffered fallback chunks
+- stream requests are accepted and return buffered fallback chunks
 
 Config examples:
 
@@ -78,6 +78,12 @@ providers:
     runtime: "remote"
     base_url: "http://127.0.0.1:8001/v1/audio/speech"
     api_key: "${QWEN_REMOTE_API_KEY}"
+    capability_override:
+      supports_streaming: true
+      supports_voice_cloning: true
+      supports_emotion_control: false
+      supported_modes: ["custom_voice_preset", "voice_clone"]
+      supports_uploaded_custom_voices: false
 ```
 
 Remote Qwen requests extend the normal OpenAI `/audio/speech` payload through `extra_body` fields:
@@ -87,6 +93,8 @@ Remote Qwen requests extend the normal OpenAI `/audio/speech` payload through `e
 - `voice_clone_prompt`
 - `x_vector_only_mode`
 - `description`
+
+Remote capability reporting defaults to conservative values until `capability_override` is set. This keeps `/api/v1/audio/health` and provider metadata aligned with the actual hosted backend.
 
 See `TTS-DEPLOYMENT.md` for Apple Silicon smoke-test steps.
 

@@ -23,6 +23,7 @@ async def test_mlx_runtime_reports_preset_custom_voice_only(monkeypatch):
     assert caps.metadata["supported_modes"] == ["custom_voice_preset"]
     assert caps.metadata["supports_uploaded_custom_voices"] is False
     assert caps.supports_voice_cloning is False
+    assert caps.supports_streaming is True
 
 
 @pytest.fixture
@@ -68,3 +69,28 @@ async def test_mlx_runtime_generates_preset_speaker_audio(fake_mlx_audio_module,
 
     assert response.audio_content
     assert response.metadata["runtime"] == "mlx"
+
+
+@pytest.mark.asyncio
+async def test_mlx_runtime_stream_request_uses_buffered_fallback(fake_mlx_audio_module, monkeypatch):
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+
+    adapter = Qwen3TTSAdapter({"runtime": "mlx", "device": "mps"})
+
+    await adapter.ensure_initialized()
+
+    request = TTSRequest(
+        text="hello",
+        voice="Vivian",
+        format=AudioFormat.PCM,
+        stream=True,
+    )
+    request.model = "auto"
+
+    response = await adapter.generate(request)
+    chunks = [chunk async for chunk in response.audio_stream]
+
+    assert chunks
+    assert response.metadata["runtime"] == "mlx"
+    assert response.metadata["streaming_fallback"] == "buffered"

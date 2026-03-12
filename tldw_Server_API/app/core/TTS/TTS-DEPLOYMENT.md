@@ -279,7 +279,9 @@ performance:
 
 - `runtime=auto` prefers `mlx` on Apple Silicon and `upstream` elsewhere.
 - `runtime=mlx` supports preset-speaker synthesis in v1 and rejects uploaded `custom:<voice_id>` voices, `Base`, and `VoiceDesign`.
+- `runtime=mlx` accepts `stream=true`, but streams buffered fallback chunks after local generation completes.
 - `runtime=remote` reuses the standard provider `base_url` and `api_key` fields.
+- `runtime=remote` advertises only conservative capabilities unless `capability_override` is set.
 - Hosted Qwen backends receive Qwen-specific fields in `extra_body`, including `ref_audio_b64`, `ref_text`, `voice_clone_prompt`, `x_vector_only_mode`, and `description`.
 
 Remote example:
@@ -291,6 +293,12 @@ providers:
     runtime: remote
     base_url: http://127.0.0.1:8001/v1/audio/speech
     api_key: ${QWEN_REMOTE_API_KEY}
+    capability_override:
+      supports_streaming: true
+      supports_voice_cloning: true
+      supports_emotion_control: false
+      supported_modes: [custom_voice_preset, voice_clone]
+      supports_uploaded_custom_voices: false
 ```
 
 ### Apple Silicon Smoke Check
@@ -322,9 +330,17 @@ providers:
    ```
 5. Verify behavior:
    - preset-speaker requests return audio
+   - `stream=true` returns buffered chunks instead of failing validation
    - `custom:<voice_id>` requests fail validation
    - `Base` and `VoiceDesign` requests fail validation on `runtime=mlx`
    - `/api/v1/audio/health` includes runtime metadata such as `qwen3_tts:mlx`
+6. Run the gated MLX integration smoke test:
+   ```bash
+   source .venv/bin/activate
+   TLDW_RUN_QWEN3_MLX_INTEGRATION=1 \
+   QWEN3_MLX_MODEL=mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16 \
+   python -m pytest tldw_Server_API/tests/TTS_NEW/integration/test_qwen3_mlx_runtime_integration.py -v
+   ```
 
 ## Manual GPU Smoke Test (IndexTTS2)
 
