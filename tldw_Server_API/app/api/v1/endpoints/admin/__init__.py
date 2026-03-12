@@ -29,6 +29,7 @@ from . import admin_byok as admin_byok_endpoints
 from . import admin_circuit_breakers as admin_circuit_breakers_endpoints
 from . import admin_data_ops as admin_data_ops_endpoints
 from . import admin_llm_providers as admin_llm_providers_endpoints
+from . import admin_monitoring as admin_monitoring_endpoints
 from . import admin_network as admin_network_endpoints
 from . import admin_ops as admin_ops_endpoints
 from . import admin_orgs as admin_orgs_endpoints
@@ -109,6 +110,7 @@ router.include_router(admin_profiles_endpoints.router)
 router.include_router(admin_sessions_mfa_endpoints.router)
 router.include_router(admin_byok_endpoints.router)
 router.include_router(admin_llm_providers_endpoints.router)
+router.include_router(admin_monitoring_endpoints.router)
 router.include_router(admin_orgs_endpoints.router)
 router.include_router(admin_settings_endpoints.router)
 router.include_router(admin_registration_endpoints.router)

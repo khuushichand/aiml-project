@@ -49,6 +49,105 @@ export interface WorkflowStepTypeInfo {
   min_engine_version?: string
 }
 
+export interface WorkflowDefinitionStepPayload {
+  id: string
+  name?: string
+  type: string
+  config?: Record<string, unknown>
+  retry?: number | null
+  timeout_seconds?: number | null
+  on_success?: string | null
+  on_failure?: string | null
+  on_timeout?: string | null
+}
+
+export interface WorkflowDefinitionPayload {
+  name: string
+  version?: number
+  description?: string | null
+  tags?: string[]
+  inputs?: Record<string, unknown>
+  on_completion_webhook?: Record<string, unknown> | string | null
+  steps: WorkflowDefinitionStepPayload[]
+  metadata?: Record<string, unknown>
+  visibility?: "private"
+}
+
+export interface WorkflowFailureSummary {
+  reason_code_core?: string | null
+  reason_code_detail?: string | null
+  category?: string | null
+  blame_scope?: string | null
+  retryable?: boolean | null
+  retry_recommendation?: string | null
+  error_summary?: string | null
+  internal_detail?: Record<string, unknown> | null
+}
+
+export interface WorkflowStepAttempt {
+  attempt_id: string
+  step_run_id: string
+  step_id: string
+  attempt_number: number
+  status: string
+  reason_code_core?: string | null
+  reason_code_detail?: string | null
+  retryable?: boolean | null
+  error_summary?: string | null
+  started_at?: string | null
+  ended_at?: string | null
+  duration_ms?: number | null
+  metadata?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface WorkflowRunStepSummary {
+  step_id: string
+  step_run_id?: string
+  name?: string | null
+  type?: string | null
+  status?: string
+  attempt_count?: number
+  latest_failure?: WorkflowFailureSummary | null
+  [key: string]: unknown
+}
+
+export interface WorkflowRunInvestigation {
+  run_id: string
+  status: string
+  schema_version: number
+  derived_from_event_seq: number
+  failed_step?: WorkflowRunStepSummary | null
+  primary_failure?: WorkflowFailureSummary | null
+  attempts: WorkflowStepAttempt[]
+  evidence: Record<string, unknown>
+  recommended_actions: string[]
+}
+
+export interface WorkflowStepAttemptsResponse {
+  run_id: string
+  step_id: string
+  attempts: WorkflowStepAttempt[]
+}
+
+export interface WorkflowValidationIssue {
+  code: string
+  message: string
+  step_id?: string | null
+  step_type?: string | null
+}
+
+export interface WorkflowPreflightRequest {
+  definition: WorkflowDefinitionPayload
+  validation_mode?: "block" | "non-block"
+}
+
+export interface WorkflowPreflightResult {
+  valid: boolean
+  errors: WorkflowValidationIssue[]
+  warnings: WorkflowValidationIssue[]
+}
+
 // StepTypeMetadata is defined in step-registry.ts to avoid circular deps
 
 // ─────────────────────────────────────────────────────────────────────────────

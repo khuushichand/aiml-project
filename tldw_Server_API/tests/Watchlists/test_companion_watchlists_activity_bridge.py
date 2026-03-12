@@ -226,3 +226,93 @@ def test_watchlist_item_run_and_flag_updates_record_companion_events(watchlists_
         event["provenance"]["route"] == f"/api/v1/watchlists/items/{item_id}"
         for event in item_updated_events
     )
+
+
+def test_watchlists_sources_import_created_rows_record_companion_activity(watchlists_app):
+    app, personalization_db = watchlists_app
+    opml_bytes = b"""<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline text="Example Feed" title="Example Feed" type="rss" xmlUrl="https://example.com/feed.xml" />
+  </body>
+</opml>
+"""
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/watchlists/sources/import",
+            files={"file": ("feeds.opml", opml_bytes, "text/xml")},
+        )
+
+    assert response.status_code == 200, response.text
+    events, total = personalization_db.list_companion_activity_events("906", limit=10)
+    assert total == 1
+    assert events[0]["event_type"] == "watchlist_source_created"
+    assert events[0]["surface"] == "api.watchlists.sources.import"
+    assert events[0]["provenance"]["route"] == "/api/v1/watchlists/sources/import"
+    assert events[0]["provenance"]["action"] == "import_create"
+
+
+def test_watchlists_sources_import_duplicate_skip_does_not_record_companion_activity(watchlists_app):
+    app, personalization_db = watchlists_app
+    opml_bytes = b"""<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline text="Example Feed" title="Example Feed" type="rss" xmlUrl="https://example.com/feed.xml" />
+  </body>
+</opml>
+"""
+
+    with TestClient(app) as client:
+        first_response = client.post(
+            "/api/v1/watchlists/sources/import",
+            files={"file": ("feeds.opml", opml_bytes, "text/xml")},
+        )
+        assert first_response.status_code == 200, first_response.text
+
+        response = client.post(
+            "/api/v1/watchlists/sources/import",
+            files={"file": ("feeds.opml", opml_bytes, "text/xml")},
+        )
+
+    assert response.status_code == 200, response.text
+    events, total = personalization_db.list_companion_activity_events("906", limit=20)
+    assert total == 1
+
+
+def test_watchlists_bulk_new_source_records_companion_activity(watchlists_app):
+    app, personalization_db = watchlists_app
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/watchlists/sources/bulk",
+            json={"sources": [{"name": "Feed A", "url": "https://example.com/a.xml", "source_type": "rss"}]},
+        )
+
+    assert response.status_code == 200, response.text
+    events, total = personalization_db.list_companion_activity_events("906", limit=10)
+    assert total == 1
+    assert events[0]["event_type"] == "watchlist_source_created"
+    assert events[0]["surface"] == "api.watchlists.sources.bulk"
+    assert events[0]["provenance"]["route"] == "/api/v1/watchlists/sources/bulk"
+    assert events[0]["provenance"]["action"] == "bulk_create"
+
+
+def test_watchlists_bulk_idempotent_existing_source_does_not_record_companion_activity(watchlists_app):
+    app, personalization_db = watchlists_app
+
+    with TestClient(app) as client:
+        first_response = client.post(
+            "/api/v1/watchlists/sources/bulk",
+            json={"sources": [{"name": "Feed A", "url": "https://example.com/a.xml", "source_type": "rss"}]},
+        )
+        assert first_response.status_code == 200, first_response.text
+
+        response = client.post(
+            "/api/v1/watchlists/sources/bulk",
+            json={"sources": [{"name": "Feed A Again", "url": "https://example.com/a.xml", "source_type": "rss"}]},
+        )
+
+    assert response.status_code == 200, response.text
+    events, total = personalization_db.list_companion_activity_events("906", limit=20)
+    assert total == 1

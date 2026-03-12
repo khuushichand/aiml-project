@@ -138,6 +138,7 @@ class PersonalizationConsolidationService:
 
         try:
             cards = derive_companion_knowledge_cards(db, user_id=user_id)
+            db.delete_companion_knowledge_cards(user_id=user_id)
             for card in cards:
                 db.upsert_companion_knowledge_card(user_id=user_id, **card)
         except _PERSONALIZATION_CONSOLIDATION_NONCRITICAL_EXCEPTIONS:

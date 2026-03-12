@@ -25,6 +25,7 @@ class AdapterContext(BaseModel):
     prev: dict[str, Any] = Field(default_factory=dict)
     last: dict[str, Any] = Field(default_factory=dict)
     secrets: dict[str, str] = Field(default_factory=dict)
+    step_capability: dict[str, Any] = Field(default_factory=dict)
     workflow_metadata: dict[str, Any] = Field(default_factory=dict)
     workflow_mcp_policy: dict[str, Any] = Field(default_factory=dict)
 

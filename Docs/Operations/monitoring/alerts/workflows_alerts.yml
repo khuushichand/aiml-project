@@ -2,6 +2,11 @@ groups:
   - name: workflows.rules
     interval: 30s
     rules:
+      # Investigation-first guidance:
+      # These alerts stay rate/latency based because the current metrics do not
+      # expose reason_code_core as a label. After an alert fires, pivot into
+      # /api/v1/workflows/runs?status=failed and the investigation endpoints to
+      # classify failures by reason_code_core, blame_scope, and retryability.
       # High failure rate of runs (over 5 minutes)
       - alert: WorkflowsHighRunFailureRate
         expr: |
@@ -18,6 +23,9 @@ groups:
           description: |
             In the last 5 minutes, over 30% of started runs failed.
             Investigate failing definitions, providers, or recent deployments.
+            Start with /api/v1/workflows/runs?status=failed and then inspect
+            /api/v1/workflows/runs/{run_id}/investigation for reason_code_core
+            and retryability.
 
       # Webhook delivery failures (any non-zero failures sustained)
       - alert: WorkflowsWebhookFailures
@@ -32,6 +40,8 @@ groups:
           description: |
             Sustained webhook delivery failures in the last 10 minutes.
             Check egress policy, target availability, and secrets.
+            Confirm whether failing runs classify as transient_network_error or
+            a policy/definition issue before bulk replaying webhook steps.
 
       # Webhook deliveries blocked by policy (sustained)
       - alert: WorkflowsWebhookBlocked
@@ -46,6 +56,8 @@ groups:
           description: |
             Webhook deliveries are being blocked by egress policy.
             Review allowlists and profile settings if this is unexpected.
+            Matching run investigations should show policy-oriented reason codes
+            rather than transient runtime failures.
 
       # Engine queue depth high (backlog)
       - alert: WorkflowsQueueDepthHigh

@@ -6,6 +6,8 @@ import type {
   ApiKey,
   ApiKeyMutationResponse,
   AuditLog,
+  BackupScheduleListResponse,
+  BackupScheduleMutationResponse,
   BackupsResponse,
   EffectivePermissionsResponse,
   FeatureRegistryEntry,
@@ -458,6 +460,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  listBackupSchedules: (params?: Record<string, string>, options?: RequestInit) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson<BackupScheduleListResponse>(
+      `/admin/backup-schedules${queryParams ? `?${queryParams}` : ''}`,
+      options
+    );
+  },
+  createBackupSchedule: (data: Record<string, unknown>) =>
+    requestJson<BackupScheduleMutationResponse>('/admin/backup-schedules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateBackupSchedule: (scheduleId: string, data: Record<string, unknown>) =>
+    requestJson<BackupScheduleMutationResponse>(`/admin/backup-schedules/${encodeURIComponent(scheduleId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  pauseBackupSchedule: (scheduleId: string) =>
+    requestJson<BackupScheduleMutationResponse>(`/admin/backup-schedules/${encodeURIComponent(scheduleId)}/pause`, {
+      method: 'POST',
+    }),
+  resumeBackupSchedule: (scheduleId: string) =>
+    requestJson<BackupScheduleMutationResponse>(`/admin/backup-schedules/${encodeURIComponent(scheduleId)}/resume`, {
+      method: 'POST',
+    }),
+  deleteBackupSchedule: (scheduleId: string) =>
+    requestJson<BackupScheduleMutationResponse>(`/admin/backup-schedules/${encodeURIComponent(scheduleId)}`, {
+      method: 'DELETE',
+    }),
   getRetentionPolicies: () => requestJson<RetentionPoliciesResponse>('/admin/retention-policies'),
   previewRetentionPolicyImpact: (policyKey: string, data: Record<string, unknown>) =>
     requestJson(`/admin/retention-policies/${encodeURIComponent(policyKey)}/preview`, {
@@ -658,12 +689,45 @@ export const api = {
     method: 'DELETE',
   }),
   getAlerts: () => requestJson('/monitoring/alerts'),
+  getAdminAlertHistory: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson(`/admin/monitoring/alerts/history${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getAdminAlertRules: () => requestJson('/admin/monitoring/alert-rules'),
+  createAdminAlertRule: (data: Record<string, unknown>) => requestJson('/admin/monitoring/alert-rules', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  deleteAdminAlertRule: (ruleId: string) => requestJson(`/admin/monitoring/alert-rules/${encodeURIComponent(ruleId)}`, {
+    method: 'DELETE',
+  }),
   acknowledgeAlert: (alertId: string) => requestJson(`/monitoring/alerts/${alertId}/acknowledge`, {
     method: 'POST',
   }),
   dismissAlert: (alertId: string) => requestJson(`/monitoring/alerts/${alertId}`, {
     method: 'DELETE',
   }),
+  assignAdminAlert: (alertIdentity: string, data: Record<string, unknown>) => requestJson(
+    `/admin/monitoring/alerts/${encodeURIComponent(alertIdentity)}/assign`,
+    {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }
+  ),
+  snoozeAdminAlert: (alertIdentity: string, data: Record<string, unknown>) => requestJson(
+    `/admin/monitoring/alerts/${encodeURIComponent(alertIdentity)}/snooze`,
+    {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }
+  ),
+  escalateAdminAlert: (alertIdentity: string, data: Record<string, unknown>) => requestJson(
+    `/admin/monitoring/alerts/${encodeURIComponent(alertIdentity)}/escalate`,
+    {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }
+  ),
   getMonitoringMetrics: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/monitoring/metrics${queryParams ? `?${queryParams}` : ''}`);

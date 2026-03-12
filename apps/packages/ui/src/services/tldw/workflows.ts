@@ -1,5 +1,11 @@
 import { bgRequest } from "@/services/background-proxy"
-import type { WorkflowStepTypeInfo } from "@/types/workflow-editor"
+import type {
+  WorkflowPreflightRequest,
+  WorkflowPreflightResult,
+  WorkflowRunInvestigation,
+  WorkflowStepAttemptsResponse,
+  WorkflowStepTypeInfo
+} from "@/types/workflow-editor"
 
 const STEP_TYPES_TTL_MS = 5 * 60 * 1000
 
@@ -46,3 +52,29 @@ export const getWorkflowStepTypes = async (
 
   return stepTypesPromise
 }
+
+export const getWorkflowInvestigation = async (
+  runId: string
+): Promise<WorkflowRunInvestigation> =>
+  bgRequest<WorkflowRunInvestigation>({
+    path: `/api/v1/workflows/runs/${runId}/investigation`,
+    method: "GET"
+  })
+
+export const getWorkflowStepAttempts = async (
+  runId: string,
+  stepId: string
+): Promise<WorkflowStepAttemptsResponse> =>
+  bgRequest<WorkflowStepAttemptsResponse>({
+    path: `/api/v1/workflows/runs/${runId}/steps/${stepId}/attempts`,
+    method: "GET"
+  })
+
+export const preflightWorkflowDefinition = async (
+  body: WorkflowPreflightRequest
+): Promise<WorkflowPreflightResult> =>
+  bgRequest<WorkflowPreflightResult>({
+    path: "/api/v1/workflows/preflight",
+    method: "POST",
+    body
+  })

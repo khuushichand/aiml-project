@@ -139,6 +139,25 @@ def test_workflow_definition_and_run_roundtrip(workflows_dual_backend_db):
         status="succeeded",
         outputs={"response": "Hello"},
     )
+    attempt_id = db.create_step_attempt(
+        tenant_id="tenant-1",
+        run_id=run_id,
+        step_run_id=step_run_id,
+        step_id="step-1",
+        attempt_number=1,
+        status="running",
+        metadata={"backend": backend_label},
+    )
+    db.complete_step_attempt(
+        attempt_id=attempt_id,
+        status="succeeded",
+        metadata={"backend": backend_label, "result": "ok"},
+    )
+    attempts = db.list_step_attempts(run_id=run_id, step_id="step-1")
+    assert len(attempts) == 1
+    assert attempts[0]["attempt_id"] == attempt_id
+    assert attempts[0]["status"] == "succeeded"
+    assert attempts[0]["metadata_json"]["backend"] == backend_label
 
     db.add_artifact(
         artifact_id=f"artifact-{backend_label}",

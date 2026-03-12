@@ -84,6 +84,9 @@ class PersonalizationDB:
                         preferred_format TEXT NOT NULL DEFAULT 'auto',
                         session_continuity_enabled INTEGER NOT NULL DEFAULT 1,
                         session_summaries_enabled INTEGER NOT NULL DEFAULT 1,
+                        companion_reflections_enabled INTEGER NOT NULL DEFAULT 1,
+                        companion_daily_reflections_enabled INTEGER NOT NULL DEFAULT 1,
+                        companion_weekly_reflections_enabled INTEGER NOT NULL DEFAULT 1,
                         purged_at TEXT,
                         updated_at TEXT NOT NULL
                     );
@@ -177,6 +180,10 @@ class PersonalizationDB:
                         goal_type TEXT NOT NULL,
                         config_json TEXT NOT NULL,
                         progress_json TEXT NOT NULL,
+                        origin_kind TEXT NOT NULL DEFAULT 'manual',
+                        progress_mode TEXT NOT NULL DEFAULT 'manual',
+                        derivation_key TEXT,
+                        evidence_json TEXT NOT NULL DEFAULT '[]',
                         status TEXT NOT NULL DEFAULT 'active',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
@@ -204,10 +211,17 @@ class PersonalizationDB:
             ("profiles", "preferred_format", "TEXT NOT NULL DEFAULT 'auto'"),
             ("profiles", "session_continuity_enabled", "INTEGER NOT NULL DEFAULT 1"),
             ("profiles", "session_summaries_enabled", "INTEGER NOT NULL DEFAULT 1"),
+            ("profiles", "companion_reflections_enabled", "INTEGER NOT NULL DEFAULT 1"),
+            ("profiles", "companion_daily_reflections_enabled", "INTEGER NOT NULL DEFAULT 1"),
+            ("profiles", "companion_weekly_reflections_enabled", "INTEGER NOT NULL DEFAULT 1"),
             ("profiles", "purged_at", "TEXT"),
             ("semantic_memories", "hidden", "INTEGER NOT NULL DEFAULT 0"),
             ("semantic_memories", "last_validated", "TEXT"),
             ("topic_profiles", "centroid_embedding", "BLOB"),
+            ("companion_goals", "origin_kind", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("companion_goals", "progress_mode", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("companion_goals", "derivation_key", "TEXT"),
+            ("companion_goals", "evidence_json", "TEXT NOT NULL DEFAULT '[]'"),
         ]
         with self._lock:
             conn = self._connect()
@@ -224,6 +238,15 @@ class PersonalizationDB:
                 conn.close()
 
     # Profiles
+    def list_profile_user_ids(self) -> list[str]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute("SELECT user_id FROM profiles ORDER BY updated_at DESC, user_id ASC")
+                return [str(row["user_id"]) for row in cur.fetchall() if str(row["user_id"]).strip()]
+            finally:
+                conn.close()
+
     def get_or_create_profile(self, user_id: str) -> dict[str, Any]:
         with self._lock:
             conn = self._connect()
@@ -248,6 +271,9 @@ class PersonalizationDB:
                     "beta": 0.6,
                     "gamma": 0.2,
                     "recency_half_life_days": 14,
+                    "companion_reflections_enabled": 1,
+                    "companion_daily_reflections_enabled": 1,
+                    "companion_weekly_reflections_enabled": 1,
                     "updated_at": now,
                 }
             finally:
@@ -264,6 +290,9 @@ class PersonalizationDB:
             "quiet_hours_start", "quiet_hours_end", "response_style",
             "preferred_format", "session_continuity_enabled",
             "session_summaries_enabled",
+            "companion_reflections_enabled",
+            "companion_daily_reflections_enabled",
+            "companion_weekly_reflections_enabled",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
@@ -681,47 +710,79 @@ class PersonalizationDB:
         user_id: str,
         events: list[dict[str, Any]],
     ) -> list[str]:
-        """Insert multiple companion activity events in a single transaction."""
+        """Insert multiple companion activity events in a single transaction.
+
+        Duplicate dedupe keys are skipped so one conflict does not fail the
+        entire batch.
+        """
         if not events:
             return []
 
         import uuid
 
         self.get_or_create_profile(user_id)
-        rows: list[tuple[Any, ...]] = []
-        event_ids: list[str] = []
-        for event in events:
-            event_id = uuid.uuid4().hex
-            event_ids.append(event_id)
-            rows.append(
-                (
-                    event_id,
-                    str(user_id),
-                    str(event["event_type"]),
-                    str(event["source_type"]),
-                    str(event["source_id"]),
-                    str(event["surface"]),
-                    str(event["dedupe_key"]),
-                    json.dumps(event.get("tags")) if event.get("tags") is not None else None,
-                    json.dumps(event.get("provenance") or {}),
-                    json.dumps(event.get("metadata")) if event.get("metadata") is not None else None,
-                    _utcnow_iso(),
-                )
-            )
-
         with self._lock:
             conn = self._connect()
             try:
-                conn.executemany(
-                    """
-                    INSERT INTO companion_activity_events (
-                        id, user_id, event_type, source_type, source_id, surface,
-                        dedupe_key, tags, provenance_json, metadata_json, created_at
+                existing_dedupe_keys: set[str] = set()
+                dedupe_keys = [
+                    str(event.get("dedupe_key"))
+                    for event in events
+                    if str(event.get("dedupe_key", "")).strip()
+                ]
+                if dedupe_keys:
+                    placeholders = ", ".join(["?"] * len(dedupe_keys))
+                    existing_rows = conn.execute(
+                        f"""
+                        SELECT dedupe_key
+                        FROM companion_activity_events
+                        WHERE user_id = ? AND dedupe_key IN ({placeholders})
+                        """,  # nosec B608
+                        (str(user_id), *dedupe_keys),
+                    ).fetchall()
+                    existing_dedupe_keys = {str(row["dedupe_key"]) for row in existing_rows}
+
+                rows: list[tuple[Any, ...]] = []
+                seen_dedupe_keys: set[str] = set(existing_dedupe_keys)
+                for event in events:
+                    dedupe_key = str(event["dedupe_key"])
+                    if dedupe_key in seen_dedupe_keys:
+                        continue
+                    seen_dedupe_keys.add(dedupe_key)
+                    event_id = uuid.uuid4().hex
+                    rows.append(
+                        (
+                            event_id,
+                            str(user_id),
+                            str(event["event_type"]),
+                            str(event["source_type"]),
+                            str(event["source_id"]),
+                            str(event["surface"]),
+                            dedupe_key,
+                            json.dumps(event.get("tags")) if event.get("tags") is not None else None,
+                            json.dumps(event.get("provenance") or {}),
+                            json.dumps(event.get("metadata")) if event.get("metadata") is not None else None,
+                            _utcnow_iso(),
+                        )
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    rows,
-                )
+
+                if not rows:
+                    return []
+
+                event_ids: list[str] = []
+                for row in rows:
+                    cursor = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO companion_activity_events (
+                            id, user_id, event_type, source_type, source_id, surface,
+                            dedupe_key, tags, provenance_json, metadata_json, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        row,
+                    )
+                    if cursor.rowcount == 1:
+                        event_ids.append(str(row[0]))
                 conn.commit()
                 return event_ids
             finally:
@@ -794,6 +855,66 @@ class PersonalizationDB:
                 ).fetchone()
                 total = int(total_row[0] if total_row else 0)
                 return items, total
+            finally:
+                conn.close()
+
+    def get_companion_activity_event(self, user_id: str, event_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, event_type, source_type, source_id, surface, tags,
+                           provenance_json, metadata_json, created_at
+                    FROM companion_activity_events
+                    WHERE user_id = ? AND id = ?
+                    LIMIT 1
+                    """,
+                    (str(user_id), str(event_id)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "id": row["id"],
+                    "event_type": row["event_type"],
+                    "source_type": row["source_type"],
+                    "source_id": row["source_id"],
+                    "surface": row["surface"],
+                    "tags": json.loads(row["tags"]) if row["tags"] else [],
+                    "provenance": json.loads(row["provenance_json"] or "{}"),
+                    "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+                    "created_at": row["created_at"],
+                }
+            finally:
+                conn.close()
+
+    def delete_companion_reflection_activity_events(self, user_id: str) -> tuple[list[str], int]:
+        """Delete persisted reflection activity rows and return their ids."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT id
+                    FROM companion_activity_events
+                    WHERE user_id = ?
+                      AND (event_type = 'companion_reflection_generated' OR source_type = 'companion_reflection')
+                    """,
+                    (str(user_id),),
+                ).fetchall()
+                reflection_ids = [str(row["id"]) for row in rows]
+                if not reflection_ids:
+                    return [], 0
+                cur = conn.execute(
+                    """
+                    DELETE FROM companion_activity_events
+                    WHERE user_id = ?
+                      AND (event_type = 'companion_reflection_generated' OR source_type = 'companion_reflection')
+                    """,
+                    (str(user_id),),
+                )
+                conn.commit()
+                return reflection_ids, int(cur.rowcount or 0)
             finally:
                 conn.close()
 
@@ -898,6 +1019,48 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
+    def get_companion_knowledge_card(self, user_id: str, card_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, card_type, title, summary, evidence_json, score, status, updated_at
+                    FROM companion_knowledge_cards
+                    WHERE user_id = ? AND id = ?
+                    LIMIT 1
+                    """,
+                    (str(user_id), str(card_id)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "id": row["id"],
+                    "card_type": row["card_type"],
+                    "title": row["title"],
+                    "summary": row["summary"],
+                    "evidence": json.loads(row["evidence_json"] or "[]"),
+                    "score": float(row["score"]),
+                    "status": row["status"],
+                    "updated_at": row["updated_at"],
+                }
+            finally:
+                conn.close()
+
+    def delete_companion_knowledge_cards(self, user_id: str) -> int:
+        """Delete all derived companion knowledge cards for a user."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM companion_knowledge_cards WHERE user_id = ?",
+                    (str(user_id),),
+                )
+                conn.commit()
+                return int(cur.rowcount or 0)
+            finally:
+                conn.close()
+
     def create_companion_goal(
         self,
         *,
@@ -907,6 +1070,10 @@ class PersonalizationDB:
         goal_type: str,
         config: dict[str, Any] | None = None,
         progress: dict[str, Any] | None = None,
+        origin_kind: str = "manual",
+        progress_mode: str = "manual",
+        derivation_key: str | None = None,
+        evidence: list[dict[str, Any]] | None = None,
         status: str = "active",
     ) -> str:
         import uuid
@@ -922,9 +1089,10 @@ class PersonalizationDB:
                     """
                     INSERT INTO companion_goals (
                         id, user_id, title, description, goal_type, config_json,
-                        progress_json, status, created_at, updated_at
+                        progress_json, origin_kind, progress_mode, derivation_key,
+                        evidence_json, status, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         goal_id,
@@ -934,6 +1102,10 @@ class PersonalizationDB:
                         str(goal_type),
                         json.dumps(config or {}),
                         json.dumps(progress or {}),
+                        str(origin_kind),
+                        str(progress_mode),
+                        None if derivation_key is None else str(derivation_key),
+                        json.dumps(evidence or []),
                         str(status),
                         now,
                         now,
@@ -945,7 +1117,17 @@ class PersonalizationDB:
                 conn.close()
 
     def update_companion_goal(self, goal_id: str, user_id: str, **updates: Any) -> dict[str, Any] | None:
-        allowed_fields = {"title", "description", "config", "progress", "status"}
+        allowed_fields = {
+            "title",
+            "description",
+            "config",
+            "progress",
+            "origin_kind",
+            "progress_mode",
+            "derivation_key",
+            "evidence",
+            "status",
+        }
         filtered_updates = {key: value for key, value in updates.items() if key in allowed_fields}
 
         with self._lock:
@@ -959,6 +1141,10 @@ class PersonalizationDB:
                             description = CASE WHEN ? THEN ? ELSE description END,
                             config_json = CASE WHEN ? THEN ? ELSE config_json END,
                             progress_json = CASE WHEN ? THEN ? ELSE progress_json END,
+                            origin_kind = CASE WHEN ? THEN ? ELSE origin_kind END,
+                            progress_mode = CASE WHEN ? THEN ? ELSE progress_mode END,
+                            derivation_key = CASE WHEN ? THEN ? ELSE derivation_key END,
+                            evidence_json = CASE WHEN ? THEN ? ELSE evidence_json END,
                             status = CASE WHEN ? THEN ? ELSE status END,
                             updated_at = ?
                         WHERE id = ? AND user_id = ?
@@ -972,6 +1158,14 @@ class PersonalizationDB:
                             json.dumps(filtered_updates.get("config") or {}),
                             int("progress" in filtered_updates),
                             json.dumps(filtered_updates.get("progress") or {}),
+                            int("origin_kind" in filtered_updates),
+                            filtered_updates.get("origin_kind"),
+                            int("progress_mode" in filtered_updates),
+                            filtered_updates.get("progress_mode"),
+                            int("derivation_key" in filtered_updates),
+                            filtered_updates.get("derivation_key"),
+                            int("evidence" in filtered_updates),
+                            json.dumps(filtered_updates.get("evidence") or []),
                             int("status" in filtered_updates),
                             filtered_updates.get("status"),
                             _utcnow_iso(),
@@ -985,7 +1179,9 @@ class PersonalizationDB:
 
                 row = conn.execute(
                     """
-                    SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at
+                    SELECT id, title, description, goal_type, config_json, progress_json,
+                           origin_kind, progress_mode, derivation_key, evidence_json,
+                           status, created_at, updated_at
                     FROM companion_goals
                     WHERE id = ? AND user_id = ?
                     """,
@@ -1000,6 +1196,10 @@ class PersonalizationDB:
                     "goal_type": row["goal_type"],
                     "config": json.loads(row["config_json"] or "{}"),
                     "progress": json.loads(row["progress_json"] or "{}"),
+                    "origin_kind": row["origin_kind"],
+                    "progress_mode": row["progress_mode"],
+                    "derivation_key": row["derivation_key"],
+                    "evidence": json.loads(row["evidence_json"] or "[]"),
                     "status": row["status"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
@@ -1010,7 +1210,8 @@ class PersonalizationDB:
     def list_companion_goals(self, user_id: str, status: str | None = None) -> list[dict[str, Any]]:
         if status is None:
             sql = (
-                "SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at "
+                "SELECT id, title, description, goal_type, config_json, progress_json, "
+                "origin_kind, progress_mode, derivation_key, evidence_json, status, created_at, updated_at "
                 "FROM companion_goals "
                 "WHERE user_id = ? "
                 "ORDER BY updated_at DESC"
@@ -1018,7 +1219,8 @@ class PersonalizationDB:
             params: list[Any] = [str(user_id)]
         else:
             sql = (
-                "SELECT id, title, description, goal_type, config_json, progress_json, status, created_at, updated_at "
+                "SELECT id, title, description, goal_type, config_json, progress_json, "
+                "origin_kind, progress_mode, derivation_key, evidence_json, status, created_at, updated_at "
                 "FROM companion_goals "
                 "WHERE user_id = ? AND status = ? "
                 "ORDER BY updated_at DESC"
@@ -1037,12 +1239,84 @@ class PersonalizationDB:
                         "goal_type": row["goal_type"],
                         "config": json.loads(row["config_json"] or "{}"),
                         "progress": json.loads(row["progress_json"] or "{}"),
+                        "origin_kind": row["origin_kind"],
+                        "progress_mode": row["progress_mode"],
+                        "derivation_key": row["derivation_key"],
+                        "evidence": json.loads(row["evidence_json"] or "[]"),
                         "status": row["status"],
                         "created_at": row["created_at"],
                         "updated_at": row["updated_at"],
                     }
                     for row in rows
                 ]
+            finally:
+                conn.close()
+
+    def get_companion_goal(self, goal_id: str, user_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, title, description, goal_type, config_json, progress_json,
+                           origin_kind, progress_mode, derivation_key, evidence_json,
+                           status, created_at, updated_at
+                    FROM companion_goals
+                    WHERE id = ? AND user_id = ?
+                    LIMIT 1
+                    """,
+                    (str(goal_id), str(user_id)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "description": row["description"],
+                    "goal_type": row["goal_type"],
+                    "config": json.loads(row["config_json"] or "{}"),
+                    "progress": json.loads(row["progress_json"] or "{}"),
+                    "origin_kind": row["origin_kind"],
+                    "progress_mode": row["progress_mode"],
+                    "derivation_key": row["derivation_key"],
+                    "evidence": json.loads(row["evidence_json"] or "[]"),
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            finally:
+                conn.close()
+
+    def delete_companion_goals_by_origin_kind(self, user_id: str, origin_kind: str) -> int:
+        """Delete companion goals matching a specific origin kind."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM companion_goals WHERE user_id = ? AND origin_kind = ?",
+                    (str(user_id), str(origin_kind)),
+                )
+                conn.commit()
+                return int(cur.rowcount or 0)
+            finally:
+                conn.close()
+
+    def reset_companion_goal_progress(self, user_id: str, progress_mode: str = "computed") -> int:
+        """Clear computed goal progress without deleting the underlying goal rows."""
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    UPDATE companion_goals
+                    SET progress_json = ?, evidence_json = ?, updated_at = ?
+                    WHERE user_id = ? AND progress_mode = ?
+                    """,
+                    ("{}", "[]", now, str(user_id), str(progress_mode)),
+                )
+                conn.commit()
+                return int(cur.rowcount or 0)
             finally:
                 conn.close()
 

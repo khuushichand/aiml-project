@@ -200,10 +200,14 @@ const buildHistoryDetailTooltip = (item: SpeechHistoryItem) => {
 
 type SpeechPlaygroundPageProps = {
   initialMode?: SpeechMode
+  lockedMode?: SpeechMode
+  hideModeSwitcher?: boolean
 }
 
 export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
-  initialMode
+  initialMode,
+  lockedMode,
+  hideModeSwitcher = false
 }) => {
   const { t } = useTranslation(["playground", "settings", "option", "common"])
   const queryClient = useQueryClient()
@@ -219,12 +223,24 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [historyFavoritesOnly, setHistoryFavoritesOnly] = React.useState(false)
   const [historyQuery, setHistoryQuery] = React.useState("")
   const [ttsPreset, setTtsPreset] = useStorage<TtsPresetKey>("ttsPreset", "balanced")
+  const isLockedTtsRoute = lockedMode === "listen"
+  const effectiveMode = lockedMode ?? mode
+  const effectiveHistoryFilter = isLockedTtsRoute ? "tts" : historyFilter
 
   React.useEffect(() => {
+    if (lockedMode) return
     if (initialMode && mode !== initialMode) {
       setMode(initialMode)
     }
-  }, [initialMode, mode, setMode])
+  }, [initialMode, lockedMode, mode, setMode])
+
+  const handleModeChange = React.useCallback(
+    (value: SpeechMode) => {
+      if (lockedMode) return
+      setMode(value)
+    },
+    [lockedMode, setMode]
+  )
 
   const addHistoryItem = React.useCallback(
     (item: SpeechHistoryItem) => {
@@ -250,12 +266,12 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const filteredHistory = React.useMemo(() => {
     const query = historyQuery.trim().toLowerCase()
     return (historyItems || []).filter((item) => {
-      if (historyFilter !== "all" && item.type !== historyFilter) return false
+      if (effectiveHistoryFilter !== "all" && item.type !== effectiveHistoryFilter) return false
       if (historyFavoritesOnly && !item.favorite) return false
       if (!query) return true
       return item.text.toLowerCase().includes(query)
     })
-  }, [historyFilter, historyItems, historyQuery, historyFavoritesOnly])
+  }, [effectiveHistoryFilter, historyItems, historyQuery, historyFavoritesOnly])
 
   const toggleHistoryFavorite = React.useCallback(
     (id: string) => {
@@ -292,6 +308,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   } = useTranscriptionModelsCatalog({
     activeModel,
     defaultModel: sttModel,
+    enabled: effectiveMode !== "listen",
     onInitialModel: setActiveModel,
     warnLabel: "Speech Playground"
   })
@@ -1688,7 +1705,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   // Keyboard shortcuts: Ctrl/Cmd+Enter (play/stop), Escape (stop), Ctrl/Cmd+. (toggle inspector)
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (mode === "speak") return
+      if (effectiveMode === "speak") return
       const mod = e.metaKey || e.ctrlKey
       if (mod && e.key === "Enter") {
         e.preventDefault()
@@ -1708,7 +1725,16 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     }
     document.addEventListener("keydown", handler)
     return () => document.removeEventListener("keydown", handler)
-  }, [handlePlay, handleStop, isPlayDisabled, isStreamingActive, isTtsJobRunning, mode, segments.length, setInspectorOpen])
+  }, [
+    effectiveMode,
+    handlePlay,
+    handleStop,
+    isPlayDisabled,
+    isStreamingActive,
+    isTtsJobRunning,
+    segments.length,
+    setInspectorOpen
+  ])
 
   const handleElevenLabsApiKeyFocus = React.useCallback(() => {
     const el = document.getElementById("elevenlabs-api-key")
@@ -1942,49 +1968,61 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     }
   }
 
-  const historyEmptyState = t(
-    "playground:speech.emptyHistory",
-    "Start a recording or generate audio to see history here."
-  )
+  const pageTitle = isLockedTtsRoute
+    ? t("playground:speech.ttsRouteTitle", "TTS Playground")
+    : t("playground:speech.title", "Speech Playground")
+  const pageSubtitle = isLockedTtsRoute
+    ? t(
+        "playground:speech.ttsRouteSubtitle",
+        "Draft text, choose a voice, and generate audio in one place."
+      )
+    : t(
+        "playground:speech.subtitle",
+        "Record speech, edit transcripts, and synthesize audio in one place."
+      )
+  const historyTitle = isLockedTtsRoute
+    ? t("playground:speech.ttsHistoryTitle", "TTS history")
+    : t("playground:speech.historyTitle", "Speech history")
+  const historyEmptyState = isLockedTtsRoute
+    ? t("playground:speech.ttsEmptyHistory", "Generate audio to see TTS history here.")
+    : t(
+        "playground:speech.emptyHistory",
+        "Start a recording or generate audio to see history here."
+      )
 
   return (
     <PageShell maxWidthClassName="max-w-5xl" className="py-6">
-      <Title level={3} className="!mb-1">
-        {t("playground:speech.title", "Speech Playground")}
-      </Title>
-      <Text type="secondary">
-        {t(
-          "playground:speech.subtitle",
-          "Record speech, edit transcripts, and synthesize audio in one place."
-        )}
-      </Text>
+      <Title level={3} className="!mb-1">{pageTitle}</Title>
+      <Text type="secondary">{pageSubtitle}</Text>
 
       <div className="mt-4 space-y-4">
-        <Card>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Space orientation="vertical" size={2}>
-              <Text strong>{t("playground:speech.modeLabel", "Mode")}</Text>
-              <Segmented
-                value={mode}
-                onChange={(value) => setMode(value as SpeechMode)}
-                options={[
-                  { label: t("playground:speech.modeRoundTrip", "Round-trip"), value: "roundtrip" },
-                  { label: t("playground:speech.modeSpeak", "Speak"), value: "speak" },
-                  { label: t("playground:speech.modeListen", "Listen"), value: "listen" }
-                ]}
-              />
-            </Space>
-            <Text type="secondary" className="text-xs">
-              {t(
-                "playground:speech.modeHint",
-                "Your last mode is remembered for this device."
-              )}
-            </Text>
-          </div>
-        </Card>
+        {!hideModeSwitcher && (
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <Space orientation="vertical" size={2}>
+                <Text strong>{t("playground:speech.modeLabel", "Mode")}</Text>
+                <Segmented
+                  value={effectiveMode}
+                  onChange={(value) => handleModeChange(value as SpeechMode)}
+                  options={[
+                    { label: t("playground:speech.modeRoundTrip", "Round-trip"), value: "roundtrip" },
+                    { label: t("playground:speech.modeSpeak", "Speak"), value: "speak" },
+                    { label: t("playground:speech.modeListen", "Listen"), value: "listen" }
+                  ]}
+                />
+              </Space>
+              <Text type="secondary" className="text-xs">
+                {t(
+                  "playground:speech.modeHint",
+                  "Your last mode is remembered for this device."
+                )}
+              </Text>
+            </div>
+          </Card>
+        )}
 
-        <div className={mode === "roundtrip" ? "grid gap-4 lg:grid-cols-2" : "space-y-4"}>
-          {mode !== "listen" && (
+        <div className={effectiveMode === "roundtrip" ? "grid gap-4 lg:grid-cols-2" : "space-y-4"}>
+          {effectiveMode !== "listen" && (
             <Card className="h-full">
               <Space orientation="vertical" className="w-full" size="middle">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2190,7 +2228,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   </div>
                 )}
 
-                {mode === "roundtrip" && (
+                {effectiveMode === "roundtrip" && (
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <Button
                       type="primary"
@@ -2212,7 +2250,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
             </Card>
           )}
 
-          {mode !== "speak" && (
+          {effectiveMode !== "speak" && (
             <Card className="h-full overflow-hidden">
               <div className="flex h-full">
                 {/* Zone 1: Workspace */}
@@ -2771,7 +2809,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
 
         <Card>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Text strong>{t("playground:speech.historyTitle", "Speech history")}</Text>
+            <Text strong>{historyTitle}</Text>
             <Space size="small" className="flex flex-wrap">
               <Tooltip title="Show favorites only">
                 <Button
@@ -2782,16 +2820,20 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                   {historyFavoritesOnly ? "Favorites" : "All items"}
                 </Button>
               </Tooltip>
-              <Select
-                size="small"
-                value={historyFilter}
-                onChange={(value) => setHistoryFilter(value)}
-                options={[
-                  { label: t("playground:speech.historyAll", "All"), value: "all" },
-                  { label: t("playground:speech.historyStt", "STT"), value: "stt" },
-                  { label: t("playground:speech.historyTts", "TTS"), value: "tts" }
-                ]}
-              />
+              {!isLockedTtsRoute && (
+                <div data-testid="speech-history-type-filter">
+                  <Select
+                    size="small"
+                    value={historyFilter}
+                    onChange={(value) => setHistoryFilter(value)}
+                    options={[
+                      { label: t("playground:speech.historyAll", "All"), value: "all" },
+                      { label: t("playground:speech.historyStt", "STT"), value: "stt" },
+                      { label: t("playground:speech.historyTts", "TTS"), value: "tts" }
+                    ]}
+                  />
+                </div>
+              )}
               <Input
                 size="small"
                 placeholder={t("playground:speech.historySearch", "Search transcripts")}

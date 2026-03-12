@@ -1417,6 +1417,146 @@ _CREATE_DATA_SUBJECT_REQUESTS_TABLES = [
 ]
 
 
+_CREATE_ADMIN_MONITORING_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_rules (
+            id SERIAL PRIMARY KEY,
+            metric TEXT NOT NULL,
+            operator TEXT NOT NULL,
+            threshold DOUBLE PRECISION NOT NULL,
+            duration_minutes INTEGER NOT NULL,
+            severity TEXT NOT NULL,
+            enabled BOOLEAN DEFAULT TRUE,
+            created_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            updated_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_created_at "
+        "ON admin_alert_rules(created_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_metric_enabled "
+        "ON admin_alert_rules(metric, enabled)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_state (
+            alert_identity TEXT PRIMARY KEY,
+            assigned_to_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            snoozed_until TIMESTAMPTZ NULL,
+            escalated_severity TEXT NULL,
+            acknowledged_at TIMESTAMPTZ NULL,
+            dismissed_at TIMESTAMPTZ NULL,
+            updated_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_updated_at "
+        "ON admin_alert_state(updated_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_assigned_user "
+        "ON admin_alert_state(assigned_to_user_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_events (
+            id SERIAL PRIMARY KEY,
+            alert_identity TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            details_json TEXT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_identity_created "
+        "ON admin_alert_events(alert_identity, created_at DESC)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_created_at "
+        "ON admin_alert_events(created_at DESC)",
+        (),
+    ),
+]
+
+_CREATE_BACKUP_SCHEDULES_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedules (
+            id TEXT PRIMARY KEY,
+            dataset TEXT NOT NULL,
+            target_user_id INTEGER NULL,
+            target_scope_key TEXT NOT NULL,
+            frequency TEXT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            timezone TEXT NOT NULL,
+            anchor_day_of_week INTEGER NULL,
+            anchor_day_of_month INTEGER NULL,
+            retention_count INTEGER NOT NULL,
+            is_paused BOOLEAN NOT NULL DEFAULT FALSE,
+            created_by_user_id INTEGER NULL,
+            updated_by_user_id INTEGER NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL,
+            next_run_at TIMESTAMPTZ NULL,
+            last_run_at TIMESTAMPTZ NULL,
+            last_status TEXT NULL,
+            last_job_id TEXT NULL,
+            last_error TEXT NULL,
+            deleted_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backup_schedules_target_scope_active
+        ON backup_schedules(target_scope_key)
+        WHERE deleted_at IS NULL
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedules_next_run_at ON backup_schedules(next_run_at)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedules_deleted_at ON backup_schedules(deleted_at)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedule_runs (
+            id TEXT PRIMARY KEY,
+            schedule_id TEXT NOT NULL REFERENCES backup_schedules(id) ON DELETE CASCADE,
+            scheduled_for TIMESTAMPTZ NOT NULL,
+            run_slot_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            job_id TEXT NULL,
+            error TEXT NULL,
+            enqueued_at TIMESTAMPTZ NULL,
+            started_at TIMESTAMPTZ NULL,
+            completed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_schedule_id ON backup_schedule_runs(schedule_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for ON backup_schedule_runs(scheduled_for)", ()),
+]
+
+
 async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
 
@@ -1440,6 +1580,28 @@ async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bo
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL tool catalogs tables: {exc}")
+        return False
+
+
+async def ensure_backup_schedules_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure backup schedule tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before backup schedules failed: {exc}")
+        for sql, params in _CREATE_BACKUP_SCHEDULES_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure backup schedules DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL backup schedule tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL backup schedule tables: {exc}")
         return False
 
 
@@ -2132,7 +2294,6 @@ async def ensure_generated_files_table_pg(pool: DatabasePool | None = None) -> b
         logger.warning(f"Failed to ensure PostgreSQL generated_files table: {exc}")
         return False
 
-
 async def ensure_data_subject_requests_table_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure data_subject_requests table exists for PostgreSQL backends."""
     try:
@@ -2152,6 +2313,28 @@ async def ensure_data_subject_requests_table_pg(pool: DatabasePool | None = None
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL data_subject_requests table: {exc}")
+        return False
+
+
+async def ensure_admin_monitoring_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure admin monitoring control-plane tables exist for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before admin monitoring failed: {exc}")
+        for sql, params in _CREATE_ADMIN_MONITORING_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure admin monitoring DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL admin monitoring tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL admin monitoring tables: {exc}")
         return False
 
 

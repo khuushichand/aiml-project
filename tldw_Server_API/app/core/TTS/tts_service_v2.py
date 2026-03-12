@@ -39,7 +39,12 @@ from .audio_utils import (
     split_text_into_chunks,
     trim_trailing_silence,
 )
-from .circuit_breaker import CircuitBreakerManager, CircuitOpenError, get_circuit_manager
+from .circuit_breaker import (
+    CircuitBreakerManager,
+    CircuitOpenError,
+    build_qwen_runtime_breaker_key,
+    get_circuit_manager,
+)
 from .realtime_session import (
     BufferedRealtimeSession,
     RealtimeSessionConfig,
@@ -1199,6 +1204,7 @@ class TTSServiceV2:
             fmts = out.get("formats")
             if isinstance(fmts, (set, list, tuple)):
                 out["formats"] = [getattr(f, "value", str(f)) for f in fmts]
+            out["metadata"] = dict(out.get("metadata") or {})
             return out
 
         # Dataclass / object case
@@ -1221,6 +1227,7 @@ class TTSServiceV2:
         except _TTS_NONCRITICAL_EXCEPTIONS:
             data["languages"] = list(languages)
         data["formats"] = [getattr(f, "value", str(f)) for f in formats]
+        data["metadata"] = dict(data.get("metadata") or {})
 
         # Normalize voices (VoiceInfo dataclasses) into plain dicts
         norm_voices: list[dict[str, Any]] = []
@@ -1248,6 +1255,32 @@ class TTSServiceV2:
             data["default_format"] = getattr(df, "value", str(df))
 
         return data
+
+    def _resolve_circuit_breaker_key(self, provider_key: str, adapter: Optional[Any] = None) -> str:
+        """Return the circuit-breaker key, namespacing Qwen runtimes when available."""
+        if provider_key != "qwen3_tts" or adapter is None:
+            return provider_key
+
+        runtime_name = None
+        runtime_getter = getattr(adapter, "_get_runtime", None)
+        if callable(runtime_getter):
+            try:
+                runtime = runtime_getter()
+                runtime_name = getattr(runtime, "runtime_name", None)
+            except _TTS_NONCRITICAL_EXCEPTIONS:
+                runtime_name = None
+
+        if not runtime_name:
+            runtime_resolver = getattr(adapter, "_resolve_runtime_name", None)
+            if callable(runtime_resolver):
+                try:
+                    runtime_name = runtime_resolver()
+                except _TTS_NONCRITICAL_EXCEPTIONS:
+                    runtime_name = None
+
+        if not runtime_name:
+            return provider_key
+        return build_qwen_runtime_breaker_key(provider_key, str(runtime_name))
 
     async def get_provider_info(self, provider: str) -> dict[str, Any]:
         """Legacy provider information wrapper used by tests."""
@@ -1549,8 +1582,10 @@ class TTSServiceV2:
 
                     # Get circuit breaker if available
                     circuit_breaker = None
+                    breaker_provider_key = provider_key
                     if self.circuit_manager:
-                        circuit_breaker = await self.circuit_manager.get_breaker(provider_key)
+                        breaker_provider_key = self._resolve_circuit_breaker_key(provider_key, adapter)
+                        circuit_breaker = await self.circuit_manager.get_breaker(breaker_provider_key)
 
                     # Generate response (with or without circuit breaker)
                     response: Optional[TTSResponse] = None
@@ -1686,7 +1721,11 @@ class TTSServiceV2:
                                         success=False,
                                         error=error_msg,
                                     )
-                                await self._handle_provider_fallback(request_for_provider, provider_key, error_msg)
+                                await self._handle_provider_fallback(
+                                    request_for_provider,
+                                    breaker_provider_key,
+                                    error_msg,
+                                )
                                 await self._decrement_active_requests(provider_key)
                                 released_active_slot = True
                                 fallback_plan = (self._build_exclude_tokens(adapter), provider_key)

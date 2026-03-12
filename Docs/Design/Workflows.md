@@ -26,6 +26,7 @@ Base prefix: `/api/v1/workflows`
 - Definitions
   - `POST /` → Create definition (immutable versions)
   - `GET /` → List active definitions (tenant + owner scoped)
+  - `POST /preflight` → Server-authoritative definition preflight. Reuses runtime validation and adds replay-safety warnings for unsafe step types. Supports `validation_mode=block|non-block`.
   - `GET /{workflow_id}` → Get definition (includes stored snapshot)
   - `POST /{workflow_id}/versions` → Create new version
   - `DELETE /{workflow_id}` → Soft delete
@@ -34,6 +35,9 @@ Base prefix: `/api/v1/workflows`
   - `POST /run?mode=async|sync` → Run ad-hoc definition (configurable rate-limited)
   - `GET /runs?status=&owner=&workflow_id=&created_after=&created_before=&last_n_hours=&order_by=&order=&limit=&offset=&cursor=` → List runs with filters. Owner by default; admin may filter by `owner`. Returns `runs`, `next_offset` (legacy) and `next_cursor` (opaque continuation token). When `cursor` is present, `offset` is ignored.
   - `GET /runs/{run_id}` → Run status and final outputs
+  - `GET /runs/{run_id}/investigation` → Derived diagnostics summary for failed runs. Includes `primary_failure`, `failed_step`, attempt timeline, evidence refs, and recommended actions.
+  - `GET /runs/{run_id}/steps` → Step history for the run, including latest failure and attempt counts per step.
+  - `GET /runs/{run_id}/steps/{step_id}/attempts` → Attempt-level retry timeline for a logical step execution.
   - `GET /runs/{run_id}/events?since=&types=&limit=&cursor=` → Ordered event stream (HTTP polling). Supports server-side filtering by `types` (comma-separated). Returns `Next-Cursor` header when a full page is returned. When `cursor` is present, `since` is ignored.
   - `WS /ws?run_id=...&token=...` → Live event stream (JWT required; run owner only)
   - `POST /runs/{run_id}/pause|resume|cancel|retry` → Control actions
@@ -126,11 +130,33 @@ The following additional step types are available and surfaced via `/step-types`
 - `notify`: Minimal notifier (Slack/webhook) respecting SSRF/egress policy.
 - `diff_change_detector`: Compare previous vs current text and mark `changed` with diff metrics.
 
+### Replay Safety & Preflight
+
+- Each step type exposes replay metadata used by retries, diagnostics, and authoring warnings:
+  - `replay_safe`
+  - `idempotency_strategy`
+  - `compensation_supported`
+  - `requires_human_review_for_rerun`
+- Unknown or side-effecting steps default to unsafe replay semantics until explicitly classified.
+- `POST /preflight` uses the same server validation helpers as run-time definition checks and adds structured warnings such as `unsafe_replay_step`.
+- Preflight is the supported way to catch definition-time issues before save/run; client-only checks should be treated as hints, not the final authority.
+
 ## Engine Behavior
 
 - Modes: `async` (background via in-process scheduler) and `sync` (server-side synchronous; UI reattaches by `run_id`).
 - Lifecycle: `queued → running → (waiting_human|cancelled|failed|succeeded)`.
 - Retries/Timeouts: Per-step `retry` (exponential backoff + jitter) and `timeout_seconds` enforced. Cooperative cancellation via a cancel flag checked between sleeps/attempts.
+- Execution entities:
+  - `workflow_step_runs` remains the logical step execution record for a run.
+  - `workflow_step_attempts` records each retry attempt for that logical step, including structured failure metadata.
+- Failure taxonomy is layered and attempt-level:
+  - `reason_code_core`
+  - `reason_code_detail`
+  - `category`
+  - `blame_scope`
+  - `retryable`
+  - `retry_recommendation`
+- Terminal run failures copy the primary `reason_code_core` into `workflow_runs.status_reason` so run listings and alert triage can pivot quickly without replaying the full event stream.
 - Heartbeats/Leases: Step runs record `locked_by/locked_at/lock_expires_at/heartbeat_at`; orphan reaper marks stale step runs as failed and emits events.
 - Subprocess Steps: Launched in new process group; engine records `pid/pgid/workdir/stdout/stderr` and escalates termination on cancel/timeout.
 - Events: Strict `event_seq` ordering per run; WebSocket emits a `snapshot` and then ordered events with lightweight heartbeats.
@@ -139,7 +165,10 @@ The following additional step types are available and surfaced via `/step-types`
 
 - Default: SQLite (`Databases/workflows.db`) with WAL enabled.
 - PostgreSQL: Supported when a content backend is configured; schema migrations applied automatically (see tests under `tests/Workflows/test_workflows_postgres_migrations.py`).
-- Tables: `workflows`, `workflow_runs`, `workflow_step_runs`, `workflow_events`, `workflow_artifacts` (+ optional `workflow_event_counters`, `workflow_webhook_dlq`).
+- Tables: `workflows`, `workflow_runs`, `workflow_step_runs`, `workflow_step_attempts`, `workflow_events`, `workflow_artifacts` (+ optional `workflow_event_counters`, `workflow_webhook_dlq`).
+- Step run vs attempt model:
+  - `workflow_step_runs` stores the logical step lifecycle and approval/branching anchor.
+  - `workflow_step_attempts` stores retry order, structured reason codes, retryability decisions, and per-attempt metadata/evidence refs.
 - Idempotency: `idempotency_key` prevents duplicate run creation per `(tenant_id, user_id, workflow)`.
 - Indices/constraints and types:
   - Per-run event ordering: composite index and unique constraint on `(run_id, event_seq)` in `workflow_events`.
@@ -265,6 +294,10 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
   - Webhooks: `workflows_webhook_deliveries_total{status,host}` with status in `delivered|failed|blocked`.
   - Engine gauges: `workflows_engine_queue_depth`.
   - Scrape: `/metrics` (root) or `/api/v1/metrics` (JSON).
+- Investigation-first operations:
+  - The current metrics are rate/latency oriented; they do not yet expose `reason_code_core` as a Prometheus label.
+  - Operators should pivot from an alert into `GET /runs?status=failed` and then `GET /runs/{run_id}/investigation` / `GET /runs/{run_id}/steps/{step_id}/attempts` to classify failures by `reason_code_core`, `category`, `blame_scope`, and `retryable`.
+  - Attempt rows preserve the structured taxonomy even when raw event payloads are noisy or incomplete.
 
 - Tracing (OpenTelemetry):
   - Spans: `workflows.run` (per run), nested `workflows.step` (per step), and `workflows.webhook` (completion hook delivery).

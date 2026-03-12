@@ -26,9 +26,13 @@ const mocks = vi.hoisted(() => ({
   fetchSnapshot: vi.fn(),
   fetchProfile: vi.fn(),
   updateOptIn: vi.fn(),
+  updatePreferences: vi.fn(),
   setGoalStatus: vi.fn(),
   createGoal: vi.fn(),
-  recordCheckIn: vi.fn()
+  recordCheckIn: vi.fn(),
+  fetchReflectionDetail: vi.fn(),
+  purgeScope: vi.fn(),
+  rebuildScope: vi.fn()
 }))
 
 vi.mock("@/components/Layouts/Layout", () => ({
@@ -70,11 +74,16 @@ vi.mock("react-i18next", () => ({
 vi.mock("@/services/companion", () => ({
   fetchPersonalizationProfile: (...args: unknown[]) => mocks.fetchProfile(...args),
   updatePersonalizationOptIn: (...args: unknown[]) => mocks.updateOptIn(...args),
+  updateCompanionPreferences: (...args: unknown[]) => mocks.updatePreferences(...args),
   fetchCompanionWorkspaceSnapshot: (...args: unknown[]) =>
     mocks.fetchSnapshot(...args),
   setCompanionGoalStatus: (...args: unknown[]) => mocks.setGoalStatus(...args),
   createCompanionGoal: (...args: unknown[]) => mocks.createGoal(...args),
-  recordCompanionCheckIn: (...args: unknown[]) => mocks.recordCheckIn(...args)
+  recordCompanionCheckIn: (...args: unknown[]) => mocks.recordCheckIn(...args),
+  fetchCompanionReflectionDetail: (...args: unknown[]) =>
+    mocks.fetchReflectionDetail(...args),
+  purgeCompanionScope: (...args: unknown[]) => mocks.purgeScope(...args),
+  queueCompanionRebuild: (...args: unknown[]) => mocks.rebuildScope(...args)
 }))
 
 import OptionCompanion from "../option-companion"
@@ -199,6 +208,14 @@ describe("option companion route", () => {
       enabled: true,
       updated_at: "2026-03-10T15:00:00Z"
     })
+    mocks.updatePreferences.mockResolvedValue({
+      enabled: true,
+      proactive_enabled: true,
+      companion_reflections_enabled: true,
+      companion_daily_reflections_enabled: false,
+      companion_weekly_reflections_enabled: true,
+      updated_at: "2026-03-10T15:00:00Z"
+    })
     mocks.fetchSnapshot.mockResolvedValue(activeSnapshot)
     mocks.setGoalStatus.mockResolvedValue({
       ...activeSnapshot.goals[0],
@@ -232,6 +249,47 @@ describe("option companion route", () => {
         summary: "Re-focused on the companion capture backlog before lunch."
       },
       created_at: "2026-03-10T14:30:00Z"
+    })
+    mocks.fetchReflectionDetail.mockResolvedValue({
+      id: "reflection-1",
+      title: "Daily reflection",
+      cadence: "daily",
+      summary: "You revisited project alpha.",
+      delivery_decision: "delivered",
+      delivery_reason: "meaningful_signal",
+      theme_key: "project-alpha",
+      signal_strength: 3,
+      follow_up_prompts: [
+        {
+          prompt_id: "prompt-1",
+          label: "Next concrete step",
+          prompt_text: "What is the next concrete step for project alpha?",
+          prompt_type: "clarify_priority",
+          source_reflection_id: "reflection-1",
+          source_evidence_ids: ["activity-1"]
+        }
+      ],
+      evidence: [],
+      provenance: {
+        source_event_ids: ["activity-1"],
+        knowledge_card_ids: ["knowledge-1"],
+        goal_ids: ["goal-1"]
+      },
+      created_at: "2026-03-10T13:00:00Z",
+      activity_events: [activeSnapshot.activity[0]],
+      knowledge_cards: [activeSnapshot.knowledge[0]],
+      goals: [activeSnapshot.goals[0]]
+    })
+    mocks.purgeScope.mockResolvedValue({
+      status: "completed",
+      scope: "knowledge",
+      deleted_counts: { knowledge: 1 }
+    })
+    mocks.rebuildScope.mockResolvedValue({
+      status: "queued",
+      scope: "knowledge",
+      job_id: 51,
+      job_uuid: "job-uuid-51"
     })
   })
 
@@ -379,6 +437,52 @@ describe("option companion route", () => {
     })
     expect(await screen.findByTestId("companion-page")).toBeInTheDocument()
     expect(mocks.fetchSnapshot).toHaveBeenCalled()
+  })
+
+  it("shows companion settings and persists reflection toggles", async () => {
+    renderRoute()
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText("Daily reflections"))
+
+    await waitFor(() => {
+      expect(mocks.updatePreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ companion_daily_reflections_enabled: false })
+      )
+    })
+  })
+
+  it("opens a provenance drawer for a reflection", async () => {
+    renderRoute()
+
+    await screen.findByText("You revisited project alpha.")
+    fireEvent.click(screen.getByRole("button", { name: "View reflection provenance" }))
+
+    expect(await screen.findByText("Source event ids")).toBeInTheDocument()
+    expect(screen.getByText("activity-1")).toBeInTheDocument()
+    expect(screen.getByText("knowledge-1")).toBeInTheDocument()
+  })
+
+  it("shows follow-up prompts when a reflection is opened", async () => {
+    renderRoute()
+
+    await screen.findByText("You revisited project alpha.")
+    fireEvent.click(screen.getByRole("button", { name: "View reflection provenance" }))
+
+    expect(await screen.findByText("Follow-up prompts")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Next concrete step" })
+    ).toBeInTheDocument()
+  })
+
+  it("does not render standalone prompt chips on the default workspace surface", async () => {
+    renderRoute()
+
+    await screen.findByText("You revisited project alpha.")
+    expect(screen.queryByText("Follow-up prompts")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Next concrete step" })
+    ).not.toBeInTheDocument()
   })
 
   it("registers the companion workspace route in the route registry", () => {

@@ -1,10 +1,14 @@
 from pathlib import Path
+import sqlite3
+from typing import Any
 
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Personalization.companion_activity import (
+    build_note_bulk_import_activity,
+    build_watchlist_source_bulk_import_activity,
     record_companion_activity,
     record_note_created,
     record_note_deleted,
@@ -99,6 +103,222 @@ def test_record_companion_activity_requires_opt_in_and_dedupes(companion_db_env)
     assert duplicate is None
     _, total_after_duplicate = db.list_companion_activity_events(user_id)
     assert total_after_duplicate == 1
+
+
+def test_insert_companion_activity_events_bulk_skips_duplicate_dedupe_keys(companion_db_env):
+    user_id = "77-bulk"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+
+    inserted = db.insert_companion_activity_events_bulk(
+        user_id=user_id,
+        events=[
+            {
+                "event_type": "note_created",
+                "source_type": "note",
+                "source_id": "n1",
+                "surface": "api.notes.import",
+                "dedupe_key": "notes.create:n1",
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "One"},
+            },
+            {
+                "event_type": "note_created",
+                "source_type": "note",
+                "source_id": "n1",
+                "surface": "api.notes.import",
+                "dedupe_key": "notes.create:n1",
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "One duplicate"},
+            },
+        ],
+    )
+
+    assert len(inserted) == 1
+    rows, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 1
+    assert rows[0]["source_id"] == "n1"
+
+
+def test_insert_companion_activity_events_bulk_keeps_unique_rows_when_one_conflicts(companion_db_env):
+    user_id = "77-bulk-existing"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+    db.insert_companion_activity_event(
+        user_id=user_id,
+        event_type="note_created",
+        source_type="note",
+        source_id="n1",
+        surface="api.notes.import",
+        dedupe_key="notes.create:n1",
+        provenance={"capture_mode": "explicit"},
+        metadata={"title": "Existing"},
+    )
+
+    inserted = db.insert_companion_activity_events_bulk(
+        user_id=user_id,
+        events=[
+            {
+                "event_type": "note_created",
+                "source_type": "note",
+                "source_id": "n1",
+                "surface": "api.notes.import",
+                "dedupe_key": "notes.create:n1",
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "Duplicate"},
+            },
+            {
+                "event_type": "note_created",
+                "source_type": "note",
+                "source_id": "n2",
+                "surface": "api.notes.import",
+                "dedupe_key": "notes.create:n2",
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "Fresh"},
+            },
+        ],
+    )
+
+    assert len(inserted) == 1
+    rows, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 2
+    source_ids = {row["source_id"] for row in rows}
+    assert source_ids == {"n1", "n2"}
+
+
+def test_insert_companion_activity_events_bulk_keeps_unique_rows_when_conflict_appears_at_insert_time(
+    companion_db_env,
+    monkeypatch,
+):
+    user_id = "77-bulk-race"
+    db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
+    db.update_profile(user_id, enabled=1)
+    real_connect = db._connect
+
+    class _RaceInjectingConnection:
+        def __init__(self, inner: sqlite3.Connection) -> None:
+            self._inner = inner
+            self._injected = False
+
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> Any:
+            normalized_sql = " ".join(sql.split()).upper()
+            if (
+                normalized_sql.startswith("INSERT")
+                and "COMPANION_ACTIVITY_EVENTS" in normalized_sql
+                and len(params) >= 7
+                and str(params[6]) == "notes.create:n1"
+                and not self._injected
+            ):
+                self._injected = True
+                competing = sqlite3.connect(db.db_path, timeout=10, isolation_level=None)
+                try:
+                    competing.execute("PRAGMA journal_mode=WAL")
+                    competing.execute("PRAGMA foreign_keys=ON")
+                    competing.execute("PRAGMA busy_timeout=5000")
+                    competing.execute(sql, params)
+                    competing.commit()
+                finally:
+                    competing.close()
+            return self._inner.execute(sql, params)
+
+        def executemany(self, sql: str, seq_of_params: Any) -> Any:
+            for row in seq_of_params:
+                self.execute(sql, row)
+            return None
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(db, "_connect", lambda: _RaceInjectingConnection(real_connect()))
+
+    inserted = db.insert_companion_activity_events_bulk(
+        user_id=user_id,
+        events=[
+            {
+                "event_type": "note_created",
+                "source_type": "note",
+                "source_id": "n1",
+                "surface": "api.notes.import",
+                "dedupe_key": "notes.create:n1",
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "Conflicted"},
+            },
+            {
+                "event_type": "note_created",
+                "source_type": "note",
+                "source_id": "n2",
+                "surface": "api.notes.import",
+                "dedupe_key": "notes.create:n2",
+                "provenance": {"capture_mode": "explicit"},
+                "metadata": {"title": "Fresh"},
+            },
+        ],
+    )
+
+    assert len(inserted) == 1
+    rows, total = db.list_companion_activity_events(user_id, limit=10)
+    assert total == 2
+    source_ids = {row["source_id"] for row in rows}
+    assert source_ids == {"n1", "n2"}
+
+
+def test_build_note_import_created_activity_uses_import_surface_and_route():
+    note = {
+        "id": "note-1",
+        "title": "Imported note",
+        "content": "Imported content",
+        "version": 1,
+        "created_at": "2026-03-12T00:00:00+00:00",
+        "last_modified": "2026-03-12T00:00:00+00:00",
+        "keywords": [{"keyword": "import"}],
+    }
+
+    payload = build_note_bulk_import_activity(
+        note=note,
+        operation="import_create",
+        route="/api/v1/notes/import",
+        surface="api.notes.import",
+    )
+
+    assert payload["event_type"] == "note_created"
+    assert payload["source_type"] == "note"
+    assert payload["source_id"] == "note-1"
+    assert payload["surface"] == "api.notes.import"
+    assert payload["provenance"]["route"] == "/api/v1/notes/import"
+    assert payload["provenance"]["action"] == "import_create"
+    assert payload["metadata"]["title"] == "Imported note"
+    assert payload["tags"] == ["import"]
+
+
+def test_build_watchlist_source_bulk_activity_uses_bulk_surface_and_route():
+    source = {
+        "id": 12,
+        "name": "Bulk source",
+        "url": "https://example.com/feed.xml",
+        "source_type": "rss",
+        "active": True,
+        "status": None,
+        "group_ids": [2],
+        "tags": ["feeds"],
+        "created_at": "2026-03-12T00:00:00+00:00",
+        "updated_at": "2026-03-12T00:00:00+00:00",
+    }
+
+    payload = build_watchlist_source_bulk_import_activity(
+        source=source,
+        operation="bulk_create",
+        route="/api/v1/watchlists/sources/bulk",
+        surface="api.watchlists.sources.bulk",
+    )
+
+    assert payload["event_type"] == "watchlist_source_created"
+    assert payload["source_type"] == "watchlist_source"
+    assert payload["source_id"] == "12"
+    assert payload["surface"] == "api.watchlists.sources.bulk"
+    assert payload["provenance"]["route"] == "/api/v1/watchlists/sources/bulk"
+    assert payload["provenance"]["action"] == "bulk_create"
+    assert payload["metadata"]["name"] == "Bulk source"
+    assert payload["tags"] == ["feeds"]
 
 
 def test_note_activity_adapters_capture_compact_metadata(companion_db_env):
