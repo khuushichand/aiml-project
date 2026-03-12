@@ -22,6 +22,7 @@ type AlertRulesPanelProps = {
   draft: AlertRuleDraft;
   errors: AlertRuleValidationErrors;
   saving: boolean;
+  mutationsEnabled: boolean;
   onDraftChange: (draft: AlertRuleDraft) => void;
   onCreateRule: () => void;
   onDeleteRule: (rule: AlertRule) => void;
@@ -46,6 +47,7 @@ export default function AlertRulesPanel({
   draft,
   errors,
   saving,
+  mutationsEnabled,
   onDraftChange,
   onCreateRule,
   onDeleteRule,
@@ -68,6 +70,7 @@ export default function AlertRulesPanel({
             <Select
               id="alert-rule-metric"
               value={draft.metric}
+              disabled={!mutationsEnabled}
               onChange={(event) => {
                 onDraftChange({ ...draft, metric: event.target.value as AlertRuleDraft['metric'] });
               }}
@@ -87,6 +90,7 @@ export default function AlertRulesPanel({
             <Select
               id="alert-rule-operator"
               value={draft.operator}
+              disabled={!mutationsEnabled}
               onChange={(event) => {
                 onDraftChange({ ...draft, operator: event.target.value as AlertRuleDraft['operator'] });
               }}
@@ -106,6 +110,7 @@ export default function AlertRulesPanel({
             <Input
               id="alert-rule-threshold"
               value={draft.threshold}
+              disabled={!mutationsEnabled}
               onChange={(event) => {
                 onDraftChange({ ...draft, threshold: event.target.value });
               }}
@@ -120,6 +125,7 @@ export default function AlertRulesPanel({
             <Select
               id="alert-rule-duration"
               value={draft.durationMinutes}
+              disabled={!mutationsEnabled}
               onChange={(event) => {
                 onDraftChange({ ...draft, durationMinutes: event.target.value });
               }}
@@ -141,6 +147,7 @@ export default function AlertRulesPanel({
             <Select
               id="alert-rule-severity"
               value={draft.severity}
+              disabled={!mutationsEnabled}
               onChange={(event) => {
                 onDraftChange({ ...draft, severity: event.target.value as AlertRuleDraft['severity'] });
               }}
@@ -160,6 +167,7 @@ export default function AlertRulesPanel({
           <Button
             type="button"
             onClick={onCreateRule}
+            disabled={!mutationsEnabled}
             loading={saving}
             loadingText="Saving..."
             data-testid="alert-rule-create"
@@ -192,6 +200,7 @@ export default function AlertRulesPanel({
                   type="button"
                   variant="ghost"
                   size="sm"
+                  disabled={!mutationsEnabled}
                   onClick={() => onDeleteRule(rule)}
                   aria-label={`Delete rule ${rule.id}`}
                 >

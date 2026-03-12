@@ -15,6 +15,7 @@ const workspaceStoreState = {
   addSourceModalTab: "upload" as const,
   addSourceProcessing: false,
   addSourceError: null as string | null,
+  sources: [] as Array<{ mediaId: number }>,
   closeAddSourceModal: mockCloseAddSourceModal,
   setAddSourceModalTab: mockSetAddSourceModalTab,
   setAddSourceProcessing: mockSetAddSourceProcessing,

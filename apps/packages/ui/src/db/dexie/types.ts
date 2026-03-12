@@ -69,6 +69,9 @@ export type Message = {
   modelImage?: string;
   documents?: ChatDocuments;
   discoSkillComment?: DiscoSkillComment;
+  // Server-sync fields
+  serverMessageId?: string | null;     // Canonical server-side message ID
+  serverMessageVersion?: number;       // Server-side message version
   // Timeline/branching fields (server-compatible with ChaChaDB)
   parent_message_id?: string | null;   // Parent message for threading/swipes
   depth?: number;                       // Computed depth in conversation tree
@@ -120,6 +123,8 @@ export type FewShotExample = {
 
 export type PromptSyncStatus = 'local' | 'synced' | 'pending' | 'conflict';
 export type PromptSourceSystem = 'workspace' | 'studio' | 'copilot';
+export type PromptFormat = 'legacy' | 'structured';
+export type StructuredPromptDefinition = Record<string, any>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Unified Prompt Type
@@ -164,6 +169,10 @@ export type Prompt = {
   serverUpdatedAt?: string | null;    // Server's updated_at for conflict detection
 
   // ─── Studio-specific Fields (progressive disclosure) ───
+  promptFormat?: PromptFormat;
+  promptSchemaVersion?: number | null;
+  structuredPromptDefinition?: StructuredPromptDefinition | null;
+  syncPayloadVersion?: number | null;
   fewShotExamples?: FewShotExample[] | null;
   modulesConfig?: PromptModule[] | null;
   versionNumber?: number | null;

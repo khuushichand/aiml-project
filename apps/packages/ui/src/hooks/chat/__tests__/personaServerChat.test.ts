@@ -1,0 +1,128 @@
+import { describe, expect, it, vi } from "vitest"
+
+import {
+  DEFAULT_PERSONA_MEMORY_MODE,
+  ensurePersonaServerChat
+} from "../personaServerChat"
+
+const createSetterBundle = () => ({
+  setServerChatId: vi.fn(),
+  setServerChatTitle: vi.fn(),
+  setServerChatCharacterId: vi.fn(),
+  setServerChatAssistantKind: vi.fn(),
+  setServerChatAssistantId: vi.fn(),
+  setServerChatPersonaMemoryMode: vi.fn(),
+  setServerChatMetaLoaded: vi.fn(),
+  setServerChatState: vi.fn(),
+  setServerChatVersion: vi.fn(),
+  setServerChatTopic: vi.fn(),
+  setServerChatClusterId: vi.fn(),
+  setServerChatSource: vi.fn(),
+  setServerChatExternalRef: vi.fn()
+})
+
+describe("ensurePersonaServerChat", () => {
+  it("creates a persona-backed chat with read_only default and updates chat state", async () => {
+    const setters = createSetterBundle()
+    const createChat = vi.fn().mockResolvedValue({
+      id: "persona-chat-1",
+      title: "Persona chat",
+      assistant_kind: "persona",
+      assistant_id: "garden-helper",
+      persona_memory_mode: "read_only",
+      state: "resolved",
+      version: 8,
+      topic_label: "Garden topic",
+      character_id: null
+    })
+    const ensureServerChatHistoryId = vi.fn().mockResolvedValue("history-1")
+    const invalidateServerChatHistory = vi.fn()
+
+    const result = await ensurePersonaServerChat({
+      assistant: {
+        kind: "persona",
+        id: "garden-helper",
+        name: "Garden Helper"
+      },
+      serverChatId: null,
+      serverChatTitle: null,
+      serverChatAssistantKind: null,
+      serverChatAssistantId: null,
+      serverChatPersonaMemoryMode: null,
+      serverChatState: "in-progress",
+      serverChatTopic: null,
+      serverChatClusterId: null,
+      serverChatSource: null,
+      serverChatExternalRef: null,
+      historyId: "history-local",
+      temporaryChat: false,
+      createChat,
+      ensureServerChatHistoryId,
+      invalidateServerChatHistory,
+      ...setters
+    })
+
+    expect(createChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistant_kind: "persona",
+        assistant_id: "garden-helper",
+        persona_memory_mode: DEFAULT_PERSONA_MEMORY_MODE
+      })
+    )
+    expect(setters.setServerChatId).toHaveBeenCalledWith("persona-chat-1")
+    expect(setters.setServerChatAssistantKind).toHaveBeenCalledWith("persona")
+    expect(setters.setServerChatAssistantId).toHaveBeenCalledWith("garden-helper")
+    expect(setters.setServerChatPersonaMemoryMode).toHaveBeenCalledWith(
+      "read_only"
+    )
+    expect(setters.setServerChatMetaLoaded).toHaveBeenCalledWith(true)
+    expect(invalidateServerChatHistory).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({
+      chatId: "persona-chat-1",
+      historyId: "history-1",
+      personaMemoryMode: "read_only"
+    })
+  })
+
+  it("reuses an existing matching persona chat without creating a new one", async () => {
+    const setters = createSetterBundle()
+    const createChat = vi.fn()
+    const ensureServerChatHistoryId = vi.fn().mockResolvedValue("history-2")
+
+    const result = await ensurePersonaServerChat({
+      assistant: {
+        kind: "persona",
+        id: "garden-helper",
+        name: "Garden Helper"
+      },
+      serverChatId: "persona-chat-2",
+      serverChatTitle: "Garden chat",
+      serverChatAssistantKind: "persona",
+      serverChatAssistantId: "garden-helper",
+      serverChatPersonaMemoryMode: "read_write",
+      serverChatState: "in-progress",
+      serverChatTopic: null,
+      serverChatClusterId: null,
+      serverChatSource: null,
+      serverChatExternalRef: null,
+      historyId: "history-2",
+      temporaryChat: false,
+      createChat,
+      ensureServerChatHistoryId,
+      invalidateServerChatHistory: vi.fn(),
+      ...setters
+    })
+
+    expect(createChat).not.toHaveBeenCalled()
+    expect(setters.setServerChatAssistantKind).toHaveBeenCalledWith("persona")
+    expect(setters.setServerChatAssistantId).toHaveBeenCalledWith("garden-helper")
+    expect(setters.setServerChatPersonaMemoryMode).toHaveBeenCalledWith(
+      "read_write"
+    )
+    expect(result).toEqual({
+      chatId: "persona-chat-2",
+      historyId: "history-2",
+      personaMemoryMode: "read_write"
+    })
+  })
+})

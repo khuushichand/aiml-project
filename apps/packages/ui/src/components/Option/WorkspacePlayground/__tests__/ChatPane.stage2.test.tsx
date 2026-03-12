@@ -718,6 +718,20 @@ describe("ChatPane Stage 2 citation traceability and retrieval transparency", ()
   })
 
   it("shows a context change warning when sources are deselected mid-thread", () => {
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "Source 1",
+        type: "pdf"
+      },
+      {
+        id: "source-2",
+        mediaId: 102,
+        title: "Source 2",
+        type: "pdf"
+      }
+    ]
     workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
     messageOptionState.messages = [
       {

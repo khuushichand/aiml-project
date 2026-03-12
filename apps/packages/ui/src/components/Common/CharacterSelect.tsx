@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next"
 import { browser } from "wxt/browser"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { IconButton } from "./IconButton"
+import { MyChatIdentityMenu } from "./MyChatIdentityMenu"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useAntdModal } from "@/hooks/useAntdModal"
 import { useConfirmModal } from "@/hooks/useConfirmModal"
@@ -274,8 +275,34 @@ export const CharacterSelect: React.FC<Props> = ({
   }) as string
   const trimmedDisplayName =
     typeof userDisplayName === "string" ? userDisplayName.trim() : ""
+  const displayNameActionLabel = trimmedDisplayName
+    ? (t("option:characters.displayNameCurrent", {
+        defaultValue: "Your name: {{name}}",
+        name: trimmedDisplayName
+      }) as string)
+    : (t("option:characters.displayNameAction", {
+        defaultValue: "Set your name"
+      }) as string)
   const hasUserPersonaImage =
     typeof userPersonaImage === "string" && userPersonaImage.trim().length > 0
+  const imageActionLabel = hasUserPersonaImage
+    ? (t("option:characters.identityImageReplace", {
+        defaultValue: "Replace your image"
+      }) as string)
+    : (t("option:characters.identityImageUpload", {
+        defaultValue: "Upload your image"
+      }) as string)
+  const clearImageActionLabel = hasUserPersonaImage
+    ? (t("option:characters.identityImageClear", {
+        defaultValue: "Remove your image"
+      }) as string)
+    : undefined
+  const promptTemplatesActionLabel = t(
+    "option:characters.promptTemplatesAction",
+    {
+      defaultValue: "Prompt style templates"
+    }
+  ) as string
   const selectedCharacterMoodImages = React.useMemo(
     () => getCharacterMoodImagesFromExtensions(selectedCharacter?.extensions),
     [selectedCharacter?.extensions]
@@ -325,6 +352,103 @@ export const CharacterSelect: React.FC<Props> = ({
       }
     })
   }, [modal, setUserDisplayName, t, trimmedDisplayName])
+
+  const openGenerationPromptsModal = React.useCallback(() => {
+    const current = normalizeMessageSteeringPrompts(messageSteeringPrompts)
+    steeringPromptDraftRef.current = {
+      ...current
+    }
+    React.startTransition(() => {
+      modal.confirm({
+        title: t("playground:composer.steering.editPromptsTitle", {
+          defaultValue: "Prompt style templates"
+        }),
+        width: 720,
+        centered: true,
+        maskClosable: false,
+        content: (
+          <div className="space-y-3">
+            <div className="text-xs text-text-muted">
+              {t("playground:composer.steering.editPromptsHelp", {
+                defaultValue:
+                  "These templates are used when running Continue as user, Impersonate user, and Force narrate."
+              })}
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-text">
+                {t("playground:composer.steering.continue", {
+                  defaultValue: "Continue as user"
+                })}
+              </div>
+              <Input.TextArea
+                rows={3}
+                defaultValue={current.continueAsUser}
+                onChange={(event) => {
+                  steeringPromptDraftRef.current = {
+                    ...steeringPromptDraftRef.current,
+                    continueAsUser: event.target.value
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-text">
+                {t("playground:composer.steering.impersonate", {
+                  defaultValue: "Impersonate user"
+                })}
+              </div>
+              <Input.TextArea
+                rows={3}
+                defaultValue={current.impersonateUser}
+                onChange={(event) => {
+                  steeringPromptDraftRef.current = {
+                    ...steeringPromptDraftRef.current,
+                    impersonateUser: event.target.value
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-text">
+                {t("playground:composer.steering.narrate", {
+                  defaultValue: "Force narrate"
+                })}
+              </div>
+              <Input.TextArea
+                rows={3}
+                defaultValue={current.forceNarrate}
+                onChange={(event) => {
+                  steeringPromptDraftRef.current = {
+                    ...steeringPromptDraftRef.current,
+                    forceNarrate: event.target.value
+                  }
+                }}
+              />
+            </div>
+          </div>
+        ),
+        okText: t("common:save", { defaultValue: "Save" }),
+        cancelText: t("common:cancel", { defaultValue: "Cancel" }),
+        onOk: async () => {
+          const next = normalizeMessageSteeringPrompts(
+            steeringPromptDraftRef.current
+          )
+          await new Promise<void>((resolve) => {
+            React.startTransition(() => {
+              Promise.resolve(setMessageSteeringPrompts(next)).finally(() =>
+                resolve()
+              )
+            })
+          })
+          notification.success({
+            message: t("playground:composer.steering.editPromptsSaved", {
+              defaultValue: "Prompt style templates saved"
+            })
+          })
+        }
+      })
+    })
+  }, [messageSteeringPrompts, modal, notification, setMessageSteeringPrompts, t])
 
   const handlePersonaImageUploadClick = React.useCallback(() => {
     if (!personaImageInputRef.current) return
@@ -414,6 +538,26 @@ export const CharacterSelect: React.FC<Props> = ({
       })
     })
   }, [notification, setUserPersonaImage, t])
+
+  const openDisplayNameFromIdentityMenu = React.useCallback(() => {
+    setDropdownOpen(false)
+    openDisplayNameModal()
+  }, [openDisplayNameModal, setDropdownOpen])
+
+  const openPromptTemplatesFromIdentityMenu = React.useCallback(() => {
+    setDropdownOpen(false)
+    openGenerationPromptsModal()
+  }, [openGenerationPromptsModal, setDropdownOpen])
+
+  const uploadImageFromIdentityMenu = React.useCallback(() => {
+    setDropdownOpen(false)
+    handlePersonaImageUploadClick()
+  }, [handlePersonaImageUploadClick, setDropdownOpen])
+
+  const clearImageFromIdentityMenu = React.useCallback(() => {
+    setDropdownOpen(false)
+    clearPersonaImage()
+  }, [clearPersonaImage, setDropdownOpen])
 
   const handleMoodImageUploadClick = React.useCallback(
     (mood: CharacterMoodLabel) => {
@@ -1239,63 +1383,6 @@ export const CharacterSelect: React.FC<Props> = ({
     onClick: handleImportClick
   }
 
-  const displayNameItem: MenuProps["items"][number] = {
-    key: "__user_display_name__",
-    label: (
-      <button
-        type="button"
-        className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
-      >
-        {trimmedDisplayName
-          ? t("option:characters.displayNameCurrent", {
-              defaultValue: "Your name: {{name}}",
-              name: trimmedDisplayName
-            })
-          : t("option:characters.displayNameAction", {
-              defaultValue: "Set your name"
-            })}
-      </button>
-    ),
-    onClick: openDisplayNameModal
-  }
-
-  const uploadPersonaImageItem: MenuProps["items"][number] = {
-    key: "__user_persona_image_upload__",
-    label: (
-      <button
-        type="button"
-        className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
-      >
-        {hasUserPersonaImage
-          ? t("option:characters.personaImageReplace", {
-              defaultValue: "Replace your persona image"
-            })
-          : t("option:characters.personaImageUpload", {
-              defaultValue: "Upload your persona image"
-            })}
-      </button>
-    ),
-    onClick: handlePersonaImageUploadClick
-  }
-
-  const clearPersonaImageItem: MenuProps["items"][number] | null =
-    hasUserPersonaImage
-      ? {
-          key: "__user_persona_image_clear__",
-          label: (
-            <button
-              type="button"
-              className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
-            >
-              {t("option:characters.personaImageClear", {
-                defaultValue: "Remove your persona image"
-              })}
-            </button>
-          ),
-          onClick: clearPersonaImage
-        }
-      : null
-
   const togglePortraitsItem: MenuProps["items"][number] = {
     key: "__toggle_character_portraits__",
     label: (
@@ -1314,116 +1401,6 @@ export const CharacterSelect: React.FC<Props> = ({
     ),
     onClick: () => {
       void setShowCharacterPortraits((prev) => !prev)
-    }
-  }
-
-  const editGenerationPromptsItem: MenuProps["items"][number] = {
-    key: "__edit_generation_prompts__",
-    label: (
-      <button
-        type="button"
-        className="w-full text-left text-xs font-medium text-text hover:text-text-muted"
-      >
-        {t("playground:composer.steering.editPrompts", {
-          defaultValue: "Edit generation prompts"
-        })}
-      </button>
-    ),
-    onClick: () => {
-      const current = normalizeMessageSteeringPrompts(messageSteeringPrompts)
-      steeringPromptDraftRef.current = {
-        ...current
-      }
-      React.startTransition(() => {
-        modal.confirm({
-          title: t("playground:composer.steering.editPromptsTitle", {
-            defaultValue: "Edit generation prompts"
-          }),
-          width: 720,
-          centered: true,
-          maskClosable: false,
-          content: (
-            <div className="space-y-3">
-              <div className="text-xs text-text-muted">
-                {t("playground:composer.steering.editPromptsHelp", {
-                  defaultValue:
-                    "These templates are used when running Continue as user, Impersonate user, and Force narrate."
-                })}
-              </div>
-              <div>
-                <div className="mb-1 text-xs font-medium text-text">
-                  {t("playground:composer.steering.continue", {
-                    defaultValue: "Continue as user"
-                  })}
-                </div>
-                <Input.TextArea
-                  rows={3}
-                  defaultValue={current.continueAsUser}
-                  onChange={(event) => {
-                    steeringPromptDraftRef.current = {
-                      ...steeringPromptDraftRef.current,
-                      continueAsUser: event.target.value
-                    }
-                  }}
-                />
-              </div>
-              <div>
-                <div className="mb-1 text-xs font-medium text-text">
-                  {t("playground:composer.steering.impersonate", {
-                    defaultValue: "Impersonate user"
-                  })}
-                </div>
-                <Input.TextArea
-                  rows={3}
-                  defaultValue={current.impersonateUser}
-                  onChange={(event) => {
-                    steeringPromptDraftRef.current = {
-                      ...steeringPromptDraftRef.current,
-                      impersonateUser: event.target.value
-                    }
-                  }}
-                />
-              </div>
-              <div>
-                <div className="mb-1 text-xs font-medium text-text">
-                  {t("playground:composer.steering.narrate", {
-                    defaultValue: "Force narrate"
-                  })}
-                </div>
-                <Input.TextArea
-                  rows={3}
-                  defaultValue={current.forceNarrate}
-                  onChange={(event) => {
-                    steeringPromptDraftRef.current = {
-                      ...steeringPromptDraftRef.current,
-                      forceNarrate: event.target.value
-                    }
-                  }}
-                />
-              </div>
-            </div>
-          ),
-          okText: t("common:save", { defaultValue: "Save" }),
-          cancelText: t("common:cancel", { defaultValue: "Cancel" }),
-          onOk: async () => {
-            const next = normalizeMessageSteeringPrompts(
-              steeringPromptDraftRef.current
-            )
-            await new Promise<void>((resolve) => {
-              React.startTransition(() => {
-                Promise.resolve(setMessageSteeringPrompts(next)).finally(() =>
-                  resolve()
-                )
-              })
-            })
-            notification.success({
-              message: t("playground:composer.steering.editPromptsSaved", {
-                defaultValue: "Generation prompts saved"
-              })
-            })
-          }
-        })
-      })
     }
   }
 
@@ -1476,16 +1453,7 @@ export const CharacterSelect: React.FC<Props> = ({
       })
     : []
 
-  menuItems.push(
-    noneItem,
-    displayNameItem,
-    editGenerationPromptsItem,
-    uploadPersonaImageItem,
-    togglePortraitsItem
-  )
-  if (clearPersonaImageItem) {
-    menuItems.push(clearPersonaImageItem)
-  }
+  menuItems.push(noneItem, togglePortraitsItem)
   if (selectedCharacter && moodPortraitItems.length > 0) {
     menuItems.push(
       dividerItem("__divider_mood_portraits__"),
@@ -1717,6 +1685,17 @@ export const CharacterSelect: React.FC<Props> = ({
                 onKeyDown={(event) => event.stopPropagation()}
               />
             </div>
+            <MyChatIdentityMenu
+              className="border-b border-border"
+              displayNameLabel={displayNameActionLabel}
+              imageLabel={imageActionLabel}
+              clearImageLabel={clearImageActionLabel}
+              promptTemplatesLabel={promptTemplatesActionLabel}
+              onDisplayName={openDisplayNameFromIdentityMenu}
+              onImage={uploadImageFromIdentityMenu}
+              onPromptTemplates={openPromptTemplatesFromIdentityMenu}
+              onClearImage={clearImageActionLabel ? clearImageFromIdentityMenu : undefined}
+            />
             <div className="max-h-[420px] overflow-y-auto no-scrollbar">
               {renderMenuWithRef(menu)}
             </div>

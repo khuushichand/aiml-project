@@ -44,6 +44,11 @@ export type ChatModelSettingsSnapshot = {
   apiProvider?: string
   extraHeaders?: string
   extraBody?: string
+  llamaThinkingBudgetTokens?: number
+  llamaGrammarMode?: "none" | "library" | "inline"
+  llamaGrammarId?: string
+  llamaGrammarInline?: string
+  llamaGrammarOverride?: string
 }
 
 export type SidepanelChatSnapshot = {
@@ -140,12 +145,15 @@ export const useSidepanelChatTabsStore = createWithEqualityFn<State>((set, get) 
       }
     }),
   setSnapshot: (tabId, snapshot) =>
-    set((state) => ({
-      snapshotsById: {
-        ...state.snapshotsById,
-        [tabId]: snapshot
+    set((state) => {
+      if (!state.tabs.some((tab) => tab.id === tabId)) return state
+      return {
+        snapshotsById: {
+          ...state.snapshotsById,
+          [tabId]: snapshot
+        }
       }
-    })),
+    }),
   getSnapshot: (tabId) => get().snapshotsById[tabId],
   togglePinned: (id) =>
     set((state) => ({

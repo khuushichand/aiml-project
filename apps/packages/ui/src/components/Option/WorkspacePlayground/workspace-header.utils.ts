@@ -1,4 +1,15 @@
-import type { SavedWorkspace, WorkspaceSource } from "@/types/workspace"
+import type {
+  SavedWorkspace,
+  WorkspaceCollection,
+  WorkspaceSource
+} from "@/types/workspace"
+
+export interface WorkspaceCollectionGroup {
+  id: string
+  name: string
+  collection: WorkspaceCollection | null
+  workspaces: SavedWorkspace[]
+}
 
 export interface WorkspaceTemplatePreset {
   id: string
@@ -76,6 +87,44 @@ export const filterSavedWorkspaces = (
     const haystack = `${workspace.name} ${workspace.tag}`.toLowerCase()
     return haystack.includes(normalizedQuery)
   })
+}
+
+export const groupWorkspacesByCollection = (
+  collections: WorkspaceCollection[],
+  workspaces: SavedWorkspace[]
+): WorkspaceCollectionGroup[] => {
+  const collectionGroups = collections.map<WorkspaceCollectionGroup>((collection) => ({
+    id: collection.id,
+    name: collection.name,
+    collection,
+    workspaces: []
+  }))
+  const groupsById = new Map(
+    collectionGroups.map((group) => [group.id, group] as const)
+  )
+  const unassignedGroup: WorkspaceCollectionGroup = {
+    id: "unassigned",
+    name: "Unassigned",
+    collection: null,
+    workspaces: []
+  }
+
+  for (const workspace of workspaces) {
+    if (!workspace.collectionId) {
+      unassignedGroup.workspaces.push(workspace)
+      continue
+    }
+
+    const group = groupsById.get(workspace.collectionId)
+    if (!group) {
+      unassignedGroup.workspaces.push(workspace)
+      continue
+    }
+
+    group.workspaces.push(workspace)
+  }
+
+  return [...collectionGroups, unassignedGroup]
 }
 
 const toDateStamp = (date: Date): string => {

@@ -31,13 +31,14 @@ import {
 const RICH_TEXT_ELEMENT_STYLE_CLASS =
   "[&_em]:[color:var(--rt-italic-color)] [&_em]:[font-family:var(--rt-italic-font)] [&_strong]:[color:var(--rt-bold-color)] [&_strong]:[font-family:var(--rt-bold-font)] [&_blockquote]:[color:var(--rt-quote-text-color)] [&_blockquote]:[font-family:var(--rt-quote-font)] [&_blockquote]:[border-left-color:var(--rt-quote-border-color)] [&_blockquote]:[background-color:var(--rt-quote-bg-color)] [&_blockquote]:border-l-4 [&_blockquote]:rounded-md [&_blockquote]:px-3 [&_blockquote]:py-2"
 
-function Markdown({
+export function Markdown({
   message,
   className = "prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark",
   searchQuery,
   codeBlockVariant = "default",
   allowExternalImages,
   richTextModeOverride,
+  headingAnchorIds,
 }: {
   message: string
   className?: string
@@ -45,6 +46,7 @@ function Markdown({
   codeBlockVariant?: "default" | "plain" | "compact" | "github"
   allowExternalImages?: boolean
   richTextModeOverride?: ChatRichTextMode
+  headingAnchorIds?: string[]
 }) {
   const [checkWideMode] = useStorage("checkWideMode", false)
   const [codeTheme] = useStorage("codeTheme", "auto")
@@ -89,8 +91,10 @@ function Markdown({
     DEFAULT_CHAT_SETTINGS.chatRichQuoteBackgroundColor
   )
   const blockIndexRef = React.useRef(0)
+  const headingIndexRef = React.useRef(0)
   // Reset index each render pass to assign sequential indices to code blocks.
   blockIndexRef.current = 0
+  headingIndexRef.current = 0
   const resolvedClassName = React.useMemo(() => {
     if (!checkWideMode) return className
     return `${className} max-w-none`
@@ -178,6 +182,11 @@ function Markdown({
     [searchQuery],
   )
   const processedMessage = React.useMemo(() => preprocessLaTeX(message), [message])
+  const nextHeadingAnchorProps = React.useCallback(() => {
+    const anchorId = headingAnchorIds?.[headingIndexRef.current]
+    headingIndexRef.current += 1
+    return anchorId ? { "data-section-anchor": anchorId, id: anchorId } : {}
+  }, [headingAnchorIds])
   const stCompatHtml = React.useMemo(() => {
     if (richTextMode !== "st_compat") return ""
     return renderStCompatMarkdownToHtml(
@@ -350,22 +359,22 @@ function Markdown({
             return <th {...props}>{renderHighlightedChildren(children)}</th>
           },
           h1({ children, ...props }) {
-            return <h1 {...props}>{renderHighlightedChildren(children)}</h1>
+            return <h1 {...props} {...nextHeadingAnchorProps()}>{renderHighlightedChildren(children)}</h1>
           },
           h2({ children, ...props }) {
-            return <h2 {...props}>{renderHighlightedChildren(children)}</h2>
+            return <h2 {...props} {...nextHeadingAnchorProps()}>{renderHighlightedChildren(children)}</h2>
           },
           h3({ children, ...props }) {
-            return <h3 {...props}>{renderHighlightedChildren(children)}</h3>
+            return <h3 {...props} {...nextHeadingAnchorProps()}>{renderHighlightedChildren(children)}</h3>
           },
           h4({ children, ...props }) {
-            return <h4 {...props}>{renderHighlightedChildren(children)}</h4>
+            return <h4 {...props} {...nextHeadingAnchorProps()}>{renderHighlightedChildren(children)}</h4>
           },
           h5({ children, ...props }) {
-            return <h5 {...props}>{renderHighlightedChildren(children)}</h5>
+            return <h5 {...props} {...nextHeadingAnchorProps()}>{renderHighlightedChildren(children)}</h5>
           },
           h6({ children, ...props }) {
-            return <h6 {...props}>{renderHighlightedChildren(children)}</h6>
+            return <h6 {...props} {...nextHeadingAnchorProps()}>{renderHighlightedChildren(children)}</h6>
           },
         }}
       >

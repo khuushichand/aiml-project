@@ -25,6 +25,7 @@ type AlertsPanelProps = {
   showSnoozed: boolean;
   assignableUsers: AlertAssignableUser[];
   loading: boolean;
+  localActionsEnabled: boolean;
   onToggleShowSnoozed: () => void;
   onAcknowledge: (alert: SystemAlert) => void;
   onDismiss: (alert: SystemAlert) => void;
@@ -57,6 +58,7 @@ export default function AlertsPanel({
   showSnoozed,
   assignableUsers,
   loading,
+  localActionsEnabled,
   onToggleShowSnoozed,
   onAcknowledge,
   onDismiss,
@@ -148,6 +150,7 @@ export default function AlertsPanel({
                     <Select
                       id={`alert-assignee-${alert.id}`}
                       value={alert.assigned_to ?? ''}
+                      disabled={!localActionsEnabled}
                       onChange={(event) => onAssign(alert, event.target.value)}
                       data-testid={`alert-assignee-select-${alert.id}`}
                     >
@@ -164,6 +167,7 @@ export default function AlertsPanel({
                   <div className="flex items-center gap-1">
                     <Select
                       value={snoozeSelections[alert.id] ?? '15m'}
+                      disabled={!localActionsEnabled}
                       onChange={(event) => {
                         setSnoozeSelections((prev) => ({
                           ...prev,
@@ -181,6 +185,7 @@ export default function AlertsPanel({
                     <Button
                       variant="outline"
                       size="sm"
+                      disabled={!localActionsEnabled}
                       onClick={() => onSnooze(alert, snoozeSelections[alert.id] ?? '15m')}
                       data-testid={`alert-snooze-button-${alert.id}`}
                     >
@@ -191,6 +196,7 @@ export default function AlertsPanel({
                     <Button
                       variant="ghost"
                       size="sm"
+                      disabled={!localActionsEnabled}
                       onClick={() => onEscalate(alert)}
                       title="Escalate"
                     >

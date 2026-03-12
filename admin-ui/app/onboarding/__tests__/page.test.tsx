@@ -71,7 +71,6 @@ import { api } from '@/lib/api-client';
 import { isBillingEnabled } from '@/lib/billing';
 
 const mockedGetPlans = api.getPlans as ReturnType<typeof vi.fn>;
-const mockedCreateOnboardingSession = api.createOnboardingSession as ReturnType<typeof vi.fn>;
 const mockedIsBillingEnabled = isBillingEnabled as ReturnType<typeof vi.fn>;
 
 describe('OnboardingPage', () => {

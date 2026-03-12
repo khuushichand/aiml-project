@@ -24,6 +24,51 @@ interface SearchIndex {
 }
 
 /**
+ * Escape special regex characters in a string.
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * Build a regex for the given query, respecting case sensitivity and word boundary options.
+ */
+function buildSearchRegex(query: string, matchCase: boolean, wordBoundary: boolean): RegExp {
+  let pattern = escapeRegex(query)
+  if (wordBoundary) {
+    pattern = `\\b${pattern}\\b`
+  }
+  const flags = matchCase ? "g" : "gi"
+  return new RegExp(pattern, flags)
+}
+
+/**
+ * Find all matches of a query in text, respecting case sensitivity and word boundary options.
+ */
+function findMatches(
+  text: string,
+  query: string,
+  matchCase: boolean,
+  wordBoundary: boolean
+): number[] {
+  if (!query) return []
+
+  const regex = buildSearchRegex(query, matchCase, wordBoundary)
+  const positions: number[] = []
+
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(text)) !== null) {
+    positions.push(match.index)
+    // Prevent infinite loop on zero-length matches
+    if (match.index === regex.lastIndex) {
+      regex.lastIndex++
+    }
+  }
+
+  return positions
+}
+
+/**
  * Hook for PDF in-document text search.
  *
  * Provides search functionality including:
@@ -50,6 +95,8 @@ export function usePdfSearch(
   const setActiveSearchIndex = useDocumentWorkspaceStore((s) => s.setActiveSearchIndex)
   const clearSearch = useDocumentWorkspaceStore((s) => s.clearSearch)
   const setCurrentPage = useDocumentWorkspaceStore((s) => s.setCurrentPage)
+  const searchMatchCase = useDocumentWorkspaceStore((s) => s.searchMatchCase)
+  const searchWordBoundary = useDocumentWorkspaceStore((s) => s.searchWordBoundary)
 
   /**
    * Build search index from PDF document.
@@ -105,18 +152,12 @@ export function usePdfSearch(
         return
       }
 
-      const normalizedQuery = query.toLowerCase()
       const results: SearchResult[] = []
 
       searchIndex.pageTexts.forEach((pageText, page) => {
-        const normalizedText = pageText.toLowerCase()
-        let matchIndex = 0
-        let startPos = 0
+        const positions = findMatches(pageText, query, searchMatchCase, searchWordBoundary)
 
-        while (true) {
-          const pos = normalizedText.indexOf(normalizedQuery, startPos)
-          if (pos === -1) break
-
+        positions.forEach((pos, matchIndex) => {
           // Find which item this match belongs to
           const items = searchIndex.pageItems.get(page) || []
           let currentPos = 0
@@ -137,10 +178,7 @@ export function usePdfSearch(
             matchIndex,
             itemIndex
           })
-
-          matchIndex++
-          startPos = pos + 1
-        }
+        })
       })
 
       // Sort by page number
@@ -148,7 +186,7 @@ export function usePdfSearch(
 
       setSearchResults(results)
     },
-    [searchIndex, setSearchResults]
+    [searchIndex, setSearchResults, searchMatchCase, searchWordBoundary]
   )
 
   /**
@@ -202,6 +240,8 @@ export function usePdfSearch(
 
       if (!query.trim()) return
 
+      const regex = buildSearchRegex(query, searchMatchCase, searchWordBoundary)
+
       // Find all text spans in the PDF text layer
       const textLayers = document.querySelectorAll(".react-pdf__Page__textContent")
 
@@ -210,10 +250,9 @@ export function usePdfSearch(
 
         spans.forEach((span) => {
           const text = span.textContent || ""
-          const normalizedText = text.toLowerCase()
-          const normalizedQuery = query.toLowerCase()
-
-          if (normalizedText.includes(normalizedQuery)) {
+          // Reset lastIndex for each span since we reuse the regex
+          regex.lastIndex = 0
+          if (regex.test(text)) {
             span.classList.add("pdf-search-match")
             highlightedElementsRef.current.push(span as HTMLElement)
           }
@@ -241,7 +280,7 @@ export function usePdfSearch(
         }
       }
     },
-    [searchResults]
+    [searchResults, searchMatchCase, searchWordBoundary]
   )
 
   /**

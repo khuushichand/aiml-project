@@ -203,3 +203,84 @@ class WorkflowRunListResponse(BaseModel):
     runs: list[WorkflowRunListItem]
     next_offset: int | None = None
     next_cursor: str | None = None
+
+
+class WorkflowFailureSummary(BaseModel):
+    reason_code_core: str | None = None
+    reason_code_detail: str | None = None
+    category: str | None = None
+    blame_scope: str | None = None
+    retryable: bool | None = None
+    retry_recommendation: str | None = None
+    error_summary: str | None = None
+    internal_detail: dict[str, Any] | None = None
+
+
+class WorkflowStepAttemptResponse(BaseModel):
+    attempt_id: str
+    step_run_id: str
+    step_id: str
+    attempt_number: int
+    status: str
+    started_at: str
+    ended_at: str | None = None
+    duration_ms: int | None = None
+    reason_code_core: str | None = None
+    reason_code_detail: str | None = None
+    retryable: bool | None = None
+    error_summary: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowRunStepResponse(BaseModel):
+    step_run_id: str
+    step_id: str
+    name: str | None = None
+    type: str | None = None
+    status: str
+    attempt_count: int = 0
+    started_at: str | None = None
+    ended_at: str | None = None
+    error: str | None = None
+    latest_failure: WorkflowFailureSummary | None = None
+
+
+class WorkflowStepAttemptsResponse(BaseModel):
+    run_id: str
+    step_id: str
+    attempts: list[WorkflowStepAttemptResponse] = Field(default_factory=list)
+
+
+class WorkflowRunStepsResponse(BaseModel):
+    run_id: str
+    steps: list[WorkflowRunStepResponse] = Field(default_factory=list)
+
+
+class WorkflowRunInvestigationResponse(BaseModel):
+    run_id: str
+    status: str
+    schema_version: int
+    derived_from_event_seq: int = 0
+    failed_step: WorkflowRunStepResponse | None = None
+    primary_failure: WorkflowFailureSummary | None = None
+    attempts: list[WorkflowStepAttemptResponse] = Field(default_factory=list)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    recommended_actions: list[str] = Field(default_factory=list)
+
+
+class WorkflowValidationIssue(BaseModel):
+    code: str
+    message: str
+    step_id: str | None = None
+    step_type: str | None = None
+
+
+class WorkflowPreflightRequest(BaseModel):
+    definition: Any
+    validation_mode: Literal["block", "non-block"] = "block"
+
+
+class WorkflowPreflightResponse(BaseModel):
+    valid: bool
+    errors: list[WorkflowValidationIssue] = Field(default_factory=list)
+    warnings: list[WorkflowValidationIssue] = Field(default_factory=list)

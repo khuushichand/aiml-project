@@ -12,6 +12,7 @@ from typing import Any, Optional, Union
 # 3rd-party imports
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, Response, status
 from loguru import logger
+from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import get_prompts_db_for_user
 from tldw_Server_API.app.api.v1.schemas import prompt_schemas as schemas
@@ -23,6 +24,15 @@ from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
     DatabaseError,
     InputError,
     PromptsDatabase,
+)
+from tldw_Server_API.app.core.Prompt_Management.structured_prompts import (
+    PromptDefinition,
+    StructuredPromptAssemblyError,
+    assemble_prompt_definition,
+    convert_legacy_prompt_to_definition,
+    extract_legacy_prompt_variables,
+    render_legacy_snapshot,
+    validate_prompt_definition,
 )
 
 #
@@ -83,6 +93,108 @@ def _render_template(template: str, variables: dict[str, Any]) -> str:
         return str(variables[key])
 
     return _TEMPLATE_VAR_RE.sub(repl, template)
+
+
+def _render_definition_legacy_fields(definition: PromptDefinition) -> tuple[str, str]:
+    messages = [
+        {"role": block.role, "content": block.content}
+        for block in sorted(definition.blocks, key=lambda item: item.order)
+        if block.enabled
+    ]
+    legacy = render_legacy_snapshot(messages, definition)
+    return legacy.system_prompt, legacy.user_prompt
+
+
+def _coerce_structured_definition(
+    prompt_schema_version: int | None,
+    prompt_definition_payload: dict[str, Any] | None,
+) -> tuple[PromptDefinition, int]:
+    if prompt_schema_version is None:
+        raise InputError("Structured prompts require prompt_schema_version.")
+    if not isinstance(prompt_definition_payload, dict):
+        raise InputError("Structured prompts require prompt_definition.")
+    try:
+        definition = PromptDefinition.model_validate(prompt_definition_payload)
+    except ValidationError as exc:
+        raise InputError(f"Invalid prompt_definition: {exc}") from exc
+    issues = validate_prompt_definition(definition)
+    if issues:
+        raise InputError(issues[0].message)
+
+    definition_schema_version = int(definition.schema_version)
+    if int(prompt_schema_version) != definition_schema_version:
+        raise InputError(
+            "prompt_schema_version must match prompt_definition.schema_version."
+        )
+
+    return definition, definition_schema_version
+
+
+def _coerce_preview_definition(
+    prompt_format: str,
+    prompt_schema_version: int | None,
+    prompt_definition_payload: dict[str, Any] | None,
+    *,
+    system_prompt: str | None,
+    user_prompt: str | None,
+) -> tuple[PromptDefinition, str, int | None]:
+    if prompt_format == "structured":
+        definition, definition_schema_version = _coerce_structured_definition(
+            prompt_schema_version,
+            prompt_definition_payload,
+        )
+        return definition, "structured", definition_schema_version
+
+    definition = convert_legacy_prompt_to_definition(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    return definition, "legacy", None
+
+
+def _prepare_prompt_storage_payload(
+    prompt_data: schemas.PromptCreate | dict[str, Any],
+    *,
+    existing_prompt: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if isinstance(prompt_data, schemas.PromptCreate):
+        payload = prompt_data.model_dump()
+    else:
+        payload = dict(prompt_data)
+
+    prompt_format = payload.get("prompt_format") or (
+        existing_prompt.get("prompt_format") if existing_prompt else "legacy"
+    ) or "legacy"
+    prompt_schema_version = payload.get("prompt_schema_version")
+    if prompt_schema_version is None and existing_prompt and prompt_format == "structured":
+        prompt_schema_version = existing_prompt.get("prompt_schema_version")
+    prompt_definition_payload = payload.get("prompt_definition")
+    if prompt_definition_payload is None and existing_prompt and prompt_format == "structured":
+        prompt_definition_payload = existing_prompt.get("prompt_definition")
+
+    if prompt_format == "structured":
+        definition, definition_schema_version = _coerce_structured_definition(
+            prompt_schema_version,
+            prompt_definition_payload,
+        )
+
+        system_prompt, user_prompt = _render_definition_legacy_fields(definition)
+        payload["prompt_definition"] = definition.model_dump()
+        payload["prompt_schema_version"] = definition_schema_version
+        payload["prompt_format"] = "structured"
+        payload["system_prompt"] = system_prompt
+        payload["user_prompt"] = user_prompt
+        return payload
+
+    if prompt_definition_payload is not None:
+        raise InputError("Legacy prompts cannot include prompt_definition.")
+    if prompt_schema_version is not None:
+        raise InputError("Legacy prompts cannot include prompt_schema_version.")
+
+    payload["prompt_format"] = "legacy"
+    payload["prompt_schema_version"] = None
+    payload["prompt_definition"] = None
+    return payload
 
 
 def _generate_unique_prompt_name(base_name: str, used_names: set, name_counts: dict[str, int]) -> str:
@@ -721,6 +833,74 @@ async def render_template_api(
     return schemas.TemplateRenderResponse(rendered=rendered)
 
 
+@router.post(
+    "/preview",
+    response_model=schemas.StructuredPromptPreviewResponse,
+    summary="Preview assembled prompt messages",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def preview_prompt_api(
+    payload: schemas.StructuredPromptPreviewRequest = Body(...),
+):
+    try:
+        definition, prompt_format, prompt_schema_version = _coerce_preview_definition(
+            payload.prompt_format,
+            payload.prompt_schema_version,
+            payload.prompt_definition,
+            system_prompt=payload.system_prompt,
+            user_prompt=payload.user_prompt,
+        )
+        assembly = assemble_prompt_definition(definition, payload.variables)
+    except InputError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid prompt_definition: {e}",
+        ) from e
+    except StructuredPromptAssemblyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+
+    return schemas.StructuredPromptPreviewResponse(
+        prompt_format=prompt_format,
+        prompt_schema_version=prompt_schema_version,
+        assembled_messages=assembly.messages,
+        legacy_system_prompt=assembly.legacy.system_prompt,
+        legacy_user_prompt=assembly.legacy.user_prompt,
+    )
+
+
+@router.post(
+    "/convert",
+    response_model=schemas.StructuredPromptConvertResponse,
+    summary="Convert a legacy prompt to a structured definition",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def convert_prompt_api(
+    payload: schemas.StructuredPromptConvertRequest = Body(...),
+):
+    definition = convert_legacy_prompt_to_definition(
+        system_prompt=payload.system_prompt,
+        user_prompt=payload.user_prompt,
+    )
+    legacy_system_prompt, legacy_user_prompt = _render_definition_legacy_fields(definition)
+    return schemas.StructuredPromptConvertResponse(
+        prompt_definition=definition.model_dump(),
+        extracted_variables=extract_legacy_prompt_variables(
+            payload.system_prompt,
+            payload.user_prompt,
+        ),
+        legacy_system_prompt=legacy_system_prompt,
+        legacy_user_prompt=legacy_user_prompt,
+    )
+
+
 # === Bulk Operations Endpoints ===
 
 @router.post(
@@ -875,15 +1055,19 @@ async def create_prompt(
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
+        storage_payload = _prepare_prompt_storage_payload(prompt_data)
         # The db.add_prompt method with overwrite=False should raise ConflictError
         # if the name already exists and is active (as per our DB layer modification).
         p_id, p_uuid, db_message = db.add_prompt(  # db_message is returned by add_prompt on success
-            name=prompt_data.name,
-            author=prompt_data.author,
-            details=prompt_data.details,
-            system_prompt=prompt_data.system_prompt,
-            user_prompt=prompt_data.user_prompt,
-            keywords=prompt_data.keywords,
+            name=storage_payload["name"],
+            author=storage_payload.get("author"),
+            details=storage_payload.get("details"),
+            system_prompt=storage_payload.get("system_prompt"),
+            user_prompt=storage_payload.get("user_prompt"),
+            prompt_format=storage_payload.get("prompt_format", "legacy"),
+            prompt_schema_version=storage_payload.get("prompt_schema_version"),
+            prompt_definition=storage_payload.get("prompt_definition"),
+            keywords=storage_payload.get("keywords"),
             overwrite=False  # For a POST/create, we don't want to overwrite.
         )
         # If add_prompt successfully created or undeleted (if that's its logic for overwrite=False and deleted=True)
@@ -1130,8 +1314,11 @@ async def update_prompt(
 
         # 2. Call the new update method
         # Convert Pydantic model to dict, excluding unset to allow partial-like updates if some fields are optional
-        update_payload_dict = prompt_data.model_dump(
-            exclude_unset=False)  # exclude_unset=False means all fields are included
+        update_input = prompt_data.model_dump(exclude_unset=True)
+        update_payload_dict = _prepare_prompt_storage_payload(
+            update_input,
+            existing_prompt=target_prompt_dict,
+        )
 
         updated_prompt_uuid, msg = db.update_prompt_by_id(prompt_id_to_update, update_payload_dict)
 

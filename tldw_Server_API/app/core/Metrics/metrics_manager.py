@@ -926,6 +926,24 @@ class MetricsRegistry:
                 labels=["command", "reason"],  # reason=exception|permission_denied|rate_limited
             )
         )
+        self.register_metric(
+            MetricDefinition(
+                name="chat_conversation_search_requests_total",
+                type=MetricType.COUNTER,
+                description="Conversation search/list requests by strategy and outcome",
+                labels=["query_strategy", "order_by", "deleted_scope", "outcome"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="chat_conversation_search_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Conversation search/list request duration in seconds",
+                unit="s",
+                labels=["query_strategy", "order_by", "deleted_scope", "outcome"],
+                buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+            )
+        )
 
         # Dictionary validator
         self.register_metric(

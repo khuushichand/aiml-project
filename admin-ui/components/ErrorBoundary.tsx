@@ -65,6 +65,8 @@ class ErrorBoundaryBase extends Component<ErrorBoundaryProps, ErrorBoundaryState
       const nextCount = prev.retryCount + 1;
       if (nextCount >= prev.maxRetries) {
         return {
+          ...prev,
+          hasError: true,
           retryCount: nextCount,
           retriesExhausted: true,
         };
@@ -75,6 +77,7 @@ class ErrorBoundaryBase extends Component<ErrorBoundaryProps, ErrorBoundaryState
         errorInfo: null,
         showDetails: false,
         retryCount: nextCount,
+        maxRetries: prev.maxRetries,
         retriesExhausted: false,
       };
     });

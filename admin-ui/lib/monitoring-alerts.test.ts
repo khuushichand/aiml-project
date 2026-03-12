@@ -3,6 +3,7 @@ import {
   DEFAULT_ALERT_RULE_DRAFT,
   ensureTriggeredHistoryEntries,
   formatSnoozeCountdown,
+  normalizeAdminAlertHistoryPayload,
   validateAlertRuleDraft,
 } from './monitoring-alerts';
 
@@ -70,5 +71,33 @@ describe('ensureTriggeredHistoryEntries', () => {
     ]);
     expect(history).toHaveLength(2);
     expect(history.every((entry) => entry.action === 'triggered')).toBe(true);
+  });
+});
+
+describe('normalizeAdminAlertHistoryPayload', () => {
+  it('renders unassigned history entries truthfully', () => {
+    const history = normalizeAdminAlertHistoryPayload({
+      items: [
+        {
+          id: 1,
+          alert_identity: 'alert:1',
+          action: 'unassigned',
+          actor_user_id: 7,
+          details: { assigned_to_user_id: null },
+          created_at: '2026-02-17T12:00:00.000Z',
+        },
+      ],
+    });
+
+    expect(history).toEqual([
+      {
+        id: '1',
+        alertId: 'alert:1',
+        action: 'unassigned',
+        actor: 'User 7',
+        details: 'Alert unassigned',
+        timestamp: '2026-02-17T12:00:00.000Z',
+      },
+    ]);
   });
 });

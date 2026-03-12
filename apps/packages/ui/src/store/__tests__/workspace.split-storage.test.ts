@@ -47,6 +47,7 @@ describe("workspace split-key persistence storage adapter", () => {
           id: "workspace-a",
           name: "Workspace A",
           tag: "workspace:a",
+          collectionId: null,
           createdAt: "2026-02-22T00:00:00.000Z",
           lastAccessedAt: "2026-02-22T00:00:00.000Z",
           sourceCount: 0
@@ -55,12 +56,14 @@ describe("workspace split-key persistence storage adapter", () => {
           id: "workspace-b",
           name: "Workspace B",
           tag: "workspace:b",
+          collectionId: null,
           createdAt: "2026-02-20T00:00:00.000Z",
           lastAccessedAt: "2026-02-21T00:00:00.000Z",
           sourceCount: 0
         }
       ],
       archivedWorkspaces: [],
+      workspaceCollections: [],
       workspaceSnapshots: {
         "workspace-a": {
           workspaceId: "workspace-a",

@@ -101,6 +101,18 @@ export const normalizePathAllowlistPrefixes = (values: string[]): string[] => {
 export const joinList = (values: string[] | undefined | null, separator = "\n"): string =>
   Array.isArray(values) ? values.filter(Boolean).join(separator) : ""
 
+export const toggleStringValue = (
+  values: string[],
+  nextValue: string,
+  enabled: boolean
+): string[] => {
+  if (enabled) {
+    return Array.from(new Set([...values, nextValue]))
+  }
+
+  return values.filter((value) => value !== nextValue)
+}
+
 const SIMPLE_POLICY_KEYS = new Set(["allowed_tools", "denied_tools", "capabilities"])
 const GUIDED_POLICY_KEYS = new Set([
   ...SIMPLE_POLICY_KEYS,

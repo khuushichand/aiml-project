@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ConnectionPhase } from "@/types/connection"
 
 vi.mock("@/services/tldw-server", () => ({
@@ -43,6 +43,12 @@ const ageLastCheck = () => {
 }
 
 describe("connection store stability", () => {
+  const originalChrome = (
+    globalThis as typeof globalThis & {
+      chrome?: unknown
+    }
+  ).chrome
+
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.removeItem("__tldw_allow_offline")
@@ -73,6 +79,18 @@ describe("connection store stability", () => {
     mockedClient.ragHealth.mockResolvedValue({ status: "healthy" } as any)
   })
 
+  afterEach(() => {
+    if (typeof originalChrome === "undefined") {
+      Reflect.deleteProperty(globalThis, "chrome")
+      return
+    }
+
+    Object.defineProperty(globalThis, "chrome", {
+      value: originalChrome,
+      configurable: true
+    })
+  })
+
   it("keeps connected state through transient unreachable checks before threshold", async () => {
     mockedApiSend.mockResolvedValue({
       ok: false,
@@ -101,6 +119,40 @@ describe("connection store stability", () => {
     expect(state.isConnected).toBe(false)
     expect(state.errorKind).toBe("unreachable")
     expect(state.consecutiveFailures).toBe(3)
+  })
+
+  it("falls back to localStorage when chrome storage lacks the first-run flag", async () => {
+    Object.defineProperty(globalThis, "chrome", {
+      value: {
+        storage: {
+          local: {
+            get: vi.fn((key: string, callback: (value: Record<string, unknown>) => void) => {
+              callback({})
+            })
+          }
+        }
+      },
+      configurable: true
+    })
+
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    mockedApiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { status: "alive" }
+    })
+
+    setConnectionState({
+      hasCompletedFirstRun: false,
+      phase: ConnectionPhase.SEARCHING,
+      isConnected: false,
+      lastCheckedAt: Date.now() - 60_000
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.hasCompletedFirstRun).toBe(true)
   })
 
   it("uses lightweight health liveness endpoint and resets failure streak on success", async () => {
@@ -251,5 +303,45 @@ describe("connection store stability", () => {
     expect(state.isConnected).toBe(true)
     expect(state.serverUrl).toBe("http://192.168.5.184:8000")
     expect(mockedApiSend).toHaveBeenCalledTimes(2)
+  })
+
+  it("preserves persisted first-run completion when offline bypass is enabled", async () => {
+    setConnectionState({
+      hasCompletedFirstRun: false,
+      phase: ConnectionPhase.SEARCHING,
+      isConnected: false,
+      isChecking: false
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    localStorage.setItem("__tldw_allow_offline", "true")
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.CONNECTED)
+    expect(state.offlineBypass).toBe(true)
+    expect(state.hasCompletedFirstRun).toBe(true)
+  })
+
+  it("preserves persisted first-run completion through a successful health check", async () => {
+    setConnectionState({
+      hasCompletedFirstRun: false,
+      phase: ConnectionPhase.SEARCHING,
+      isConnected: false,
+      isChecking: false
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    mockedApiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { status: "alive" }
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.CONNECTED)
+    expect(state.isConnected).toBe(true)
+    expect(state.hasCompletedFirstRun).toBe(true)
   })
 })

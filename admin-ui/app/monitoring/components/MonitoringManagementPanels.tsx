@@ -24,9 +24,6 @@ export default function MonitoringManagementPanels({
     <>
       <div className="mb-6">
         <AlertRulesPanel {...alertRulesPanelProps} />
-        <p className="mt-2 text-xs text-muted-foreground">
-          Alert rules are stored locally until a backend alert-rules endpoint is available.
-        </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">

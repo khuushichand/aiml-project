@@ -74,7 +74,9 @@ const NotificationsPanelShell = ({
         <Button
           variant="outline"
           size="sm"
-          onClick={onTest}
+          onClick={() => {
+            void onTest();
+          }}
           disabled={loading || saving || enabledChannels === 0}
         >
           <Send className="mr-2 h-4 w-4" />

@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import sqlite3
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -139,6 +140,25 @@ CREATE TABLE IF NOT EXISTS workflow_step_runs (
     FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS workflow_step_attempts (
+    attempt_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    step_run_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL,
+    ended_at TIMESTAMPTZ,
+    duration_ms INTEGER,
+    reason_code_core TEXT,
+    reason_code_detail TEXT,
+    retryable BOOLEAN,
+    error_summary TEXT,
+    metadata_json TEXT,
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS workflow_events (
     event_id BIGSERIAL PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -171,6 +191,9 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
 CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at);
+CREATE INDEX IF NOT EXISTS idx_step_attempts_run_attempts ON workflow_step_attempts(run_id, attempt_number, started_at);
+CREATE INDEX IF NOT EXISTS idx_step_attempts_run_step_attempts ON workflow_step_attempts(run_id, step_id, attempt_number, started_at);
+CREATE INDEX IF NOT EXISTS idx_step_attempts_step_run_attempts ON workflow_step_attempts(step_run_id, attempt_number, started_at);
     CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq);
 
 -- Ensure uniqueness of per-run event sequence
@@ -460,7 +483,7 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
-    _CURRENT_SCHEMA_VERSION = 6
+    _CURRENT_SCHEMA_VERSION = 8
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -707,6 +730,8 @@ class WorkflowsDatabase:
             4: self._backend_migrate_to_v4,
             5: self._backend_migrate_to_v5,
             6: self._backend_migrate_to_v6,
+            7: self._backend_migrate_to_v7,
+            8: self._backend_migrate_to_v8,
         }
 
     def _backend_migrate_to_v1(self, conn) -> None:
@@ -922,6 +947,60 @@ class WorkflowsDatabase:
                 connection=conn,
             )
 
+    def _backend_migrate_to_v7(self, conn) -> None:
+        if not self.backend:
+            return
+        backend = self.backend
+        ident = backend.escape_identifier
+        backend.execute(
+            f"CREATE TABLE IF NOT EXISTS {ident('workflow_step_attempts')} ("
+            f"attempt_id TEXT PRIMARY KEY,"
+            f"tenant_id TEXT NOT NULL,"
+            f"run_id TEXT NOT NULL,"
+            f"step_run_id TEXT NOT NULL,"
+            f"step_id TEXT NOT NULL,"
+            f"attempt_number INTEGER NOT NULL,"
+            f"status TEXT NOT NULL,"
+            f"started_at TIMESTAMPTZ NOT NULL,"
+            f"ended_at TIMESTAMPTZ,"
+            f"duration_ms INTEGER,"
+            f"reason_code_core TEXT,"
+            f"reason_code_detail TEXT,"
+            f"retryable BOOLEAN,"
+            f"error_summary TEXT,"
+            f"metadata_json TEXT,"
+            f"FOREIGN KEY ({ident('run_id')}) REFERENCES {ident('workflow_runs')}({ident('run_id')}) ON DELETE CASCADE"
+            ")",
+            connection=conn,
+        )
+
+    def _backend_migrate_to_v8(self, conn) -> None:
+        if not self.backend:
+            return
+        backend = self.backend
+        ident = backend.escape_identifier
+        index_definitions = (
+            (
+                "idx_step_attempts_run_attempts",
+                ("run_id", "attempt_number", "started_at"),
+            ),
+            (
+                "idx_step_attempts_run_step_attempts",
+                ("run_id", "step_id", "attempt_number", "started_at"),
+            ),
+            (
+                "idx_step_attempts_step_run_attempts",
+                ("step_run_id", "attempt_number", "started_at"),
+            ),
+        )
+        for index_name, columns in index_definitions:
+            cols = ", ".join(ident(column) for column in columns)
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident(index_name)} "  # nosec B608
+                f"ON {ident('workflow_step_attempts')} ({cols})",
+                connection=conn,
+            )
+
     def _initialize_schema_backend(self) -> None:
         if not self.backend:
             return
@@ -1045,6 +1124,29 @@ class WorkflowsDatabase:
             """
         )
 
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_step_attempts (
+                attempt_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                step_run_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                attempt_number INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                duration_ms INTEGER,
+                reason_code_core TEXT,
+                reason_code_detail TEXT,
+                retryable INTEGER,
+                error_summary TEXT,
+                metadata_json TEXT,
+                FOREIGN KEY(run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
+            );
+            """
+        )
+
         # Events
         cur.execute(
             """
@@ -1067,6 +1169,15 @@ class WorkflowsDatabase:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status)")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_step_attempts_run_attempts ON workflow_step_attempts(run_id, attempt_number, started_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_step_attempts_run_step_attempts ON workflow_step_attempts(run_id, step_id, attempt_number, started_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_step_attempts_step_run_attempts ON workflow_step_attempts(step_run_id, attempt_number, started_at)"
         )
         # Partial indexes for frequently accessed statuses (supported on modern SQLite)
         try:
@@ -1879,6 +1990,146 @@ class WorkflowsDatabase:
             else:
                 raise
 
+    def create_step_attempt(
+        self,
+        *,
+        tenant_id: str,
+        run_id: str,
+        step_run_id: str,
+        step_id: str,
+        attempt_number: int,
+        status: str = "running",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        attempt_id = str(uuid.uuid4())
+        started_at = _utcnow_iso()
+        params = (
+            attempt_id,
+            tenant_id,
+            run_id,
+            step_run_id,
+            step_id,
+            int(attempt_number),
+            status,
+            started_at,
+            json.dumps(metadata or {}),
+        )
+        query = """
+            INSERT INTO workflow_step_attempts(
+                attempt_id, tenant_id, run_id, step_run_id, step_id,
+                attempt_number, status, started_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return attempt_id
+
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
+        return attempt_id
+
+    def complete_step_attempt(
+        self,
+        *,
+        attempt_id: str,
+        status: str,
+        reason_code_core: str | None = None,
+        reason_code_detail: str | None = None,
+        retryable: bool | None = None,
+        error_summary: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        ended_at = _utcnow_iso()
+        duration_ms = None
+        row = None
+        query_started = "SELECT started_at FROM workflow_step_attempts WHERE attempt_id = ?"
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                row = self._row_from_result(self._execute_backend(query_started, (attempt_id,), connection=conn))
+        else:
+            row = self._conn.cursor().execute(query_started, (attempt_id,)).fetchone()
+        try:
+            started_raw = row["started_at"] if row else None
+            if started_raw:
+                started_dt = datetime.fromisoformat(str(started_raw))
+                ended_dt = datetime.fromisoformat(ended_at)
+                duration_ms = max(0, int((ended_dt - started_dt).total_seconds() * 1000))
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
+            duration_ms = None
+
+        params = (
+            status,
+            ended_at,
+            duration_ms,
+            reason_code_core,
+            reason_code_detail,
+            retryable,
+            error_summary,
+            json.dumps(metadata or {}),
+            attempt_id,
+        )
+        query = """
+            UPDATE workflow_step_attempts
+            SET status = ?, ended_at = ?, duration_ms = ?, reason_code_core = ?, reason_code_detail = ?,
+                retryable = ?, error_summary = ?, metadata_json = ?
+            WHERE attempt_id = ?
+        """
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
+
+    def list_step_attempts(
+        self,
+        *,
+        run_id: str,
+        step_id: str | None = None,
+        step_run_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = "SELECT * FROM workflow_step_attempts WHERE run_id = ?"
+        params: list[Any] = [str(run_id)]
+        if step_id is not None:
+            query += " AND step_id = ?"
+            params.append(str(step_id))
+        if step_run_id is not None:
+            query += " AND step_run_id = ?"
+            params.append(str(step_run_id))
+        query += " ORDER BY attempt_number ASC, started_at ASC"
+
+        rows: list[Any]
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, tuple(params), connection=conn)
+            rows = self._rows_from_result(result)
+        else:
+            rows = self._conn.cursor().execute(query, params).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            data = self._row_to_dict(row)
+            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
+                data["metadata_json"] = json.loads(data.get("metadata_json") or "{}")
+            out.append(data)
+        return out
+
     def get_latest_step_run(self, *, run_id: str, step_id: str) -> dict[str, Any] | None:
         """Return the most recent step run for a run/step_id pair."""
         query = """
@@ -1900,6 +2151,35 @@ class WorkflowsDatabase:
             return dict(row) if row else None
         finally:
             self._release_sqlite(conn)
+
+    def list_step_runs(self, *, run_id: str) -> list[dict[str, Any]]:
+        query = """
+            SELECT * FROM workflow_step_runs
+            WHERE run_id = ?
+            ORDER BY started_at ASC, step_run_id ASC
+        """
+        params = (str(run_id),)
+        rows: list[Any]
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                result = self._execute_backend(query, params, connection=conn)
+            rows = self._rows_from_result(result)
+        else:
+            conn = self._acquire_sqlite()
+            try:
+                rows = conn.cursor().execute(query, params).fetchall()
+            finally:
+                self._release_sqlite(conn)
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            data = self._row_to_dict(row)
+            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
+                data["inputs_json"] = json.loads(data.get("inputs_json") or "{}")
+            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
+                data["outputs_json"] = json.loads(data.get("outputs_json") or "{}")
+            out.append(data)
+        return out
 
     def update_step_attempt(self, *, step_run_id: str, attempt: int) -> None:
         """Persist the current attempt count for a step run."""

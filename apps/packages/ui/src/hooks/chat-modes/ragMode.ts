@@ -212,7 +212,7 @@ const ragModeDefinition: ChatModeDefinition<RagModeParams> = {
     name: "You",
     message: ctx.message,
     sources: [],
-    images: [],
+    images: ctx.image ? [ctx.image] : [],
     createdAt: ctx.createdAt,
     id: ctx.resolvedUserMessageId,
     messageType: ctx.userMessageType,
@@ -251,7 +251,7 @@ const ragModeDefinition: ChatModeDefinition<RagModeParams> = {
             name: "You",
             message: ctx.message,
             sources: [],
-            images: []
+            images: ctx.image ? [ctx.image] : []
           }
         ]
 

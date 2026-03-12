@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import types
 from typing import Any, Dict, List, Tuple
 
@@ -8,6 +9,7 @@ import pytest
 
 from tldw_Server_API.app.core.Sandbox.runners.docker_runner import DockerRunner
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType
+from tldw_Server_API.app.core.Sandbox.runners.seatbelt_runner import SeatbeltRunner
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 
 
@@ -128,3 +130,38 @@ def test_runner_execution_timeout_on_wait(monkeypatch: pytest.MonkeyPatch) -> No
     assert (rs.message or "") == "execution_timeout"
     frames = list(hub._buffers.get(rid, []))  # type: ignore[attr-defined]
     assert any(f.get("type") == "event" and f.get("event") == "end" and f.get("data", {}).get("reason") == "execution_timeout" for f in frames)
+
+
+@pytest.mark.unit
+def test_seatbelt_cancel_run_kills_active_process_group_and_removes_run_dir(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    rid = "run_seatbelt_cancel_1"
+    run_dir = tmp_path / "seatbelt-run-dir"
+    run_dir.mkdir()
+
+    class _FakeProc:
+        pid = 9876
+
+        def wait(self, timeout: int | None = None) -> int:
+            del timeout
+            return 0
+
+    with SeatbeltRunner._active_lock:  # type: ignore[attr-defined]
+        SeatbeltRunner._active_proc[rid] = _FakeProc()  # type: ignore[attr-defined]
+        SeatbeltRunner._active_run_dir[rid] = str(run_dir)  # type: ignore[attr-defined]
+
+    killpg_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr("os.killpg", lambda pid, sig: killpg_calls.append((pid, sig)))
+    monkeypatch.setattr(SeatbeltRunner, "_cancel_grace_seconds", classmethod(lambda cls: 0))
+
+    try:
+        ok = SeatbeltRunner.cancel_run(rid)
+    finally:
+        with SeatbeltRunner._active_lock:  # type: ignore[attr-defined]
+            SeatbeltRunner._cancelled_runs.discard(rid)  # type: ignore[attr-defined]
+
+    assert ok is True
+    assert killpg_calls == [(9876, signal.SIGTERM)]
+    assert not run_dir.exists()
+    with SeatbeltRunner._active_lock:  # type: ignore[attr-defined]
+        assert rid not in SeatbeltRunner._active_proc  # type: ignore[attr-defined]
+        assert rid not in SeatbeltRunner._active_run_dir  # type: ignore[attr-defined]

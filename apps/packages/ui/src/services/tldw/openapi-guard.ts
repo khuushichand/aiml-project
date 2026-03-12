@@ -87,6 +87,8 @@ export type ClientPath =
   | "/api/v1/chat/dictionaries/import/json"
   | "/api/v1/chat/dictionaries/validate"
   | "/api/v1/chat/dictionaries/process"
+  | "/api/v1/chat/grammars"
+  | "/api/v1/chat/grammars/{grammar_id}"
   | "/api/v1/chat/knowledge/save"
   | "/api/v1/chat/documents"
   | "/api/v1/chat/documents/generate"

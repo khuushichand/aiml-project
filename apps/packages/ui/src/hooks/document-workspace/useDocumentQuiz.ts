@@ -1,10 +1,12 @@
+import { useState, useEffect, useCallback } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { tldwClient } from "@/services/tldw"
+import { saveQuizToHistory, getQuizHistory, updateQuizAnswers, type QuizHistoryEntry } from "./offlineQueue"
 
 /**
  * Question type options
  */
-export type QuestionType = "multiple_choice" | "true_false" | "short_answer"
+export type QuestionType = "multiple_choice" | "true_false" | "short_answer" | "mixed"
 
 /**
  * Difficulty level options
@@ -105,9 +107,19 @@ export function useDocumentQuiz(documentId: number | null) {
         generatedAt: data.generated_at || new Date().toISOString()
       }
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       // Cache the generated quiz
       queryClient.setQueryData(["document-quiz", documentId], data)
+      // Persist to IndexedDB and store the history entry ID
+      if (documentId) {
+        const historyId = await saveQuizToHistory({
+          documentId,
+          quiz: data,
+          answers: {},
+          createdAt: Date.now()
+        })
+        queryClient.setQueryData(["document-quiz-history-id", documentId], historyId)
+      }
     }
   })
 
@@ -119,15 +131,38 @@ export function useDocumentQuiz(documentId: number | null) {
     staleTime: Infinity
   })
 
+  const historyId = queryClient.getQueryData<number>(["document-quiz-history-id", documentId])
+
+  const persistAnswer = useCallback(
+    (answers: Record<number, string>, score?: number, completedAt?: number) => {
+      if (historyId && historyId > 0) {
+        updateQuizAnswers(historyId, answers, score, completedAt)
+      }
+    },
+    [historyId]
+  )
+
   return {
     // State
     quiz: generateMutation.data || cachedQuiz,
     isGenerating: generateMutation.isPending,
     error: generateMutation.error,
+    historyId: historyId ?? null,
 
     // Actions
     generateQuiz: (options?: QuizGenerationOptions) => generateMutation.mutate(options),
-    clearQuiz: () => queryClient.removeQueries({ queryKey: ["document-quiz", documentId] }),
+    clearQuiz: () => {
+      queryClient.removeQueries({ queryKey: ["document-quiz", documentId] })
+      queryClient.removeQueries({ queryKey: ["document-quiz-history-id", documentId] })
+    },
+    loadQuiz: (quiz: QuizResponse, entryId?: number) => {
+      generateMutation.reset()
+      queryClient.setQueryData(["document-quiz", documentId], quiz)
+      if (entryId) {
+        queryClient.setQueryData(["document-quiz-history-id", documentId], entryId)
+      }
+    },
+    persistAnswer,
 
     // Reset mutation state
     reset: generateMutation.reset
@@ -149,6 +184,10 @@ export const QUESTION_TYPE_INFO: Record<QuestionType, { label: string; descripti
   short_answer: {
     label: "Short Answer",
     description: "Open-ended questions requiring brief responses"
+  },
+  mixed: {
+    label: "Mixed",
+    description: "A variety of question types"
   }
 }
 
@@ -168,6 +207,36 @@ export const DIFFICULTY_INFO: Record<DifficultyLevel, { label: string; descripti
     label: "Hard",
     description: "Complex questions requiring synthesis"
   }
+}
+
+/**
+ * Hook to load quiz history from IndexedDB.
+ */
+export function useQuizHistory(documentId: number | null) {
+  const [history, setHistory] = useState<QuizHistoryEntry[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+
+  const loadHistory = useCallback(async () => {
+    if (!documentId) {
+      setHistory([])
+      return
+    }
+    setIsLoading(true)
+    try {
+      const entries = await getQuizHistory(documentId)
+      setHistory(entries)
+    } catch {
+      setHistory([])
+    } finally {
+      setIsLoading(false)
+    }
+  }, [documentId])
+
+  useEffect(() => {
+    loadHistory()
+  }, [loadHistory])
+
+  return { history, isLoading, refresh: loadHistory }
 }
 
 export default useDocumentQuiz

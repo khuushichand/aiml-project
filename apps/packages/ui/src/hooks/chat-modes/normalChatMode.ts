@@ -118,6 +118,10 @@ type NormalChatModeParams = {
   useOCR: boolean
   selectedSystemPrompt: string
   currentChatModelSettings: any
+  assistantIdentity?: {
+    name: string
+    avatarUrl?: string | null
+  }
   imageBackendOverride?: string
   imageGenerationRequest?: Partial<ImageGenerationRequestSnapshot>
   imageGenerationRefine?: ImageGenerationRefineMetadata
@@ -190,13 +194,20 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
   }),
   buildAssistantMessage: (ctx) => ({
     isBot: true,
-    name: ctx.selectedModel,
+    name:
+      ctx.assistantIdentity?.name ||
+      ctx.modelInfo?.model_name ||
+      ctx.selectedModel,
     message: "▋",
     sources: [],
     createdAt: ctx.createdAt,
     id: ctx.resolvedAssistantMessageId,
-    modelImage: ctx.modelInfo?.model_avatar,
-    modelName: ctx.modelInfo?.model_name || ctx.selectedModel,
+    modelImage:
+      ctx.assistantIdentity?.avatarUrl || ctx.modelInfo?.model_avatar,
+    modelName:
+      ctx.assistantIdentity?.name ||
+      ctx.modelInfo?.model_name ||
+      ctx.selectedModel,
     messageType: ctx.assistantMessageType,
     clusterId: ctx.clusterId,
     modelId: ctx.resolvedModelId,

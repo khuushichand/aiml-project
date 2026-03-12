@@ -15,6 +15,7 @@ export interface PlaygroundSessionData {
   // Core identifier (used to restore messages from Dexie)
   historyId: string | null
   serverChatId: string | null
+  scopeKey: string | null
 
   // Settings NOT already persisted elsewhere (selectedModel uses useStorage)
   chatMode: "normal" | "rag" | "vision"
@@ -39,12 +40,13 @@ interface PlaygroundSessionState extends PlaygroundSessionData {
   saveSession: (data: Partial<PlaygroundSessionData>) => void
   clearSession: () => void
   isSessionStale: () => boolean
-  isSessionValid: () => boolean
+  isSessionValid: (expectedScopeKey?: string | null) => boolean
 }
 
 const initialState: PlaygroundSessionData = {
   historyId: null,
   serverChatId: null,
+  scopeKey: null,
   chatMode: "normal",
   webSearch: false,
   compareMode: false,
@@ -78,15 +80,25 @@ export const usePlaygroundSessionStore = createWithEqualityFn<PlaygroundSessionS
         return Date.now() - lastUpdated > STALE_THRESHOLD_MS
       },
 
-      isSessionValid: () => {
-        const { historyId, serverChatId, queuedMessages, lastUpdated } = get()
+      isSessionValid: (expectedScopeKey) => {
+        const {
+          historyId,
+          serverChatId,
+          scopeKey,
+          queuedMessages,
+          lastUpdated
+        } = get()
         // Session is valid if we have a conversation or queued work and it's not stale.
         const hasConversationOrQueue =
           historyId !== null ||
           serverChatId !== null ||
           queuedMessages.length > 0
         const isNotStale = lastUpdated > 0 && Date.now() - lastUpdated <= STALE_THRESHOLD_MS
-        return hasConversationOrQueue && isNotStale
+        const matchesScope =
+          typeof expectedScopeKey === "undefined" || expectedScopeKey === null
+            ? true
+            : scopeKey === expectedScopeKey
+        return hasConversationOrQueue && isNotStale && matchesScope
       }
     }),
     {
@@ -97,6 +109,7 @@ export const usePlaygroundSessionStore = createWithEqualityFn<PlaygroundSessionS
       partialize: (state) => ({
         historyId: state.historyId,
         serverChatId: state.serverChatId,
+        scopeKey: state.scopeKey,
         chatMode: state.chatMode,
         webSearch: state.webSearch,
         compareMode: state.compareMode,

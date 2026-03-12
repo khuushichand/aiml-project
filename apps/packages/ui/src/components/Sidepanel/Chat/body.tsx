@@ -98,6 +98,29 @@ export const SidePanelBody = ({
     [setMessages]
   )
 
+  // Stable callbacks for PlaygroundMessage
+  const handleEditMessage = React.useCallback(
+    (index: number, value: string, isUser: boolean, isSend?: boolean) =>
+      editMessage(index, value, isUser, isSend),
+    [editMessage]
+  )
+  const handleDeleteMessage = React.useCallback(
+    (index: number) => deleteMessage(index),
+    [deleteMessage]
+  )
+  const handleNewBranch = React.useCallback(
+    (index: number) => createChatBranch(index),
+    [createChatBranch]
+  )
+  const handleSwipePrev = React.useCallback(
+    (id: string) => handleVariantSwipe(id, "prev"),
+    [handleVariantSwipe]
+  )
+  const handleSwipeNext = React.useCallback(
+    (id: string) => handleVariantSwipe(id, "next"),
+    [handleVariantSwipe]
+  )
+
   const getPreviousUserMessage = (index: number) => {
     for (let i = index - 1; i >= 0; i--) {
       const candidate = messages[i]
@@ -255,9 +278,9 @@ export const SidePanelBody = ({
                   isProcessing={isProcessing}
                   isSearchingInternet={isSearchingInternet}
                   sources={message.sources}
-                  onEditFormSubmit={(value) => { editMessage(index, value, !message.isBot) }}
-                  onDeleteMessage={() => { deleteMessage(index) }}
-                  onNewBranch={() => { createChatBranch(index) }}
+                  onEditFormSubmit={handleEditMessage}
+                  onDeleteMessage={handleDeleteMessage}
+                  onNewBranch={handleNewBranch}
                   isTTSEnabled={ttsEnabled}
                   generationInfo={message?.generationInfo}
                   toolCalls={message?.toolCalls}
@@ -288,8 +311,8 @@ export const SidePanelBody = ({
                   moodTopic={message.moodTopic ?? null}
                   variants={message.variants}
                   activeVariantIndex={message.activeVariantIndex}
-                  onSwipePrev={() => handleVariantSwipe(message.id, "prev")}
-                  onSwipeNext={() => handleVariantSwipe(message.id, "next")}
+                  onSwipePrev={handleSwipePrev}
+                  onSwipeNext={handleSwipeNext}
                 />
               </div>
             )

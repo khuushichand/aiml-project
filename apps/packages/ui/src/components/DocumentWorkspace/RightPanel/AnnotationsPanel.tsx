@@ -33,16 +33,9 @@ import {
   useDeleteAnnotation
 } from "@/hooks/document-workspace"
 import type { Annotation, AnnotationColor, AnnotationType, DocumentType } from "../types"
+import { COLOR_BADGES } from "../config"
 
 const { TextArea } = Input
-
-// theme-exempt: user annotation colors
-const COLOR_BADGES: Record<AnnotationColor, { bg: string; border: string; label: string }> = {
-  yellow: { bg: "bg-yellow-100 dark:bg-yellow-900/30", border: "border-yellow-300 dark:border-yellow-700", label: "Yellow" },
-  green: { bg: "bg-green-100 dark:bg-green-900/30", border: "border-green-300 dark:border-green-700", label: "Green" },
-  blue: { bg: "bg-blue-100 dark:bg-blue-900/30", border: "border-blue-300 dark:border-blue-700", label: "Blue" },
-  pink: { bg: "bg-pink-100 dark:bg-pink-900/30", border: "border-pink-300 dark:border-pink-700", label: "Pink" }
-}
 
 type SortOption = "date-desc" | "date-asc" | "page-asc" | "page-desc"
 type TypeFilter = "all" | "highlight" | "page_note"
@@ -110,7 +103,7 @@ const AnnotationCard: React.FC<AnnotationCardProps> = ({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <div className="flex items-center gap-1 text-text-muted hover:text-text transition-colors">
           <Tooltip title={t("common:edit", "Edit")}>
             <button
               onClick={onEdit}

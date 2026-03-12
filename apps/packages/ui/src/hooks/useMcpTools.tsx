@@ -59,9 +59,16 @@ const areModuleListsEqual = (left: string[], right: string[]): boolean => {
   return left.every((value, index) => value === right[index])
 }
 
-export const useMcpTools = (): McpToolsStatus => {
+type UseMcpToolsOptions = {
+  enabled?: boolean
+}
+
+export const useMcpTools = (
+  options: UseMcpToolsOptions = {}
+): McpToolsStatus => {
   const { capabilities, loading } = useServerCapabilities()
   const hasMcp = Boolean(capabilities?.hasMcp) && !loading
+  const probeEnabled = options.enabled ?? true
   const setTools = useMcpToolsStore((state) => state.setTools)
   const setHealthState = useMcpToolsStore((state) => state.setHealthState)
   const setToolsLoading = useMcpToolsStore((state) => state.setToolsLoading)
@@ -95,7 +102,7 @@ export const useMcpTools = (): McpToolsStatus => {
   const healthQuery = useQuery({
     queryKey: ["mcp-health"],
     queryFn: async () => apiSend({ path: "/api/v1/mcp/health", method: "GET" }),
-    enabled: hasMcp,
+    enabled: hasMcp && probeEnabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false
@@ -104,6 +111,8 @@ export const useMcpTools = (): McpToolsStatus => {
   let healthState: McpHealthState = "unknown"
   if (!hasMcp) {
     healthState = loading ? "unknown" : "unavailable"
+  } else if (!probeEnabled) {
+    healthState = "unknown"
   } else if (healthQuery.isLoading) {
     healthState = "unknown"
   } else if (healthQuery.data?.ok) {
@@ -150,7 +159,7 @@ export const useMcpTools = (): McpToolsStatus => {
         })
       }
     },
-    enabled: hasMcp,
+    enabled: hasMcp && probeEnabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false
@@ -165,7 +174,7 @@ export const useMcpTools = (): McpToolsStatus => {
         return await fetchMcpToolCatalogs()
       }
     },
-    enabled: hasMcp,
+    enabled: hasMcp && probeEnabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false
@@ -190,7 +199,7 @@ export const useMcpTools = (): McpToolsStatus => {
         return modules
       }
     },
-    enabled: hasMcp,
+    enabled: hasMcp && probeEnabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false
@@ -205,7 +214,7 @@ export const useMcpTools = (): McpToolsStatus => {
       }),
     [toolsQuery.data]
   )
-  const toolsAvailable = toolsQuery.isLoading ? null : tools.length > 0
+  const toolsAvailable = !probeEnabled || toolsQuery.isLoading ? null : tools.length > 0
   const catalogs = catalogsQuery.data ?? []
   const moduleOptionsSource =
     moduleOptionsQuery.data && moduleOptionsQuery.data.length > 0
@@ -319,17 +328,17 @@ export const useMcpTools = (): McpToolsStatus => {
   return {
     hasMcp,
     healthState,
-    healthLoading: healthQuery.isLoading,
+    healthLoading: probeEnabled ? healthQuery.isLoading : false,
     tools,
-    toolsLoading: toolsQuery.isLoading,
+    toolsLoading: probeEnabled ? toolsQuery.isLoading : false,
     toolsAvailable,
     catalogs,
-    catalogsLoading: catalogsQuery.isLoading,
+    catalogsLoading: probeEnabled ? catalogsQuery.isLoading : false,
     toolCatalog,
     toolCatalogId,
     toolModules: normalizedToolModules,
     moduleOptions,
-    moduleOptionsLoading,
+    moduleOptionsLoading: probeEnabled ? moduleOptionsLoading : false,
     toolCatalogStrict,
     setToolCatalog: persistToolCatalog,
     setToolCatalogId: persistToolCatalogId,

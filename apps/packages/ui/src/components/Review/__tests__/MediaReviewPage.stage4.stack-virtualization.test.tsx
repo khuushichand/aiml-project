@@ -303,6 +303,22 @@ vi.mock('antd', async (importOriginal) => {
   }
 })
 
+vi.mock("@/components/Common/Markdown", () => ({
+  Markdown: ({ message }: { message: string }) => <div data-testid="mock-markdown">{message}</div>
+}))
+
+vi.mock("@/components/Media/diff-worker-client", () => ({
+  computeDiffSync: () => [],
+  shouldUseWorkerDiff: () => false,
+  shouldRequireSampling: () => false,
+  sampleTextForDiff: (t: string) => t,
+  computeDiffWithWorker: async () => [],
+  createDiffWorker: () => null,
+  DIFF_SYNC_LINE_THRESHOLD: 4000,
+  DIFF_HARD_CHAR_THRESHOLD: 300_000,
+  DIFF_SAMPLED_CHAR_BUDGET: 120_000
+}))
+
 describe('MediaReviewPage stage4 stack virtualization', () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -356,6 +372,12 @@ describe('MediaReviewPage stage4 stack virtualization', () => {
     return row as HTMLElement
   }
 
+  const selectItemByCheckbox = (title: string, options?: Record<string, unknown>): void => {
+    const row = getResultRowByTitle(title)
+    const checkbox = within(row).getByRole('checkbox')
+    fireEvent.click(checkbox, options)
+  }
+
   it('virtualizes stack mode cards for large selections instead of eager rendering all cards', async () => {
     render(<MediaReviewPage />)
 
@@ -364,7 +386,7 @@ describe('MediaReviewPage stage4 stack virtualization', () => {
     })
 
     for (let i = 1; i <= 30; i += 1) {
-      fireEvent.click(getResultRowByTitle(`Item ${i}`))
+      selectItemByCheckbox(`Item ${i}`)
     }
 
     await waitFor(() => {

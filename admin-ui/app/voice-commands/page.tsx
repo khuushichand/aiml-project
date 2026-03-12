@@ -47,7 +47,8 @@ const createCommandSchema = z.object({
   requires_confirmation: z.boolean().default(false),
 });
 
-type CreateCommandFormData = z.infer<typeof createCommandSchema>;
+type CreateCommandFormInput = z.input<typeof createCommandSchema>;
+type CreateCommandFormData = z.output<typeof createCommandSchema>;
 
 function VoiceCommandsPageContent() {
   const confirm = useConfirm();
@@ -63,7 +64,7 @@ function VoiceCommandsPageContent() {
   const [showDetailedAnalytics, setShowDetailedAnalytics] = useState(false);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
-  const createForm = useForm<CreateCommandFormData>({
+  const createForm = useForm<CreateCommandFormInput, unknown, CreateCommandFormData>({
     resolver: zodResolver(createCommandSchema),
     defaultValues: {
       name: '',

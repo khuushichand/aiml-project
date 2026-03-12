@@ -26,8 +26,11 @@ import {
 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
-import { isBillingEnabled } from '@/lib/billing';
-import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, type SecurityHealthData, type Subscription, User } from '@/types';
+import {
+  fetchDashboardBillingStats,
+  isBillingEnabled,
+} from '@/lib/billing';
+import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, type SecurityHealthData, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
 import {
   buildDashboardOperationalKpis,
@@ -231,13 +234,18 @@ export default function DashboardPage() {
       setSecurityHealthError('');
 
       const orgParams = selectedOrg ? { org_id: String(selectedOrg.id) } : undefined;
-      const auditParams = selectedOrg ? { limit: '10', org_id: String(selectedOrg.id) } : { limit: '10' };
-      const usageDailyParams = selectedOrg
-        ? { limit: '200', org_id: String(selectedOrg.id) }
-        : { limit: '200' };
-      const llmUsageSummaryParams = selectedOrg
-        ? { group_by: 'day', org_id: String(selectedOrg.id) }
-        : { group_by: 'day' };
+      const auditParams: Record<string, string> = {
+        limit: '10',
+        ...(selectedOrg ? { org_id: String(selectedOrg.id) } : {}),
+      };
+      const usageDailyParams: Record<string, string> = {
+        limit: '200',
+        ...(selectedOrg ? { org_id: String(selectedOrg.id) } : {}),
+      };
+      const llmUsageSummaryParams: Record<string, string> = {
+        group_by: 'day',
+        ...(selectedOrg ? { org_id: String(selectedOrg.id) } : {}),
+      };
       const activityQuery = getDashboardActivityQuery(activityRange);
 
       // Fetch all dashboard data in parallel
@@ -366,25 +374,11 @@ export default function DashboardPage() {
       setStats(nextStats);
 
       if (isBillingEnabled()) {
-        try {
-          const subs = await api.getSubscriptions();
-          if (Array.isArray(subs)) {
-            const active = subs.filter((s: Subscription) => s.status === 'active');
-            const pastDue = subs.filter((s: Subscription) => s.status === 'past_due');
-            const distribution: Record<string, number> = {};
-            subs.forEach((s: Subscription) => {
-              const tier = s.plan?.tier ?? 'free';
-              distribution[tier] = (distribution[tier] ?? 0) + 1;
-            });
-            setBillingStats({
-              active_subscriptions: active.length,
-              past_due_count: pastDue.length,
-              plan_distribution: distribution,
-            });
-          }
-        } catch {
-          // Non-critical – billing stats are optional
-        }
+        setBillingStats(
+          await fetchDashboardBillingStats(() => api.getSubscriptions())
+        );
+      } else {
+        setBillingStats(null);
       }
 
       setSystemHealth(buildDashboardSystemHealth({

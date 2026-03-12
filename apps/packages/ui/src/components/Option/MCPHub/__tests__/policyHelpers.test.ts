@@ -9,7 +9,8 @@ import {
   getAdvancedPolicyKeys,
   getExternalBlockedReasonLabel,
   getManagedExternalServers,
-  getPolicyAllowedToolSelection
+  getPolicyAllowedToolSelection,
+  toggleStringValue
 } from "../policyHelpers"
 
 const TOOL_REGISTRY: McpHubToolRegistryEntry[] = [
@@ -147,5 +148,19 @@ describe("policyHelpers", () => {
     expect(managedServers.map((server) => server.id)).toEqual(["docs-managed"])
     expect(getExternalBlockedReasonLabel("disabled_by_assignment")).toEqual("Disabled by assignment")
     expect(getExternalBlockedReasonLabel("missing_secret")).toEqual("Missing secret")
+  })
+
+  it("toggles string selections without duplicating enabled entries", () => {
+    expect(toggleStringValue(["session"], "conversation", true)).toEqual([
+      "session",
+      "conversation"
+    ])
+    expect(toggleStringValue(["session"], "session", true)).toEqual(["session"])
+    expect(toggleStringValue(["session", "conversation"], "session", false)).toEqual([
+      "conversation"
+    ])
+    expect(toggleStringValue(["session"], "once", true)).toEqual(["session", "once"])
+    expect(toggleStringValue(["session", "once"], "once", true)).toEqual(["session", "once"])
+    expect(toggleStringValue(["session", "once"], "once", false)).toEqual(["session"])
   })
 })

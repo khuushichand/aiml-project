@@ -2,11 +2,14 @@ import { createWithEqualityFn } from "zustand/traditional"
 import type { DiscoSkillComment } from "@/types/disco-skills"
 
 export type Message = {
+  id?: string
   isBot: boolean
   name: string
   message: string
+  role?: "user" | "assistant" | "system"
   sources: any[]
   images?: string[]
+  messageType?: string
   modelName?: string
   modelImage?: string
   serverMessageId?: string

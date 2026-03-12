@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Personalization.companion_derivations import derive_companion_knowledge_cards
 
 _PERSONALIZATION_CONSOLIDATION_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -134,6 +135,20 @@ class PersonalizationConsolidationService:
                     )
                 except _PERSONALIZATION_CONSOLIDATION_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics increment failed for personalization upsert_topic_failed")
+
+        try:
+            cards = derive_companion_knowledge_cards(db, user_id=user_id)
+            db.delete_companion_knowledge_cards(user_id=user_id)
+            for card in cards:
+                db.upsert_companion_knowledge_card(user_id=user_id, **card)
+        except _PERSONALIZATION_CONSOLIDATION_NONCRITICAL_EXCEPTIONS:
+            try:
+                get_metrics_registry().increment(
+                    "app_warning_events_total",
+                    labels={"component": "personalization", "event": "upsert_companion_card_failed"},
+                )
+            except _PERSONALIZATION_CONSOLIDATION_NONCRITICAL_EXCEPTIONS:
+                logger.debug("metrics increment failed for personalization upsert_companion_card_failed")
 
         self._last_tick[str(user_id)] = datetime.now(timezone.utc).isoformat()
 

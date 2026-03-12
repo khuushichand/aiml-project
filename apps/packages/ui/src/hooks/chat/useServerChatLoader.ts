@@ -9,6 +9,7 @@ import {
   type ServerChatMessage
 } from "@/services/tldw/TldwApiClient"
 import { getHistoriesWithMetadata, saveMessage } from "@/db/dexie/helpers"
+import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import { syncChatSettingsForServerChat } from "@/services/chat-settings"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
@@ -17,6 +18,10 @@ import {
   IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
   parseImageGenerationEventMirrorContent
 } from "@/utils/image-generation-chat"
+import {
+  characterToAssistantSelection,
+  personaToAssistantSelection
+} from "@/types/assistant-selection"
 
 type NotificationApi = {
   error: (payload: { message: string; description?: string }) => void
@@ -216,6 +221,82 @@ export const fetchAllServerChatMessages = async (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value)
 
+const resolveAssistantId = (value: unknown): string | null => {
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value)
+  }
+  return null
+}
+
+export const resolveServerChatAssistantIdentity = (
+  chat: Record<string, unknown> | null | undefined
+): {
+  assistantKind: "character" | "persona" | null
+  assistantId: string | null
+  characterId: string | number | null
+  personaMemoryMode: "read_only" | "read_write" | null
+} => {
+  const candidate = chat && typeof chat === "object" ? chat : null
+  const assistantKind =
+    candidate?.assistant_kind === "character" || candidate?.assistant_kind === "persona"
+      ? candidate.assistant_kind
+      : null
+  const assistantId = resolveAssistantId(candidate?.assistant_id)
+  const rawCharacterId =
+    candidate?.character_id ??
+    candidate?.characterId ??
+    null
+  const characterId =
+    typeof rawCharacterId === "number" && Number.isFinite(rawCharacterId)
+      ? rawCharacterId
+      : typeof rawCharacterId === "string" && rawCharacterId.trim().length > 0
+        ? rawCharacterId
+        : null
+  const personaMemoryMode =
+    candidate?.persona_memory_mode === "read_only" ||
+    candidate?.persona_memory_mode === "read_write"
+      ? candidate.persona_memory_mode
+      : null
+
+  if (assistantKind === "persona" && assistantId) {
+    return {
+      assistantKind,
+      assistantId,
+      characterId: characterId ?? null,
+      personaMemoryMode
+    }
+  }
+
+  if (assistantKind === "character" && assistantId) {
+    return {
+      assistantKind,
+      assistantId,
+      characterId: characterId ?? assistantId,
+      personaMemoryMode
+    }
+  }
+
+  if (characterId != null) {
+    return {
+      assistantKind: "character",
+      assistantId: String(characterId),
+      characterId,
+      personaMemoryMode: null
+    }
+  }
+
+  return {
+    assistantKind: null,
+    assistantId: null,
+    characterId: null,
+    personaMemoryMode
+  }
+}
+
 type MapServerMessagesArgs = {
   serverMessages: ServerChatMessage[]
   assistantName: string
@@ -366,11 +447,72 @@ export const mapServerChatMessagesToPlaygroundMessages = ({
   })
 }
 
+type ApplyAssistantPresentationArgs = {
+  messages: Message[]
+  assistantName: string
+  assistantAvatarUrl?: string | null
+}
+
+export const applyAssistantPresentationToMessages = ({
+  messages,
+  assistantName,
+  assistantAvatarUrl
+}: ApplyAssistantPresentationArgs): Message[] =>
+  messages.map((message) => {
+    if (!message.isBot || message.role !== "assistant") {
+      return message
+    }
+
+    const hasExplicitName =
+      typeof message.name === "string" &&
+      message.name.trim().length > 0 &&
+      message.name !== "Assistant"
+    const hasExplicitModelName =
+      typeof message.modelName === "string" &&
+      message.modelName.trim().length > 0 &&
+      message.modelName !== "Assistant"
+
+    return {
+      ...message,
+      name: hasExplicitName ? message.name : assistantName,
+      modelName: hasExplicitModelName ? message.modelName : assistantName,
+      modelImage:
+        message.modelImage ??
+        (typeof assistantAvatarUrl === "string" &&
+        assistantAvatarUrl.trim().length > 0
+          ? assistantAvatarUrl
+          : undefined)
+    }
+  })
+
+export const reportDeferredAssistantPresentationError = ({
+  stage,
+  assistantKind,
+  assistantId,
+  characterId,
+  error
+}: {
+  stage: "persona-profile" | "character-profile" | "presentation-apply"
+  assistantKind: string | null
+  assistantId: string | null
+  characterId: number | null
+  error: unknown
+}): void => {
+  console.warn("[useServerChatLoader] Deferred assistant presentation failed", {
+    stage,
+    assistantKind,
+    assistantId,
+    characterId,
+    error
+  })
+}
+
 export const useServerChatLoader = ({
   ensureServerChatHistoryId,
   notification,
   t
 }: UseServerChatLoaderOptions) => {
+  const [, setSelectedAssistant] = useSelectedAssistant(null)
   const {
     messages,
     streaming,
@@ -386,12 +528,18 @@ export const useServerChatLoader = ({
     serverChatId,
     serverChatTitle,
     serverChatCharacterId,
+    serverChatAssistantKind,
+    serverChatAssistantId,
+    serverChatPersonaMemoryMode,
     serverChatMetaLoaded,
     temporaryChat,
     setServerChatLoadState,
     setServerChatLoadError,
     setServerChatTitle,
     setServerChatCharacterId,
+    setServerChatAssistantKind,
+    setServerChatAssistantId,
+    setServerChatPersonaMemoryMode,
     setServerChatState,
     setServerChatVersion,
     setServerChatTopic,
@@ -404,12 +552,18 @@ export const useServerChatLoader = ({
       serverChatId: state.serverChatId,
       serverChatTitle: state.serverChatTitle,
       serverChatCharacterId: state.serverChatCharacterId,
+      serverChatAssistantKind: state.serverChatAssistantKind,
+      serverChatAssistantId: state.serverChatAssistantId,
+      serverChatPersonaMemoryMode: state.serverChatPersonaMemoryMode,
       serverChatMetaLoaded: state.serverChatMetaLoaded,
       temporaryChat: state.temporaryChat,
       setServerChatLoadState: state.setServerChatLoadState,
       setServerChatLoadError: state.setServerChatLoadError,
       setServerChatTitle: state.setServerChatTitle,
       setServerChatCharacterId: state.setServerChatCharacterId,
+      setServerChatAssistantKind: state.setServerChatAssistantKind,
+      setServerChatAssistantId: state.setServerChatAssistantId,
+      setServerChatPersonaMemoryMode: state.setServerChatPersonaMemoryMode,
       setServerChatState: state.setServerChatState,
       setServerChatVersion: state.setServerChatVersion,
       setServerChatTopic: state.setServerChatTopic,
@@ -501,6 +655,9 @@ export const useServerChatLoader = ({
           let assistantName = "Assistant"
           let chatTitle = serverChatTitle || ""
           let characterId = serverChatCharacterId ?? null
+          let assistantKind = serverChatAssistantKind
+          let assistantId = serverChatAssistantId
+          let personaMemoryMode = serverChatPersonaMemoryMode
 
           if (!serverChatMetaLoaded) {
             try {
@@ -510,15 +667,17 @@ export const useServerChatLoader = ({
               }
               const meta = chat as unknown as Record<string, unknown>
               chatTitle = String(meta?.title || chatTitle || "")
-              const resolvedCharacterId =
-                (meta?.character_id as string | number | null | undefined) ??
-                (meta?.characterId as string | number | null | undefined) ??
-                null
-              if (resolvedCharacterId != null) {
-                characterId = resolvedCharacterId
-              }
+              const resolvedAssistantIdentity =
+                resolveServerChatAssistantIdentity(meta)
+              assistantKind = resolvedAssistantIdentity.assistantKind
+              assistantId = resolvedAssistantIdentity.assistantId
+              characterId = resolvedAssistantIdentity.characterId
+              personaMemoryMode = resolvedAssistantIdentity.personaMemoryMode
               setServerChatTitle(chatTitle || "")
-              setServerChatCharacterId(resolvedCharacterId ?? null)
+              setServerChatCharacterId(characterId)
+              setServerChatAssistantKind(assistantKind)
+              setServerChatAssistantId(assistantId)
+              setServerChatPersonaMemoryMode(personaMemoryMode)
               setServerChatState(
                 normalizeConversationState(
                   (meta?.state as string | null | undefined) ??
@@ -550,16 +709,90 @@ export const useServerChatLoader = ({
             }
           }
 
-          if (characterId != null) {
-            try {
-              const character = await tldwClient.getCharacter(characterId)
-              if (character) {
-                assistantName = character.name || character.title || assistantName
+          const deferredAssistantPresentationPromise = (async () => {
+            if (assistantKind === "persona" && assistantId) {
+              try {
+                const persona = await tldwClient.getPersonaProfile(assistantId)
+                if (persona) {
+                  if (!canCommitCurrentLoad()) {
+                    return null
+                  }
+                  const nextAssistantName = persona.name || "Persona"
+                  const selection = personaToAssistantSelection({
+                    ...persona,
+                    id: assistantId,
+                    name: nextAssistantName
+                  })
+                  await setSelectedAssistant(selection)
+                  return {
+                    assistantName: nextAssistantName,
+                    assistantAvatarUrl: selection?.avatar_url ?? null
+                  }
+                }
+              } catch (error) {
+                reportDeferredAssistantPresentationError({
+                  stage: "persona-profile",
+                  assistantKind,
+                  assistantId,
+                  characterId,
+                  error
+                })
+                if (!canCommitCurrentLoad()) {
+                  return null
+                }
+                const selection = personaToAssistantSelection({
+                  id: assistantId,
+                  name: "Persona"
+                })
+                await setSelectedAssistant(selection)
+                return {
+                  assistantName: selection?.name || "Persona",
+                  assistantAvatarUrl: selection?.avatar_url ?? null
+                }
               }
-            } catch {
-              // ignore character lookup failures
+            } else if (characterId != null) {
+              try {
+                const character = await tldwClient.getCharacter(characterId)
+                if (character) {
+                  if (!canCommitCurrentLoad()) {
+                    return null
+                  }
+                  const selection = characterToAssistantSelection({
+                    ...character,
+                    id: String(character.id ?? characterId)
+                  })
+                  await setSelectedAssistant(selection)
+                  return {
+                    assistantName:
+                      selection?.name ||
+                      character.name ||
+                      character.title ||
+                      assistantName,
+                    assistantAvatarUrl: selection?.avatar_url ?? null
+                  }
+                }
+              } catch (error) {
+                reportDeferredAssistantPresentationError({
+                  stage: "character-profile",
+                  assistantKind,
+                  assistantId,
+                  characterId,
+                  error
+                })
+              }
+              if (!canCommitCurrentLoad()) {
+                return null
+              }
+              await setSelectedAssistant(null)
+              return null
             }
-          }
+
+            if (!canCommitCurrentLoad()) {
+              return null
+            }
+            await setSelectedAssistant(null)
+            return null
+          })()
 
           const list = await fetchAllServerChatMessages(
             ({ limit, offset, signal }) =>
@@ -610,6 +843,32 @@ export const useServerChatLoader = ({
           if (!shouldPreserveLocal && !shouldPreserveAtCommit) {
             setHistory(history)
             setMessages(mappedMessages)
+          }
+          const shouldApplyDeferredAssistantPresentation =
+            !shouldPreserveLocal && !shouldPreserveAtCommit
+          if (shouldApplyDeferredAssistantPresentation) {
+            void deferredAssistantPresentationPromise
+              .then((presentation) => {
+                if (!presentation || !canCommitCurrentLoad()) {
+                  return
+                }
+                setMessages((currentMessages) =>
+                  applyAssistantPresentationToMessages({
+                    messages: currentMessages,
+                    assistantName: presentation.assistantName,
+                    assistantAvatarUrl: presentation.assistantAvatarUrl
+                  })
+                )
+              })
+              .catch((error) => {
+                reportDeferredAssistantPresentationError({
+                  stage: "presentation-apply",
+                  assistantKind,
+                  assistantId,
+                  characterId,
+                  error
+                })
+              })
           }
           if (!temporaryChat && !shouldPreserveLocal && !shouldPreserveAtCommit) {
             try {
@@ -725,19 +984,26 @@ export const useServerChatLoader = ({
   }, [
     ensureServerChatHistoryId,
     notification,
+    serverChatAssistantId,
+    serverChatAssistantKind,
     serverChatCharacterId,
     serverChatId,
     serverChatMetaLoaded,
+    serverChatPersonaMemoryMode,
     serverChatTitle,
     setHistory,
     setIsLoading,
     setMessages,
+    setSelectedAssistant,
+    setServerChatAssistantId,
+    setServerChatAssistantKind,
     setServerChatCharacterId,
     setServerChatClusterId,
     setServerChatExternalRef,
     setServerChatLoadError,
     setServerChatLoadState,
     setServerChatMetaLoaded,
+    setServerChatPersonaMemoryMode,
     setServerChatSource,
     setServerChatState,
     setServerChatTitle,

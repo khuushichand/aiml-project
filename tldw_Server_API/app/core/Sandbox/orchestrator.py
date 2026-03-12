@@ -270,7 +270,7 @@ class SandboxOrchestrator:
             self._sessions.pop(sid, None)
             self._session_roots.pop(sid, None)
 
-    def get_session(self, session_id: str) -> Session | None:
+    def get_session(self, session_id: str, *, allow_cache_on_store_error: bool = True) -> Session | None:
         sid = str(session_id or "").strip()
         if not sid:
             return None
@@ -283,7 +283,9 @@ class SandboxOrchestrator:
                 record = self._store.get_session(sid)
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"store.get_session failed during cache validation: {e}")
-                return cached
+                if allow_cache_on_store_error:
+                    return cached
+                return None
             if not isinstance(record, dict):
                 self._drop_cached_session(sid)
                 return None
@@ -832,7 +834,7 @@ class SandboxOrchestrator:
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
                 continue
 
-    def destroy_session(self, session_id: str) -> bool:
+    def destroy_session(self, session_id: str, *, remove_workspace_tree: bool = True) -> bool:
         sid = str(session_id or "").strip()
         if not sid:
             return False
@@ -887,9 +889,11 @@ class SandboxOrchestrator:
                 owner = "unknown"
             with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
                 self._remove_run_artifacts(rid, owner=owner, decrement_usage=True)
-        if ws_path:
+        if remove_workspace_tree and ws_path:
             with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
-                shutil.rmtree(ws_path, ignore_errors=True)
+                ws_path_obj = Path(str(ws_path))
+                session_root = ws_path_obj.parent if ws_path_obj.name == "workspace" else ws_path_obj
+                shutil.rmtree(session_root, ignore_errors=True)
         return bool(removed or store_removed)
 
     # -----------------
@@ -1330,7 +1334,7 @@ class SandboxOrchestrator:
             self._session_roots[session_id] = str(ws)
         return str(ws)
 
-    def get_session_workspace_path(self, session_id: str) -> str | None:
+    def get_session_workspace_path(self, session_id: str, *, allow_cache_on_store_error: bool = True) -> str | None:
         sid = str(session_id or "").strip()
         if not sid:
             return None
@@ -1340,6 +1344,8 @@ class SandboxOrchestrator:
             row = self._store.get_session(sid)
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"store.get_session workspace lookup failed: {e}")
+            if not allow_cache_on_store_error:
+                return None
             with self._lock:
                 ws = self._session_roots.get(sid)
                 return ws

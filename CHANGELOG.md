@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.37] 2026-03-07
+
+### Changed
+
+- **Writing Playground UX overhaul** — Editor-dominant layout with collapsible drawers, based on Nielsen heuristic audit:
+  - **Editor-dominant layout (H8 fix):** Removed `PageShell` max-width constraint; editor now fills all available viewport space instead of competing with permanently-visible sidebars
+  - **Drawer-based panels:** Library and Inspector panels converted to collapsible sidebars (pinned on desktop ≥1100px, overlay Drawers on mobile <1100px) via `WritingPlaygroundShell`; toggle buttons in new compact top bar
+  - **Prominent Generate button (H1/H6 fix):** Generate button moved from buried inspector sidebar to always-visible top bar; disabled state shows tooltip explaining why (no session, no model, offline, no chat provider)
+  - **Generation visual feedback (H1 fix):** Pulsing ring animation on editor during generation; live elapsed-time counter in status bar; tok/s display
+  - **Compact top bar:** Session name, model input, Generate button, diagnostics tag, and panel toggles in a single row; replaces removed page title/subtitle
+  - **Status bar:** Token count, generation speed, elapsed time, save status, and Ctrl+Enter shortcut hint
+  - **Decluttered toolbar (H8 fix):** Toolbar reduced from 12+ always-visible buttons to icon-only Undo/Redo + view mode toggle + overflow dropdown (Read Aloud, Pause/Resume, View Chunks, Insert, Search)
+  - **Flexible editor:** Replaced fixed `rows={18}` textarea with `autoSize={{ minRows: 12 }}` and resizable styling; fixed double-scroll caused by nested overflow containers
+  - **Terminology cleanup (H2 fix):** "Basic stopping mode" → "Stop condition"; "Inspect" tab → "Analysis" (both default label and override)
+  - Updated 4 test files (32 assertions) to match new layout structure
+
 ## [0.1.36] 2026-03-08
 
 ### Added
@@ -33,6 +49,15 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
+- Chat Workflows web-shell regression coverage:
+  - Added `apps/tldw-frontend/__tests__/pages/chat-workflows-route.test.tsx` to verify the Next.js page shim exists and still lazy-loads `@/routes/option-chat-workflows`.
+  - Tightened `apps/packages/ui/src/routes/__tests__/chat-workflows-route.test.tsx` to keep the `/chat-workflows` workspace navigation metadata aligned with the shared route registry.
+
+### Fixed
+
+- Restored Chat Workflows route exposure in the Next.js web app:
+  - Added `apps/tldw-frontend/pages/chat-workflows.tsx` so `/chat-workflows` resolves instead of falling through to a missing-page state.
+  - Preserved discoverability through existing launcher coverage targeting `/chat-workflows`.
 - Chat UI regression coverage for server-chat reliability:
   - Added recoverable refresh regression coverage in `useServerChatHistory.test.ts`
   - Added selected-chat load state and stale-request guard coverage in `useServerChatLoader.test.ts`
@@ -453,7 +478,24 @@ and this project adheres to Some kind of Versioning
   - Added/updated regression coverage for MLX path handling, notes frontmatter escaping, and admin auth API key storage behavior.
 
 
-## [0.1.26] 2026-03-01
+## [0.1.26] 2026-03-11
+
+### Consolidated Release Summary (Merged PRs #790-#829)
+
+- Added: Repo2Txt shipped across shared UI, web, and extension surfaces with GitHub and local sources, file-tree filtering, preview/copy/download flows, and better launcher discoverability. (PR #790)
+- Added: Safety and admin surfaces expanded with the Family Guardrails Wizard, per-user moderation phrase lists, and router analytics usage tabs plus aggregate APIs for operators. (PRs #804, #810, #797)
+- Added: Reading and research workflows grew with pinboard-style Collections enhancements, switchable unified RAG profiles, and multi-source quiz generation. (PRs #805, #796, #807)
+- Added: MCP Hub management shipped across AuthNZ storage, API, WebUI, and extension settings for ACP profiles and external server lifecycle management. (PR #806)
+- Added: Workflow capabilities expanded with kanban orchestration primitives, strict structured-output generation, structured QA chat workflows, unified queued-request handling, and connector-backed external file sync orchestration. (PRs #809, #818, #820, #823, #821)
+- Changed: Audio and ingestion experiences were redesigned: the Speech Playground gained richer TTS and STT comparison workflows, while Quick Ingest became a 5-step wizard with live progress, retry/error classification, and minimize-to-background controls. (PRs #816, #827)
+- Changed: Knowledge and watchlists moved to more progressive, task-oriented layouts with clearer defaults, navigation, empty states, and reliability feedback. (PRs #812, #813)
+- Changed: Prompt and writing workflows were reorganized with a fuller prompt workspace, stronger filtering/discoverability, and a restructured Writing Playground inspector. (PRs #817, #815)
+- Changed: Notes management was overhauled around decomposed editor/sidebar panes, progressive disclosure, and clearer save-status handling. (PR #826)
+- Changed: Media compatibility cleanup reduced legacy shim behavior and made deprecation signaling more explicit across ingestion flows. (PR #794)
+- Fixed: Platform reliability hardened across monitoring, benchmark recovery, shim cleanup, and core runtime paths, including sandbox admission/state handling, monitoring range interactions, and broader cleanup bundles that had previously been scattered across draft entries. (PRs #792, #793, #795, #798)
+- Fixed: Chat reliability issues were addressed for tool routing parity, OpenRouter freeze cases, selected-chat failure states, and conflict/retry behavior. (PRs #811, #814)
+- Fixed: ACP and admin surfaces received remediation for control auth, persistence, forks, login/auth proxy paths, privileged actions, and users views. (PRs #825, #829)
+- Fixed: Repo2Txt was hardened for local source selection, GitHub provider permissions, worker recovery, and deterministic compile behavior. (PR #790)
 
 ### Added
 

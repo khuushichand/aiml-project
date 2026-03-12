@@ -1422,7 +1422,6 @@ def migration_055_create_mcp_hub_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
     logger.info("Migration 055: Created MCP Hub tables")
 
-
 def migration_056_create_mcp_hub_policy_tables(conn: sqlite3.Connection) -> None:
     """Create MCP Hub policy and approval tables (SQLite)."""
     conn.execute(
@@ -1999,6 +1998,7 @@ def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
     conn.commit()
     logger.info("Rollback 053: Dropped byok_oauth_state table")
+
 
 
 def rollback_051_drop_storage_quotas_table(conn: sqlite3.Connection) -> None:
@@ -3042,6 +3042,227 @@ def rollback_048_drop_org_team_config_overrides(conn: sqlite3.Connection) -> Non
     logger.info("Rollback 048: Dropped org/team config overrides tables")
 
 
+def migration_059_create_data_subject_requests_table(conn: sqlite3.Connection) -> None:
+    """Create data_subject_requests table for authoritative DSR intake."""
+    logger.info("Migration 059: START data_subject_requests table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_subject_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_request_id TEXT NOT NULL UNIQUE,
+            requester_identifier TEXT NOT NULL,
+            resolved_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            request_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            selected_categories TEXT NOT NULL DEFAULT '[]',
+            preview_summary TEXT NOT NULL DEFAULT '[]',
+            coverage_metadata TEXT DEFAULT '{}',
+            requested_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requester "
+        "ON data_subject_requests(requester_identifier)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_resolved_user "
+        "ON data_subject_requests(resolved_user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_type "
+        "ON data_subject_requests(request_type)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_status "
+        "ON data_subject_requests(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requested_at "
+        "ON data_subject_requests(requested_at)"
+    )
+    conn.commit()
+    logger.info("Migration 059: Created data_subject_requests table")
+
+
+def rollback_059_drop_data_subject_requests_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 059 by dropping data_subject_requests."""
+    conn.execute("DROP TABLE IF EXISTS data_subject_requests")
+    conn.commit()
+    logger.info("Rollback 059: Dropped data_subject_requests table")
+
+
+def migration_060_create_admin_monitoring_tables(conn: sqlite3.Connection) -> None:
+    """Create admin monitoring control-plane tables for SQLite backends."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric TEXT NOT NULL,
+            operator TEXT NOT NULL,
+            threshold REAL NOT NULL,
+            duration_minutes INTEGER NOT NULL,
+            severity TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_by_user_id INTEGER,
+            updated_by_user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_created_at ON admin_alert_rules(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_metric_enabled "
+        "ON admin_alert_rules(metric, enabled)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_state (
+            alert_identity TEXT PRIMARY KEY,
+            assigned_to_user_id INTEGER,
+            snoozed_until TIMESTAMP,
+            escalated_severity TEXT,
+            acknowledged_at TIMESTAMP,
+            dismissed_at TIMESTAMP,
+            updated_by_user_id INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assigned_to_user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_updated_at ON admin_alert_state(updated_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_assigned_user "
+        "ON admin_alert_state(assigned_to_user_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_identity TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor_user_id INTEGER,
+            details_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_identity_created "
+        "ON admin_alert_events(alert_identity, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_created_at ON admin_alert_events(created_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 060: Created admin monitoring tables")
+
+
+def rollback_060_drop_admin_monitoring_tables(conn: sqlite3.Connection) -> None:
+    """Rollback migration 060 by dropping admin monitoring tables."""
+    conn.execute("DROP TABLE IF EXISTS admin_alert_events")
+    conn.execute("DROP TABLE IF EXISTS admin_alert_state")
+    conn.execute("DROP TABLE IF EXISTS admin_alert_rules")
+    conn.commit()
+    logger.info("Rollback 060: Dropped admin monitoring tables")
+
+
+def migration_061_create_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+    """Create backup schedule persistence tables (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedules (
+            id TEXT PRIMARY KEY,
+            dataset TEXT NOT NULL,
+            target_user_id INTEGER,
+            target_scope_key TEXT NOT NULL,
+            frequency TEXT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            timezone TEXT NOT NULL,
+            anchor_day_of_week INTEGER,
+            anchor_day_of_month INTEGER,
+            retention_count INTEGER NOT NULL,
+            is_paused INTEGER NOT NULL DEFAULT 0,
+            created_by_user_id INTEGER,
+            updated_by_user_id INTEGER,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL,
+            next_run_at TIMESTAMP,
+            last_run_at TIMESTAMP,
+            last_status TEXT,
+            last_job_id TEXT,
+            last_error TEXT,
+            deleted_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backup_schedules_target_scope_active
+        ON backup_schedules(target_scope_key)
+        WHERE deleted_at IS NULL
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_next_run_at "
+        "ON backup_schedules(next_run_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_deleted_at "
+        "ON backup_schedules(deleted_at)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedule_runs (
+            id TEXT PRIMARY KEY,
+            schedule_id TEXT NOT NULL,
+            scheduled_for TIMESTAMP NOT NULL,
+            run_slot_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            job_id TEXT,
+            error TEXT,
+            enqueued_at TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            FOREIGN KEY (schedule_id) REFERENCES backup_schedules(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_schedule_id "
+        "ON backup_schedule_runs(schedule_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for "
+        "ON backup_schedule_runs(scheduled_for)"
+    )
+
+    conn.commit()
+    logger.info("Migration 061: Created backup schedule tables")
+
+
+def rollback_061_drop_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+    """Drop backup schedule persistence tables (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS backup_schedule_runs")
+    conn.execute("DROP TABLE IF EXISTS backup_schedules")
+    conn.commit()
+    logger.info("Rollback 061: Dropped backup schedule tables")
+
+
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     """Add llm_provider_overrides table for runtime provider overrides."""
     logger.info("Migration 041: START llm_provider_overrides table")
@@ -3444,26 +3665,44 @@ def get_authnz_migrations() -> list[Migration]:
         ),
         Migration(
             59,
+            "Create data subject requests table",
+            migration_059_create_data_subject_requests_table,
+            rollback_059_drop_data_subject_requests_table,
+        ),
+        Migration(
+            60,
+            "Create admin monitoring tables",
+            migration_060_create_admin_monitoring_tables,
+            rollback_060_drop_admin_monitoring_tables,
+        ),
+        Migration(
+            61,
+            "Create backup schedule tables",
+            migration_061_create_backup_schedule_tables,
+            rollback_061_drop_backup_schedule_tables,
+        ),
+        Migration(
+            62,
             "Harden MCP external binding schema",
             migration_059_harden_mcp_external_binding_schema,
         ),
         Migration(
-            60,
+            63,
             "Add MCP external credential slots",
             migration_060_add_mcp_external_credential_slots,
         ),
         Migration(
-            61,
+            64,
             "Add MCP path scope objects and assignment workspaces",
             migration_061_add_mcp_path_scope_objects_and_assignment_workspaces,
         ),
         Migration(
-            62,
+            65,
             "Add MCP workspace set objects",
             migration_062_add_mcp_workspace_set_objects,
         ),
         Migration(
-            63,
+            66,
             "Add MCP shared workspace registry",
             migration_063_add_mcp_shared_workspaces,
         ),

@@ -136,6 +136,7 @@ export const saveMessage = async ({
   reasoning_time_taken,
   time,
   documents,
+  serverMessageId,
   createdAt: createdAtOverride
 }: {
   id?: string
@@ -156,6 +157,7 @@ export const saveMessage = async ({
   modelImage?: string
   parent_message_id?: string | null
   documents?: ChatDocuments
+  serverMessageId?: string | null
   createdAt?: number
 }) => {
   const messageId = id ?? generateID()
@@ -184,7 +186,8 @@ export const saveMessage = async ({
     modelImage,
     parent_message_id: parent_message_id ?? null,
     documents,
-    discoSkillComment
+    discoSkillComment,
+    serverMessageId: serverMessageId ?? undefined
   }
   const db = new PageAssistDatabase()
   await db.addMessage(message)
@@ -226,8 +229,8 @@ const buildVariantFromHistory = (message: Message): MessageVariant => ({
   generationInfo: message.generationInfo,
   reasoning_time_taken: message.reasoning_time_taken,
   createdAt: message.createdAt,
-  serverMessageId: (message as any).serverMessageId,
-  serverMessageVersion: (message as any).serverMessageVersion
+  serverMessageId: message.serverMessageId,
+  serverMessageVersion: message.serverMessageVersion
 })
 
 const collapseVariantMessages = (messages: MessageHistory) => {
@@ -287,6 +290,8 @@ export const formatToMessage = (messages: MessageHistory): MessageType[] => {
       modelImage: message?.modelImage,
       createdAt: message?.createdAt,
       id: message.id,
+      serverMessageId: message.serverMessageId ?? undefined,
+      serverMessageVersion: message.serverMessageVersion ?? undefined,
       documents: message?.documents,
       discoSkillComment: message?.discoSkillComment
     }
@@ -441,6 +446,10 @@ export const savePrompt = async ({
   user_prompt,
   fewShotExamples,
   modulesConfig,
+  promptFormat,
+  promptSchemaVersion,
+  structuredPromptDefinition,
+  syncPayloadVersion,
   versionNumber,
   changeDescription,
   parentVersionId,
@@ -459,6 +468,10 @@ export const savePrompt = async ({
   user_prompt?: string
   fewShotExamples?: Prompt["fewShotExamples"]
   modulesConfig?: Prompt["modulesConfig"]
+  promptFormat?: Prompt["promptFormat"]
+  promptSchemaVersion?: Prompt["promptSchemaVersion"]
+  structuredPromptDefinition?: Prompt["structuredPromptDefinition"]
+  syncPayloadVersion?: Prompt["syncPayloadVersion"]
   versionNumber?: Prompt["versionNumber"]
   changeDescription?: Prompt["changeDescription"]
   parentVersionId?: Prompt["parentVersionId"]
@@ -497,6 +510,10 @@ export const savePrompt = async ({
     details,
     system_prompt: system_prompt ?? (is_system ? resolvedContent : undefined),
     user_prompt: user_prompt ?? (!is_system ? resolvedContent : undefined),
+    promptFormat: promptFormat ?? 'legacy',
+    promptSchemaVersion: promptSchemaVersion ?? null,
+    structuredPromptDefinition: structuredPromptDefinition ?? null,
+    syncPayloadVersion: syncPayloadVersion ?? 1,
     fewShotExamples: fewShotExamples ?? null,
     modulesConfig: modulesConfig ?? null,
     versionNumber: versionNumber ?? null,
@@ -582,6 +599,10 @@ export const updatePrompt = async ({
   user_prompt,
   fewShotExamples,
   modulesConfig,
+  promptFormat,
+  promptSchemaVersion,
+  structuredPromptDefinition,
+  syncPayloadVersion,
   versionNumber,
   changeDescription,
   parentVersionId,
@@ -603,6 +624,10 @@ export const updatePrompt = async ({
   user_prompt?: string
   fewShotExamples?: Prompt["fewShotExamples"]
   modulesConfig?: Prompt["modulesConfig"]
+  promptFormat?: Prompt["promptFormat"]
+  promptSchemaVersion?: Prompt["promptSchemaVersion"]
+  structuredPromptDefinition?: Prompt["structuredPromptDefinition"]
+  syncPayloadVersion?: Prompt["syncPayloadVersion"]
   versionNumber?: Prompt["versionNumber"]
   changeDescription?: Prompt["changeDescription"]
   parentVersionId?: Prompt["parentVersionId"]
@@ -636,6 +661,10 @@ export const updatePrompt = async ({
     details,
     system_prompt,
     user_prompt,
+    promptFormat,
+    promptSchemaVersion,
+    structuredPromptDefinition,
+    syncPayloadVersion,
     fewShotExamples,
     modulesConfig,
     versionNumber,
@@ -725,13 +754,18 @@ export const getUserId = async () => {
 export const exportChatHistory = async () => {
   const db = new PageAssistDatabase()
   const chatHistories = await db.getChatHistories()
-  const messages = await Promise.all(
+  const results = await Promise.allSettled(
     chatHistories.map(async (history) => {
       const messages = await db.getChatHistory(history.id)
       return { history, messages }
     })
   )
-  return messages
+  return results
+    .filter(
+      (r): r is PromiseFulfilledResult<{ history: (typeof chatHistories)[0]; messages: MessageHistory }> =>
+        r.status === "fulfilled"
+    )
+    .map((r) => r.value)
 }
 
 export const importChatHistory = async (

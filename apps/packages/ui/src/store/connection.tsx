@@ -23,28 +23,46 @@ const TEST_BYPASS_KEY = "__tldw_allow_offline"
 const FORCE_UNCONFIGURED_KEY = "__tldw_force_unconfigured"
 const FIRST_RUN_COMPLETE_KEY = "__tldw_first_run_complete"
 
+const coerceStorageFlag = (value: unknown): boolean | null => {
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") return value === "true"
+  return null
+}
+
+const readLocalStorageFlag = (key: string): boolean | null => {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem(key)
+      if (raw != null) {
+        return raw === "true"
+      }
+    }
+  } catch {
+    // ignore localStorage availability
+  }
+
+  return null
+}
+
 const getStorageFlag = async (key: string): Promise<boolean> => {
   try {
     if (typeof chrome !== "undefined" && chrome?.storage?.local) {
       return await new Promise<boolean>((resolve) => {
-        chrome.storage.local.get(key, (res) =>
-          resolve(Boolean(res?.[key]))
-        )
+        chrome.storage.local.get(key, (res) => {
+          if (res && Object.prototype.hasOwnProperty.call(res, key)) {
+            resolve(coerceStorageFlag(res[key]) ?? false)
+            return
+          }
+
+          resolve(readLocalStorageFlag(key) ?? false)
+        })
       })
     }
   } catch {
     // ignore storage read errors
   }
 
-  try {
-    if (typeof localStorage !== "undefined") {
-      return localStorage.getItem(key) === "true"
-    }
-  } catch {
-    // ignore localStorage availability
-  }
-
-  return false
+  return readLocalStorageFlag(key) ?? false
 }
 
 const getOfflineBypassFlag = async (): Promise<boolean> => {
@@ -412,13 +430,18 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     const bypass = await getOfflineBypassFlag()
     console.log('[CONN_DEBUG] flags loaded', { persistedFirstRun, persistedServerUrl, forceUnconfigured, bypass })
 
+    const currentState =
+      !prev.hasCompletedFirstRun && persistedFirstRun
+        ? {
+            ...prev,
+            hasCompletedFirstRun: true
+          }
+        : prev
+
     // Apply persisted first-run flag if not already set
-    if (!prev.hasCompletedFirstRun && persistedFirstRun) {
+    if (currentState !== prev) {
       set({
-        state: {
-          ...prev,
-          hasCompletedFirstRun: true
-        }
+        state: currentState
       })
     }
 
@@ -426,7 +449,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     if (forceUnconfigured) {
       set({
         state: {
-          ...prev,
+          ...currentState,
           errorKind: "none",
           phase: ConnectionPhase.UNCONFIGURED,
           serverUrl: persistedServerUrl,
@@ -452,12 +475,12 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       const serverUrl =
         persistedServerUrl ??
         (await ensurePlaceholderConfig()) ??
-        prev.serverUrl ??
+        currentState.serverUrl ??
         "offline://local"
 
       set({
         state: {
-          ...prev,
+          ...currentState,
           phase: ConnectionPhase.CONNECTED,
           serverUrl,
           isConnected: true,
@@ -479,29 +502,29 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     // Throttle repeated checks when already connected recently.
     // This prevents the landing page/header from hammering the server.
     const now = Date.now()
-    const nextChecksSinceConfigChange = prev.checksSinceConfigChange + 1
+    const nextChecksSinceConfigChange = currentState.checksSinceConfigChange + 1
     if (
-      prev.isConnected &&
-      prev.phase === ConnectionPhase.CONNECTED &&
-      prev.lastCheckedAt != null &&
-      now - prev.lastCheckedAt < CONNECTED_THROTTLE_MS
+      currentState.isConnected &&
+      currentState.phase === ConnectionPhase.CONNECTED &&
+      currentState.lastCheckedAt != null &&
+      now - currentState.lastCheckedAt < CONNECTED_THROTTLE_MS
     ) {
       return
     }
 
     const isBackgroundRefresh =
-      prev.isConnected && prev.phase === ConnectionPhase.CONNECTED
+      currentState.isConnected && currentState.phase === ConnectionPhase.CONNECTED
     set({
       state: {
-        ...prev,
+        ...currentState,
         phase: isBackgroundRefresh
           ? ConnectionPhase.CONNECTED
           : ConnectionPhase.SEARCHING,
-        serverUrl: persistedServerUrl ?? prev.serverUrl,
-        errorKind: isBackgroundRefresh ? prev.errorKind : "none",
+        serverUrl: persistedServerUrl ?? currentState.serverUrl,
+        errorKind: isBackgroundRefresh ? currentState.errorKind : "none",
         isChecking: true,
         offlineBypass: false,
-        lastError: isBackgroundRefresh ? prev.lastError : null,
+        lastError: isBackgroundRefresh ? currentState.lastError : null,
         checksSinceConfigChange: nextChecksSinceConfigChange
       }
     })
@@ -539,7 +562,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       if (!serverUrl) {
         set({
           state: {
-            ...prev,
+            ...currentState,
             phase: ConnectionPhase.UNCONFIGURED,
             serverUrl: null,
             isConnected: false,
@@ -654,13 +677,13 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         serverUrl
       })
 
-      let knowledgeStatus: KnowledgeStatus = prev.knowledgeStatus
-      let knowledgeLastCheckedAt = prev.knowledgeLastCheckedAt
-      let knowledgeError = prev.knowledgeError
+      let knowledgeStatus: KnowledgeStatus = currentState.knowledgeStatus
+      let knowledgeLastCheckedAt = currentState.knowledgeLastCheckedAt
+      let knowledgeError = currentState.knowledgeError
       const shouldRefreshKnowledge =
-        !prev.knowledgeLastCheckedAt ||
-        now - prev.knowledgeLastCheckedAt >= KNOWLEDGE_RECHECK_INTERVAL_MS ||
-        prev.knowledgeStatus !== "ready"
+        !currentState.knowledgeLastCheckedAt ||
+        now - currentState.knowledgeLastCheckedAt >= KNOWLEDGE_RECHECK_INTERVAL_MS ||
+        currentState.knowledgeStatus !== "ready"
 
       if (ok && shouldRefreshKnowledge) {
         try {
@@ -696,7 +719,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       }
 
       let errorKind: ConnectionState["errorKind"] = "none"
-      const nextConsecutiveFailures = ok ? 0 : prev.consecutiveFailures + 1
+      const nextConsecutiveFailures = ok ? 0 : currentState.consecutiveFailures + 1
 
       if (ok) {
         if (knowledgeStatus === "offline") {
@@ -716,14 +739,14 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       const holdConnectedOnTransientFailure =
         !ok &&
         errorKind === "unreachable" &&
-        prev.isConnected &&
-        prev.phase === ConnectionPhase.CONNECTED &&
+        currentState.isConnected &&
+        currentState.phase === ConnectionPhase.CONNECTED &&
         nextConsecutiveFailures < CONNECTED_FAILURE_THRESHOLD
 
       if (holdConnectedOnTransientFailure) {
         set({
           state: {
-            ...prev,
+            ...currentState,
             phase: ConnectionPhase.CONNECTED,
             isConnected: true,
             isChecking: false,
@@ -747,7 +770,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       })
       set({
         state: {
-          ...prev,
+          ...currentState,
           phase: ok ? ConnectionPhase.CONNECTED : ConnectionPhase.ERROR,
           serverUrl,
           isConnected: ok,
@@ -775,15 +798,15 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         maybeAnnotateCorsMismatchError({
           error: (error as Error)?.message ?? "unknown-error",
           status: 0,
-          serverUrl: prev.serverUrl
+          serverUrl: currentState.serverUrl
         }) ?? "unknown-error"
       set({
         state: {
-          ...prev,
+          ...currentState,
           phase: ConnectionPhase.ERROR,
           isConnected: false,
           isChecking: false,
-          consecutiveFailures: prev.consecutiveFailures + 1,
+          consecutiveFailures: currentState.consecutiveFailures + 1,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
           lastError: fallbackError,

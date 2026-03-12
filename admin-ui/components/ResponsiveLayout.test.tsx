@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ResponsiveLayout } from './ResponsiveLayout';
 
 let mockPathname = '/';
+const isSingleUserModeMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock('next/link', () => ({
   default: ({ href, children, ...props }: { href: string; children: ReactNode }) => (
@@ -25,6 +26,7 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/lib/auth', () => ({
   logout: vi.fn().mockResolvedValue(undefined),
+  isSingleUserMode: isSingleUserModeMock,
 }));
 
 vi.mock('@/components/PermissionGuard', () => ({
@@ -43,7 +45,10 @@ vi.mock('@/components/PermissionGuard', () => ({
       updated_at: '2025-01-01T00:00:00Z',
     },
     hasPermission: () => true,
-    hasRole: () => true,
+    hasRole: (role: string | string[]) => {
+      const requiredRoles = Array.isArray(role) ? role : [role];
+      return requiredRoles.includes('admin');
+    },
     loading: false,
     refresh: async () => {},
   }),
@@ -66,7 +71,12 @@ vi.mock('@/components/OrgContextSwitcher', () => ({
 afterEach(() => {
   cleanup();
   mockPathname = '/';
+  isSingleUserModeMock.mockReturnValue(false);
   localStorage.clear();
+});
+
+beforeEach(() => {
+  isSingleUserModeMock.mockReturnValue(false);
 });
 
 describe('ResponsiveLayout mobile navigation', () => {
@@ -184,5 +194,27 @@ describe('ResponsiveLayout mobile navigation', () => {
     );
 
     expect(screen.getByTestId('sidebar-shortcuts-hint').textContent).toContain('Press ? for shortcuts');
+  });
+
+  it('hides debug navigation from plain admins in multi-user mode', () => {
+    render(
+      <ResponsiveLayout>
+        <div>Page content</div>
+      </ResponsiveLayout>
+    );
+
+    expect(screen.queryByRole('link', { name: 'Debug' })).toBeNull();
+  });
+
+  it('shows debug navigation for single-user admins', () => {
+    isSingleUserModeMock.mockReturnValue(true);
+
+    render(
+      <ResponsiveLayout>
+        <div>Page content</div>
+      </ResponsiveLayout>
+    );
+
+    expect(screen.getByRole('link', { name: 'Debug' })).toBeInTheDocument();
   });
 });

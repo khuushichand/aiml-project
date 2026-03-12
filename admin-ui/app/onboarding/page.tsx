@@ -79,7 +79,6 @@ function OnboardingPageContent() {
 
   const {
     register,
-    handleSubmit,
     getValues,
     trigger,
     formState: { errors },

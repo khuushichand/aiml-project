@@ -39,10 +39,15 @@ from tldw_Server_API.app.api.v1.schemas.workflows import (
     RunRequest,
     WorkflowDefinitionCreate,
     WorkflowDefinitionResponse,
+    WorkflowPreflightRequest,
+    WorkflowPreflightResponse,
+    WorkflowRunInvestigationResponse,
     WorkflowRagSearchConfig,
     WorkflowRunListItem,
     WorkflowRunListResponse,
     WorkflowRunResponse,
+    WorkflowRunStepsResponse,
+    WorkflowStepAttemptsResponse,
 )
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditContext,
@@ -87,6 +92,7 @@ from tldw_Server_API.app.core.testing import (
 )
 from tldw_Server_API.app.core.Workflows import RunMode, WorkflowEngine, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
+from tldw_Server_API.app.core.Workflows.capabilities import get_step_capability
 from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
 from tldw_Server_API.app.core.Workflows.daily_ledger import (
     backfill_legacy_runs_to_ledger,
@@ -94,6 +100,9 @@ from tldw_Server_API.app.core.Workflows.daily_ledger import (
     record_workflow_run,
     workflows_ledger_category,
 )
+from tldw_Server_API.app.core.Workflows.investigation import build_run_investigation
+from tldw_Server_API.app.core.Workflows.investigation import list_run_steps as build_run_steps
+from tldw_Server_API.app.core.Workflows.investigation import list_step_attempts as build_step_attempts
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 
 _WORKFLOWS_NONCRITICAL_EXCEPTIONS = (
@@ -177,6 +186,24 @@ def _is_workflows_admin_user(current_user: User) -> bool:
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         return False
     return False
+
+
+def _get_authorized_run_or_404(
+    *,
+    run_id: str,
+    current_user: User,
+    db: WorkflowsDatabase,
+) -> tuple[Any, bool]:
+    run = db.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    tenant_id = str(getattr(current_user, "tenant_id", "default"))
+    if run.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    is_admin = _is_workflows_admin_user(current_user)
+    if str(run.user_id) != str(current_user.id) and not is_admin:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run, is_admin
 
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
@@ -489,6 +516,8 @@ def _classify_webhook_status(status_code: int) -> str:
 
 def _validate_definition_payload(defn: dict[str, Any]) -> None:
     import json
+    if not isinstance(defn, dict):
+        raise HTTPException(status_code=422, detail="Workflow definition must be an object")
     # Optional JSON Schema validator
     try:
         import jsonschema  # type: ignore
@@ -685,6 +714,8 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
         },
     }
     for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            raise HTTPException(status_code=422, detail=f"Step {i + 1} must be an object")
         t = (s.get("type") or "").strip()
         sid = str(s.get("id") or f"step_{i+1}")
         if not reg.has(t):
@@ -1111,6 +1142,129 @@ async def _record_workflow_run_usage(
         return
 
 
+def _build_preflight_issue(
+    *,
+    code: str,
+    message: str,
+    step_id: str | None = None,
+    step_type: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "message": message,
+        "step_id": step_id,
+        "step_type": step_type,
+    }
+
+
+def _collect_preflight_warnings(definition: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    if not isinstance(definition, dict):
+        return warnings
+    steps = definition.get("steps") or []
+    if not isinstance(steps, list):
+        return warnings
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        step_id = str(step.get("id") or f"step_{idx+1}")
+        step_type = str(step.get("type") or "").strip()
+        if not step_type:
+            continue
+        capability = get_step_capability(step_type)
+        if not capability.replay_safe or capability.requires_human_review_for_rerun:
+            warnings.append(
+                _build_preflight_issue(
+                    code="unsafe_replay_step",
+                    message=(
+                        f"Step '{step_id}' ({step_type}) is not replay-safe and should be reviewed before rerun"
+                    ),
+                    step_id=step_id,
+                    step_type=step_type,
+                )
+            )
+    return warnings
+
+
+def _format_preflight_validation_message(error: dict[str, Any]) -> str:
+    loc = error.get("loc") or ()
+    if isinstance(loc, tuple):
+        loc_parts = [str(part) for part in loc]
+    elif isinstance(loc, list):
+        loc_parts = [str(part) for part in loc]
+    else:
+        loc_parts = [str(loc)] if loc else []
+    location = ".".join(part for part in loc_parts if part)
+    message = str(error.get("msg") or "Invalid workflow definition").strip()
+    return f"{location}: {message}" if location else message
+
+
+def _build_preflight_schema_issues(definition: Any) -> list[dict[str, Any]]:
+    if not isinstance(definition, dict):
+        return [
+            _build_preflight_issue(
+                code="definition_invalid",
+                message="definition: Workflow definition must be an object",
+            )
+        ]
+
+    try:
+        WorkflowDefinitionCreate.model_validate(definition)
+    except ValidationError as exc:
+        issues: list[dict[str, Any]] = []
+        steps = definition.get("steps") if isinstance(definition.get("steps"), list) else []
+        for error in exc.errors():
+            step_id = None
+            step_type = None
+            loc = error.get("loc") or ()
+            if len(loc) >= 2 and loc[0] == "steps" and isinstance(loc[1], int):
+                idx = int(loc[1])
+                if 0 <= idx < len(steps):
+                    step = steps[idx]
+                    if isinstance(step, dict):
+                        raw_step_id = step.get("id")
+                        raw_step_type = step.get("type")
+                        if raw_step_id is not None:
+                            step_id = str(raw_step_id)
+                        if raw_step_type is not None:
+                            step_type = str(raw_step_type)
+            issues.append(
+                _build_preflight_issue(
+                    code="definition_invalid",
+                    message=_format_preflight_validation_message(error),
+                    step_id=step_id,
+                    step_type=step_type,
+                )
+            )
+        return issues
+    return []
+
+
+def _build_preflight_validation_issues(definition: Any) -> list[dict[str, Any]]:
+    schema_issues = _build_preflight_schema_issues(definition)
+    if schema_issues:
+        return schema_issues
+    try:
+        _validate_definition_payload(definition)
+    except HTTPException as exc:
+        return [
+            _build_preflight_issue(
+                code="definition_invalid",
+                message=str(exc.detail),
+            )
+        ]
+    return []
+
+
+def _demote_preflight_issues_to_warnings(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for issue in issues:
+        warning = dict(issue)
+        warning["code"] = "definition_validation_warning"
+        warnings.append(warning)
+    return warnings
+
+
 @router.post("", response_model=WorkflowDefinitionResponse, status_code=201)
 async def create_definition(
     body: WorkflowDefinitionCreate,
@@ -1184,6 +1338,34 @@ async def list_definitions(
         )
         for d in defs
     ]
+
+
+@router.post(
+    "/preflight",
+    response_model=WorkflowPreflightResponse,
+    dependencies=[Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ))],
+)
+async def preflight_definition(
+    body: WorkflowPreflightRequest,
+    current_user: User = Depends(get_request_user),
+):
+    _ = current_user
+    definition = body.definition
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    issues = _build_preflight_validation_issues(definition)
+    if body.validation_mode == "non-block":
+        warnings.extend(_demote_preflight_issues_to_warnings(issues))
+    else:
+        errors.extend(issues)
+
+    warnings.extend(_collect_preflight_warnings(definition))
+
+    return WorkflowPreflightResponse(
+        valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+    )
 
 
 ## get_definition moved below '/runs*' routes to avoid path shadowing
@@ -3004,6 +3186,71 @@ async def get_chunker_options():
 
 
 
+@router.get(
+    "/runs/{run_id}/investigation",
+    response_model=WorkflowRunInvestigationResponse,
+    dependencies=[Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ))],
+)
+async def get_run_investigation(
+    run_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    _run, is_admin = _get_authorized_run_or_404(run_id=run_id, current_user=current_user, db=db)
+    investigation = build_run_investigation(
+        db,
+        run_id=run_id,
+        include_operator_detail=is_admin,
+    )
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return WorkflowRunInvestigationResponse(**investigation)
+
+
+@router.get(
+    "/runs/{run_id}/steps",
+    response_model=WorkflowRunStepsResponse,
+    dependencies=[Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ))],
+)
+async def get_run_steps(
+    run_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    _run, is_admin = _get_authorized_run_or_404(run_id=run_id, current_user=current_user, db=db)
+    steps = build_run_steps(
+        db,
+        run_id=run_id,
+        include_operator_detail=is_admin,
+    )
+    if steps is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return WorkflowRunStepsResponse(**steps)
+
+
+@router.get(
+    "/runs/{run_id}/steps/{step_id}/attempts",
+    response_model=WorkflowStepAttemptsResponse,
+    dependencies=[Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ))],
+)
+async def get_step_attempts(
+    run_id: str,
+    step_id: str,
+    current_user: User = Depends(get_request_user),
+    db: WorkflowsDatabase = Depends(_get_db),
+):
+    _run, is_admin = _get_authorized_run_or_404(run_id=run_id, current_user=current_user, db=db)
+    attempts = build_step_attempts(
+        db,
+        run_id=run_id,
+        step_id=step_id,
+        include_operator_detail=is_admin,
+    )
+    if attempts is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return WorkflowStepAttemptsResponse(**attempts)
+
+
 @router.post(
     "/runs/{run_id}/{action}",
     dependencies=[
@@ -3417,6 +3664,7 @@ async def list_step_types():
             "schema": sch,
             "example": sch.get("example", {}),
             "min_engine_version": sch.get("min_engine_version", "0.1.0"),
+            "capabilities": s.capability.to_dict(),
         })
     return out
 

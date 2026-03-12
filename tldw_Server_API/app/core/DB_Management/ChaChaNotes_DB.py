@@ -99,6 +99,7 @@ _ORDER_BY_EXPR_RE = re.compile(
     re.IGNORECASE,
 )
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CHAT_GRAMMAR_VALIDATION_STATUSES = frozenset({"unchecked", "valid", "invalid"})
 
 # --- Custom Exceptions ---
 class CharactersRAGDBError(Exception):
@@ -434,9 +435,11 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 30  # Schema v30 adds quizzes.source_bundle_json for mixed-source metadata
+    _CURRENT_SCHEMA_VERSION = 36  # Schema v36 adds lean chat overview list indexes
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
+    _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
+    _ALLOWED_CONVERSATION_SEARCH_ORDER: tuple[str, ...] = ("bm25", "recency", "hybrid", "topic")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
     _ALLOWED_PERSONA_MODES: tuple[str, ...] = ("session_scoped", "persistent_scoped")
     _DEFAULT_PERSONA_MODE = "session_scoped"
@@ -449,6 +452,21 @@ class CharactersRAGDB:
     )
     _ALLOWED_PERSONA_POLICY_RULE_KINDS: tuple[str, ...] = ("mcp_tool", "skill")
     _ALLOWED_PERSONA_SESSION_STATUSES: tuple[str, ...] = ("active", "paused", "closed", "archived")
+    _ALLOWED_CONVERSATION_ASSISTANT_KINDS: tuple[str, ...] = ("character", "persona")
+    _ALLOWED_PERSONA_MEMORY_MODES: tuple[str, ...] = ("read_only", "read_write")
+    _ALLOWED_PERSONA_EXEMPLAR_KINDS: tuple[str, ...] = (
+        "style",
+        "catchphrase",
+        "boundary",
+        "scenario_demo",
+        "tool_behavior",
+    )
+    _ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES: tuple[str, ...] = (
+        "manual",
+        "transcript_import",
+        "character_seed",
+        "generated_candidate",
+    )
 
     _FTS_CONFIG: list[tuple[str, str, list[str]]] = [
         (
@@ -879,7 +897,8 @@ END;
 CREATE TRIGGER notes_au
 AFTER UPDATE ON notes BEGIN
   INSERT INTO notes_fts(notes_fts,rowid,title,content)
-  VALUES('delete',old.rowid,old.title,old.content);
+  SELECT 'delete',old.rowid,old.title,old.content
+  WHERE old.deleted = 0;
 
   INSERT INTO notes_fts(rowid,title,content)
   SELECT new.rowid,new.title,new.content
@@ -889,7 +908,8 @@ END;
 CREATE TRIGGER notes_ad
 AFTER DELETE ON notes BEGIN
   INSERT INTO notes_fts(notes_fts,rowid,title,content)
-  VALUES('delete',old.rowid,old.title,old.content);
+  SELECT 'delete',old.rowid,old.title,old.content
+  WHERE old.deleted = 0;
 END;
 
 /*----------------------------------------------------------------
@@ -2905,6 +2925,143 @@ UPDATE db_schema_version
    AND version < 30;
 """
 
+    _MIGRATION_SQL_V30_TO_V31 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 31 - Persona origin snapshots (2026-03-07)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS origin_character_id INTEGER;
+
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS origin_character_name TEXT;
+
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS origin_character_snapshot_at TEXT;
+
+UPDATE db_schema_version
+   SET version = 31
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 31;
+"""
+
+    _MIGRATION_SQL_V31_TO_V32 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 32 - Conversation assistant identity (2026-03-08)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS assistant_kind TEXT CHECK (assistant_kind IN ('character', 'persona'));
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS assistant_id TEXT;
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS persona_memory_mode TEXT CHECK (persona_memory_mode IN ('read_only', 'read_write'));
+
+UPDATE conversations
+   SET assistant_kind = 'character'
+ WHERE character_id IS NOT NULL
+   AND COALESCE(TRIM(assistant_kind), '') = '';
+
+UPDATE conversations
+   SET assistant_id = CAST(character_id AS TEXT)
+ WHERE character_id IS NOT NULL
+   AND COALESCE(TRIM(assistant_id), '') = '';
+
+UPDATE db_schema_version
+   SET version = 32
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 32;
+"""
+
+    _MIGRATION_SQL_V32_TO_V33 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 33 - Persona exemplars (2026-03-08)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS persona_exemplars(
+  id TEXT PRIMARY KEY,
+  persona_id TEXT NOT NULL REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL
+    CHECK(kind IN ('style','catchphrase','boundary','scenario_demo','tool_behavior')),
+  content TEXT NOT NULL,
+  tone TEXT,
+  scenario_tags_json TEXT NOT NULL DEFAULT '[]',
+  capability_tags_json TEXT NOT NULL DEFAULT '[]',
+  priority INTEGER NOT NULL DEFAULT 0,
+  enabled BOOLEAN NOT NULL DEFAULT 1,
+  source_type TEXT NOT NULL DEFAULT 'manual'
+    CHECK(source_type IN ('manual','transcript_import','character_seed','generated_candidate')),
+  source_ref TEXT,
+  notes TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_persona
+  ON persona_exemplars(persona_id, deleted, enabled);
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_user
+  ON persona_exemplars(user_id, deleted, enabled);
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_kind
+  ON persona_exemplars(kind, deleted);
+CREATE INDEX IF NOT EXISTS idx_persona_exemplars_enabled
+  ON persona_exemplars(enabled, deleted);
+
+UPDATE db_schema_version
+   SET version = 33
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 33;
+"""
+
+    _MIGRATION_SQL_V32_TO_V33_POSTGRES = _MIGRATION_SQL_V32_TO_V33.replace(
+        "PRAGMA foreign_keys = ON;\n\n",
+        "",
+    )
+
+    _MIGRATION_SQL_V33_TO_V34 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 34 - Persona session activity surfaces (2026-03-10)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_sessions
+  ADD COLUMN IF NOT EXISTS activity_surface TEXT NOT NULL DEFAULT 'api.persona';
+
+UPDATE db_schema_version
+   SET version = 34
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 34;
+"""
+
+    _MIGRATION_SQL_V34_TO_V35 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 35 - Persona session preferences (2026-03-10)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_sessions
+  ADD COLUMN IF NOT EXISTS preferences_json TEXT NOT NULL DEFAULT '{}';
+
+UPDATE db_schema_version
+   SET version = 35
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 35;
+"""
+    _MIGRATION_SQL_V35_TO_V36 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 36 - Conversation list indexes (2026-03-11)
+───────────────────────────────────────────────────────────────*/
+CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified
+  ON conversations(client_id, deleted, last_modified DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified
+  ON conversations(client_id, character_id, deleted, last_modified DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at
+  ON conversations(client_id, deleted, created_at DESC);
+
+UPDATE db_schema_version
+   SET version = 36
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 36;
+"""
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4408,6 +4565,275 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V29->V30: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V30 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v30_to_v31(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V30 to V31 (persona origin snapshots)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V30 to V31 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+            if "origin_character_id" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_id INTEGER")
+            if "origin_character_name" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_name TEXT")
+            if "origin_character_snapshot_at" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_snapshot_at TEXT")
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 31
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 31;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 31:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V30->V31 failed version check. Expected 31, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V31 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V30->V31 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V30->V31 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V30->V31: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V31 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v31_to_v32(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V31 to V32 (conversation assistant identity)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V31 to V32 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
+            if "assistant_kind" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN assistant_kind TEXT CHECK(assistant_kind IN ('character','persona'))"
+                )
+            if "assistant_id" not in existing_cols:
+                conn.execute("ALTER TABLE conversations ADD COLUMN assistant_id TEXT")
+            if "persona_memory_mode" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN persona_memory_mode TEXT CHECK(persona_memory_mode IN ('read_only','read_write'))"
+                )
+            conn.execute(
+                """
+                UPDATE conversations
+                   SET assistant_kind = 'character'
+                 WHERE character_id IS NOT NULL
+                   AND COALESCE(TRIM(assistant_kind), '') = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE conversations
+                   SET assistant_id = CAST(character_id AS TEXT)
+                 WHERE character_id IS NOT NULL
+                   AND COALESCE(TRIM(assistant_id), '') = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 32
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 32;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 32:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V31->V32 failed version check. Expected 32, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V32 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V31->V32 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V31->V32 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V31->V32: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V32 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v32_to_v33(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V32 to V33 (persona exemplar persistence)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V32 to V33 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V32_TO_V33)
+            final_version = self._get_db_version(conn)
+            if final_version != 33:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V32->V33 failed version check. Expected 33, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V33 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V32->V33 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V32->V33 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V32->V33: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V33 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v33_to_v34(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V33 to V34 (persona session activity surfaces)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V33 to V34 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
+            if "activity_surface" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE persona_sessions ADD COLUMN activity_surface TEXT NOT NULL DEFAULT 'api.persona'"
+                )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 34
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 34;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 34:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V33->V34 failed version check. Expected 34, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V34 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V33->V34 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V33->V34 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V33->V34: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V34 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v34_to_v35(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V34 to V35 (persona session preferences)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V34 to V35 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
+            if "preferences_json" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE persona_sessions ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 35
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 35;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 35:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V34->V35 failed version check. Expected 35, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V35 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V34->V35 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V34->V35 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V34->V35: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V35 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v35_to_v36(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V35 to V36 (conversation list indexes)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V35 to V36 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V35_TO_V36)
+            final_version = self._get_db_version(conn)
+            if final_version != 36:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V35->V36 failed version check. Expected 36, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V36 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V35->V36 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V35->V36 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V35->V36: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V36 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Backfill recent persona schema columns after version-number collisions."""
+        profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+        if "origin_character_id" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_id INTEGER")
+        if "origin_character_name" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_name TEXT")
+        if "origin_character_snapshot_at" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_snapshot_at TEXT")
+
+        conversation_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
+        if "assistant_kind" not in conversation_cols:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN assistant_kind TEXT CHECK(assistant_kind IN ('character','persona'))"
+            )
+        if "assistant_id" not in conversation_cols:
+            conn.execute("ALTER TABLE conversations ADD COLUMN assistant_id TEXT")
+        if "persona_memory_mode" not in conversation_cols:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN persona_memory_mode TEXT CHECK(persona_memory_mode IN ('read_only','read_write'))"
+            )
+        conn.execute(
+            """
+            UPDATE conversations
+               SET assistant_kind = 'character'
+             WHERE character_id IS NOT NULL
+               AND COALESCE(TRIM(assistant_kind), '') = ''
+            """
+        )
+        conn.execute(
+            """
+            UPDATE conversations
+               SET assistant_id = CAST(character_id AS TEXT)
+             WHERE character_id IS NOT NULL
+               AND COALESCE(TRIM(assistant_id), '') = ''
+            """
+        )
+
+        session_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
+        if "activity_surface" not in session_cols:
+            conn.execute(
+                "ALTER TABLE persona_sessions ADD COLUMN activity_surface TEXT NOT NULL DEFAULT 'api.persona'"
+            )
+        if "preferences_json" not in session_cols:
+            conn.execute(
+                "ALTER TABLE persona_sessions ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
+            )
+
+    def _ensure_recent_persona_schema_postgres(self, conn: Any) -> None:
+        """Backfill recent persona schema columns for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_id INTEGER",
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_name TEXT",
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_snapshot_at TEXT",
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS assistant_kind TEXT CHECK (assistant_kind IN ('character', 'persona'))",
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS assistant_id TEXT",
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS persona_memory_mode TEXT CHECK (persona_memory_mode IN ('read_only', 'read_write'))",
+            """
+            UPDATE conversations
+               SET assistant_kind = 'character'
+             WHERE character_id IS NOT NULL
+               AND COALESCE(TRIM(assistant_kind), '') = ''
+            """,
+            """
+            UPDATE conversations
+               SET assistant_id = CAST(character_id AS TEXT)
+             WHERE character_id IS NOT NULL
+               AND COALESCE(TRIM(assistant_id), '') = ''
+            """,
+            "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS activity_surface TEXT NOT NULL DEFAULT 'api.persona'",
+            "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS preferences_json TEXT NOT NULL DEFAULT '{}'",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4527,6 +4953,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         conn.execute(
                             "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)"
                         )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified "
+                            "ON conversations(client_id, deleted, last_modified DESC)"
+                        )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified "
+                            "ON conversations(client_id, character_id, deleted, last_modified DESC)"
+                        )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at "
+                            "ON conversations(client_id, deleted, created_at DESC)"
+                        )
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified)")
@@ -4546,6 +4984,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     # Verify core FTS tables exist to avoid silent search failures
                     self._verify_required_fts_tables_sqlite(conn)
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
+                    self._ensure_notes_fts_triggers_sqlite(conn)
+                    self._ensure_recent_persona_schema_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
                     self._self_heal_character_cards_fts_sqlite(conn)
@@ -4636,6 +5076,24 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 30 and current_db_version == 29:
                         self._migrate_from_v29_to_v30(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 31 and current_db_version == 30:
+                        self._migrate_from_v30_to_v31(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 32 and current_db_version == 31:
+                        self._migrate_from_v31_to_v32(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 33 and current_db_version == 32:
+                        self._migrate_from_v32_to_v33(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 34 and current_db_version == 33:
+                        self._migrate_from_v33_to_v34(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 35 and current_db_version == 34:
+                        self._migrate_from_v34_to_v35(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 36 and current_db_version == 35:
+                        self._migrate_from_v35_to_v36(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -4647,6 +5105,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_topic_label ON conversations(topic_label)")
                     conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified "
+                        "ON conversations(client_id, deleted, last_modified DESC)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified "
+                        "ON conversations(client_id, character_id, deleted, last_modified DESC)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at "
+                        "ON conversations(client_id, deleted, created_at DESC)"
                     )
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
@@ -4938,6 +5408,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v28_to_v29(conn)
                             elif fallback_version == 29:
                                 self._migrate_from_v29_to_v30(conn)
+                            elif fallback_version == 30:
+                                self._migrate_from_v30_to_v31(conn)
+                            elif fallback_version == 31:
+                                self._migrate_from_v31_to_v32(conn)
+                            elif fallback_version == 32:
+                                self._migrate_from_v32_to_v33(conn)
+                            elif fallback_version == 33:
+                                self._migrate_from_v33_to_v34(conn)
+                            elif fallback_version == 34:
+                                self._migrate_from_v34_to_v35(conn)
+                            elif fallback_version == 35:
+                                self._migrate_from_v35_to_v36(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5004,6 +5486,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 30 and current_db_version == 29:
                     self._migrate_from_v29_to_v30(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 31 and current_db_version == 30:
+                    self._migrate_from_v30_to_v31(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 32 and current_db_version == 31:
+                    self._migrate_from_v31_to_v32(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 33 and current_db_version == 32:
+                    self._migrate_from_v32_to_v33(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 34 and current_db_version == 33:
+                    self._migrate_from_v33_to_v34(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 35 and current_db_version == 34:
+                    self._migrate_from_v34_to_v35(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 36 and current_db_version == 35:
+                    self._migrate_from_v35_to_v36(conn)
+                    current_db_version = self._get_db_version(conn)
+
+                self._ensure_recent_persona_schema_sqlite(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -5012,6 +5514,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
+                self._ensure_notes_fts_triggers_sqlite(conn)
                 # Seed/heal character_cards_fts before request traffic. Schema V4
                 # inserts "Default Assistant" before FTS triggers are created.
                 self._self_heal_character_cards_fts_sqlite(conn)
@@ -5129,6 +5632,52 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring character_cards FTS triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_notes_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Normalize notes FTS triggers to avoid invalid delete operations.
+
+        When restoring a soft-deleted note (`deleted: 1 -> 0`), the old trigger
+        shape always issued an FTS `delete` against the previous row snapshot.
+        If the row was already absent from FTS because of the earlier soft-delete,
+        SQLite could surface `database disk image is malformed` from FTS internals.
+        We guard this by deleting from FTS only when `old.deleted = 0`.
+        """
+
+        try:
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS notes_ai;
+                DROP TRIGGER IF EXISTS notes_au;
+                DROP TRIGGER IF EXISTS notes_ad;
+
+                CREATE TRIGGER notes_ai
+                AFTER INSERT ON notes BEGIN
+                  INSERT INTO notes_fts(rowid,title,content)
+                  SELECT new.rowid,new.title,new.content
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER notes_au
+                AFTER UPDATE ON notes BEGIN
+                  INSERT INTO notes_fts(notes_fts,rowid,title,content)
+                  SELECT 'delete',old.rowid,old.title,old.content
+                  WHERE old.deleted = 0;
+
+                  INSERT INTO notes_fts(rowid,title,content)
+                  SELECT new.rowid,new.title,new.content
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER notes_ad
+                AFTER DELETE ON notes BEGIN
+                  INSERT INTO notes_fts(notes_fts,rowid,title,content)
+                  SELECT 'delete',old.rowid,old.title,old.content
+                  WHERE old.deleted = 0;
+                END;
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring notes FTS triggers: {exc}") from exc  # noqa: TRY003
 
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
@@ -5282,11 +5831,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 30:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V29_TO_V30, conn, expected_version=30)
                 current_version = 30
+            if current_version < 31:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V30_TO_V31, conn, expected_version=31)
+                current_version = 31
+            if current_version < 32:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V31_TO_V32, conn, expected_version=32)
+                current_version = 32
+            if current_version < 33:
+                self._apply_postgres_migration_script(
+                    self._MIGRATION_SQL_V32_TO_V33_POSTGRES,
+                    conn,
+                    expected_version=33,
+                )
+                current_version = 33
+            if current_version < 34:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V33_TO_V34, conn, expected_version=34)
+                current_version = 34
+            if current_version < 35:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V34_TO_V35, conn, expected_version=35)
+                current_version = 35
+            if current_version < 36:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36, conn, expected_version=36)
+                current_version = 36
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
                     f"Database schema version ({current_version}) is newer than supported by code ({target_version})."
                 )
+
+            self._ensure_recent_persona_schema_postgres(conn)
 
             if current_version < target_version:
                 logger.warning(
@@ -5336,6 +5909,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     self.backend.execute(
                         "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified "
+                        "ON conversations(client_id, deleted, last_modified DESC)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified "
+                        "ON conversations(client_id, character_id, deleted, last_modified DESC)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at "
+                        "ON conversations(client_id, deleted, created_at DESC)",
                         connection=conn,
                     )
                     self.backend.execute(
@@ -6227,6 +6815,591 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     # ----------------------
+    # Chat grammar library
+    # ----------------------
+    def ensure_chat_grammars_table(self) -> None:
+        """Ensure the chat_grammars table exists for the active backend."""
+        self._ensure_chat_grammars_table()
+
+    def _ensure_chat_grammars_table(self) -> None:
+        """Create the user-scoped grammar-library table and indexes when missing."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS chat_grammars (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    grammar_text TEXT NOT NULL,
+                    validation_status TEXT NOT NULL DEFAULT 'unchecked',
+                    validation_error TEXT,
+                    last_validated_at DATETIME,
+                    is_archived BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted BOOLEAN NOT NULL DEFAULT 0,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(user_id, name)
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            self._migrate_sqlite_chat_grammars_table()
+            self._ensure_chat_grammars_indexes()
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_grammars (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    grammar_text TEXT NOT NULL,
+                    validation_status TEXT NOT NULL DEFAULT 'unchecked',
+                    validation_error TEXT,
+                    last_validated_at TIMESTAMP,
+                    is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    CONSTRAINT uq_chat_grammars_user_name UNIQUE (user_id, name)
+                )
+                """
+            )
+            self._migrate_postgres_chat_grammars_table()
+            self._ensure_chat_grammars_indexes()
+            return
+
+        raise NotImplementedError(
+            f"chat_grammars table creation not supported for backend {self.backend_type.value}"
+        )
+
+    def _chat_grammar_owner_id(self) -> str:
+        """Return the effective owner identifier for grammar-library rows."""
+        owner_id = str(self.client_id or "").strip()
+        return owner_id or "unknown"
+
+    def _chat_grammar_column_names(self, conn: Any | None = None) -> set[str]:
+        """Return the current chat_grammars column names for the active backend."""
+        return {
+            str(column.get("name"))
+            for column in self.backend.get_table_info("chat_grammars", connection=conn)
+            if column.get("name")
+        }
+
+    def _ensure_chat_grammars_indexes(self) -> None:
+        """Create the owner-scoped lookup indexes used by grammar-library CRUD."""
+        index_statements = (
+            "CREATE INDEX IF NOT EXISTS idx_chat_grammars_user_name ON chat_grammars(user_id, name)",
+            "CREATE INDEX IF NOT EXISTS idx_chat_grammars_user_archived_deleted "
+            "ON chat_grammars(user_id, is_archived, deleted)",
+        )
+        for statement in index_statements:
+            if self.backend_type == BackendType.POSTGRESQL:
+                self.backend.execute(statement)
+            else:
+                self.execute_query(statement, script=False, commit=True)
+
+    def _migrate_sqlite_chat_grammars_table(self) -> None:
+        """Rebuild legacy SQLite chat_grammars tables so rows are owner-scoped."""
+        with self.transaction() as conn:
+            existing_cols = self._chat_grammar_column_names(conn)
+            if "user_id" in existing_cols:
+                return
+
+            owner_id = self._chat_grammar_owner_id()
+            conn.execute("ALTER TABLE chat_grammars RENAME TO chat_grammars_legacy")
+            conn.execute(
+                """
+                CREATE TABLE chat_grammars (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    grammar_text TEXT NOT NULL,
+                    validation_status TEXT NOT NULL DEFAULT 'unchecked',
+                    validation_error TEXT,
+                    last_validated_at DATETIME,
+                    is_archived BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted BOOLEAN NOT NULL DEFAULT 0,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(user_id, name)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO chat_grammars (
+                    id,
+                    user_id,
+                    name,
+                    description,
+                    grammar_text,
+                    validation_status,
+                    validation_error,
+                    last_validated_at,
+                    is_archived,
+                    created_at,
+                    updated_at,
+                    deleted,
+                    version
+                )
+                SELECT
+                    id,
+                    ?,
+                    name,
+                    description,
+                    grammar_text,
+                    validation_status,
+                    validation_error,
+                    last_validated_at,
+                    is_archived,
+                    created_at,
+                    updated_at,
+                    deleted,
+                    version
+                FROM chat_grammars_legacy
+                """,
+                (owner_id,),
+            )
+            conn.execute("DROP TABLE chat_grammars_legacy")
+
+    def _migrate_postgres_chat_grammars_table(self) -> None:
+        """Backfill owner scoping for legacy PostgreSQL chat_grammars tables."""
+        owner_id = self._chat_grammar_owner_id()
+        existing_cols = self._chat_grammar_column_names()
+        if "user_id" not in existing_cols:
+            self.backend.execute("ALTER TABLE chat_grammars ADD COLUMN IF NOT EXISTS user_id TEXT")
+        self.backend.execute(
+            "UPDATE chat_grammars SET user_id = %s WHERE user_id IS NULL OR BTRIM(user_id) = ''",
+            (owner_id,),
+        )
+        self.backend.execute("ALTER TABLE chat_grammars ALTER COLUMN user_id SET NOT NULL")
+        self.backend.execute("ALTER TABLE chat_grammars DROP CONSTRAINT IF EXISTS chat_grammars_name_key")
+        self.backend.execute("ALTER TABLE chat_grammars DROP CONSTRAINT IF EXISTS uq_chat_grammars_user_name")
+        self.backend.execute(
+            "ALTER TABLE chat_grammars ADD CONSTRAINT uq_chat_grammars_user_name UNIQUE (user_id, name)"
+        )
+
+    def _coerce_chat_grammar_datetime(self, value: Any) -> datetime | None:
+        """Best-effort conversion of stored chat-grammar timestamps."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
+
+    def _chat_grammar_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a chat_grammars row into a normalized dict."""
+        if not row:
+            return None
+        item = dict(row)
+        item.pop("user_id", None)
+        item["validation_status"] = str(item.get("validation_status") or "unchecked").strip().lower()
+        item["is_archived"] = bool(item.get("is_archived", False))
+        item["deleted"] = bool(item.get("deleted", False))
+        item["version"] = int(item.get("version") or 1)
+        item["created_at"] = self._coerce_chat_grammar_datetime(item.get("created_at"))
+        item["updated_at"] = self._coerce_chat_grammar_datetime(item.get("updated_at"))
+        item["last_validated_at"] = self._coerce_chat_grammar_datetime(item.get("last_validated_at"))
+        return item
+
+    def list_chat_grammars(
+        self,
+        *,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List saved grammars for the current user."""
+        self._ensure_chat_grammars_table()
+        clauses: list[str] = ["user_id = ?"]
+        params: list[Any] = [self._chat_grammar_owner_id()]
+        if not include_deleted:
+            clauses.append("deleted = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if not include_archived:
+            clauses.append("is_archived = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = (
+            "SELECT * FROM chat_grammars "  # nosec B608
+            f"{where_sql} "
+            "ORDER BY name ASC LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            return [self._chat_grammar_row_to_dict(row) for row in cursor.fetchall() if row]
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error listing chat grammars: {exc}")
+            raise
+
+    def count_chat_grammars(
+        self,
+        *,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> int:
+        """Return the number of saved grammars for the current user."""
+        self._ensure_chat_grammars_table()
+        clauses: list[str] = ["user_id = ?"]
+        params: list[Any] = [self._chat_grammar_owner_id()]
+        if not include_deleted:
+            clauses.append("deleted = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if not include_archived:
+            clauses.append("is_archived = ?")
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"SELECT COUNT(*) AS cnt FROM chat_grammars {where_sql}"  # nosec B608
+        try:
+            cursor = self.execute_query(query, tuple(params) if params else None)
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error counting chat grammars: {exc}")
+            raise
+
+    def get_chat_grammar(
+        self,
+        grammar_id: str,
+        *,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a saved grammar by identifier."""
+        self._ensure_chat_grammars_table()
+        grammar_id = str(grammar_id or "").strip()
+        if not grammar_id:
+            raise InputError("grammar_id is required.")  # noqa: TRY003
+        query = "SELECT * FROM chat_grammars WHERE id = ? AND user_id = ?"
+        params: list[Any] = [grammar_id, self._chat_grammar_owner_id()]
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        if not include_archived:
+            query += " AND is_archived = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            row = cursor.fetchone()
+            return self._chat_grammar_row_to_dict(row)
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error fetching chat grammar '{grammar_id}': {exc}")
+            raise
+
+    def insert_chat_grammar(self, grammar_data: dict[str, Any]) -> str:
+        """Insert a new saved grammar and return its identifier."""
+        self._ensure_chat_grammars_table()
+        name = str(grammar_data.get("name") or "").strip()
+        if not name:
+            raise InputError("Grammar name is required.")  # noqa: TRY003
+        grammar_text = str(grammar_data.get("grammar_text") or "")
+        if not grammar_text.strip():
+            raise InputError("grammar_text is required.")  # noqa: TRY003
+
+        validation_status = str(grammar_data.get("validation_status") or "unchecked").strip().lower()
+        if validation_status not in _CHAT_GRAMMAR_VALIDATION_STATUSES:
+            raise InputError("validation_status must be one of unchecked, valid, invalid.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        grammar_id = str(grammar_data.get("id") or f"grammar_{self._generate_uuid().replace('-', '')}")
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        owner_id = self._chat_grammar_owner_id()
+
+        query = (
+            "INSERT INTO chat_grammars ("
+            "id, user_id, name, description, grammar_text, validation_status, validation_error, "
+            "last_validated_at, is_archived, created_at, updated_at, deleted, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            grammar_id,
+            owner_id,
+            name,
+            grammar_data.get("description"),
+            grammar_text,
+            validation_status,
+            grammar_data.get("validation_error"),
+            grammar_data.get("last_validated_at"),
+            bool_cast(bool(grammar_data.get("is_archived", False))),
+            grammar_data.get("created_at") or now,
+            grammar_data.get("updated_at") or now,
+            bool_cast(bool(grammar_data.get("deleted", False))),
+            int(grammar_data.get("version", 1)),
+        )
+        try:
+            with self.transaction() as conn:
+                prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                conn.execute(prepared_query, prepared_params)
+                return grammar_id  # noqa: TRY300
+        except sqlite3.IntegrityError as exc:
+            lowered = str(exc).lower()
+            if "unique constraint failed: chat_grammars.user_id, chat_grammars.name" in lowered or (
+                "unique constraint failed: chat_grammars.name" in lowered
+            ):
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{name}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=name,
+                ) from exc
+            if "unique constraint failed: chat_grammars.id" in str(exc).lower():
+                raise ConflictError(  # noqa: TRY003
+                    "Grammar ID already exists.",
+                    entity="chat_grammars",
+                    entity_id=grammar_id,
+                ) from exc
+            raise CharactersRAGDBError(f"Database integrity error adding grammar '{name}': {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{name}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=name,
+                ) from exc
+            raise CharactersRAGDBError(f"Database integrity error adding grammar '{name}': {exc}") from exc  # noqa: TRY003
+
+    def update_chat_grammar(
+        self,
+        grammar_id: str,
+        update_data: dict[str, Any],
+        *,
+        expected_version: int,
+    ) -> bool:
+        """Update a saved grammar using optimistic locking."""
+        if not update_data:
+            raise InputError(f"No data provided for grammar update '{grammar_id}'.")  # noqa: TRY003
+
+        self._ensure_chat_grammars_table()
+        now = self._get_current_utc_timestamp_iso()
+        allowed_fields = {
+            "name",
+            "description",
+            "grammar_text",
+            "validation_status",
+            "validation_error",
+            "last_validated_at",
+            "is_archived",
+        }
+
+        set_parts: list[str] = []
+        params: list[Any] = []
+        grammar_text_updated = False
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "name":
+                normalized = str(value or "").strip()
+                if not normalized:
+                    raise InputError("Grammar name cannot be empty.")  # noqa: TRY003
+                params.append(normalized)
+                set_parts.append("name = ?")
+            elif key == "grammar_text":
+                normalized_text = str(value or "")
+                if not normalized_text.strip():
+                    raise InputError("grammar_text cannot be empty.")  # noqa: TRY003
+                params.append(normalized_text)
+                set_parts.append("grammar_text = ?")
+                grammar_text_updated = True
+            elif key == "validation_status":
+                normalized_status = str(value or "").strip().lower()
+                if normalized_status not in _CHAT_GRAMMAR_VALIDATION_STATUSES:
+                    raise InputError("validation_status must be one of unchecked, valid, invalid.")  # noqa: TRY003
+                params.append(normalized_status)
+                set_parts.append("validation_status = ?")
+            elif key == "is_archived":
+                params.append(bool(value) if self.backend_type == BackendType.POSTGRESQL else int(bool(value)))
+                set_parts.append("is_archived = ?")
+            else:
+                params.append(value)
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError(f"No supported data provided for grammar update '{grammar_id}'.")  # noqa: TRY003
+
+        if grammar_text_updated and "validation_status" not in update_data:
+            params.append("unchecked")
+            set_parts.append("validation_status = ?")
+        if grammar_text_updated and "validation_error" not in update_data:
+            params.append(None)
+            set_parts.append("validation_error = ?")
+        if grammar_text_updated and "last_validated_at" not in update_data:
+            params.append(None)
+            set_parts.append("last_validated_at = ?")
+
+        owner_id = self._chat_grammar_owner_id()
+        next_version = expected_version + 1
+        set_parts.extend(["updated_at = ?", "version = ?"])
+        params.extend([now, next_version, grammar_id, owner_id, expected_version])
+        query = (
+            f"UPDATE chat_grammars SET {', '.join(set_parts)} "  # nosec B608
+            "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 0"
+        )
+
+        try:
+            with self.transaction() as conn:
+                lookup_query, lookup_params = self._prepare_backend_statement(
+                    "SELECT version FROM chat_grammars WHERE id = ? AND user_id = ? AND deleted = 0",
+                    (grammar_id, owner_id),
+                )
+                current_row = conn.execute(lookup_query, lookup_params).fetchone()
+                current_db_version = int(current_row["version"]) if current_row else None
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Version mismatch. Expected {expected_version}, found {current_db_version}. Please refresh and try again.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+
+                prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+                cursor = conn.execute(prepared_query, prepared_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Grammar '{grammar_id}' update affected 0 rows.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+                return True
+        except sqlite3.IntegrityError as exc:
+            if "unique constraint failed: chat_grammars.name" in str(exc).lower():
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{update_data.get('name')}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=update_data.get("name"),
+                ) from exc
+            raise CharactersRAGDBError(f"Database error updating grammar '{grammar_id}': {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(  # noqa: TRY003
+                    f"Grammar '{update_data.get('name')}' already exists.",
+                    entity="chat_grammars",
+                    entity_id=update_data.get("name"),
+                ) from exc
+            raise CharactersRAGDBError(f"Database error updating grammar '{grammar_id}': {exc}") from exc  # noqa: TRY003
+
+    def archive_chat_grammar(self, grammar_id: str, *, expected_version: int) -> bool:
+        """Archive a saved grammar using optimistic locking."""
+        self._ensure_chat_grammars_table()
+        now = self._get_current_utc_timestamp_iso()
+        next_version = expected_version + 1
+        query = (
+            "UPDATE chat_grammars SET is_archived = ?, updated_at = ?, version = ? "
+            "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 0"
+        )
+        owner_id = self._chat_grammar_owner_id()
+        params = (
+            True if self.backend_type == BackendType.POSTGRESQL else 1,
+            now,
+            next_version,
+            grammar_id,
+            owner_id,
+            expected_version,
+        )
+
+        try:
+            with self.transaction() as conn:
+                lookup_query, lookup_params = self._prepare_backend_statement(
+                    "SELECT version FROM chat_grammars WHERE id = ? AND user_id = ? AND deleted = 0",
+                    (grammar_id, owner_id),
+                )
+                current_row = conn.execute(lookup_query, lookup_params).fetchone()
+                current_db_version = int(current_row["version"]) if current_row else None
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Version mismatch. Expected {expected_version}, found {current_db_version}. Please refresh and try again.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+
+                prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+                cursor = conn.execute(prepared_query, prepared_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Grammar '{grammar_id}' archive affected 0 rows.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+                return True
+        except ConflictError:
+            raise
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error archiving grammar '{grammar_id}': {exc}")
+            raise
+
+    def delete_chat_grammar(
+        self,
+        grammar_id: str,
+        *,
+        expected_version: int,
+        hard_delete: bool = False,
+    ) -> bool:
+        """Delete a saved grammar using optimistic locking."""
+        self._ensure_chat_grammars_table()
+        now = self._get_current_utc_timestamp_iso()
+        owner_id = self._chat_grammar_owner_id()
+
+        try:
+            with self.transaction() as conn:
+                lookup_query, lookup_params = self._prepare_backend_statement(
+                    "SELECT version FROM chat_grammars WHERE id = ? AND user_id = ?",
+                    (grammar_id, owner_id),
+                )
+                current_row = conn.execute(lookup_query, lookup_params).fetchone()
+                current_db_version = int(current_row["version"]) if current_row else None
+                if current_db_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Version mismatch. Expected {expected_version}, found {current_db_version}. Please refresh and try again.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+
+                if hard_delete:
+                    prepared_query, prepared_params = self._prepare_backend_statement(
+                        "DELETE FROM chat_grammars WHERE id = ? AND user_id = ? AND version = ?",
+                        (grammar_id, owner_id, expected_version),
+                    )
+                else:
+                    prepared_query, prepared_params = self._prepare_backend_statement(
+                        "UPDATE chat_grammars SET deleted = ?, updated_at = ?, version = ? "
+                        "WHERE id = ? AND user_id = ? AND version = ? AND deleted = 0",
+                        (
+                            True if self.backend_type == BackendType.POSTGRESQL else 1,
+                            now,
+                            expected_version + 1,
+                            grammar_id,
+                            owner_id,
+                            expected_version,
+                        ),
+                    )
+                cursor = conn.execute(prepared_query, prepared_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Grammar '{grammar_id}' delete affected 0 rows.",
+                        entity="chat_grammars",
+                        entity_id=grammar_id,
+                    )
+                return True
+        except ConflictError:
+            raise
+        except CharactersRAGDBError as exc:
+            logger.error(f"Database error deleting grammar '{grammar_id}': {exc}")
+            raise
+
+    # ----------------------
     # Persona persistence
     # ----------------------
     @staticmethod
@@ -6365,6 +7538,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         item = dict(row)
         item["reuse_allowed"] = self._as_bool(item.get("reuse_allowed"))
         item["deleted"] = self._as_bool(item.get("deleted"))
+        item["activity_surface"] = self._normalize_persona_session_activity_surface(item.get("activity_surface"))
+        raw_preferences = item.get("preferences_json")
+        if isinstance(raw_preferences, str):
+            try:
+                decoded_preferences = json.loads(raw_preferences)
+            except json.JSONDecodeError:
+                decoded_preferences = {}
+            item["preferences"] = decoded_preferences if isinstance(decoded_preferences, dict) else {}
+        elif isinstance(raw_preferences, dict):
+            item["preferences"] = raw_preferences
+        else:
+            item["preferences"] = {}
         raw_snapshot = item.get("scope_snapshot_json")
         if isinstance(raw_snapshot, str):
             try:
@@ -6376,6 +7561,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             item["scope_snapshot"] = {}
         return item
+
+    @staticmethod
+    def _normalize_persona_session_activity_surface(value: Any) -> str:
+        from tldw_Server_API.app.core.Personalization.companion_activity import (
+            normalize_persona_activity_surface,
+        )
+
+        return normalize_persona_activity_surface(value)
 
     def _persona_memory_row_to_dict(self, row: Any) -> dict[str, Any] | None:
         """Convert a persona memory DB `row: Any` to an API-safe dict.
@@ -6393,6 +7586,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 item["salience"] = float(salience)
             except (TypeError, ValueError):
                 item["salience"] = 0.0
+        return item
+
+    def _persona_exemplar_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        """Convert a persona exemplar DB row to an API-safe dict."""
+        if not row:
+            return None
+        item = self._deserialize_row_fields(row, self._PERSONA_EXEMPLAR_JSON_FIELDS)
+        if not item:
+            return None
+        item["enabled"] = self._as_bool(item.get("enabled", True))
+        item["deleted"] = self._as_bool(item.get("deleted"))
+        try:
+            item["priority"] = int(item.get("priority", 0) or 0)
+        except (TypeError, ValueError):
+            item["priority"] = 0
+        item["scenario_tags"] = self._normalize_persona_exemplar_tags(
+            item.pop("scenario_tags_json", []),
+            "scenario_tags",
+        )
+        item["capability_tags"] = self._normalize_persona_exemplar_tags(
+            item.pop("capability_tags_json", []),
+            "capability_tags",
+        )
         return item
 
     def _require_active_persona_profile_owner(self, conn: Any, *, persona_id: str, user_id: str) -> dict[str, Any]:
@@ -6419,6 +7635,295 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         return item
 
+    def _normalize_persona_exemplar_tone(self, value: Any) -> str | None:
+        tone = self._normalize_nullable_text(value)
+        if tone is None:
+            return None
+        normalized = tone.strip().lower()
+        return normalized or None
+
+    def create_persona_exemplar(self, exemplar_data: dict[str, Any]) -> str:
+        """Create a persona-owned exemplar and return its ID."""
+        persona_id = str(exemplar_data.get("persona_id") or "").strip()
+        user_id = str(exemplar_data.get("user_id") or "").strip()
+        if not persona_id:
+            raise InputError("persona_id is required for persona exemplar creation.")  # noqa: TRY003
+        if not user_id:
+            raise InputError("user_id is required for persona exemplar creation.")  # noqa: TRY003
+
+        kind = self._normalize_exemplar_enum(
+            exemplar_data.get("kind"),
+            allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
+            field_name="kind",
+            default="style",
+        )
+        content = self._normalize_nullable_text(exemplar_data.get("content"))
+        if not content:
+            raise InputError("content is required for persona exemplar creation.")  # noqa: TRY003
+
+        tone = self._normalize_persona_exemplar_tone(exemplar_data.get("tone"))
+        scenario_tags = self._normalize_persona_exemplar_tags(
+            exemplar_data.get("scenario_tags"),
+            "scenario_tags",
+        )
+        capability_tags = self._normalize_persona_exemplar_tags(
+            exemplar_data.get("capability_tags"),
+            "capability_tags",
+        )
+        try:
+            priority = int(exemplar_data.get("priority", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise InputError("priority must be an integer.") from exc  # noqa: TRY003
+        enabled = self._as_bool(exemplar_data.get("enabled", True))
+        source_type = self._normalize_exemplar_enum(
+            exemplar_data.get("source_type"),
+            allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
+            field_name="source_type",
+            default="manual",
+        )
+        source_ref = self._normalize_nullable_text(exemplar_data.get("source_ref"))
+        notes = self._normalize_nullable_text(exemplar_data.get("notes"))
+        exemplar_id = str(exemplar_data.get("id") or self._generate_uuid()).strip()
+        now = self._get_current_utc_timestamp_iso()
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        deleted = self._normalize_deleted_input(exemplar_data.get("deleted", False))
+        version = self._parse_version_input(exemplar_data.get("version", 1))
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "INSERT INTO persona_exemplars("
+                "id, persona_id, user_id, kind, content, tone, scenario_tags_json, capability_tags_json, "
+                "priority, enabled, source_type, source_ref, notes, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            params = (
+                exemplar_id,
+                persona_id,
+                user_id,
+                kind,
+                content,
+                tone,
+                self._ensure_json_string(scenario_tags) or "[]",
+                self._ensure_json_string(capability_tags) or "[]",
+                priority,
+                bool_cast(enabled),
+                source_type,
+                source_ref,
+                notes,
+                exemplar_data.get("created_at") or now,
+                exemplar_data.get("last_modified") or now,
+                bool_cast(deleted),
+                version,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            conn.execute(prepared_query, prepared_params or ())
+        return exemplar_id
+
+    def get_persona_exemplar(
+        self,
+        *,
+        exemplar_id: str,
+        persona_id: str,
+        user_id: str,
+        include_disabled: bool = False,
+        include_deleted: bool = False,
+        include_deleted_personas: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a persona exemplar owned by a user."""
+        clauses = [
+            "pe.id = ?",
+            "pe.persona_id = ?",
+            "pe.user_id = ?",
+            "pp.id = pe.persona_id",
+            "pp.user_id = pe.user_id",
+        ]
+        params: list[Any] = [exemplar_id, persona_id, user_id]
+        if not include_disabled:
+            clauses.append("pe.enabled = 1")
+        if not include_deleted:
+            clauses.append("pe.deleted = 0")
+        if not include_deleted_personas:
+            clauses.append("pp.deleted = 0")
+        query = (
+            "SELECT pe.* "
+            "FROM persona_exemplars pe "
+            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
+            "WHERE " + " AND ".join(clauses) + " LIMIT 1"
+        )
+        cursor = self.execute_query(query, tuple(params))
+        return self._persona_exemplar_row_to_dict(cursor.fetchone())
+
+    def list_persona_exemplars(
+        self,
+        *,
+        user_id: str,
+        persona_id: str | None = None,
+        include_disabled: bool = False,
+        include_deleted: bool = False,
+        include_deleted_personas: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List persona exemplars for a user, optionally filtered to a persona."""
+        clauses = [
+            "pe.user_id = ?",
+            "pp.id = pe.persona_id",
+            "pp.user_id = pe.user_id",
+        ]
+        params: list[Any] = [user_id]
+        if persona_id is not None:
+            clauses.append("pe.persona_id = ?")
+            params.append(persona_id)
+        if not include_disabled:
+            clauses.append("pe.enabled = 1")
+        if not include_deleted:
+            clauses.append("pe.deleted = 0")
+        if not include_deleted_personas:
+            clauses.append("pp.deleted = 0")
+        query = (
+            "SELECT pe.* "
+            "FROM persona_exemplars pe "
+            "JOIN persona_profiles pp ON pp.id = pe.persona_id AND pp.user_id = pe.user_id "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY pe.priority DESC, pe.last_modified DESC, pe.id ASC LIMIT ? OFFSET ?"
+        )
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+        cursor = self.execute_query(query, tuple(params))
+        return [self._persona_exemplar_row_to_dict(row) for row in cursor.fetchall() if row]
+
+    def update_persona_exemplar(
+        self,
+        *,
+        exemplar_id: str,
+        persona_id: str,
+        user_id: str,
+        update_data: dict[str, Any],
+    ) -> bool:
+        """Update mutable persona exemplar fields."""
+        if not update_data:
+            raise InputError("No exemplar fields provided for update.")  # noqa: TRY003
+
+        allowed_fields = {
+            "kind",
+            "content",
+            "tone",
+            "scenario_tags",
+            "capability_tags",
+            "priority",
+            "enabled",
+            "source_type",
+            "source_ref",
+            "notes",
+            "deleted",
+        }
+        set_parts: list[str] = []
+        params: list[Any] = []
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "kind":
+                params.append(
+                    self._normalize_exemplar_enum(
+                        value,
+                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_KINDS,
+                        field_name="kind",
+                        default="style",
+                    )
+                )
+                set_parts.append("kind = ?")
+            elif key == "content":
+                content = self._normalize_nullable_text(value)
+                if not content:
+                    raise InputError("content cannot be empty.")  # noqa: TRY003
+                params.append(content)
+                set_parts.append("content = ?")
+            elif key == "tone":
+                params.append(self._normalize_persona_exemplar_tone(value))
+                set_parts.append("tone = ?")
+            elif key == "scenario_tags":
+                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "scenario_tags")) or "[]")
+                set_parts.append("scenario_tags_json = ?")
+            elif key == "capability_tags":
+                params.append(self._ensure_json_string(self._normalize_persona_exemplar_tags(value, "capability_tags")) or "[]")
+                set_parts.append("capability_tags_json = ?")
+            elif key == "priority":
+                try:
+                    params.append(int(value))
+                except (TypeError, ValueError) as exc:
+                    raise InputError("priority must be an integer.") from exc  # noqa: TRY003
+                set_parts.append("priority = ?")
+            elif key == "enabled":
+                params.append(bool_cast(self._as_bool(value)))
+                set_parts.append("enabled = ?")
+            elif key == "source_type":
+                params.append(
+                    self._normalize_exemplar_enum(
+                        value,
+                        allowed=self._ALLOWED_PERSONA_EXEMPLAR_SOURCE_TYPES,
+                        field_name="source_type",
+                        default="manual",
+                    )
+                )
+                set_parts.append("source_type = ?")
+            elif key == "deleted":
+                params.append(bool_cast(self._normalize_deleted_input(value)))
+                set_parts.append("deleted = ?")
+            else:
+                params.append(self._normalize_nullable_text(value))
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError("No valid exemplar fields provided for update.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.append("last_modified = ?")
+        params.append(now)
+        set_parts.append("version = version + 1")
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "UPDATE persona_exemplars "
+                f"SET {', '.join(set_parts)} "
+                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"
+            )
+            params.extend([exemplar_id, persona_id, user_id])
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
+
+    def soft_delete_persona_exemplar(
+        self,
+        *,
+        exemplar_id: str,
+        persona_id: str,
+        user_id: str,
+    ) -> bool:
+        """Soft-delete a persona exemplar owned by a user."""
+        now = self._get_current_utc_timestamp_iso()
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "UPDATE persona_exemplars "
+                "SET deleted = ?, enabled = ?, last_modified = ?, version = version + 1 "
+                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"
+            )
+            params = (
+                bool_cast(True),
+                bool_cast(False),
+                now,
+                exemplar_id,
+                persona_id,
+                user_id,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
+
     def create_persona_profile(self, profile_data: dict[str, Any]) -> str:
         """Create a persona profile and return its UUID."""
         user_id = str(profile_data.get("user_id") or "").strip()
@@ -6444,6 +7949,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             except (TypeError, ValueError) as exc:
                 raise InputError("character_card_id must be an integer when provided.") from exc  # noqa: TRY003
 
+        origin_character_id = profile_data.get("origin_character_id")
+        origin_character_name = profile_data.get("origin_character_name")
+        origin_character_snapshot_at = profile_data.get("origin_character_snapshot_at")
+        if character_card_id is not None:
+            source_character = self.get_character_card_by_id(character_card_id)
+            if source_character is None:
+                raise InputError(  # noqa: TRY003
+                    f"character_card_id '{character_card_id}' must reference an existing active character."
+                )
+            origin_character_id = source_character.get("id") or character_card_id
+            source_character_name = str(source_character.get("name") or "").strip()
+            origin_character_name = source_character_name or None
+            origin_character_snapshot_at = origin_character_snapshot_at or now
+
+        if origin_character_id is not None:
+            try:
+                origin_character_id = int(origin_character_id)
+            except (TypeError, ValueError) as exc:
+                raise InputError("origin_character_id must be an integer when provided.") from exc  # noqa: TRY003
+        if origin_character_name is not None:
+            origin_character_name = str(origin_character_name).strip() or None
+        if origin_character_snapshot_at is not None:
+            origin_character_snapshot_at = str(origin_character_snapshot_at)
+
         deleted_value = self._normalize_deleted_input(profile_data.get("deleted", False))
         version = self._parse_version_input(profile_data.get("version", 1))
 
@@ -6458,15 +7987,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         query = (
             "INSERT INTO persona_profiles("
-            "id, user_id, name, character_card_id, mode, system_prompt, "
+            "id, user_id, name, character_card_id, origin_character_id, origin_character_name, "
+            "origin_character_snapshot_at, mode, system_prompt, "
             "is_active, use_persona_state_context_default, created_at, last_modified, deleted, version"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             persona_id,
             user_id,
             name,
             character_card_id,
+            origin_character_id,
+            origin_character_name,
+            origin_character_snapshot_at,
             mode,
             system_prompt,
             is_active_db,
@@ -6846,9 +8379,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             scope_snapshot_json = scope_snapshot.strip() or "{}"
         else:
             scope_snapshot_json = self._ensure_json_string(scope_snapshot) or "{}"
+        raw_preferences = session_data.get("preferences_json")
+        if isinstance(raw_preferences, str):
+            preferences_json = raw_preferences.strip() or "{}"
+        else:
+            preferences_json = self._ensure_json_string(raw_preferences) or "{}"
 
         now = self._get_current_utc_timestamp_iso()
         bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        activity_surface = self._normalize_persona_session_activity_surface(session_data.get("activity_surface"))
 
         with self.transaction() as conn:
             persona_row = self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
@@ -6863,8 +8402,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             query = (
                 "INSERT INTO persona_sessions("
                 "id, persona_id, user_id, conversation_id, mode, reuse_allowed, status, "
-                "scope_snapshot_json, created_at, last_modified, deleted, version"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "scope_snapshot_json, preferences_json, activity_surface, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             params = (
                 session_id,
@@ -6875,6 +8414,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 bool_cast(reuse_allowed),
                 status,
                 scope_snapshot_json,
+                preferences_json,
+                activity_surface,
                 session_data.get("created_at") or now,
                 session_data.get("last_modified") or now,
                 bool_cast(deleted_value),
@@ -6904,6 +8445,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         user_id: str,
         persona_id: str | None = None,
+        activity_surface: str | None = None,
         status: str | None = None,
         include_deleted: bool = False,
         limit: int = 100,
@@ -6915,6 +8457,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if persona_id is not None:
             clauses.append("persona_id = ?")
             params.append(persona_id)
+        if activity_surface is not None:
+            clauses.append("activity_surface = ?")
+            params.append(self._normalize_persona_session_activity_surface(activity_surface))
         if status is not None:
             normalized_status = self._normalize_persona_session_status(status)
             clauses.append("status = ?")
@@ -6942,7 +8487,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Update persona session fields for an owned session."""
         if not update_data:
             raise InputError("No session fields provided for update.")  # noqa: TRY003
-        allowed_fields = {"conversation_id", "mode", "reuse_allowed", "status", "scope_snapshot_json", "deleted"}
+        allowed_fields = {
+            "conversation_id",
+            "mode",
+            "reuse_allowed",
+            "status",
+            "scope_snapshot_json",
+            "preferences_json",
+            "activity_surface",
+            "deleted",
+        }
         bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
         set_parts: list[str] = []
         params: list[Any] = []
@@ -6965,6 +8519,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 else:
                     params.append(self._ensure_json_string(value) or "{}")
                 set_parts.append("scope_snapshot_json = ?")
+            elif key == "preferences_json":
+                if isinstance(value, str):
+                    params.append(value.strip() or "{}")
+                else:
+                    params.append(self._ensure_json_string(value) or "{}")
+                set_parts.append("preferences_json = ?")
+            elif key == "activity_surface":
+                params.append(self._normalize_persona_session_activity_surface(value))
+                set_parts.append("activity_surface = ?")
             else:
                 params.append(value)
                 set_parts.append("conversation_id = ?")
@@ -8179,6 +9742,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     _CHARACTER_CARD_JSON_FIELDS = ['alternate_greetings', 'tags', 'extensions']
     _CHARACTER_FOLDER_TAG_PREFIX = "__tldw_folder_id:"
     _CHARACTER_EXEMPLAR_JSON_FIELDS = ['rhetorical', 'safety_allowed', 'safety_blocked']
+    _PERSONA_EXEMPLAR_JSON_FIELDS = ['scenario_tags_json', 'capability_tags_json']
     _ALLOWED_EXEMPLAR_SOURCE_TYPES = ('audio_transcript', 'video_transcript', 'article', 'other')
     _ALLOWED_EXEMPLAR_NOVELTY_HINTS = ('post_cutoff', 'unknown', 'pre_cutoff')
     _ALLOWED_EXEMPLAR_EMOTIONS = ('angry', 'neutral', 'happy', 'other')
@@ -9507,6 +11071,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 normalized.append(text)
         return normalized
 
+    def _normalize_persona_exemplar_tags(self, value: Any, field_name: str) -> list[str]:
+        """Normalize free-form persona exemplar tags to lowercase unique strings."""
+        raw_values = self._normalize_exemplar_string_list(value, field_name)
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in raw_values:
+            text = str(item).strip().lower()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
+        return normalized
+
     def _normalize_character_exemplar_row(self, row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
         """Deserialize exemplar JSON fields and normalize bool-like values."""
         if not row:
@@ -9999,6 +11576,52 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         return normalized
 
+    def _normalize_conversation_character_scope(self, character_scope: str | None) -> str:
+        """Normalize and validate conversation character scope."""
+        if character_scope is None:
+            return "all"
+        if not isinstance(character_scope, str):
+            raise InputError(f"Conversation character scope must be a string. Got: {character_scope!r}")  # noqa: TRY003
+        normalized = character_scope.strip().lower()
+        if not normalized:
+            raise InputError("Conversation character scope cannot be empty.")  # noqa: TRY003
+        if normalized not in self._ALLOWED_CONVERSATION_CHARACTER_SCOPES:
+            raise InputError(
+                "Invalid conversation character scope "
+                f"'{character_scope}'. Allowed: {', '.join(self._ALLOWED_CONVERSATION_CHARACTER_SCOPES)}"
+            )  # noqa: TRY003
+        return normalized
+
+    def _conversation_character_scope_clause(
+        self,
+        character_scope: str | None,
+        *,
+        column: str = "character_id",
+    ) -> str | None:
+        """Return the SQL clause for a conversation character-scope filter."""
+        normalized = self._normalize_conversation_character_scope(character_scope)
+        if normalized == "all":
+            return None
+        if normalized == "character":
+            return f"{column} IS NOT NULL"
+        return f"{column} IS NULL"
+
+    def _conversation_deleted_scope_clause(
+        self,
+        *,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+        column: str = "deleted",
+        true_literal: str = "1",
+        false_literal: str = "0",
+    ) -> str | None:
+        """Return the SQL clause for a conversation deleted-state filter."""
+        if deleted_only:
+            return f"{column} = {true_literal}"
+        if include_deleted:
+            return None
+        return f"{column} = {false_literal}"
+
     @staticmethod
     def _normalize_nullable_text(value: Any) -> str | None:
         """Normalize optional text fields; returns None for empty/whitespace."""
@@ -10009,13 +11632,74 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return stripped if stripped else None
         return str(value)
 
+    def _normalize_conversation_assistant_identity(
+        self,
+        *,
+        character_id: Any,
+        assistant_kind: Any,
+        assistant_id: Any,
+        persona_memory_mode: Any,
+    ) -> tuple[str, str, int | None, str | None]:
+        """Normalize and validate the persisted assistant identity for a conversation."""
+        normalized_kind = self._normalize_nullable_text(assistant_kind)
+        normalized_assistant_id = self._normalize_nullable_text(assistant_id)
+        normalized_memory_mode = self._normalize_nullable_text(persona_memory_mode)
+
+        if normalized_kind is None:
+            normalized_kind = "character" if character_id is not None else None
+        if normalized_kind is None:
+            raise InputError(
+                "Conversation requires either 'character_id' or assistant identity fields."
+            )  # noqa: TRY003
+
+        normalized_kind = normalized_kind.strip().lower()
+        if normalized_kind not in self._ALLOWED_CONVERSATION_ASSISTANT_KINDS:
+            raise InputError(
+                f"Invalid assistant_kind '{normalized_kind}'. Allowed: {', '.join(self._ALLOWED_CONVERSATION_ASSISTANT_KINDS)}"
+            )  # noqa: TRY003
+
+        if normalized_kind == "character":
+            normalized_character_id: int | None
+            if character_id is None:
+                if normalized_assistant_id is None:
+                    raise InputError(
+                        "Character conversations require 'character_id' or a numeric 'assistant_id'."
+                    )  # noqa: TRY003
+                try:
+                    normalized_character_id = int(normalized_assistant_id)
+                except (TypeError, ValueError) as exc:  # pragma: no cover - defensive branch
+                    raise InputError(
+                        f"Character assistant_id must be numeric. Got: {normalized_assistant_id}"
+                    ) from exc  # noqa: TRY003
+            else:
+                try:
+                    normalized_character_id = int(character_id)
+                except (TypeError, ValueError) as exc:
+                    raise InputError(f"character_id must be numeric. Got: {character_id}") from exc  # noqa: TRY003
+
+            if normalized_memory_mode is not None:
+                raise InputError("persona_memory_mode is only valid for persona-backed conversations.")  # noqa: TRY003
+            return "character", str(normalized_character_id), normalized_character_id, None
+
+        if normalized_assistant_id is None:
+            raise InputError("Persona conversations require a non-empty 'assistant_id'.")  # noqa: TRY003
+
+        if normalized_memory_mode is not None:
+            normalized_memory_mode = normalized_memory_mode.strip().lower()
+            if normalized_memory_mode not in self._ALLOWED_PERSONA_MEMORY_MODES:
+                raise InputError(
+                    f"Invalid persona_memory_mode '{normalized_memory_mode}'. Allowed: {', '.join(self._ALLOWED_PERSONA_MEMORY_MODES)}"
+                )  # noqa: TRY003
+
+        return "persona", normalized_assistant_id, None, normalized_memory_mode
+
     def add_conversation(self, conv_data: dict[str, Any]) -> str | None:
         """
         Adds a new conversation to the database.
 
         `id` (UUID string) can be provided; if not, it's auto-generated.
         `root_id` (UUID string) should be provided; if not, `id` is used as `root_id`.
-        `character_id` is required in `conv_data`.
+        Either `character_id` or a normalized assistant identity is required in `conv_data`.
         `client_id` defaults to the DB instance's `client_id` if not provided in `conv_data`.
         `version` defaults to 1. `created_at` and `last_modified` are set to current UTC time.
 
@@ -10024,7 +11708,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         Args:
             conv_data: A dictionary containing conversation data.
-                       Required: 'character_id'.
+                       Required: 'character_id' or ('assistant_kind' + 'assistant_id').
                        Recommended: 'id' (if providing own UUID), 'root_id'.
                        Optional: 'forked_from_message_id', 'parent_conversation_id',
                                  'title', 'rating' (1-5), 'client_id'.
@@ -10033,16 +11717,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             The string UUID of the newly created conversation.
 
         Raises:
-            InputError: If required fields like 'character_id' are missing, or if
-                        'client_id' is missing and not set on the DB instance.
+            InputError: If the assistant identity is invalid, or if 'client_id' is
+                        missing and not set on the DB instance.
             ConflictError: If a conversation with the provided 'id' already exists.
             CharactersRAGDBError: For other database-related errors.
         """
         conv_id = conv_data.get('id') or self._generate_uuid()
         root_id = conv_data.get('root_id') or conv_id  # If root_id not given, this is a new root.
-
-        if 'character_id' not in conv_data:
-            raise InputError("Required field 'character_id' is missing for conversation.")  # noqa: TRY003
 
         client_id = conv_data.get('client_id') or self.client_id
         if not client_id:
@@ -10053,25 +11734,32 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cluster_id = self._normalize_nullable_text(conv_data.get('cluster_id'))
         source = self._normalize_nullable_text(conv_data.get('source'))
         external_ref = self._normalize_nullable_text(conv_data.get('external_ref'))
+        assistant_kind, assistant_id, character_id, persona_memory_mode = self._normalize_conversation_assistant_identity(
+            character_id=conv_data.get('character_id'),
+            assistant_kind=conv_data.get('assistant_kind'),
+            assistant_id=conv_data.get('assistant_id'),
+            persona_memory_mode=conv_data.get('persona_memory_mode'),
+        )
 
         now = self._get_current_utc_timestamp_iso()
         query = """
                 INSERT INTO conversations (id, root_id, forked_from_message_id, parent_conversation_id, \
-                                           character_id, title, state, topic_label, cluster_id, source, external_ref, rating, \
+                                           character_id, assistant_kind, assistant_id, persona_memory_mode, \
+                                           title, state, topic_label, cluster_id, source, external_ref, rating, \
                                            created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                 """ # created_at added
         if self.backend_type == BackendType.POSTGRESQL:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
-                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
                 now, now, client_id, 1, False
             )
         else:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
-                conv_data.get('parent_conversation_id'), conv_data['character_id'],
+                conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
                 now, now, client_id, 1, 0
             )
@@ -10171,6 +11859,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         client_id: str,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        character_scope: str | None = None,
     ) -> int:
         """
         Count total non-deleted conversations for a given user (client_id).
@@ -10190,9 +11879,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deleted_clause = "1 = 1"
         else:
             deleted_clause = "deleted = 0"
-        query = f"SELECT COUNT(*) as cnt FROM conversations WHERE client_id = ? AND {deleted_clause}"  # nosec B608
+        clauses = ["client_id = ?", deleted_clause]
+        params: list[Any] = [client_id]
+        character_scope_clause = self._conversation_character_scope_clause(character_scope)
+        if character_scope_clause:
+            clauses.append(character_scope_clause)
+        query = f"SELECT COUNT(*) as cnt FROM conversations WHERE {' AND '.join(clauses)}"  # nosec B608
         try:
-            cursor = self.execute_query(query, (client_id,))
+            cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
             return int(row[0] if row else 0)
         except CharactersRAGDBError as e:
@@ -10206,6 +11900,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        character_scope: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         List conversations for a given user (client_id), ordered by last_modified DESC.
@@ -10228,13 +11923,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             deleted_clause = "deleted = 0"
 
+        clauses = ["client_id = ?", deleted_clause]
+        params: list[Any] = [client_id]
+        character_scope_clause = self._conversation_character_scope_clause(character_scope)
+        if character_scope_clause:
+            clauses.append(character_scope_clause)
         query = (
             "SELECT * FROM conversations "  # nosec B608
-            f"WHERE client_id = ? AND {deleted_clause} "
+            f"WHERE {' AND '.join(clauses)} "
             "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
+        params.extend([limit, offset])
         try:
-            cursor = self.execute_query(query, (client_id, limit, offset))
+            cursor = self.execute_query(query, tuple(params))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
         except CharactersRAGDBError as e:
@@ -10543,7 +12244,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         Updatable fields from `update_data`: 'title', 'rating', 'state', 'topic_label',
         'topic_label_source', 'topic_last_tagged_at', 'topic_last_tagged_message_id',
-        'cluster_id', 'source', 'external_ref'. Other fields are ignored.
+        'cluster_id', 'source', 'external_ref', 'assistant_kind', 'assistant_id',
+        'character_id', 'persona_memory_mode'. Other fields are ignored.
         If `update_data` is empty or contains no updatable fields, metadata (version,
         last_modified, client_id) is still updated if the version check passes.
 
@@ -10607,7 +12309,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 # Fetch current state, including rowid (though not used for manual FTS, it's good practice to fetch if available)
                 # and current title for potential non-FTS related "title_changed" logic.
-                cursor_check = conn.execute("SELECT rowid, title, version, deleted FROM conversations WHERE id = ?",
+                cursor_check = conn.execute(
+                    """
+                    SELECT rowid, title, version, deleted, character_id, assistant_kind, assistant_id, persona_memory_mode
+                    FROM conversations
+                    WHERE id = ?
+                    """,
                                             (conversation_id,))
                 current_state = cursor_check.fetchone()
 
@@ -10620,6 +12327,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 current_db_version = current_state['version']
                 current_title = current_state['title']  # For logging or other conditional logic if title changed
+                assistant_update_requested = any(
+                    field in update_data
+                    for field in ('assistant_kind', 'assistant_id', 'character_id', 'persona_memory_mode')
+                )
+                normalized_assistant_kind = current_state['assistant_kind']
+                normalized_assistant_id = current_state['assistant_id']
+                normalized_character_id = current_state['character_id']
+                normalized_persona_memory_mode = current_state['persona_memory_mode']
+
+                if assistant_update_requested:
+                    (
+                        normalized_assistant_kind,
+                        normalized_assistant_id,
+                        normalized_character_id,
+                        normalized_persona_memory_mode,
+                    ) = self._normalize_conversation_assistant_identity(
+                        character_id=update_data.get('character_id', current_state['character_id']),
+                        assistant_kind=update_data.get('assistant_kind', current_state['assistant_kind']),
+                        assistant_id=update_data.get('assistant_id', current_state['assistant_id']),
+                        persona_memory_mode=update_data.get(
+                            'persona_memory_mode',
+                            current_state['persona_memory_mode'],
+                        ),
+                    )
 
                 logger.debug(
                     f"Conversation current DB version: {current_db_version}, Expected by client: {expected_version}, Current title: {current_title}")
@@ -10679,6 +12410,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if 'external_ref' in update_data:
                     fields_to_update_sql.append("external_ref = ?")
                     params_for_set_clause.append(self._normalize_nullable_text(update_data.get('external_ref')))
+
+                if assistant_update_requested:
+                    fields_to_update_sql.append("character_id = ?")
+                    params_for_set_clause.append(normalized_character_id)
+                    fields_to_update_sql.append("assistant_kind = ?")
+                    params_for_set_clause.append(normalized_assistant_kind)
+                    fields_to_update_sql.append("assistant_id = ?")
+                    params_for_set_clause.append(normalized_assistant_id)
+                    fields_to_update_sql.append("persona_memory_mode = ?")
+                    params_for_set_clause.append(normalized_persona_memory_mode)
 
                 next_version_val = expected_version + 1  # Version always increments on successful update
 
@@ -10942,6 +12683,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         title_query: str,
         character_id: int | None = None,
+        character_scope: str | None = None,
         limit: int = 10,
         offset: int = 0,
         client_id: str | None = None,
@@ -10973,6 +12715,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         client_filter = self.client_id if client_id is None else client_id
 
+        normalized_character_scope = self._normalize_conversation_character_scope(character_scope)
+
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(title_query, 'postgresql')
             if not tsquery:
@@ -10990,6 +12734,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if character_id is not None:
                 filters.append("c.character_id = ?")
                 params_list.append(character_id)
+            elif normalized_character_scope != "all":
+                filters.append(self._conversation_character_scope_clause(normalized_character_scope, column="c.character_id"))
             if client_filter is not None:
                 filters.append("c.client_id = ?")
                 params_list.append(client_filter)
@@ -11025,6 +12771,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if character_id is not None:
             filters.append("c.character_id = ?")
             params_filters.append(character_id)
+        elif normalized_character_scope != "all":
+            filters.append(self._conversation_character_scope_clause(normalized_character_scope, column="c.character_id"))
         if client_filter is not None:
             filters.append("c.client_id = ?")
             params_filters.append(client_filter)
@@ -11062,12 +12810,132 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
         return rows[offset: offset + limit]
 
+    def _normalize_conversation_search_order(self, order_by: str | None) -> str:
+        """Normalize and validate conversation search ordering."""
+        if order_by is None:
+            return "recency"
+        if not isinstance(order_by, str):
+            raise InputError(f"Conversation search order must be a string. Got: {order_by!r}")  # noqa: TRY003
+        normalized = order_by.strip().lower()
+        if not normalized:
+            raise InputError("Conversation search order cannot be empty.")  # noqa: TRY003
+        if normalized not in self._ALLOWED_CONVERSATION_SEARCH_ORDER:
+            raise InputError(
+                "Invalid conversation search order "
+                f"'{order_by}'. Allowed: {', '.join(self._ALLOWED_CONVERSATION_SEARCH_ORDER)}"
+            )  # noqa: TRY003
+        return normalized
+
+    def _build_conversation_search_filters(
+        self,
+        *,
+        alias: str,
+        client_filter: str | None,
+        include_deleted: bool,
+        deleted_only: bool,
+        character_id: int | None,
+        character_scope: str | None,
+        state: str | None,
+        topic_label: str | None,
+        topic_prefix: bool,
+        cluster_id: str | None,
+        keywords: list[str] | None,
+        start_date: str | None,
+        end_date: str | None,
+        date_expr: str,
+        keyword_table: str,
+        keyword_deleted_literal: str,
+        deleted_true_literal: str,
+        deleted_false_literal: str,
+    ) -> tuple[list[str], list[Any]]:
+        """Build shared conversation-search filter clauses and parameters."""
+        normalized_character_scope = self._normalize_conversation_character_scope(character_scope)
+        filters: list[str] = []
+        params: list[Any] = []
+
+        deleted_clause = self._conversation_deleted_scope_clause(
+            include_deleted=include_deleted,
+            deleted_only=deleted_only,
+            column=f"{alias}.deleted",
+            true_literal=deleted_true_literal,
+            false_literal=deleted_false_literal,
+        )
+        if deleted_clause:
+            filters.append(deleted_clause)
+
+        if character_id is not None:
+            filters.append(f"{alias}.character_id = ?")
+            params.append(character_id)
+        elif normalized_character_scope != "all":
+            filters.append(self._conversation_character_scope_clause(normalized_character_scope, column=f"{alias}.character_id"))
+
+        if client_filter is not None:
+            filters.append(f"{alias}.client_id = ?")
+            params.append(client_filter)
+
+        if state is not None:
+            filters.append(f"{alias}.state = ?")
+            params.append(self._normalize_conversation_state(state))
+
+        if topic_label:
+            normalized_topic = topic_label.rstrip("*").strip().lower()
+            if normalized_topic:
+                if topic_prefix:
+                    filters.append(f"LOWER({alias}.topic_label) LIKE ?")
+                    params.append(f"{normalized_topic}%")
+                else:
+                    filters.append(f"LOWER({alias}.topic_label) = ?")
+                    params.append(normalized_topic)
+
+        if cluster_id:
+            filters.append(f"{alias}.cluster_id = ?")
+            params.append(cluster_id)
+
+        if start_date:
+            filters.append(f"{date_expr} >= ?")
+            params.append(start_date)
+
+        if end_date:
+            filters.append(f"{date_expr} <= ?")
+            params.append(end_date)
+
+        if keywords:
+            for keyword in keywords:
+                filters.append(
+                    f"EXISTS (SELECT 1 FROM conversation_keywords ck "  # nosec B608
+                    f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
+                    f"WHERE ck.conversation_id = {alias}.id AND k.deleted = {keyword_deleted_literal} "
+                    "AND LOWER(k.keyword) = ?)"
+                )
+                params.append(keyword.lower())
+
+        return filters, params
+
+    def _conversation_deleted_text_search_clause(
+        self,
+        *,
+        alias: str,
+        query: str,
+    ) -> tuple[str, list[str]]:
+        """Build a deleted-state text-search clause that matches the old sidebar fallback."""
+        normalized_query = query.strip().lower()
+        like_pattern = f"%{normalized_query}%"
+        clause = (
+            f"(LOWER(COALESCE({alias}.title, '')) LIKE ? "
+            f"OR LOWER(COALESCE({alias}.topic_label, '')) LIKE ? "
+            f"OR LOWER(COALESCE({alias}.state, '')) LIKE ?)"
+        )
+        return clause, [like_pattern, like_pattern, like_pattern]
+
     def search_conversations(
         self,
         query: str | None,
         *,
         client_id: str | None = None,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
         character_id: int | None = None,
+        character_scope: str | None = None,
         state: str | None = None,
         topic_label: str | None = None,
         topic_prefix: bool = False,
@@ -11090,59 +12958,53 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if date_field not in {"last_modified", "created_at"}:
             raise InputError("date_field must be 'last_modified' or 'created_at'")  # noqa: TRY003
 
-        filters: list[str] = []
-        params: list[Any] = []
         keyword_table = self._map_table_for_backend("keywords")
+        use_deleted_text_search = safe_query is not None and (include_deleted or deleted_only)
 
         if self.backend_type == BackendType.POSTGRESQL:
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
-            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE c.deleted = FALSE"
+            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE TRUE"
+            params: list[Any] = []
             if safe_query:
-                tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
-                if not tsquery:
-                    return []
-                base_query = (
-                    "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS bm25_raw "
-                    "FROM conversations c "
-                    "WHERE c.deleted = FALSE AND c.conversations_fts_tsv @@ to_tsquery('english', ?)"
-                )
-                params.extend([tsquery, tsquery])
-
-            if character_id is not None:
-                filters.append("c.character_id = ?")
-                params.append(character_id)
-            if client_filter is not None:
-                filters.append("c.client_id = ?")
-                params.append(client_filter)
-            if state is not None:
-                filters.append("c.state = ?")
-                params.append(self._normalize_conversation_state(state))
-            if topic_label:
-                label = topic_label.rstrip("*")
-                if label:
-                    if topic_prefix:
-                        filters.append("LOWER(c.topic_label) LIKE ?")
-                        params.append(f"{label.lower()}%")
-                    else:
-                        filters.append("LOWER(c.topic_label) = ?")
-                        params.append(label.lower())
-            if cluster_id:
-                filters.append("c.cluster_id = ?")
-                params.append(cluster_id)
-            if start_date:
-                filters.append(f"{date_expr} >= ?")
-                params.append(start_date)
-            if end_date:
-                filters.append(f"{date_expr} <= ?")
-                params.append(end_date)
-            if keywords:
-                for kw in keywords:
-                    filters.append(
-                        f"EXISTS (SELECT 1 FROM conversation_keywords ck "  # nosec B608
-                        f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
-                        f"WHERE ck.conversation_id = c.id AND k.deleted = FALSE AND LOWER(k.keyword) = ?)"
+                if use_deleted_text_search:
+                    text_clause, text_params = self._conversation_deleted_text_search_clause(
+                        alias="c",
+                        query=safe_query,
                     )
-                    params.append(kw.lower())
+                    base_query += f" AND {text_clause}"
+                    params.extend(text_params)
+                else:
+                    tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
+                    if not tsquery:
+                        return []
+                    base_query = (
+                        "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS bm25_raw "
+                        "FROM conversations c "
+                        "WHERE c.conversations_fts_tsv @@ to_tsquery('english', ?)"
+                    )
+                    params.extend([tsquery, tsquery])
+
+            filters, filter_params = self._build_conversation_search_filters(
+                alias="c",
+                client_filter=client_filter,
+                include_deleted=include_deleted or deleted_only,
+                deleted_only=deleted_only,
+                character_id=character_id,
+                character_scope=character_scope,
+                state=state,
+                topic_label=topic_label,
+                topic_prefix=topic_prefix,
+                cluster_id=cluster_id,
+                keywords=keywords,
+                start_date=start_date,
+                end_date=end_date,
+                date_expr=date_expr,
+                keyword_table=keyword_table,
+                keyword_deleted_literal="FALSE",
+                deleted_true_literal="TRUE",
+                deleted_false_literal="FALSE",
+            )
+            params.extend(filter_params)
 
             if filters:
                 base_query += " AND " + " AND ".join(filters)
@@ -11155,53 +13017,51 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 raise
 
         date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(NULLIF(c.last_modified,''), c.created_at)"
+        params: list[Any] = []
+        filters: list[str] = []
 
         if safe_query:
-            filters.append("conversations_fts MATCH ?")
-            params.append(safe_query)
-            base_query = (
-                "SELECT c.*, (bm25(conversations_fts) * -1) AS bm25_raw "
-                "FROM conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid "
-                "WHERE c.deleted = 0"
-            )
-        else:
-            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE c.deleted = 0"
-
-        if character_id is not None:
-            filters.append("c.character_id = ?")
-            params.append(character_id)
-        if client_filter is not None:
-            filters.append("c.client_id = ?")
-            params.append(client_filter)
-        if state is not None:
-            filters.append("c.state = ?")
-            params.append(self._normalize_conversation_state(state))
-        if topic_label:
-            label = topic_label.rstrip("*")
-            if label:
-                if topic_prefix:
-                    filters.append("LOWER(c.topic_label) LIKE ?")
-                    params.append(f"{label.lower()}%")
-                else:
-                    filters.append("LOWER(c.topic_label) = ?")
-                    params.append(label.lower())
-        if cluster_id:
-            filters.append("c.cluster_id = ?")
-            params.append(cluster_id)
-        if start_date:
-            filters.append(f"{date_expr} >= ?")
-            params.append(start_date)
-        if end_date:
-            filters.append(f"{date_expr} <= ?")
-            params.append(end_date)
-        if keywords:
-            for kw in keywords:
-                filters.append(
-                    "EXISTS (SELECT 1 FROM conversation_keywords ck "  # nosec B608
-                    f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
-                    "WHERE ck.conversation_id = c.id AND k.deleted = 0 AND LOWER(k.keyword) = ?)"
+            if use_deleted_text_search:
+                text_clause, text_params = self._conversation_deleted_text_search_clause(
+                    alias="c",
+                    query=safe_query,
                 )
-                params.append(kw.lower())
+                filters.append(text_clause)
+                params.extend(text_params)
+                base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE 1 = 1"
+            else:
+                filters.append("conversations_fts MATCH ?")
+                params.append(safe_query)
+                base_query = (
+                    "SELECT c.*, (bm25(conversations_fts) * -1) AS bm25_raw "
+                    "FROM conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid "
+                    "WHERE 1 = 1"
+                )
+        else:
+            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE 1 = 1"
+
+        extra_filters, extra_params = self._build_conversation_search_filters(
+            alias="c",
+            client_filter=client_filter,
+            include_deleted=include_deleted or deleted_only,
+            deleted_only=deleted_only,
+            character_id=character_id,
+            character_scope=character_scope,
+            state=state,
+            topic_label=topic_label,
+            topic_prefix=topic_prefix,
+            cluster_id=cluster_id,
+            keywords=keywords,
+            start_date=start_date,
+            end_date=end_date,
+            date_expr=date_expr,
+            keyword_table=keyword_table,
+            keyword_deleted_literal="0",
+            deleted_true_literal="1",
+            deleted_false_literal="0",
+        )
+        filters.extend(extra_filters)
+        params.extend(extra_params)
 
         if filters:
             base_query += " AND " + " AND ".join(filters)
@@ -11212,6 +13072,274 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError as e:
             logger.error(f"Error searching conversations: {e}")
             raise
+
+    def search_conversations_page(
+        self,
+        query: str | None,
+        *,
+        client_id: str | None = None,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+        character_id: int | None = None,
+        character_scope: str | None = None,
+        state: str | None = None,
+        topic_label: str | None = None,
+        topic_prefix: bool = False,
+        cluster_id: str | None = None,
+        keywords: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_field: str = "last_modified",
+        order_by: str = "recency",
+        limit: int = 50,
+        offset: int = 0,
+        as_of: datetime | None = None,
+        half_life_days: float = 14.0,
+        bm25_weight: float = 0.65,
+        recency_weight: float = 0.35,
+    ) -> tuple[list[dict[str, Any]], int, float]:
+        """Search conversations using DB-side ordering and pagination."""
+        client_filter = self.client_id if client_id is None else client_id
+        safe_query = (query or "").strip()
+        if safe_query == "":
+            safe_query = None
+
+        if date_field not in {"last_modified", "created_at"}:
+            raise InputError("date_field must be 'last_modified' or 'created_at'")  # noqa: TRY003
+
+        normalized_order = self._normalize_conversation_search_order(order_by)
+        as_of_dt = as_of or datetime.now(timezone.utc)
+        if as_of_dt.tzinfo is None:
+            as_of_dt = as_of_dt.replace(tzinfo=timezone.utc)
+        else:
+            as_of_dt = as_of_dt.astimezone(timezone.utc)
+
+        normalized_limit = max(1, int(limit))
+        normalized_offset = max(0, int(offset))
+        total_weight = (bm25_weight or 0.0) + (recency_weight or 0.0)
+        if total_weight <= 0:
+            normalized_bm25_weight = 0.65
+            normalized_recency_weight = 0.35
+        else:
+            normalized_bm25_weight = (bm25_weight or 0.0) / total_weight
+            normalized_recency_weight = (recency_weight or 0.0) / total_weight
+
+        keyword_table = self._map_table_for_backend("keywords")
+        use_deleted_text_search = safe_query is not None and (include_deleted or deleted_only)
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
+            bm25_expr = "0.0"
+            where_clauses = ["TRUE"]
+            base_params: list[Any] = []
+            count_params: list[Any] = []
+            if safe_query:
+                if use_deleted_text_search:
+                    text_clause, text_params = self._conversation_deleted_text_search_clause(
+                        alias="c",
+                        query=safe_query,
+                    )
+                    where_clauses.append(text_clause)
+                    base_params.extend(text_params)
+                    count_params.extend(text_params)
+                else:
+                    tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
+                    if not tsquery:
+                        return [], 0, 0.0
+                    bm25_expr = "ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?))"
+                    base_params.append(tsquery)
+                    where_clauses.append("c.conversations_fts_tsv @@ to_tsquery('english', ?)")
+                    base_params.append(tsquery)
+                    count_params.append(tsquery)
+
+            extra_filters, extra_params = self._build_conversation_search_filters(
+                alias="c",
+                client_filter=client_filter,
+                include_deleted=include_deleted or deleted_only,
+                deleted_only=deleted_only,
+                character_id=character_id,
+                character_scope=character_scope,
+                state=state,
+                topic_label=topic_label,
+                topic_prefix=topic_prefix,
+                cluster_id=cluster_id,
+                keywords=keywords,
+                start_date=start_date,
+                end_date=end_date,
+                date_expr=date_expr,
+                keyword_table=keyword_table,
+                keyword_deleted_literal="FALSE",
+                deleted_true_literal="TRUE",
+                deleted_false_literal="FALSE",
+            )
+            where_clauses.extend(extra_filters)
+            base_params.extend(extra_params)
+            count_params.extend(extra_params)
+            topic_sort_expr = "NULLIF(LOWER(BTRIM(c.topic_label)), '')"
+            recency_expr = (
+                "CASE WHEN sort_timestamp IS NULL OR ? <= 0 THEN 0.0 "
+                "ELSE EXP(-GREATEST(EXTRACT(EPOCH FROM (?::timestamptz - sort_timestamp)) / 86400.0, 0.0) / ?) END"
+            )
+            from_clause = "conversations c"
+        else:
+            date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(NULLIF(c.last_modified,''), c.created_at)"
+            bm25_expr = "0.0"
+            where_clauses = ["1 = 1"]
+            base_params = []
+            count_params = []
+            if safe_query:
+                if use_deleted_text_search:
+                    text_clause, text_params = self._conversation_deleted_text_search_clause(
+                        alias="c",
+                        query=safe_query,
+                    )
+                    where_clauses.append(text_clause)
+                    base_params.extend(text_params)
+                    count_params.extend(text_params)
+                else:
+                    bm25_expr = "(bm25(conversations_fts) * -1)"
+                    where_clauses.append("conversations_fts MATCH ?")
+                    base_params.append(safe_query)
+                    count_params.append(safe_query)
+
+            extra_filters, extra_params = self._build_conversation_search_filters(
+                alias="c",
+                client_filter=client_filter,
+                include_deleted=include_deleted or deleted_only,
+                deleted_only=deleted_only,
+                character_id=character_id,
+                character_scope=character_scope,
+                state=state,
+                topic_label=topic_label,
+                topic_prefix=topic_prefix,
+                cluster_id=cluster_id,
+                keywords=keywords,
+                start_date=start_date,
+                end_date=end_date,
+                date_expr=date_expr,
+                keyword_table=keyword_table,
+                keyword_deleted_literal="0",
+                deleted_true_literal="1",
+                deleted_false_literal="0",
+            )
+            where_clauses.extend(extra_filters)
+            base_params.extend(extra_params)
+            count_params.extend(extra_params)
+            topic_sort_expr = "NULLIF(LOWER(TRIM(c.topic_label)), '')"
+            recency_expr = (
+                "CASE WHEN sort_timestamp IS NULL OR ? <= 0 THEN 0.0 "
+                "ELSE exp(-MAX(julianday(?) - julianday(sort_timestamp), 0.0) / ?) END"
+            )
+            from_clause = (
+                "conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid"
+                if safe_query and not use_deleted_text_search
+                else "conversations c"
+            )
+
+        base_query = (
+            "SELECT c.*, "
+            f"{date_expr} AS sort_timestamp, "
+            f"{topic_sort_expr} AS topic_sort_key, "
+            f"{bm25_expr} AS bm25_raw "
+            f"FROM {from_clause} "  # nosec B608
+            f"WHERE {' AND '.join(where_clauses)}"
+        )  # nosec B608
+        count_query = (
+            "SELECT COUNT(*) AS total "
+            f"FROM {from_clause} "  # nosec B608
+            f"WHERE {' AND '.join(where_clauses)}"
+        )  # nosec B608
+
+        needs_global_bm25 = (
+            safe_query is not None
+            and not use_deleted_text_search
+            and normalized_order in {"bm25", "hybrid", "topic"}
+        )
+        try:
+            count_cursor = self.execute_query(count_query, tuple(count_params))
+            count_row = count_cursor.fetchone()
+        except CharactersRAGDBError as exc:
+            logger.error("Error counting paged conversation search rows: {}", exc)
+            raise
+
+        if count_row is None:
+            return [], 0, 0.0
+
+        try:
+            total = int(count_row[0] or 0)
+        except _CHACHA_NONCRITICAL_EXCEPTIONS:
+            total = int(count_row.get("total") or count_row.get("count") or 0)
+
+        max_bm25 = 0.0
+        if total > 0 and needs_global_bm25:
+            if self.backend_type == BackendType.POSTGRESQL:
+                max_query = (
+                    f"WITH candidate_rows AS ({base_query}) "  # nosec B608
+                    "SELECT COALESCE(MAX(bm25_raw), 0.0) AS max_bm25 FROM candidate_rows"
+                )
+                max_params = list(base_params)
+            else:
+                max_query = (
+                    f"WITH candidate_rows AS ({base_query}) "  # nosec B608
+                    "SELECT bm25_raw FROM candidate_rows "
+                    "ORDER BY bm25_raw DESC, sort_timestamp DESC, id ASC LIMIT 1"
+                )
+                max_params = list(base_params)
+
+            try:
+                max_cursor = self.execute_query(max_query, tuple(max_params))
+                max_row = max_cursor.fetchone()
+            except CharactersRAGDBError as exc:
+                logger.error("Error fetching paged conversation search max bm25: {}", exc)
+                raise
+
+            if max_row is not None:
+                try:
+                    max_bm25 = float(max_row[0] or 0.0)
+                except _CHACHA_NONCRITICAL_EXCEPTIONS:
+                    max_bm25 = float(max_row.get("max_bm25") or max_row.get("bm25_raw") or 0.0)
+
+        if total == 0:
+            return [], 0, max_bm25
+
+        page_params = list(base_params)
+        page_params.extend([half_life_days, as_of_dt.isoformat(), half_life_days, max_bm25, max_bm25])
+
+        if normalized_order == "bm25" and safe_query:
+            order_clause = "bm25_norm DESC, sort_timestamp DESC, id ASC"
+        elif normalized_order == "topic":
+            if safe_query:
+                order_clause = "topic_sort_is_null ASC, topic_sort_key ASC, bm25_norm DESC, recency_score DESC, id ASC"
+            else:
+                order_clause = "topic_sort_is_null ASC, topic_sort_key ASC, recency_score DESC, id ASC"
+        elif normalized_order == "hybrid" and safe_query:
+            order_clause = "((bm25_norm * ?) + (recency_score * ?)) DESC, sort_timestamp DESC, id ASC"
+            page_params.extend([normalized_bm25_weight, normalized_recency_weight])
+        else:
+            order_clause = "recency_score DESC, sort_timestamp DESC, id ASC"
+
+        page_params.extend([normalized_limit, normalized_offset])
+        page_query = (
+            f"WITH candidate_rows AS ({base_query}), "  # nosec B608
+            "scored_rows AS ("
+            "SELECT candidate_rows.*, "
+            f"{recency_expr} AS recency_score, "
+            "CASE WHEN topic_sort_key IS NULL THEN 1 ELSE 0 END AS topic_sort_is_null, "
+            "CASE WHEN ? > 0 THEN bm25_raw / ? ELSE 0.0 END AS bm25_norm "
+            "FROM candidate_rows"
+            ") "
+            "SELECT * FROM scored_rows "
+            f"ORDER BY {order_clause} LIMIT ? OFFSET ?"
+        )  # nosec B608
+
+        try:
+            cursor = self.execute_query(page_query, tuple(page_params))
+            rows = [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError as exc:
+            logger.error("Error fetching paged conversation search rows: {}", exc)
+            raise
+
+        return rows, total, max_bm25
 
     # --- Message Methods ---
     def add_message(self, msg_data: dict[str, Any]) -> str | None:
@@ -13108,9 +15236,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error adding note '{title.strip()}': {e}")
             raise
 
-    def get_note_by_id(self, note_id: str) -> dict[str, Any] | None:
-        query = "SELECT * FROM notes WHERE id = ? AND deleted = 0"
-        cursor = self.execute_query(query, (note_id,))
+    def get_note_by_id(self, note_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
+        query = "SELECT * FROM notes WHERE id = ?"
+        params: list[Any] = [note_id]
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
+        cursor = self.execute_query(query, tuple(params))
         row = cursor.fetchone()
         return dict(row) if row else None
 

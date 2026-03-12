@@ -20,6 +20,9 @@ const mockDuplicateWorkspace = vi.fn()
 const mockArchiveWorkspace = vi.fn()
 const mockRestoreArchivedWorkspace = vi.fn()
 const mockDeleteWorkspace = vi.fn()
+const mockCreateWorkspaceCollection = vi.fn()
+const mockDeleteWorkspaceCollection = vi.fn()
+const mockAssignWorkspaceToCollection = vi.fn()
 const mockSaveCurrentWorkspace = vi.fn()
 const mockSetWorkspaceName = vi.fn()
 const mockSetWorkspaceBanner = vi.fn()
@@ -74,6 +77,7 @@ const mockStoreState = {
       id: "workspace-alpha",
       name: "Alpha Research",
       tag: "workspace:alpha-research",
+      collectionId: "collection-topic-a",
       createdAt: new Date("2026-02-10T10:00:00.000Z"),
       lastAccessedAt: now,
       sourceCount: 3
@@ -82,6 +86,7 @@ const mockStoreState = {
       id: "workspace-beta",
       name: "Beta Deep Dive",
       tag: "workspace:beta-deep-dive",
+      collectionId: null,
       createdAt: new Date("2026-02-09T10:00:00.000Z"),
       lastAccessedAt: new Date("2026-02-18T11:00:00.000Z"),
       sourceCount: 5
@@ -90,15 +95,28 @@ const mockStoreState = {
       id: "workspace-gamma",
       name: "Gamma Notes",
       tag: "workspace:gamma-notes",
+      collectionId: null,
       createdAt: new Date("2026-02-08T10:00:00.000Z"),
       lastAccessedAt: new Date("2026-02-18T09:00:00.000Z"),
       sourceCount: 2
     }
   ],
   archivedWorkspaces: [],
+  workspaceCollections: [
+    {
+      id: "collection-topic-a",
+      name: "Topic A",
+      description: null,
+      createdAt: new Date("2026-02-01T10:00:00.000Z"),
+      updatedAt: new Date("2026-02-01T10:00:00.000Z")
+    }
+  ],
   createNewWorkspace: mockCreateNewWorkspace,
   exportWorkspaceBundle: mockExportWorkspaceBundle,
   importWorkspaceBundle: mockImportWorkspaceBundle,
+  createWorkspaceCollection: mockCreateWorkspaceCollection,
+  deleteWorkspaceCollection: mockDeleteWorkspaceCollection,
+  assignWorkspaceToCollection: mockAssignWorkspaceToCollection,
   switchWorkspace: mockSwitchWorkspace,
   duplicateWorkspace: mockDuplicateWorkspace,
   archiveWorkspace: mockArchiveWorkspace,
@@ -221,6 +239,44 @@ describe("WorkspaceHeader workspace browser modal", () => {
     vi.clearAllMocks()
     window.localStorage.clear()
     clearWorkspaceUndoActionsForTests()
+    mockStoreState.savedWorkspaces = [
+      {
+        id: "workspace-alpha",
+        name: "Alpha Research",
+        tag: "workspace:alpha-research",
+        collectionId: "collection-topic-a",
+        createdAt: new Date("2026-02-10T10:00:00.000Z"),
+        lastAccessedAt: now,
+        sourceCount: 3
+      },
+      {
+        id: "workspace-beta",
+        name: "Beta Deep Dive",
+        tag: "workspace:beta-deep-dive",
+        collectionId: null,
+        createdAt: new Date("2026-02-09T10:00:00.000Z"),
+        lastAccessedAt: new Date("2026-02-18T11:00:00.000Z"),
+        sourceCount: 5
+      },
+      {
+        id: "workspace-gamma",
+        name: "Gamma Notes",
+        tag: "workspace:gamma-notes",
+        collectionId: null,
+        createdAt: new Date("2026-02-08T10:00:00.000Z"),
+        lastAccessedAt: new Date("2026-02-18T09:00:00.000Z"),
+        sourceCount: 2
+      }
+    ]
+    mockStoreState.workspaceCollections = [
+      {
+        id: "collection-topic-a",
+        name: "Topic A",
+        description: null,
+        createdAt: new Date("2026-02-01T10:00:00.000Z"),
+        updatedAt: new Date("2026-02-01T10:00:00.000Z")
+      }
+    ]
     mockCaptureUndoSnapshot.mockReturnValue({
       workspaceId: "workspace-alpha",
       workspaceName: "Alpha Research"
@@ -422,7 +478,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
     expect(mockSwitchWorkspace).toHaveBeenCalledWith("workspace-beta")
   })
 
-  it("exports workspace bundle from the workspace menu", async () => {
+  it("renders collection groups and assigns workspaces from the browser modal", async () => {
     render(
       <WorkspaceHeader
         leftPaneOpen={true}
@@ -433,6 +489,72 @@ describe("WorkspaceHeader workspace browser modal", () => {
     )
 
     fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("View all workspaces"))
+
+    const modal = await screen.findByRole("dialog", {
+      name: "All Workspaces"
+    })
+    expect(
+      within(modal).getByLabelText("Collection group Topic A")
+    ).toBeInTheDocument()
+    expect(
+      within(modal).getByLabelText("Collection group Unassigned")
+    ).toBeInTheDocument()
+
+    fireEvent.change(
+      within(modal).getByLabelText("Collection for Beta Deep Dive"),
+      { target: { value: "collection-topic-a" } }
+    )
+
+    expect(mockAssignWorkspaceToCollection).toHaveBeenCalledWith(
+      "workspace-beta",
+      "collection-topic-a"
+    )
+  })
+
+  it("creates and deletes collections from the browser modal", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("View all workspaces"))
+
+    const modal = await screen.findByRole("dialog", {
+      name: "All Workspaces"
+    })
+
+    fireEvent.change(
+      within(modal).getByPlaceholderText("New collection name"),
+      { target: { value: "Topic B" } }
+    )
+    fireEvent.click(within(modal).getByRole("button", { name: "Add collection" }))
+    fireEvent.click(
+      within(modal).getByRole("button", { name: "Delete collection Topic A" })
+    )
+
+    expect(mockCreateWorkspaceCollection).toHaveBeenCalledWith("Topic B", null)
+    expect(mockDeleteWorkspaceCollection).toHaveBeenCalledWith(
+      "collection-topic-a"
+    )
+  })
+
+  it("exports workspace bundle from the settings menu", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Export Workspace"))
 
     await waitFor(() => {
@@ -462,7 +584,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Export Workspace"))
 
     await waitFor(() => {
@@ -491,7 +613,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Export Citations (BibTeX)"))
 
     expect(createObjectUrlSpy).toHaveBeenCalledTimes(1)
@@ -508,7 +630,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Literature Review"))
 
     expect(mockCreateNewWorkspace).toHaveBeenCalledWith(
@@ -545,7 +667,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
     })
   })
 
-  it("opens Customize banner modal from workspace menu", async () => {
+  it("opens Customize banner modal from settings menu", async () => {
     render(
       <WorkspaceHeader
         leftPaneOpen={true}
@@ -555,7 +677,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Customize banner"))
 
     const modal = await screen.findByRole("dialog", {
@@ -590,7 +712,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Customize banner"))
 
     const modal = await screen.findByRole("dialog", {
@@ -644,7 +766,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Customize banner"))
 
     const modal = await screen.findByRole("dialog", {
@@ -676,7 +798,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Archive Current Workspace"))
 
     expect(confirmSpy).toHaveBeenCalled()
@@ -721,7 +843,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Keyboard Shortcuts"))
 
     const shortcutsModal = await screen.findByRole("dialog", {
@@ -734,7 +856,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
     expect(within(shortcutsModal).getByText("Focus studio")).toBeInTheDocument()
   })
 
-  it("opens telemetry summary modal from workspace menu", async () => {
+  it("opens telemetry summary modal from settings menu", async () => {
     render(
       <WorkspaceHeader
         leftPaneOpen={true}
@@ -744,7 +866,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -774,7 +896,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -805,7 +927,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -855,7 +977,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -886,7 +1008,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     fireEvent.click(await screen.findByText("Telemetry summary"))
 
     const telemetryModal = await screen.findByRole("dialog", {
@@ -911,161 +1033,9 @@ describe("WorkspaceHeader workspace browser modal", () => {
     ).toHaveTextContent("10%")
   })
 
-  it("renders proactive storage usage indicator with formatted capacity", () => {
-    render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={2.1 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-      />
-    )
+  // Storage and connection indicators moved to WorkspaceStatusBar component
 
-    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent("Capacity Payload 2.1/5 MB")
-    expect(indicator.className).toContain("text-text-muted")
-  })
-
-  it("includes browser profile storage usage when provided", () => {
-    render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={2.1 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-        storageOriginUsedBytes={120 * 1024 * 1024}
-        storageOriginQuotaBytes={1000 * 1024 * 1024}
-      />
-    )
-
-    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent(
-      "Capacity Payload 2.1/5 MB | Browser 120.0/1000 MB"
-    )
-  })
-
-  it("includes account storage usage when provided", () => {
-    render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={2.1 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-        storageAccountUsedBytes={300 * 1024 * 1024}
-        storageAccountQuotaBytes={1000 * 1024 * 1024}
-      />
-    )
-
-    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent(
-      "Capacity Payload 2.1/5 MB | Account 300.0/1000 MB"
-    )
-  })
-
-  it("shows connection status indicator tone for healthy, degraded, and disconnected states", () => {
-    const { rerender } = render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-      />
-    )
-
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator")
-    ).toHaveTextContent("Connected")
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator").className
-    ).toContain("text-success")
-
-    mockConnectionStoreState.state = {
-      ...mockConnectionStoreState.state,
-      phase: "connected",
-      isConnected: true,
-      errorKind: "partial",
-      knowledgeStatus: "offline"
-    }
-
-    rerender(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-      />
-    )
-
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator")
-    ).toHaveTextContent("Degraded")
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator").className
-    ).toContain("text-warning")
-
-    mockConnectionStoreState.state = {
-      ...mockConnectionStoreState.state,
-      phase: "error",
-      isConnected: false,
-      errorKind: "unreachable",
-      lastError: "Network timeout"
-    }
-
-    rerender(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-      />
-    )
-
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator")
-    ).toHaveTextContent("Disconnected")
-    expect(
-      screen.getByTestId("workspace-connection-status-indicator").className
-    ).toContain("text-error")
-  })
-
-  it("highlights storage usage indicator at warning and critical thresholds", () => {
-    const { rerender } = render(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={4.1 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-      />
-    )
-
-    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator.className).toContain("text-warning")
-
-    rerender(
-      <WorkspaceHeader
-        leftPaneOpen={true}
-        rightPaneOpen={true}
-        onToggleLeftPane={vi.fn()}
-        onToggleRightPane={vi.fn()}
-        storageUsedBytes={4.8 * 1024 * 1024}
-        storageQuotaBytes={5 * 1024 * 1024}
-      />
-    )
-
-    expect(screen.getByTestId("workspace-storage-usage-indicator").className).toContain(
-      "text-error"
-    )
-  })
-
-  it("hides status guardrail indicators and telemetry menu when rollout flags are disabled", async () => {
+  it("hides telemetry menu when rollout flags are disabled", async () => {
     render(
       <WorkspaceHeader
         leftPaneOpen={true}
@@ -1077,14 +1047,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
       />
     )
 
-    expect(
-      screen.queryByTestId("workspace-connection-status-indicator")
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByTestId("workspace-storage-usage-indicator")
-    ).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
     expect(screen.queryByText("Telemetry summary")).not.toBeInTheDocument()
   })
 })

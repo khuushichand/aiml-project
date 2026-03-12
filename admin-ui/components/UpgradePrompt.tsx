@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ArrowUpCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 
 interface UpgradePromptProps {
   requiredPlan: string;
@@ -20,11 +21,8 @@ export function UpgradePrompt({ requiredPlan, featureName, showUpgradeLink }: Up
           {!showUpgradeLink && ' Contact your administrator to upgrade.'}
         </span>
         {showUpgradeLink && (
-          <Link
-            href="/plans"
-            className="ml-4 inline-flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-          >
-            Upgrade Plan
+          <Link href="/plans" className="ml-4">
+            <Button size="sm" variant="outline">Upgrade Plan</Button>
           </Link>
         )}
       </AlertDescription>

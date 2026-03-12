@@ -147,29 +147,14 @@ describe("WritingPlayground phase1 baseline", () => {
       screen.getByTestId("writing-playground-shell")
     ).toBeInTheDocument()
     expect(
-      screen.getByTestId("writing-playground-library-panel")
-    ).toBeInTheDocument()
-    expect(
       screen.getByTestId("writing-playground-editor-panel")
     ).toBeInTheDocument()
     expect(
-      screen.getByTestId("writing-playground-settings-card")
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole("heading", { name: "Writing Playground" })
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText("Create your first session to start writing.")
+      screen.getByTestId("writing-playground-topbar")
     ).toBeInTheDocument()
     expect(screen.getByText("Select a session to begin.")).toBeInTheDocument()
     expect(
-      screen.getByText("Select a session to edit settings.")
-    ).toBeInTheDocument()
-    expect(
       screen.getByTestId("writing-playground-main-grid")
-    ).toBeInTheDocument()
-    expect(
-      screen.getByTestId("writing-playground-content-grid")
     ).toBeInTheDocument()
   })
 

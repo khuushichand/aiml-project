@@ -23,7 +23,7 @@ export default function TeamDetailPage() {
   const params = useParams();
   const router = useRouter();
   const confirm = useConfirm();
-  const teamId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const teamId = typeof params.id === 'string' ? params.id : params.id?.[0] ?? '';
 
   const [team, setTeam] = useState<Team | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
