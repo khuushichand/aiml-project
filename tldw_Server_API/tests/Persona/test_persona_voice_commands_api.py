@@ -134,3 +134,60 @@ def test_persona_voice_command_rejects_mismatched_persona_payload(persona_db: Ch
         assert response.status_code == 400, response.text
 
     fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_voice_command_reports_missing_connection_after_connection_delete(
+    persona_db: CharactersRAGDB,
+):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Voice Builder With Connection")
+
+        created_connection = client.post(
+            f"/api/v1/persona/profiles/{persona_id}/connections",
+            json={
+                "name": "Webhook API",
+                "base_url": "https://api.example.com/hooks",
+                "auth_type": "none",
+            },
+        )
+        assert created_connection.status_code == 201, created_connection.text
+        connection_id = created_connection.json()["id"]
+
+        created_command = client.post(
+            f"/api/v1/persona/profiles/{persona_id}/voice-commands",
+            json={
+                "name": "Send Webhook",
+                "phrases": ["send webhook for {query}"],
+                "action_type": "custom",
+                "connection_id": connection_id,
+                "action_config": {
+                    "action": "external_request",
+                    "method": "POST",
+                    "path": "search",
+                },
+                "priority": 10,
+                "enabled": True,
+                "requires_confirmation": True,
+            },
+        )
+        assert created_command.status_code == 201, created_command.text
+        created_command_payload = created_command.json()
+        assert created_command_payload["connection_status"] == "ok"
+        assert created_command_payload["connection_name"] == "Webhook API"
+
+        deleted_connection = client.delete(
+            f"/api/v1/persona/profiles/{persona_id}/connections/{connection_id}"
+        )
+        assert deleted_connection.status_code == 200, deleted_connection.text
+
+        listed = client.get(
+            f"/api/v1/persona/profiles/{persona_id}/voice-commands?include_disabled=true"
+        )
+        assert listed.status_code == 200, listed.text
+        payload = listed.json()
+        assert payload["total"] == 1
+        assert payload["commands"][0]["connection_id"] == connection_id
+        assert payload["commands"][0]["connection_status"] == "missing"
+        assert payload["commands"][0]["connection_name"] is None
+
+    fastapi_app.dependency_overrides.clear()

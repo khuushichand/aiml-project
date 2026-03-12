@@ -292,6 +292,14 @@ class VoiceCommandInfo(BaseModel):
     user_id: int = Field(..., description="Owner user ID (0 for system)")
     persona_id: Optional[str] = Field(default=None, description="Persona owner ID")
     connection_id: Optional[str] = Field(default=None, description="Reusable connection reference")
+    connection_status: Optional[Literal["ok", "missing"]] = Field(
+        default=None,
+        description="Whether the referenced reusable connection currently resolves"
+    )
+    connection_name: Optional[str] = Field(
+        default=None,
+        description="Resolved connection name when available"
+    )
     name: str = Field(..., description="Command name")
     phrases: list[str] = Field(..., description="Trigger phrases")
     action_type: VoiceActionType = Field(..., description="Action type")

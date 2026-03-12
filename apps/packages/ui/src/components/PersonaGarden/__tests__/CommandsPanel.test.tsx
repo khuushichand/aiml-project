@@ -51,6 +51,8 @@ const existingExternalCommand = {
   id: "cmd-external",
   persona_id: "persona-1",
   connection_id: "conn-1",
+  connection_status: "ok",
+  connection_name: "Slack Alerts",
   name: "Search Slack Alerts",
   phrases: ["search slack alerts for {query}"],
   action_type: "custom",
@@ -61,6 +63,26 @@ const existingExternalCommand = {
     slot_to_param_map: { query: "query" }
   },
   priority: 40,
+  enabled: true,
+  requires_confirmation: true
+}
+
+const missingConnectionCommand = {
+  id: "cmd-missing-connection",
+  persona_id: "persona-1",
+  connection_id: "conn-missing",
+  connection_status: "missing",
+  connection_name: null,
+  name: "Broken Alerts Command",
+  phrases: ["send broken alert for {query}"],
+  action_type: "custom",
+  action_config: {
+    action: "external_request",
+    method: "POST",
+    path: "alerts/send",
+    slot_to_param_map: { query: "query" }
+  },
+  priority: 20,
   enabled: true,
   requires_confirmation: true
 }
@@ -84,7 +106,9 @@ describe("CommandsPanel", () => {
       ) {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ commands: [existingCommand, existingExternalCommand] })
+          json: async () => ({
+            commands: [existingCommand, existingExternalCommand, missingConnectionCommand]
+          })
         })
       }
       if (
@@ -141,6 +165,25 @@ describe("CommandsPanel", () => {
             description: init.body.description,
             action_config: init.body.action_config,
             connection_id: init.body.connection_id,
+            requires_confirmation: init.body.requires_confirmation
+          })
+        })
+      }
+      if (
+        path ===
+          "/api/v1/persona/profiles/persona-1/voice-commands/cmd-missing-connection" &&
+        init?.method === "PUT"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...missingConnectionCommand,
+            name: init.body.name,
+            description: init.body.description,
+            action_config: init.body.action_config,
+            connection_id: init.body.connection_id,
+            connection_status: "ok",
+            connection_name: "Slack Alerts",
             requires_confirmation: init.body.requires_confirmation
           })
         })
@@ -351,6 +394,63 @@ describe("CommandsPanel", () => {
     )
     expect(screen.getByTestId("persona-commands-request-path-input")).toHaveValue(
       "alerts/search"
+    )
+  })
+
+  it("surfaces missing connection commands and requires a valid replacement before saving", async () => {
+    render(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+      />
+    )
+
+    expect(await screen.findByText("Broken Alerts Command")).toBeInTheDocument()
+    expect(screen.getByText("missing connection")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("persona-commands-edit-cmd-missing-connection"))
+
+    expect(screen.getByTestId("persona-commands-connection-select")).toHaveValue(
+      "conn-missing"
+    )
+    expect(
+      screen.getAllByText(
+        "Selected connection no longer exists. Choose another connection or clear it."
+      )
+    ).toHaveLength(1)
+
+    fireEvent.click(screen.getByTestId("persona-commands-save"))
+
+    expect(
+      await screen.findAllByText(
+        "Selected connection no longer exists. Choose another connection or clear it."
+      )
+    ).toHaveLength(2)
+    expect(
+      mocks.fetchWithAuth.mock.calls.filter(
+        ([path, init]: [string, { method?: string } | undefined]) =>
+          path ===
+            "/api/v1/persona/profiles/persona-1/voice-commands/cmd-missing-connection" &&
+          init?.method === "PUT"
+      )
+    ).toHaveLength(0)
+
+    fireEvent.change(screen.getByTestId("persona-commands-connection-select"), {
+      target: { value: "conn-1" }
+    })
+    fireEvent.click(screen.getByTestId("persona-commands-save"))
+
+    await waitFor(() =>
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/persona/profiles/persona-1/voice-commands/cmd-missing-connection",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.objectContaining({
+            connection_id: "conn-1"
+          })
+        })
+      )
     )
   })
 })

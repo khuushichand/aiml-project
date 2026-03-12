@@ -436,6 +436,8 @@ def _voice_command_to_response(command: VoiceCommand) -> VoiceCommandInfo:
         user_id=command.user_id,
         persona_id=command.persona_id,
         connection_id=command.connection_id,
+        connection_status=None,
+        connection_name=None,
         name=command.name,
         phrases=command.phrases,
         action_type=VoiceActionType(command.action_type.value),
@@ -446,6 +448,27 @@ def _voice_command_to_response(command: VoiceCommand) -> VoiceCommandInfo:
         description=command.description,
         created_at=command.created_at,
     )
+
+
+def _voice_command_to_response_with_connections(
+    command: VoiceCommand,
+    *,
+    connections_by_id: dict[str, PersonaConnectionResponse] | None = None,
+) -> VoiceCommandInfo:
+    connection_status: str | None = None
+    connection_name: str | None = None
+    connection_id = str(command.connection_id or "").strip()
+    if connection_id:
+        connection = (connections_by_id or {}).get(connection_id)
+        if connection is None:
+            connection_status = "missing"
+        else:
+            connection_status = "ok"
+            connection_name = connection.name
+    response = _voice_command_to_response(command)
+    response.connection_status = connection_status
+    response.connection_name = connection_name
+    return response
 
 
 def _normalize_command_path_persona_id(path_persona_id: str, payload_persona_id: str | None) -> str:
@@ -3128,7 +3151,18 @@ async def list_persona_voice_commands(
             include_disabled=include_disabled,
             persona_id=persona_id,
         )
-        command_infos = [_voice_command_to_response(command) for command in commands]
+        connections_by_id = await _get_persona_connections_by_id(
+            db,
+            user_id=user_id,
+            persona_id=persona_id,
+        )
+        command_infos = [
+            _voice_command_to_response_with_connections(
+                command,
+                connections_by_id=connections_by_id,
+            )
+            for command in commands
+        ]
         return VoiceCommandListResponse(commands=command_infos, total=len(command_infos))
     except HTTPException:
         raise
@@ -3159,13 +3193,14 @@ async def create_persona_voice_command(
             user_id=user_id,
             include_deleted=False,
         )
+        connections_by_id: dict[str, PersonaConnectionResponse] = {}
         if payload.connection_id:
-            connections = await _get_persona_connections_by_id(
+            connections_by_id = await _get_persona_connections_by_id(
                 db,
                 user_id=user_id,
                 persona_id=normalized_persona_id,
             )
-            if payload.connection_id not in connections:
+            if payload.connection_id not in connections_by_id:
                 raise HTTPException(status_code=404, detail="Persona connection not found")
 
         command = VoiceCommand(
@@ -3192,7 +3227,10 @@ async def create_persona_voice_command(
             int(user_id),
             persona_id=normalized_persona_id,
         ) or command
-        return _voice_command_to_response(saved)
+        return _voice_command_to_response_with_connections(
+            saved,
+            connections_by_id=connections_by_id,
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -3237,13 +3275,14 @@ async def update_persona_voice_command(
             if "connection_id" in payload.model_fields_set
             else existing.connection_id
         )
+        connections_by_id: dict[str, PersonaConnectionResponse] = {}
         if next_connection_id:
-            connections = await _get_persona_connections_by_id(
+            connections_by_id = await _get_persona_connections_by_id(
                 db,
                 user_id=user_id,
                 persona_id=normalized_persona_id,
             )
-            if next_connection_id not in connections:
+            if next_connection_id not in connections_by_id:
                 raise HTTPException(status_code=404, detail="Persona connection not found")
 
         updated = VoiceCommand(
@@ -3271,7 +3310,10 @@ async def update_persona_voice_command(
             int(user_id),
             persona_id=normalized_persona_id,
         ) or updated
-        return _voice_command_to_response(saved)
+        return _voice_command_to_response_with_connections(
+            saved,
+            connections_by_id=connections_by_id,
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -3330,7 +3372,17 @@ async def toggle_persona_voice_command(
             int(user_id),
             persona_id=persona_id,
         ) or updated
-        return _voice_command_to_response(saved)
+        connections_by_id: dict[str, PersonaConnectionResponse] = {}
+        if saved.connection_id:
+            connections_by_id = await _get_persona_connections_by_id(
+                db,
+                user_id=user_id,
+                persona_id=persona_id,
+            )
+        return _voice_command_to_response_with_connections(
+            saved,
+            connections_by_id=connections_by_id,
+        )
     except HTTPException:
         raise
     except Exception as exc:

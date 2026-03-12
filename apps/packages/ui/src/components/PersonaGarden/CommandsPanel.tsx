@@ -9,6 +9,8 @@ type PersonaVoiceCommand = {
   id: string
   persona_id?: string | null
   connection_id?: string | null
+  connection_status?: "ok" | "missing" | null
+  connection_name?: string | null
   name: string
   phrases: string[]
   action_type: VoiceCommandActionType
@@ -184,6 +186,19 @@ const normalizeRequestMethod = (
     : "POST"
 }
 
+const resolveCommandConnectionStatus = (
+  command: PersonaVoiceCommand,
+  availableConnections: PersonaConnectionSummary[]
+): "ok" | "missing" | null => {
+  if (!command.connection_id) return null
+  if (command.connection_status === "ok" || command.connection_status === "missing") {
+    return command.connection_status
+  }
+  return availableConnections.some((connection) => connection.id === command.connection_id)
+    ? "ok"
+    : "missing"
+}
+
 const toCommandTargetLabel = (command: PersonaVoiceCommand): string => {
   if (command.action_type === "mcp_tool") {
     return String(command.action_config?.tool_name || "").trim() || "MCP tool"
@@ -257,6 +272,17 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   const [validationError, setValidationError] = React.useState<string | null>(null)
   const [formState, setFormState] =
     React.useState<CommandFormState>(DEFAULT_FORM_STATE)
+  const editingCommand = React.useMemo(
+    () =>
+      formState.commandId
+        ? commands.find((command) => command.id === formState.commandId) ?? null
+        : null,
+    [commands, formState.commandId]
+  )
+  const selectedConnectionMissing = React.useMemo(() => {
+    if (!formState.connectionId.trim()) return false
+    return !connections.some((connection) => connection.id === formState.connectionId.trim())
+  }, [connections, formState.connectionId])
 
   React.useEffect(() => {
     let cancelled = false
@@ -435,12 +461,22 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
 
     const name = formState.name.trim()
     const phrases = splitPhrases(formState.phrasesText)
+    const trimmedConnectionId = formState.connectionId.trim()
     if (!name) {
       setValidationError("Command name is required.")
       return
     }
     if (phrases.length === 0) {
       setValidationError("Add at least one trigger phrase.")
+      return
+    }
+    if (
+      trimmedConnectionId &&
+      !connections.some((connection) => connection.id === trimmedConnectionId)
+    ) {
+      setValidationError(
+        "Selected connection no longer exists. Choose another connection or clear it."
+      )
       return
     }
 
@@ -500,7 +536,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     }
 
     const payload = {
-      connection_id: formState.connectionId.trim() || null,
+      connection_id: trimmedConnectionId || null,
       name,
       description: formState.description.trim() || null,
       phrases,
@@ -553,7 +589,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     } finally {
       setSaving(false)
     }
-  }, [formState, resetForm, selectedPersonaId])
+  }, [connections, formState, resetForm, selectedPersonaId])
 
   return (
     <div className="rounded-lg border border-border bg-surface p-3">
@@ -668,9 +704,15 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                             </span>
                           ) : null}
                           {command.connection_id ? (
-                            <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-sky-700">
-                              connection
-                            </span>
+                            resolveCommandConnectionStatus(command, connections) === "missing" ? (
+                              <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-700">
+                                missing connection
+                              </span>
+                            ) : (
+                              <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-sky-700">
+                                connection
+                              </span>
+                            )
                           ) : null}
                         </div>
                       </div>
@@ -678,6 +720,14 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                         <p className="mt-2 text-xs text-text-muted">
                           {command.description}
                         </p>
+                      ) : null}
+                      {resolveCommandConnectionStatus(command, connections) === "missing" ? (
+                        <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700">
+                          {t("sidepanel:personaGarden.commands.missingConnectionHint", {
+                            defaultValue:
+                              "The saved connection for this command was deleted. Edit the command to choose a replacement connection."
+                          })}
+                        </div>
                       ) : null}
                       <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-text-muted">
                         {command.phrases.map((phrase) => (
@@ -853,6 +903,14 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                             defaultValue: "No connection"
                           })}
                         </option>
+                        {selectedConnectionMissing ? (
+                          <option value={formState.connectionId}>
+                            {t("sidepanel:personaGarden.commands.missingConnectionOption", {
+                              defaultValue: "Missing connection ({{connectionId}})",
+                              connectionId: formState.connectionId
+                            })}
+                          </option>
+                        ) : null}
                         {connections.map((connection) => (
                           <option key={connection.id} value={connection.id}>
                             {connection.name}
@@ -920,6 +978,14 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
 
                   {formState.actionType === "custom" ? (
                     <div className="space-y-3">
+                      {selectedConnectionMissing ? (
+                        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700">
+                          {t("sidepanel:personaGarden.commands.missingConnectionWarning", {
+                            defaultValue:
+                              "Selected connection no longer exists. Choose another connection or clear it."
+                          })}
+                        </div>
+                      ) : null}
                       <label className="block text-xs text-text-muted">
                         {t("sidepanel:personaGarden.commands.customAction", {
                           defaultValue: "Custom action"
