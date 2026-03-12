@@ -26,6 +26,8 @@ import time  # noqa: E402
 from collections.abc import AsyncIterator, Iterable  # noqa: E402
 from contextlib import asynccontextmanager, suppress  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from email.utils import parsedate_to_datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 from typing import Any, Protocol, TypedDict  # noqa: E402
@@ -458,6 +460,7 @@ class TransportAdapter(Protocol):
         files: Any | None = None,
         timeout: Any | None = None,
         proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
         chunk_size: int = 65536,
         cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator[bytes]: ...
@@ -567,6 +570,7 @@ class HttpxAdapter:
         files: Any | None = None,
         timeout: float | httpx.Timeout | None = None,
         proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
         chunk_size: int = 65536,
         cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator[bytes]:
@@ -581,6 +585,7 @@ class HttpxAdapter:
             files=files,
             timeout=timeout,
             proxies=proxies,
+            retry=retry,
             chunk_size=chunk_size,
             cert_pinning=cert_pinning,
         ):
@@ -673,6 +678,7 @@ class AiohttpAdapter:
         files: Any | None = None,
         timeout: Any | None = None,
         proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
         chunk_size: int = 65536,
         cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator[bytes]:
@@ -687,6 +693,7 @@ class AiohttpAdapter:
             files=files,
             timeout=timeout,
             proxies=proxies,
+            retry=retry,
             chunk_size=chunk_size,
             cert_pinning=cert_pinning,
         ):
@@ -1366,6 +1373,29 @@ def _decorrelated_jitter_sleep(prev: float, base_ms: int, cap_s: int) -> float:
     cap = max(base, float(cap_s))
     sleep = base if prev <= 0 else min(cap, random.uniform(base, prev * 3))
     return sleep
+
+
+def _parse_retry_after_delay_seconds(
+    retry_after: str | None,
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    """Parse Retry-After as delta-seconds or HTTP-date and return seconds to wait."""
+    if not retry_after:
+        return None
+    try:
+        return max(0.0, float(retry_after.strip()))
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    try:
+        parsed = parsedate_to_datetime(retry_after.strip())
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        current = now or datetime.now(timezone.utc)
+        return max(0.0, (parsed - current).total_seconds())
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+        return None
 
 
 def _should_retry(method: str, status: int | None, exc: Exception | None, policy: RetryPolicy) -> tuple[bool, str]:
@@ -2254,12 +2284,7 @@ async def _afetch_httpx(
                             # Honor Retry-After
                             delay = 0.0
                             if retry.respect_retry_after:
-                                ra = resp.headers.get("retry-after")
-                                if ra:
-                                    try:
-                                        delay = float(ra)
-                                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
-                                        delay = 0.0
+                                delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
                             if delay <= 0:
                                 delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                             logger.debug(
@@ -2528,12 +2553,7 @@ async def _afetch_aiohttp(
                     pass
                 delay = 0.0
                 if retry.respect_retry_after:
-                    ra = resp.headers.get("retry-after")
-                    if ra:
-                        try:
-                            delay = float(ra)
-                        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
-                            delay = 0.0
+                    delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
                 if delay <= 0:
                     delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                 logger.debug(
@@ -2900,12 +2920,7 @@ def _fetch_httpx_response(
                         get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
                     delay = 0.0
                     if retry.respect_retry_after:
-                        ra = resp.headers.get("retry-after")
-                        if ra:
-                            try:
-                                delay = float(ra)
-                            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
-                                delay = 0.0
+                        delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
                     if delay <= 0:
                         delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                     logger.debug(
@@ -3192,11 +3207,14 @@ async def _astream_bytes_httpx(
     files: Any | None = None,
     timeout: float | httpx.Timeout | None = None,
     proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
     chunk_size: int = 65536,
     cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[bytes]:
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")  # noqa: TRY003
+    retry = retry or RetryPolicy()
+    _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -3206,80 +3224,175 @@ async def _astream_bytes_httpx(
         ac = _get_httpx_async_client(proxies=proxies)
         need_close = False
 
-    req_headers = _inject_trace_headers(headers)
+    attempts = max(1, retry.attempts)
     t0 = time.time()
     try:
-        # Optional cert pinning
-        try:
-            pins_map = cert_pinning or _get_client_cert_pins(ac)
-            if pins_map:
-                u = httpx.URL(url)
-                if u.scheme.lower() == "https":
-                    host = (u.host or "").lower()
-                    if host in pins_map:
-                        _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
-        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
-            raise NetworkError(e.__class__.__name__) from e
-        async with _httpx_stream_io(
-            client=ac,
-            method=method.upper(),
-            url=url,
-            headers=req_headers,
-            params=params,
-            json=json,
-            data=data,
-            files=files,
-            timeout=timeout,
-            chunk_size=chunk_size,
-        ) as (resp, byte_iter):
-            resp.raise_for_status()
-            timed_iter = _iter_bytes_with_timeouts(byte_iter, timeout)
-            async for chunk in timed_iter:
-                yield chunk
-            # per-request structured log on successful completion
-            _log_outbound_request(
-                method=method,
-                url=resp.request.url,
-                status_code=int(resp.status_code),
-                start_time=t0,
-                attempt=1,
-                last_retry_delay_s=0.0,
-            )
+        sleep_s = 0.0
+        for attempt in range(1, attempts + 1):
+            yielded_any = False
+            req_headers = _inject_trace_headers(headers)
+            resp = None
+            try:
+                try:
+                    pins_map = cert_pinning or _get_client_cert_pins(ac)
+                    if pins_map:
+                        u = httpx.URL(url)
+                        if u.scheme.lower() == "https":
+                            host = (u.host or "").lower()
+                            if host in pins_map:
+                                _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
+                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
+                    raise NetworkError(e.__class__.__name__) from e
+
+                async with _httpx_stream_io(
+                    client=ac,
+                    method=method.upper(),
+                    url=url,
+                    headers=req_headers,
+                    params=params,
+                    json=json,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                    chunk_size=chunk_size,
+                ) as (resp, byte_iter):
+                    try:
+                        resp.raise_for_status()
+                    except httpx.HTTPStatusError:
+                        should, rsn = _should_retry(method, resp.status_code, None, retry)
+                        if should and attempt < attempts:
+                            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+                                get_metrics_registry().increment(
+                                    "http_client_retries_total",
+                                    1,
+                                    labels={"reason": rsn},
+                                )
+                            delay = 0.0
+                            if retry.respect_retry_after:
+                                delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
+                            if delay <= 0:
+                                delay = _decorrelated_jitter_sleep(
+                                    sleep_s,
+                                    retry.backoff_base_ms,
+                                    retry.backoff_cap_s,
+                                )
+                            logger.debug(
+                                f"astream_bytes retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
+                            )
+                            await asyncio.sleep(delay)
+                            sleep_s = delay
+                            continue
+                        _log_outbound_request(
+                            method=method,
+                            url=resp.request.url,
+                            status_code=int(resp.status_code),
+                            start_time=t0,
+                            attempt=attempt,
+                            last_retry_delay_s=sleep_s,
+                        )
+                        raise
+
+                    timed_iter = _iter_bytes_with_timeouts(byte_iter, timeout)
+                    async for chunk in timed_iter:
+                        if chunk:
+                            yielded_any = True
+                        yield chunk
+                    _log_outbound_request(
+                        method=method,
+                        url=resp.request.url,
+                        status_code=int(resp.status_code),
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                    )
+                    return
+            except asyncio.CancelledError:
+                raise
+            except httpx.HTTPStatusError:
+                raise
+            except httpx.HTTPError as e:
+                network_exc = NetworkError(e.__class__.__name__)
+                if yielded_any:
+                    _log_outbound_request(
+                        method=method,
+                        url=url,
+                        status_code=int(getattr(resp, "status_code", 0) or 0),
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=network_exc.__class__.__name__,
+                    )
+                    raise network_exc from e
+                should, rsn = _should_retry(method, None, network_exc, retry)
+                if not should or attempt == attempts:
+                    _log_outbound_request(
+                        method=method,
+                        url=url,
+                        status_code=0,
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=network_exc.__class__.__name__,
+                    )
+                    raise network_exc from e
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+                    get_metrics_registry().increment(
+                        "http_client_retries_total",
+                        1,
+                        labels={"reason": rsn},
+                    )
+                delay = _decorrelated_jitter_sleep(
+                    sleep_s,
+                    retry.backoff_base_ms,
+                    retry.backoff_cap_s,
+                )
+                logger.debug(
+                    f"astream_bytes network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
+                )
+                await asyncio.sleep(delay)
+                sleep_s = delay
+            except NetworkError as e:
+                if yielded_any:
+                    _log_outbound_request(
+                        method=method,
+                        url=url,
+                        status_code=int(getattr(resp, "status_code", 0) or 0),
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=e.__class__.__name__,
+                    )
+                    raise
+                should, rsn = _should_retry(method, None, e, retry)
+                if not should or attempt == attempts:
+                    _log_outbound_request(
+                        method=method,
+                        url=url,
+                        status_code=0,
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=e.__class__.__name__,
+                    )
+                    raise
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+                    get_metrics_registry().increment(
+                        "http_client_retries_total",
+                        1,
+                        labels={"reason": rsn},
+                    )
+                delay = _decorrelated_jitter_sleep(
+                    sleep_s,
+                    retry.backoff_base_ms,
+                    retry.backoff_cap_s,
+                )
+                logger.debug(
+                    f"astream_bytes network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
+                )
+                await asyncio.sleep(delay)
+                sleep_s = delay
     except asyncio.CancelledError:
         # propagate cancellations cleanly
-        raise
-    except httpx.HTTPStatusError as e:
-        _log_outbound_request(
-            method=method,
-            url=url,
-            status_code=int(getattr(getattr(e, "response", None), "status_code", 0) or 0),
-            start_time=t0,
-            attempt=1,
-            last_retry_delay_s=0.0,
-            exception_class=e.__class__.__name__,
-        )
-        raise
-    except httpx.HTTPError as e:
-        _log_outbound_request(
-            method=method,
-            url=url,
-            status_code=0,
-            start_time=t0,
-            attempt=1,
-            last_retry_delay_s=0.0,
-            exception_class=e.__class__.__name__,
-        )
-        raise NetworkError(e.__class__.__name__) from e
-    except NetworkError as e:
-        _log_outbound_request(
-            method=method,
-            url=url,
-            status_code=0,
-            start_time=t0,
-            attempt=1,
-            last_retry_delay_s=0.0,
-            exception_class=e.__class__.__name__,
-        )
         raise
     finally:
         if need_close:
@@ -3299,89 +3412,193 @@ async def _astream_bytes_aiohttp(
     files: Any | None = None,
     timeout: Any | None = None,
     proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
     chunk_size: int = 65536,
     cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[bytes]:
     if aiohttp is None:  # pragma: no cover
         raise RuntimeError("aiohttp is not available")  # noqa: TRY003
+    retry = retry or RetryPolicy()
+    _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
     session = client or _get_aiohttp_session()
-    req_headers = _inject_trace_headers(headers)
+    attempts = max(1, retry.attempts)
     t0 = time.time()
     try:
-        # Optional cert pinning
-        try:
-            pins_map = cert_pinning or _get_client_cert_pins(session)
-            if pins_map:
-                if httpx is not None:
-                    u = httpx.URL(url)
-                    host = (u.host or "").lower()
-                    port = int(u.port or (443 if (u.scheme or "").lower() == "https" else 80))
-                else:
-                    parsed = urlparse(url)
-                    host = (parsed.hostname or "").lower()
-                    port = parsed.port or (443 if (parsed.scheme or "").lower() == "https" else 80)
-                if host in pins_map:
-                    _check_cert_pinning(host, port, pins_map[host], TLS_MIN_VERSION)
-        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
-            raise NetworkError(e.__class__.__name__) from e
-        ssl_ctx = _build_ssl_context(ENFORCE_TLS_MIN, TLS_MIN_VERSION)
-        async with _aiohttp_stream_io(
-            session=session,
-            method=method.upper(),
-            url=url,
-            headers=req_headers,
-            params=params,
-            json=json,
-            data=data,
-            files=files,
-            timeout=timeout,
-            proxies=proxies,
-            ssl_override=ssl_ctx,
-            chunk_size=chunk_size,
-        ) as (resp, byte_iter):
-            if resp.status >= 400:
-                await resp.read()
-                raise NetworkError(f"HTTP {resp.status}")  # noqa: TRY003, TRY301
-            timed_iter = _iter_bytes_with_timeouts(byte_iter, timeout)
-            async for chunk in timed_iter:
-                if not chunk:
-                    continue
-                yield chunk
-            _log_outbound_request(
-                method=method,
-                url=str(getattr(resp, "url", url)),
-                status_code=int(resp.status),
-                start_time=t0,
-                attempt=1,
-                last_retry_delay_s=0.0,
-            )
+        sleep_s = 0.0
+        for attempt in range(1, attempts + 1):
+            yielded_any = False
+            resp = None
+            req_headers = _inject_trace_headers(headers)
+            try:
+                try:
+                    pins_map = cert_pinning or _get_client_cert_pins(session)
+                    if pins_map:
+                        if httpx is not None:
+                            u = httpx.URL(url)
+                            host = (u.host or "").lower()
+                            port = int(u.port or (443 if (u.scheme or "").lower() == "https" else 80))
+                        else:
+                            parsed = urlparse(url)
+                            host = (parsed.hostname or "").lower()
+                            port = parsed.port or (443 if (parsed.scheme or "").lower() == "https" else 80)
+                        if host in pins_map:
+                            _check_cert_pinning(host, port, pins_map[host], TLS_MIN_VERSION)
+                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
+                    raise NetworkError(e.__class__.__name__) from e
+
+                ssl_ctx = _build_ssl_context(ENFORCE_TLS_MIN, TLS_MIN_VERSION)
+                async with _aiohttp_stream_io(
+                    session=session,
+                    method=method.upper(),
+                    url=url,
+                    headers=req_headers,
+                    params=params,
+                    json=json,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                    proxies=proxies,
+                    ssl_override=ssl_ctx,
+                    chunk_size=chunk_size,
+                ) as (resp, byte_iter):
+                    if resp.status >= 400:
+                        should, rsn = _should_retry(method, resp.status, None, retry)
+                        if should and attempt < attempts:
+                            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+                                get_metrics_registry().increment(
+                                    "http_client_retries_total",
+                                    1,
+                                    labels={"reason": rsn},
+                                )
+                            delay = 0.0
+                            if retry.respect_retry_after:
+                                delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
+                            if delay <= 0:
+                                delay = _decorrelated_jitter_sleep(
+                                    sleep_s,
+                                    retry.backoff_base_ms,
+                                    retry.backoff_cap_s,
+                                )
+                            logger.debug(
+                                f"astream_bytes retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
+                            )
+                            await asyncio.sleep(delay)
+                            sleep_s = delay
+                            continue
+                        await resp.read()
+                        _log_outbound_request(
+                            method=method,
+                            url=str(getattr(resp, "url", url)),
+                            status_code=int(resp.status),
+                            start_time=t0,
+                            attempt=attempt,
+                            last_retry_delay_s=sleep_s,
+                        )
+                        raise NetworkError(f"HTTP {resp.status}")  # noqa: TRY003
+
+                    timed_iter = _iter_bytes_with_timeouts(byte_iter, timeout)
+                    async for chunk in timed_iter:
+                        if not chunk:
+                            continue
+                        yielded_any = True
+                        yield chunk
+                    _log_outbound_request(
+                        method=method,
+                        url=str(getattr(resp, "url", url)),
+                        status_code=int(resp.status),
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                    )
+                    return
+            except asyncio.CancelledError:
+                raise
+            except NetworkError as e:
+                if yielded_any:
+                    _log_outbound_request(
+                        method=method,
+                        url=str(getattr(resp, "url", url)),
+                        status_code=int(getattr(resp, "status", 0) or 0),
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=e.__class__.__name__,
+                    )
+                    raise
+                should, rsn = _should_retry(method, None, e, retry)
+                if not should or attempt == attempts:
+                    _log_outbound_request(
+                        method=method,
+                        url=str(getattr(resp, "url", url)),
+                        status_code=0,
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=e.__class__.__name__,
+                    )
+                    raise
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+                    get_metrics_registry().increment(
+                        "http_client_retries_total",
+                        1,
+                        labels={"reason": rsn},
+                    )
+                delay = _decorrelated_jitter_sleep(
+                    sleep_s,
+                    retry.backoff_base_ms,
+                    retry.backoff_cap_s,
+                )
+                logger.debug(
+                    f"astream_bytes network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
+                )
+                await asyncio.sleep(delay)
+                sleep_s = delay
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
+                network_exc = NetworkError(e.__class__.__name__)
+                if yielded_any:
+                    _log_outbound_request(
+                        method=method,
+                        url=str(getattr(resp, "url", url)),
+                        status_code=int(getattr(resp, "status", 0) or 0),
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=network_exc.__class__.__name__,
+                    )
+                    raise network_exc from e
+                should, rsn = _should_retry(method, None, network_exc, retry)
+                if not should or attempt == attempts:
+                    _log_outbound_request(
+                        method=method,
+                        url=str(getattr(resp, "url", url)),
+                        status_code=0,
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=network_exc.__class__.__name__,
+                    )
+                    raise network_exc from e
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+                    get_metrics_registry().increment(
+                        "http_client_retries_total",
+                        1,
+                        labels={"reason": rsn},
+                    )
+                delay = _decorrelated_jitter_sleep(
+                    sleep_s,
+                    retry.backoff_base_ms,
+                    retry.backoff_cap_s,
+                )
+                logger.debug(
+                    f"astream_bytes network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
+                )
+                await asyncio.sleep(delay)
+                sleep_s = delay
     except asyncio.CancelledError:
         raise
-    except NetworkError as e:
-        _log_outbound_request(
-            method=method,
-            url=url,
-            status_code=0,
-            start_time=t0,
-            attempt=1,
-            last_retry_delay_s=0.0,
-            exception_class=e.__class__.__name__,
-        )
-        raise
-    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
-        _log_outbound_request(
-            method=method,
-            url=url,
-            status_code=0,
-            start_time=t0,
-            attempt=1,
-            last_retry_delay_s=0.0,
-            exception_class=e.__class__.__name__,
-        )
-        raise NetworkError(e.__class__.__name__) from e
 
 
 async def astream_bytes(
@@ -3396,6 +3613,7 @@ async def astream_bytes(
     files: Any | None = None,
     timeout: Any | None = None,
     proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
     chunk_size: int = 65536,
     cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[bytes]:
@@ -3415,6 +3633,7 @@ async def astream_bytes(
         files=files,
         timeout=timeout,
         proxies=proxies,
+        retry=retry,
         chunk_size=chunk_size,
         cert_pinning=cert_pinning,
     ):

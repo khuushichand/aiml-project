@@ -25,7 +25,7 @@ from .tts_exceptions import (
     TTSValidationError,
     TTSVoiceNotFoundError,
 )
-from .utils import parse_bool
+from .utils import parse_bool, resolve_qwen3_runtime_name
 
 #
 #######################################################################################################################
@@ -354,6 +354,10 @@ class TTSInputValidator:
         except (TypeError, ValueError):
             return None
 
+    def _resolve_qwen3_runtime(self, provider: Optional[str]) -> str:
+        configured = self._get_provider_setting(provider, "runtime")
+        return resolve_qwen3_runtime_name(configured)
+
     def _decode_base64_payload(self, payload: str) -> bytes:
         """Decode base64 payload with optional data URL prefix."""
         if "," in payload:
@@ -550,6 +554,35 @@ class TTSInputValidator:
             if provider == "qwen3_tts":
                 model_name = (getattr(request, "model", None) or "").strip().lower()
                 extras = request.extra_params or {}
+                runtime_name = self._resolve_qwen3_runtime(provider)
+                if runtime_name == "mlx":
+                    if request.voice and isinstance(request.voice, str) and request.voice.startswith("custom:"):
+                        raise TTSInvalidInputError(
+                            "Uploaded custom voices are not supported by the MLX runtime in v1",
+                            provider=provider,
+                        )
+                    if "voicedesign" in model_name:
+                        raise TTSInvalidInputError(
+                            "Mode 'voice_design' is not supported by the MLX runtime",
+                            provider=provider,
+                        )
+                    clone_requested = bool(
+                        request.voice_reference
+                        or (isinstance(extras, dict) and (
+                            extras.get("reference_text")
+                            or extras.get("ref_text")
+                            or extras.get("voice_reference_text")
+                            or extras.get("x_vector_only_mode")
+                            or extras.get("voice_clone_prompt")
+                        ))
+                        or model_name.endswith("base")
+                        or model_name.endswith("-base")
+                    )
+                    if clone_requested:
+                        raise TTSInvalidInputError(
+                            "Mode 'voice_clone' is not supported by the MLX runtime",
+                            provider=provider,
+                        )
                 if model_name == "auto" or "customvoice" in model_name:
                     if request.voice and isinstance(request.voice, str) and not request.voice.startswith("custom:"):
                         normalized = self._normalize_qwen3_speaker(request.voice)

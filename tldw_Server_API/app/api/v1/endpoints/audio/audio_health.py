@@ -13,6 +13,7 @@ from tldw_Server_API.app.api.v1.endpoints.audio.audio_tts import get_tts_service
 from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_audio_model_to_whisper
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
+from tldw_Server_API.app.core.TTS.circuit_breaker import build_qwen_runtime_breaker_key
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
@@ -97,10 +98,19 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
                             continue
                         availability = str(raw_entry.get("availability") or "unknown").strip().lower() or "unknown"
                         serialized_caps = _serialize_tts_caps_for_health(tts_service, raw_entry.get("capabilities"))
+                        metadata = {}
+                        if isinstance(serialized_caps, dict):
+                            metadata = dict(serialized_caps.get("metadata") or {})
+                        runtime_name = metadata.get("runtime")
+                        breaker_key = provider_name
+                        if provider_name == "qwen3_tts" and runtime_name:
+                            breaker_key = build_qwen_runtime_breaker_key(provider_name, str(runtime_name))
                         capability_envelopes.append(
                             {
                                 "provider": provider_name,
                                 "availability": availability,
+                                "runtime": runtime_name,
+                                "breaker_key": breaker_key,
                                 "capabilities": serialized_caps,
                             }
                         )
@@ -110,10 +120,15 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
                         if isinstance(current_details, dict):
                             current_details.setdefault("availability", availability)
                             current_details.setdefault("status", availability)
+                            if runtime_name:
+                                current_details.setdefault("runtime", runtime_name)
+                            current_details.setdefault("breaker_key", breaker_key)
                         else:
                             provider_details[provider_name] = {
                                 "status": availability,
                                 "availability": availability,
+                                "runtime": runtime_name,
+                                "breaker_key": breaker_key,
                                 "initialized": False,
                                 "failed": availability == "failed",
                             }
