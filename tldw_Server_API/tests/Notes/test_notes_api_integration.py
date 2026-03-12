@@ -841,8 +841,16 @@ def test_export_notes_csv_route(client: TestClient):
 
 def test_import_notes_json_creates_notes_and_keywords(client: TestClient):
     expected_db_client_id = "test_api_client_for_user_db"
-    mock_chacha_db_instance.get_note_by_id.side_effect = lambda note_id: None
-    mock_chacha_db_instance.add_note.return_value = str(uuid.uuid4())
+    created_note_id = str(uuid.uuid4())
+    mock_chacha_db_instance.add_note.return_value = created_note_id
+    mock_chacha_db_instance.get_note_by_id.side_effect = lambda note_id: (
+        create_timestamped_data(
+            {"id": created_note_id, "title": "Imported Note", "content": "Imported body"},
+            expected_db_client_id,
+        )
+        if str(note_id) == created_note_id
+        else None
+    )
     mock_chacha_db_instance.get_keywords_for_note.return_value = []
     mock_chacha_db_instance.get_keyword_by_text.return_value = {
         "id": 42,
@@ -922,7 +930,21 @@ def test_import_notes_round_trip_accepts_export_wrapper_payload(client: TestClie
     assert export_payload["count"] == 1
 
     mock_chacha_db_instance.get_note_by_id.return_value = None
-    mock_chacha_db_instance.add_note.return_value = str(uuid.uuid4())
+    created_note_id = str(uuid.uuid4())
+    mock_chacha_db_instance.add_note.return_value = created_note_id
+    mock_chacha_db_instance.get_note_by_id.side_effect = lambda note_id: (
+        create_timestamped_data(
+            {
+                "id": created_note_id,
+                "title": "Round-trip source note",
+                "content": "Round-trip body",
+            },
+            expected_db_client_id,
+        )
+        if str(note_id) == created_note_id
+        else None
+    )
+    mock_chacha_db_instance.get_keywords_for_note.return_value = []
 
     import_response = client.post(
         "/api/v1/notes/import",
@@ -947,7 +969,22 @@ def test_import_notes_round_trip_accepts_export_wrapper_payload(client: TestClie
 
 
 def test_import_notes_partial_success_includes_parse_errors(client: TestClient):
-    mock_chacha_db_instance.add_note.return_value = str(uuid.uuid4())
+    expected_db_client_id = "test_api_client_for_user_db"
+    created_note_id = str(uuid.uuid4())
+    mock_chacha_db_instance.add_note.return_value = created_note_id
+    mock_chacha_db_instance.get_note_by_id.side_effect = lambda note_id: (
+        create_timestamped_data(
+            {
+                "id": created_note_id,
+                "title": "Imported Markdown",
+                "content": "# Imported Markdown\n\nBody from markdown.",
+            },
+            expected_db_client_id,
+        )
+        if str(note_id) == created_note_id
+        else None
+    )
+    mock_chacha_db_instance.get_keywords_for_note.return_value = []
     payload = {
         "duplicate_strategy": "create_copy",
         "items": [

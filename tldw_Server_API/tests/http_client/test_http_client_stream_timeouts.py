@@ -18,7 +18,16 @@ def _has_httpx():
         return False
 
 
+def _has_aiohttp():
+    try:
+        import aiohttp  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installed")
+requires_aiohttp = pytest.mark.skipif(not _has_aiohttp(), reason="aiohttp not installed")
 
 
 class StreamResponse:
@@ -138,6 +147,7 @@ async def test_stream_bytes_honors_date_form_retry_after_before_first_chunk_http
     assert delays[0] >= 3.0
 
 
+@requires_aiohttp
 @pytest.mark.asyncio
 async def test_stream_bytes_retries_aiohttp_transport_error_before_first_chunk(monkeypatch):
     from tldw_Server_API.app.core import http_client as hc
@@ -155,7 +165,6 @@ async def test_stream_bytes_retries_aiohttp_transport_error_before_first_chunk(m
 
         yield AioStreamResponse("http://93.184.216.34/stream"), iter_bytes()
 
-    monkeypatch.setattr(hc, "aiohttp", object())
     monkeypatch.setattr(hc, "_aiohttp_stream_io", fake_aiohttp_stream_io)
 
     chunks = []
