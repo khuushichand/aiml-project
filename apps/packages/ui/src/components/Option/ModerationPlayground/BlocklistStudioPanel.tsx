@@ -16,17 +16,10 @@ interface BlocklistStudioPanelProps {
 }
 
 type SubTab = "managed" | "raw"
-type PhaseValue = "input" | "output" | "both"
 
 const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: "managed", label: "Managed Rules" },
   { key: "raw", label: "Raw Editor" }
-]
-
-const PHASE_OPTIONS: { value: PhaseValue; label: string }[] = [
-  { value: "input", label: "Input" },
-  { value: "output", label: "Output" },
-  { value: "both", label: "Both" }
 ]
 
 const PAGE_SIZE = 10
@@ -40,8 +33,7 @@ function composeLine(
   pattern: string,
   action: string,
   replacement: string,
-  categories: string[],
-  _phase: PhaseValue
+  categories: string[]
 ): string {
   let line = pattern.trim()
   if (!line) return ""
@@ -126,7 +118,6 @@ const BlocklistStudioPanel: React.FC<BlocklistStudioPanelProps> = ({ blocklist, 
   const [action, setAction] = React.useState("block")
   const [replacement, setReplacement] = React.useState("")
   const [categories, setCategories] = React.useState<string[]>([])
-  const [phase, setPhase] = React.useState<PhaseValue>("both")
   const [inlineLint, setInlineLint] = React.useState<BlocklistLintItem[] | null>(null)
 
   // Auto-load managed rules on mount
@@ -137,7 +128,7 @@ const BlocklistStudioPanel: React.FC<BlocklistStudioPanelProps> = ({ blocklist, 
     })
   }, [blocklist.loadManaged]) // stable callback from useCallback([], [])
 
-  const composed = composeLine(pattern, action, replacement, categories, phase)
+  const composed = composeLine(pattern, action, replacement, categories)
 
   const handleValidate = async () => {
     if (!composed) {
@@ -172,7 +163,6 @@ const BlocklistStudioPanel: React.FC<BlocklistStudioPanelProps> = ({ blocklist, 
       setAction("block")
       setReplacement("")
       setCategories([])
-      setPhase("both")
       setInlineLint(null)
     } catch (err: any) {
       messageApi.error(err?.message || "Failed to add rule")
@@ -270,26 +260,6 @@ const BlocklistStudioPanel: React.FC<BlocklistStudioPanelProps> = ({ blocklist, 
             />
           </div>
 
-          {/* Phase */}
-          <div>
-            <label className="block text-xs text-text-muted mb-1">Phase</label>
-            <div className="flex rounded-lg border border-border overflow-hidden" role="group">
-              {PHASE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setPhase(opt.value)}
-                  className={`flex-1 px-3 py-2 text-sm font-medium transition-colors ${
-                    phase === opt.value
-                      ? "bg-blue-500 text-white"
-                      : "bg-bg text-text-muted hover:text-text hover:bg-surface/50"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
 
         {/* Composed preview */}

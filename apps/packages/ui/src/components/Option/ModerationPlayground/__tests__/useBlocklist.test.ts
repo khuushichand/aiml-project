@@ -32,6 +32,7 @@ describe("useBlocklist", () => {
     const { result } = renderHook(() => useBlocklist())
     expect(result.current.rawText).toBe("")
     expect(result.current.rawLint).toBeNull()
+    expect(result.current.isDirtyRaw).toBe(false)
     expect(result.current.managedItems).toEqual([])
     expect(result.current.managedVersion).toBe("")
     expect(result.current.managedLine).toBe("")
@@ -78,6 +79,25 @@ describe("useBlocklist", () => {
     })
 
     expect(updateBlocklistMock).toHaveBeenCalledWith(["rule1", "rule2"])
+    expect(result.current.isDirtyRaw).toBe(false)
+  })
+
+  it("tracks raw editor dirtiness relative to the loaded baseline", async () => {
+    getBlocklistMock.mockResolvedValue(["rule1", "rule2"])
+
+    const { result } = renderHook(() => useBlocklist())
+
+    await act(async () => {
+      await result.current.loadRaw()
+    })
+
+    expect(result.current.isDirtyRaw).toBe(false)
+
+    act(() => {
+      result.current.setRawText("rule1\nrule2\nrule3")
+    })
+
+    expect(result.current.isDirtyRaw).toBe(true)
   })
 
   it("lintRaw calls lintBlocklist and stores result", async () => {

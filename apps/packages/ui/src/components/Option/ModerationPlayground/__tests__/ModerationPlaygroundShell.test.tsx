@@ -2,6 +2,29 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+const mockBlocklist = {
+  rawText: "",
+  setRawText: vi.fn(),
+  rawLint: null,
+  isDirtyRaw: false,
+  loading: false,
+  loadRaw: vi.fn().mockResolvedValue(undefined),
+  saveRaw: vi.fn().mockResolvedValue(undefined),
+  saveRawText: vi.fn().mockResolvedValue(undefined),
+  lintRaw: vi.fn().mockResolvedValue(undefined),
+  managedItems: [],
+  managedVersion: "",
+  managedLine: "",
+  setManagedLine: vi.fn(),
+  managedLint: null,
+  loadManaged: vi.fn().mockResolvedValue(undefined),
+  appendManaged: vi.fn().mockResolvedValue(undefined),
+  appendLine: vi.fn().mockResolvedValue(undefined),
+  deleteManaged: vi.fn().mockResolvedValue(undefined),
+  lintManagedLine: vi.fn().mockResolvedValue(undefined),
+  lintLine: vi.fn().mockResolvedValue({ items: [], valid_count: 0, invalid_count: 0 })
+}
+
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: null, isFetching: false, error: null, refetch: vi.fn() })
 }))
@@ -19,6 +42,9 @@ vi.mock("@/services/moderation", () => ({
   testModeration: vi.fn(),
   getUserOverride: vi.fn()
 }))
+vi.mock("../hooks/useBlocklist", () => ({
+  useBlocklist: () => mockBlocklist
+}))
 
 import { ModerationPlaygroundShell } from "../ModerationPlaygroundShell"
 
@@ -26,6 +52,7 @@ describe("ModerationPlaygroundShell", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.setItem("moderation-playground-onboarded", "true")
+    mockBlocklist.isDirtyRaw = false
   })
 
   it("renders 5 tab buttons", () => {
@@ -54,5 +81,13 @@ describe("ModerationPlaygroundShell", () => {
     const option = screen.getByRole("option", { name: /server/i }) as HTMLOptionElement
     expect(option).toBeInTheDocument()
     expect(option.selected).toBe(true)
+  })
+
+  it("shows the unsaved indicator when the raw blocklist editor is dirty", () => {
+    mockBlocklist.isDirtyRaw = true
+
+    render(<ModerationPlaygroundShell />)
+
+    expect(screen.getByText(/unsaved/i)).toBeInTheDocument()
   })
 })

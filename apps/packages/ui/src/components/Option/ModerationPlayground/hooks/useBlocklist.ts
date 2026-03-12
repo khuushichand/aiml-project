@@ -15,6 +15,7 @@ export interface BlocklistState {
   rawText: string
   setRawText: React.Dispatch<React.SetStateAction<string>>
   rawLint: BlocklistLintResponse | null
+  isDirtyRaw: boolean
   managedItems: BlocklistManagedItem[]
   managedVersion: string
   managedLine: string
@@ -36,17 +37,21 @@ export interface BlocklistState {
 export function useBlocklist(): BlocklistState {
   const [rawText, setRawText] = React.useState("")
   const [rawLint, setRawLint] = React.useState<BlocklistLintResponse | null>(null)
+  const [rawBaseline, setRawBaseline] = React.useState("")
   const [managedItems, setManagedItems] = React.useState<BlocklistManagedItem[]>([])
   const [managedVersion, setManagedVersion] = React.useState("")
   const [managedLine, setManagedLine] = React.useState("")
   const [managedLint, setManagedLint] = React.useState<BlocklistLintResponse | null>(null)
   const [loading, setLoading] = React.useState(false)
+  const isDirtyRaw = rawText !== rawBaseline
 
   const loadRaw = React.useCallback(async () => {
     setLoading(true)
     try {
       const lines = await getBlocklist()
-      setRawText((lines || []).join("\n"))
+      const nextText = (lines || []).join("\n")
+      setRawText(nextText)
+      setRawBaseline(nextText)
       setRawLint(null)
     } finally {
       setLoading(false)
@@ -58,6 +63,10 @@ export function useBlocklist(): BlocklistState {
     try {
       const lines = rawText.split(/\r?\n/).map((line) => line.trimEnd())
       await updateBlocklist(lines)
+      const nextText = lines.join("\n")
+      setRawText(nextText)
+      setRawBaseline(nextText)
+      setRawLint(null)
     } finally {
       setLoading(false)
     }
@@ -68,7 +77,9 @@ export function useBlocklist(): BlocklistState {
     try {
       const lines = text.split(/\r?\n/).map((line) => line.trimEnd())
       await updateBlocklist(lines)
-      setRawText(text)
+      const nextText = lines.join("\n")
+      setRawText(nextText)
+      setRawBaseline(nextText)
       setRawLint(null)
     } finally {
       setLoading(false)
@@ -171,6 +182,7 @@ export function useBlocklist(): BlocklistState {
     rawText,
     setRawText,
     rawLint,
+    isDirtyRaw,
     managedItems,
     managedVersion,
     managedLine,

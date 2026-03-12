@@ -54,7 +54,7 @@ export const ModerationPlaygroundShell: React.FC = () => {
   const tester = useModerationTest()
 
   const policy = settings.policyQuery.data || {}
-  const hasUnsavedChanges = settings.isDirty || overrides.isDirty
+  const hasUnsavedChanges = settings.isDirty || overrides.isDirty || blocklist.isDirtyRaw
 
   // Authorization check — show error if backend returns 401/403
   const hasPermissionError = [settings.settingsQuery?.error, settings.policyQuery?.error, overrides.overridesQuery?.error]

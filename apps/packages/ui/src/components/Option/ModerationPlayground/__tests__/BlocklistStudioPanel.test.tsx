@@ -32,9 +32,11 @@ function makeBlocklist(overrides: Partial<ReturnType<typeof import("../hooks/use
     rawText: "",
     setRawText: vi.fn(),
     rawLint: null,
+    isDirtyRaw: false,
     loading: false,
     loadRaw: vi.fn().mockResolvedValue(undefined),
     saveRaw: vi.fn().mockResolvedValue(undefined),
+    saveRawText: vi.fn().mockResolvedValue(undefined),
     lintRaw: vi.fn().mockResolvedValue(undefined),
     managedItems: [],
     managedVersion: "",
@@ -43,8 +45,10 @@ function makeBlocklist(overrides: Partial<ReturnType<typeof import("../hooks/use
     managedLint: null,
     loadManaged: vi.fn().mockResolvedValue(undefined),
     appendManaged: vi.fn().mockResolvedValue(undefined),
+    appendLine: vi.fn().mockResolvedValue(undefined),
     deleteManaged: vi.fn().mockResolvedValue(undefined),
     lintManagedLine: vi.fn().mockResolvedValue(undefined),
+    lintLine: vi.fn().mockResolvedValue({ items: [], valid_count: 0, invalid_count: 0 }),
     ...overrides
   }
 }
@@ -154,6 +158,16 @@ describe("BlocklistStudioPanel", () => {
 
     expect(screen.getByRole("button", { name: /validate/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /add rule/i })).toBeInTheDocument()
+  })
+
+  it("does not render unsupported phase controls in the managed rule form", () => {
+    const blocklist = makeBlocklist()
+    render(<BlocklistStudioPanel blocklist={blocklist as any} messageApi={messageApi} />)
+
+    expect(screen.queryByText(/^Phase$/)).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Input" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Output" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Both" })).not.toBeInTheDocument()
   })
 
   it("renders syntax reference in raw editor tab too", async () => {

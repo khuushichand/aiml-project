@@ -21,6 +21,10 @@ vi.mock("@/services/moderation", () => ({
   getEffectivePolicy: vi.fn(),
   reloadModeration: vi.fn(),
   listUserOverrides: vi.fn(),
+  getManagedBlocklist: vi.fn().mockResolvedValue({
+    data: { version: "v1", items: [] },
+    etag: null
+  }),
   testModeration: vi.fn(),
   getUserOverride: vi.fn(),
   setUserOverride: vi.fn(),
