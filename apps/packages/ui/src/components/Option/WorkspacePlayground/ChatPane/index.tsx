@@ -2612,16 +2612,22 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                         activeVariantIndex={msg.activeVariantIndex}
                         onSwipePrev={
                           msg.isBot
-                            ? () => handleSwitchMessageVariant(idx, "prev")
+                            ? (id: string) => {
+                                const foundIdx = messages.findIndex((m) => m.id === id)
+                                if (foundIdx >= 0) handleSwitchMessageVariant(foundIdx, "prev")
+                              }
                             : undefined
                         }
                         onSwipeNext={
                           msg.isBot
-                            ? () => handleSwitchMessageVariant(idx, "next")
+                            ? (id: string) => {
+                                const foundIdx = messages.findIndex((m) => m.id === id)
+                                if (foundIdx >= 0) handleSwitchMessageVariant(foundIdx, "next")
+                              }
                             : undefined
                         }
                         onNewBranch={
-                          msg.isBot ? () => handleCreateChatBranch(idx) : undefined
+                          msg.isBot ? (idx: number) => handleCreateChatBranch(idx) : undefined
                         }
                         modelName={msg.modelName}
                         modelImage={msg.modelImage}
@@ -2640,10 +2646,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                             ? () => regenerateLastMessage()
                             : () => {}
                         }
-                        onDeleteMessage={() => handleDeleteMessageWithUndo(idx)}
+                        onDeleteMessage={(idx: number) => handleDeleteMessageWithUndo(idx)}
                         suppressDeleteSuccessToast
-                        onEditFormSubmit={(value, isSend) => {
-                          editMessage(idx, value, !msg.isBot, isSend)
+                        onEditFormSubmit={(idx: number, value: string, isUser: boolean, isSend?: boolean) => {
+                          editMessage(idx, value, isUser, isSend)
                         }}
                         hideEditAndRegenerate={!msg.isBot && idx !== messages.length - 1}
                         hideContinue={true}
