@@ -91,4 +91,24 @@ describe("WorkspaceSetsTab", () => {
     })
     expect(mocks.addWorkspaceSetMember).toHaveBeenCalledWith(52, "workspace-docs")
   })
+
+  it("opens the existing workspace-set editor from a drill target", async () => {
+    const onDrillHandled = vi.fn()
+    render(
+      <WorkspaceSetsTab
+        drillTarget={{
+          tab: "workspace-sets",
+          object_kind: "workspace_set_object",
+          object_id: "51",
+          action: "edit",
+          request_id: 7
+        }}
+        onDrillHandled={onDrillHandled}
+      />
+    )
+
+    expect(await screen.findByDisplayValue("Primary Workspace Set")).toBeTruthy()
+    expect(screen.getByDisplayValue("User-scoped reusable workspaces")).toBeTruthy()
+    expect(onDrillHandled).toHaveBeenCalledWith(7)
+  })
 })

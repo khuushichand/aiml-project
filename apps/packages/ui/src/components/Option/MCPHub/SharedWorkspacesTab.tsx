@@ -1,16 +1,27 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Alert, Button, Card, Empty, List, Space, Tag, Typography } from "antd"
 
 import {
   createSharedWorkspace,
   deleteSharedWorkspace,
   listSharedWorkspaces,
+  type McpHubDrillTarget,
   updateSharedWorkspace,
   type McpHubSharedWorkspace
 } from "@/services/tldw/mcp-hub"
 
-export const SharedWorkspacesTab = () => {
+type SharedWorkspacesTabProps = {
+  drillTarget?: McpHubDrillTarget | null
+  onDrillHandled?: (requestId: number) => void
+}
+
+export const SharedWorkspacesTab = ({
+  drillTarget = null,
+  onDrillHandled
+}: SharedWorkspacesTabProps) => {
+  const handledDrillRequestRef = useRef<number | null>(null)
   const [entries, setEntries] = useState<McpHubSharedWorkspace[]>([])
+  const [entriesLoaded, setEntriesLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -34,12 +45,36 @@ export const SharedWorkspacesTab = () => {
       setErrorMessage("Failed to load shared workspaces.")
     } finally {
       setLoading(false)
+      setEntriesLoaded(true)
     }
   }
 
   useEffect(() => {
     void loadEntries()
   }, [])
+
+  useEffect(() => {
+    if (
+      !drillTarget ||
+      drillTarget.tab !== "shared-workspaces" ||
+      drillTarget.object_kind !== "shared_workspace"
+    ) {
+      return
+    }
+    if (
+      handledDrillRequestRef.current === drillTarget.request_id ||
+      loading ||
+      !entriesLoaded
+    ) {
+      return
+    }
+    const entry = entries.find((row) => String(row.id) === String(drillTarget.object_id))
+    if (entry) {
+      handledDrillRequestRef.current = drillTarget.request_id
+      openForEdit(entry)
+      onDrillHandled?.(drillTarget.request_id)
+    }
+  }, [drillTarget, entries, entriesLoaded, loading, onDrillHandled])
 
   const resetForm = () => {
     setCreateOpen(false)

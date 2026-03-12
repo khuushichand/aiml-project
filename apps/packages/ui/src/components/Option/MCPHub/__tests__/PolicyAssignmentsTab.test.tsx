@@ -517,4 +517,24 @@ describe("PolicyAssignmentsTab", () => {
     expect(errorAlert?.textContent).toMatch(/workspace-alpha, workspace-beta/i)
     expect(errorAlert?.textContent).toMatch(/\/repo, \/repo\/docs/i)
   })
+
+  it("opens the existing assignment editor from a drill target", async () => {
+    const onDrillHandled = vi.fn()
+    render(
+      <PolicyAssignmentsTab
+        drillTarget={{
+          tab: "assignments",
+          object_kind: "policy_assignment",
+          object_id: "11",
+          action: "edit",
+          request_id: 41
+        }}
+        onDrillHandled={onDrillHandled}
+      />
+    )
+
+    expect(await screen.findByText("Assignment Override")).toBeTruthy()
+    expect(screen.getByText("Base Assignment Policy")).toBeTruthy()
+    expect(onDrillHandled).toHaveBeenCalledWith(41)
+  })
 })

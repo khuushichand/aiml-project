@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 
 vi.mock("../PermissionProfilesTab", () => ({
   PermissionProfilesTab: () => <div>profiles tab</div>
@@ -26,6 +27,22 @@ vi.mock("../ToolCatalogsTab", () => ({
 vi.mock("../ExternalServersTab", () => ({
   ExternalServersTab: () => <div>credentials tab</div>
 }))
+vi.mock("../GovernanceAuditTab", () => ({
+  GovernanceAuditTab: ({ onOpen }: { onOpen?: (target: { tab: string; object_kind: string; object_id: string }) => void }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onOpen?.({
+          tab: "assignments",
+          object_kind: "policy_assignment",
+          object_id: "11"
+        })
+      }
+    >
+      open assignment from audit
+    </button>
+  )
+}))
 
 import { McpHubPage } from "../McpHubPage"
 
@@ -37,5 +54,14 @@ describe("McpHubPage", () => {
     expect(screen.getByText("Assignments")).toBeTruthy()
     expect(screen.getByText("Audit")).toBeTruthy()
   })
-})
 
+  it("opens the requested MCP Hub tab from the audit view", async () => {
+    const user = userEvent.setup()
+    render(<McpHubPage />)
+
+    await user.click(screen.getByText("Audit"))
+    await user.click(screen.getByRole("button", { name: /open assignment from audit/i }))
+
+    expect(screen.getByText("assignments tab")).toBeTruthy()
+  })
+})

@@ -329,4 +329,44 @@ describe("ExternalServersTab", () => {
     await user.click(screen.getByRole("button", { name: /delete docs managed/i }))
     expect(mocks.deleteExternalServer).toHaveBeenCalledWith("docs-managed")
   })
+
+  it("opens the managed server editor from a drill target", async () => {
+    const onDrillHandled = vi.fn()
+    render(
+      <ExternalServersTab
+        drillTarget={{
+          tab: "credentials",
+          object_kind: "external_server",
+          object_id: "docs-managed",
+          action: "edit",
+          request_id: 12
+        }}
+        onDrillHandled={onDrillHandled}
+      />
+    )
+
+    expect(await screen.findByDisplayValue("Docs Managed")).toBeTruthy()
+    expect(screen.getByDisplayValue("stdio")).toBeTruthy()
+    expect(onDrillHandled).toHaveBeenCalledWith(12)
+  })
+
+  it("falls back to visible focus for legacy servers from a drill target", async () => {
+    const onDrillHandled = vi.fn()
+    render(
+      <ExternalServersTab
+        drillTarget={{
+          tab: "credentials",
+          object_kind: "external_server",
+          object_id: "search-legacy",
+          action: "focus",
+          request_id: 13
+        }}
+        onDrillHandled={onDrillHandled}
+      />
+    )
+
+    expect(await screen.findByText("Search Legacy")).toBeTruthy()
+    expect(await screen.findByText(/focused from audit/i)).toBeTruthy()
+    expect(onDrillHandled).toHaveBeenCalledWith(13)
+  })
 })

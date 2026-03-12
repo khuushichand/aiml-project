@@ -78,4 +78,24 @@ describe("SharedWorkspacesTab", () => {
       is_active: true
     })
   })
+
+  it("opens the existing shared-workspace editor from a drill target", async () => {
+    const onDrillHandled = vi.fn()
+    render(
+      <SharedWorkspacesTab
+        drillTarget={{
+          tab: "shared-workspaces",
+          object_kind: "shared_workspace",
+          object_id: "71",
+          action: "edit",
+          request_id: 9
+        }}
+        onDrillHandled={onDrillHandled}
+      />
+    )
+
+    expect(await screen.findByDisplayValue("shared-docs")).toBeTruthy()
+    expect(screen.getByDisplayValue("Shared Docs")).toBeTruthy()
+    expect(onDrillHandled).toHaveBeenCalledWith(9)
+  })
 })

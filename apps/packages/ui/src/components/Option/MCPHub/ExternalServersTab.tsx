@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } from "antd"
 
 import {
@@ -12,6 +12,7 @@ import {
   listExternalServers,
   setExternalServerSecret,
   setExternalServerSlotSecret,
+  type McpHubDrillTarget,
   updateExternalServer,
   updateExternalServerAuthTemplate,
   updateExternalServerCredentialSlot,
@@ -45,8 +46,18 @@ const normalizeAuthTemplateMapping = (
   required: mapping.required !== false
 })
 
-export const ExternalServersTab = () => {
+type ExternalServersTabProps = {
+  drillTarget?: McpHubDrillTarget | null
+  onDrillHandled?: (requestId: number) => void
+}
+
+export const ExternalServersTab = ({
+  drillTarget = null,
+  onDrillHandled
+}: ExternalServersTabProps) => {
+  const handledDrillRequestRef = useRef<number | null>(null)
   const [servers, setServers] = useState<McpHubExternalServer[]>([])
+  const [serversLoaded, setServersLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
   const [activeServerId, setActiveServerId] = useState<string>("")
   const [secretValue, setSecretValue] = useState("")
@@ -76,6 +87,7 @@ export const ExternalServersTab = () => {
   const [slotSecretValue, setSlotSecretValue] = useState("")
   const [slotSecretSaving, setSlotSecretSaving] = useState(false)
   const [slotSecretClearing, setSlotSecretClearing] = useState(false)
+  const [focusedServerId, setFocusedServerId] = useState<string | null>(null)
   const [authTemplateMappings, setAuthTemplateMappings] = useState<McpHubExternalServerAuthTemplateMapping[]>([])
   const [authTemplateLoading, setAuthTemplateLoading] = useState(false)
   const [authTemplateSaving, setAuthTemplateSaving] = useState(false)
@@ -137,12 +149,42 @@ export const ExternalServersTab = () => {
       setErrorMessage("Failed to load external servers.")
     } finally {
       setLoading(false)
+      setServersLoaded(true)
     }
   }
 
   useEffect(() => {
     void loadServers()
   }, [])
+
+  useEffect(() => {
+    if (
+      !drillTarget ||
+      drillTarget.tab !== "credentials" ||
+      drillTarget.object_kind !== "external_server"
+    ) {
+      return
+    }
+    if (
+      handledDrillRequestRef.current === drillTarget.request_id ||
+      loading ||
+      !serversLoaded
+    ) {
+      return
+    }
+    const server = servers.find((row) => String(row.id) === String(drillTarget.object_id))
+    if (server) {
+      handledDrillRequestRef.current = drillTarget.request_id
+      if (server.server_source === "legacy") {
+        setFocusedServerId(server.id)
+      } else {
+        setFocusedServerId(server.id)
+        setActiveServerId(server.id)
+        openEditForm(server)
+      }
+      onDrillHandled?.(drillTarget.request_id)
+    }
+  }, [drillTarget, loading, onDrillHandled, servers, serversLoaded])
 
   useEffect(() => {
     if (activeSlots.length === 0) {
@@ -952,6 +994,7 @@ export const ExternalServersTab = () => {
             <Space wrap size="small" style={{ width: "100%", justifyContent: "space-between" }}>
               <Space wrap size="small">
                 <Typography.Text strong>{server.name}</Typography.Text>
+                {focusedServerId === server.id ? <Tag color="blue">focused from audit</Tag> : null}
                 {server.server_source === "legacy" ? (
                   <Tag>legacy read only</Tag>
                 ) : (

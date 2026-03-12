@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Alert, Button, Card, Empty, List, Space, Tag, Typography } from "antd"
 
 import {
@@ -10,6 +10,7 @@ import {
   listWorkspaceSetMembers,
   listWorkspaceSetObjects,
   updateWorkspaceSetObject,
+  type McpHubDrillTarget,
   type McpHubSharedWorkspace,
   type McpHubWorkspaceSetObject,
   type McpHubWorkspaceSetObjectMember
@@ -17,8 +18,18 @@ import {
 
 import { parseLineList } from "./policyHelpers"
 
-export const WorkspaceSetsTab = () => {
+type WorkspaceSetsTabProps = {
+  drillTarget?: McpHubDrillTarget | null
+  onDrillHandled?: (requestId: number) => void
+}
+
+export const WorkspaceSetsTab = ({
+  drillTarget = null,
+  onDrillHandled
+}: WorkspaceSetsTabProps) => {
+  const handledDrillRequestRef = useRef<number | null>(null)
   const [objects, setObjects] = useState<McpHubWorkspaceSetObject[]>([])
+  const [objectsLoaded, setObjectsLoaded] = useState(false)
   const [membersByObjectId, setMembersByObjectId] = useState<Record<number, McpHubWorkspaceSetObjectMember[]>>({})
   const [sharedEntries, setSharedEntries] = useState<McpHubSharedWorkspace[]>([])
   const [loading, setLoading] = useState(false)
@@ -66,12 +77,38 @@ export const WorkspaceSetsTab = () => {
       setErrorMessage("Failed to load workspace sets.")
     } finally {
       setLoading(false)
+      setObjectsLoaded(true)
     }
   }
 
   useEffect(() => {
     void loadObjects()
   }, [])
+
+  useEffect(() => {
+    if (
+      !drillTarget ||
+      drillTarget.tab !== "workspace-sets" ||
+      drillTarget.object_kind !== "workspace_set_object"
+    ) {
+      return
+    }
+    if (
+      handledDrillRequestRef.current === drillTarget.request_id ||
+      loading ||
+      !objectsLoaded
+    ) {
+      return
+    }
+    const workspaceSet = objects.find(
+      (row) => String(row.id) === String(drillTarget.object_id)
+    )
+    if (workspaceSet) {
+      handledDrillRequestRef.current = drillTarget.request_id
+      openForEdit(workspaceSet)
+      onDrillHandled?.(drillTarget.request_id)
+    }
+  }, [drillTarget, loading, objects, objectsLoaded, onDrillHandled])
 
   const resetForm = () => {
     setCreateOpen(false)

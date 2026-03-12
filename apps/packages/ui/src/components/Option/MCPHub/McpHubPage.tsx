@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Tabs, Typography } from "antd"
 
 import { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
@@ -10,17 +10,44 @@ import { SharedWorkspacesTab } from "./SharedWorkspacesTab"
 import { ToolCatalogsTab } from "./ToolCatalogsTab"
 import { ExternalServersTab } from "./ExternalServersTab"
 import { WorkspaceSetsTab } from "./WorkspaceSetsTab"
-import type { McpHubGovernanceAuditNavigateTarget, McpHubGovernanceAuditTabKey } from "@/services/tldw/mcp-hub"
+import type {
+  McpHubDrillAction,
+  McpHubDrillTarget,
+  McpHubGovernanceAuditNavigateTarget,
+  McpHubGovernanceAuditTabKey
+} from "@/services/tldw/mcp-hub"
 
 export const McpHubPage = () => {
   const [activeTab, setActiveTab] = useState<McpHubGovernanceAuditTabKey>("profiles")
-  const [, setSelectedObjectKind] = useState<string | null>(null)
-  const [, setSelectedObjectId] = useState<string | null>(null)
+  const [drillTarget, setDrillTarget] = useState<McpHubDrillTarget | null>(null)
+  const requestIdRef = useRef(0)
+
+  const _deriveDrillAction = (
+    target: McpHubGovernanceAuditNavigateTarget
+  ): McpHubDrillAction => {
+    if (
+      target.tab === "assignments" ||
+      target.tab === "workspace-sets" ||
+      target.tab === "shared-workspaces" ||
+      target.tab === "credentials"
+    ) {
+      return "edit"
+    }
+    return "focus"
+  }
 
   const handleOpen = (target: McpHubGovernanceAuditNavigateTarget) => {
-    setSelectedObjectKind(target.object_kind)
-    setSelectedObjectId(target.object_id)
+    requestIdRef.current += 1
+    setDrillTarget({
+      ...target,
+      action: _deriveDrillAction(target),
+      request_id: requestIdRef.current
+    })
     setActiveTab(target.tab)
+  }
+
+  const handleDrillHandled = (requestId: number) => {
+    setDrillTarget((current) => (current?.request_id === requestId ? null : current))
   }
 
   return (
@@ -40,7 +67,12 @@ export const McpHubPage = () => {
           {
             key: "assignments",
             label: "Assignments",
-            children: <PolicyAssignmentsTab />
+            children: (
+              <PolicyAssignmentsTab
+                drillTarget={drillTarget}
+                onDrillHandled={handleDrillHandled}
+              />
+            )
           },
           {
             key: "path-scopes",
@@ -50,12 +82,22 @@ export const McpHubPage = () => {
           {
             key: "workspace-sets",
             label: "Workspace Sets",
-            children: <WorkspaceSetsTab />
+            children: (
+              <WorkspaceSetsTab
+                drillTarget={drillTarget}
+                onDrillHandled={handleDrillHandled}
+              />
+            )
           },
           {
             key: "shared-workspaces",
             label: "Shared Workspaces",
-            children: <SharedWorkspacesTab />
+            children: (
+              <SharedWorkspacesTab
+                drillTarget={drillTarget}
+                onDrillHandled={handleDrillHandled}
+              />
+            )
           },
           {
             key: "audit",
@@ -75,7 +117,12 @@ export const McpHubPage = () => {
           {
             key: "credentials",
             label: "Credentials",
-            children: <ExternalServersTab />
+            children: (
+              <ExternalServersTab
+                drillTarget={drillTarget}
+                onDrillHandled={handleDrillHandled}
+              />
+            )
           }
         ]}
       />

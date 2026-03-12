@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } from "antd"
 
 import {
@@ -25,6 +25,7 @@ import {
   updatePolicyAssignment,
   type McpHubApprovalPolicy,
   type McpHubCredentialBinding,
+  type McpHubDrillTarget,
   type McpHubEffectivePolicy,
   type McpHubEffectiveExternalAccess,
   type McpHubExternalServer,
@@ -125,8 +126,18 @@ const _formatAssignmentValidationError = (error: unknown, fallback: string): str
   return parts.join(" ")
 }
 
-export const PolicyAssignmentsTab = () => {
+type PolicyAssignmentsTabProps = {
+  drillTarget?: McpHubDrillTarget | null
+  onDrillHandled?: (requestId: number) => void
+}
+
+export const PolicyAssignmentsTab = ({
+  drillTarget = null,
+  onDrillHandled
+}: PolicyAssignmentsTabProps) => {
+  const handledDrillRequestRef = useRef<number | null>(null)
   const [assignments, setAssignments] = useState<McpHubPolicyAssignment[]>([])
+  const [assignmentsLoaded, setAssignmentsLoaded] = useState(false)
   const [profiles, setProfiles] = useState<McpHubPermissionProfile[]>([])
   const [approvalPolicies, setApprovalPolicies] = useState<McpHubApprovalPolicy[]>([])
   const [effectivePolicy, setEffectivePolicy] = useState<McpHubEffectivePolicy | null>(null)
@@ -222,6 +233,7 @@ export const PolicyAssignmentsTab = () => {
       setErrorMessage("Failed to load policy assignments.")
     } finally {
       setLoading(false)
+      setAssignmentsLoaded(true)
     }
   }
 
@@ -261,6 +273,31 @@ export const PolicyAssignmentsTab = () => {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (
+      !drillTarget ||
+      drillTarget.tab !== "assignments" ||
+      drillTarget.object_kind !== "policy_assignment"
+    ) {
+      return
+    }
+    if (
+      handledDrillRequestRef.current === drillTarget.request_id ||
+      loading ||
+      !assignmentsLoaded
+    ) {
+      return
+    }
+    const assignment = assignments.find(
+      (row) => String(row.id) === String(drillTarget.object_id)
+    )
+    if (assignment) {
+      handledDrillRequestRef.current = drillTarget.request_id
+      openForEdit(assignment)
+      onDrillHandled?.(drillTarget.request_id)
+    }
+  }, [assignments, assignmentsLoaded, drillTarget, loading, onDrillHandled])
 
   const resetForm = () => {
     setCreateOpen(false)

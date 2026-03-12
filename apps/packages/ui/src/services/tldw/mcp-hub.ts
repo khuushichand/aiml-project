@@ -46,6 +46,16 @@ export type McpHubGovernanceAuditTabKey =
   | "tool-catalogs"
   | "credentials"
 
+export type McpHubDrillAction = "edit" | "focus"
+
+export type McpHubDrillTarget = {
+  tab: McpHubGovernanceAuditTabKey
+  object_kind: McpHubGovernanceAuditObjectKind
+  object_id: string
+  action: McpHubDrillAction
+  request_id: number
+}
+
 export type McpHubProfile = {
   id: number
   name: string
