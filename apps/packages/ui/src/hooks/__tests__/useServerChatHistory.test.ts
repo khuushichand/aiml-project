@@ -333,6 +333,42 @@ describe("useServerChatHistory", () => {
     queryClient.clear()
   })
 
+  it("pages server-side search results when search mode receives page and limit", async () => {
+    searchConversationsWithMetaMock.mockResolvedValueOnce({
+      chats: [createChat(26, { title: "Quota page 2" })],
+      total: 60
+    })
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(
+      () =>
+        useServerChatHistory("quota", {
+          enabled: true,
+          mode: "search",
+          page: 2,
+          limit: 25
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() =>
+      expect(result.current.data.map((chat) => chat.id)).toEqual(["chat-26"])
+    )
+
+    expect(searchConversationsWithMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "quota",
+        limit: 25,
+        offset: 25,
+        order_by: "recency"
+      }),
+      expect.anything()
+    )
+    expect(result.current.total).toBe(60)
+
+    queryClient.clear()
+  })
+
   it("uses server-side search when search mode targets trash chats", async () => {
     searchConversationsWithMetaMock.mockResolvedValueOnce({
       chats: [createChat(9, { title: "Quota cleanup" })],

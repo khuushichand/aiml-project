@@ -254,7 +254,8 @@ export function ServerChatList({
     sidebarRefreshState,
     hasUsableData,
     isShowingStaleData,
-    isLoading
+    isLoading,
+    isServerPagedResult = false
   } = useServerChatHistory(searchQuery, {
     deletedOnly: isTrashView,
     enabled: hasSearchQuery || serverHistoryOverviewEnabled,
@@ -264,7 +265,6 @@ export function ServerChatList({
     filterMode: chatTypeFilter
   })
   const serverChats = serverChatData || []
-  const isServerPagedOverview = !hasSearchQuery && (chatTypeFilter === "all" || isTrashView)
 
   React.useEffect(() => {
     if (hasSearchQuery) {
@@ -327,7 +327,7 @@ export function ServerChatList({
     () => [...pinnedChats, ...unpinnedChats],
     [pinnedChats, unpinnedChats]
   )
-  const totalChatCount = isServerPagedOverview ? serverChatTotal : orderedChats.length
+  const totalChatCount = isServerPagedResult ? serverChatTotal : orderedChats.length
   const totalPages = Math.max(
     1,
     Math.ceil(totalChatCount / CHAT_HISTORY_PAGE_SIZE)
@@ -336,13 +336,13 @@ export function ServerChatList({
   const pageStartIndex = (currentPageSafe - 1) * CHAT_HISTORY_PAGE_SIZE
   const pagedChats = React.useMemo(
     () =>
-      isServerPagedOverview
+      isServerPagedResult
         ? orderedChats
         : orderedChats.slice(
             pageStartIndex,
             pageStartIndex + CHAT_HISTORY_PAGE_SIZE
           ),
-    [isServerPagedOverview, orderedChats, pageStartIndex]
+    [isServerPagedResult, orderedChats, pageStartIndex]
   )
   const pagedPinnedChats = React.useMemo(
     () => pagedChats.filter((chat) => pinnedChatSet.has(chat.id)),

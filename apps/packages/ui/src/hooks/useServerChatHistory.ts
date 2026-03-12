@@ -221,10 +221,19 @@ export const useServerChatHistory = (
       Math.trunc(options?.limit ?? SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE)
     )
   )
+  const searchPage = Math.max(1, Math.trunc(options?.page ?? 1))
+  const searchLimit = Math.max(
+    1,
+    Math.min(
+      SERVER_CHAT_FETCH_LIMIT,
+      Math.trunc(options?.limit ?? SERVER_CHAT_SEARCH_LIMIT)
+    )
+  )
   const canUsePagedOverview =
     mode === "overview" && supportsServerPagedOverview(filterMode)
   const canUseConversationSearch =
     mode === "search" && normalizedQuery.length > 0
+  const isServerPagedResult = canUseConversationSearch || canUsePagedOverview
   const queryStrategy = canUseConversationSearch
     ? "search-server"
     : canUsePagedOverview
@@ -244,8 +253,16 @@ export const useServerChatHistory = (
         mode,
         q: mode === "search" ? normalizedQuery : "",
         strategy: queryStrategy,
-        page: canUsePagedOverview ? overviewPage : 1,
-        limit: canUsePagedOverview ? overviewLimit : null,
+        page: isServerPagedResult
+          ? canUseConversationSearch
+            ? searchPage
+            : overviewPage
+          : 1,
+        limit: isServerPagedResult
+          ? canUseConversationSearch
+            ? searchLimit
+            : overviewLimit
+          : null,
         filterMode
       }
     ],
@@ -257,8 +274,8 @@ export const useServerChatHistory = (
           const response = await tldwClient.searchConversationsWithMeta(
             {
               query: normalizedQuery,
-              limit: SERVER_CHAT_SEARCH_LIMIT,
-              offset: 0,
+              limit: searchLimit,
+              offset: (searchPage - 1) * searchLimit,
               order_by: "recency",
               ...(includeDeleted || deletedOnly ? { include_deleted: true } : {}),
               ...(deletedOnly ? { deleted_only: true } : {}),
@@ -347,11 +364,11 @@ export const useServerChatHistory = (
     [canUseConversationSearch, query.data, normalizedQuery]
   )
   const resolvedTotal = useMemo(() => {
-    if (canUsePagedOverview) {
+    if (isServerPagedResult) {
       return query.data?.total ?? filteredData.length
     }
     return filteredData.length
-  }, [canUsePagedOverview, filteredData.length, query.data])
+  }, [filteredData.length, isServerPagedResult, query.data])
 
   const sidebarState = useMemo(() => {
     if (query.status === "success") {
@@ -396,6 +413,7 @@ export const useServerChatHistory = (
     total: sidebarState.total,
     sidebarRefreshState: sidebarState.sidebarRefreshState,
     hasUsableData: sidebarState.hasUsableData,
-    isShowingStaleData: sidebarState.isShowingStaleData
+    isShowingStaleData: sidebarState.isShowingStaleData,
+    isServerPagedResult
   }
 }
