@@ -39,7 +39,21 @@ import {
   scheduleWorkspaceUndoAction,
   undoWorkspaceAction
 } from "../undo-manager"
+import {
+  collectDescendantSourceIds,
+  createWorkspaceOrganizationIndex,
+  getFolderSelectionState,
+  getSourceSelectionOrigin
+} from "@/store/workspace-organization"
 import { AddSourceModal } from "./AddSourceModal"
+import {
+  SourceFolderMembershipMenu,
+  type SourceFolderMembershipOption
+} from "./SourceFolderMembershipMenu"
+import {
+  SourceFolderTree,
+  type SourceFolderTreeNode
+} from "./SourceFolderTree"
 
 // Icon mapping for source types
 const SOURCE_TYPE_ICONS: Record<WorkspaceSourceType, React.ElementType> = {
@@ -107,14 +121,26 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   // Store state
   const sources = useWorkspaceStore((s) => s.sources)
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const sourceFolders = useWorkspaceStore((s) => s.sourceFolders) || []
+  const sourceFolderMemberships = useWorkspaceStore(
+    (s) => s.sourceFolderMemberships
+  ) || []
+  const selectedSourceFolderIds = useWorkspaceStore(
+    (s) => s.selectedSourceFolderIds
+  ) || []
+  const activeFolderId = useWorkspaceStore((s) => s.activeFolderId) || null
   const sourceSearchQuery = useWorkspaceStore((s) => s.sourceSearchQuery)
   const sourceFocusTarget = useWorkspaceStore((s) => s.sourceFocusTarget)
 
   // Store actions
   const toggleSourceSelection = useWorkspaceStore((s) => s.toggleSourceSelection)
+  const toggleSourceFolderSelection = useWorkspaceStore(
+    (s) => s.toggleSourceFolderSelection
+  ) || (() => undefined)
   const selectAllSources = useWorkspaceStore((s) => s.selectAllSources)
   const deselectAllSources = useWorkspaceStore((s) => s.deselectAllSources)
   const setSourceSearchQuery = useWorkspaceStore((s) => s.setSourceSearchQuery)
+  const setActiveFolder = useWorkspaceStore((s) => s.setActiveFolder) || (() => undefined)
   const clearSourceFocusTarget = useWorkspaceStore(
     (s) => s.clearSourceFocusTarget
   )
@@ -124,6 +150,8 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   const removeSources = useWorkspaceStore((s) => s.removeSources)
   const restoreSource = useWorkspaceStore((s) => s.restoreSource)
   const reorderSource = useWorkspaceStore((s) => s.reorderSource)
+  const assignSourceToFolders =
+    useWorkspaceStore((s) => s.assignSourceToFolders) || (() => undefined)
   const sourceItemRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
   const sourceListContainerRef = React.useRef<HTMLDivElement | null>(null)
   const [highlightedSourceId, setHighlightedSourceId] = React.useState<
@@ -250,14 +278,101 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     t
   ])
 
+  const organizationIndex = React.useMemo(
+    () =>
+      createWorkspaceOrganizationIndex({
+        sources,
+        sourceFolders,
+        sourceFolderMemberships
+      }),
+    [sourceFolderMemberships, sourceFolders, sources]
+  )
+
+  const buildFolderTreeNode = React.useCallback(
+    (folderId: string): SourceFolderTreeNode | null => {
+      const folder = organizationIndex.folderById.get(folderId)
+      if (!folder) {
+        return null
+      }
+
+      return {
+        id: folder.id,
+        name: folder.name,
+        sourceCount: collectDescendantSourceIds(organizationIndex, folder.id).length,
+        children: (organizationIndex.childrenByFolderId.get(folder.id) || [])
+          .map((childId) => buildFolderTreeNode(childId))
+          .filter((node): node is SourceFolderTreeNode => Boolean(node))
+      }
+    },
+    [organizationIndex]
+  )
+
+  const folderTreeNodes = React.useMemo(
+    () =>
+      organizationIndex.rootFolderIds
+        .map((folderId) => buildFolderTreeNode(folderId))
+        .filter((node): node is SourceFolderTreeNode => Boolean(node)),
+    [buildFolderTreeNode, organizationIndex.rootFolderIds]
+  )
+
+  const sourceFolderOptions = React.useMemo<SourceFolderMembershipOption[]>(() => {
+    const flattened: SourceFolderMembershipOption[] = []
+
+    const walk = (nodes: SourceFolderTreeNode[], depth: number) => {
+      for (const node of nodes) {
+        flattened.push({
+          id: node.id,
+          name: node.name,
+          depth
+        })
+        walk(node.children, depth + 1)
+      }
+    }
+
+    walk(folderTreeNodes, 0)
+    return flattened
+  }, [folderTreeNodes])
+
+  const selectionStateByFolderId = React.useMemo(
+    () =>
+      Object.fromEntries(
+        sourceFolders.map((folder) => [
+          folder.id,
+          getFolderSelectionState(
+            organizationIndex,
+            folder.id,
+            selectedSourceIds,
+            selectedSourceFolderIds
+          )
+        ])
+      ) as Record<string, "unchecked" | "checked" | "indeterminate">,
+    [
+      organizationIndex,
+      selectedSourceFolderIds,
+      selectedSourceIds,
+      sourceFolders
+    ]
+  )
+
+  const activeFolderSourceIds = React.useMemo(
+    () =>
+      activeFolderId
+        ? new Set(collectDescendantSourceIds(organizationIndex, activeFolderId))
+        : null,
+    [activeFolderId, organizationIndex]
+  )
+
   // Filter sources based on search query
   const filteredSources = React.useMemo(() => {
-    if (!sourceSearchQuery.trim()) return sources
+    const scopedSources = activeFolderSourceIds
+      ? sources.filter((source) => activeFolderSourceIds.has(source.id))
+      : sources
+    if (!sourceSearchQuery.trim()) return scopedSources
     const query = sourceSearchQuery.toLowerCase()
-    return sources.filter((source) =>
+    return scopedSources.filter((source) =>
       source.title.toLowerCase().includes(query)
     )
-  }, [sources, sourceSearchQuery])
+  }, [activeFolderSourceIds, sourceSearchQuery, sources])
 
   const useVirtualizedSources =
     filteredSources.length > SOURCE_VIRTUALIZATION_THRESHOLD
@@ -634,7 +749,13 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
 
   const renderSourceRow = (source: (typeof filteredSources)[number]) => {
     const Icon = SOURCE_TYPE_ICONS[source.type] || File
-    const isSelected = selectedSourceIds.includes(source.id)
+    const selectionOrigin = getSourceSelectionOrigin(
+      source.id,
+      selectedSourceIds,
+      selectedSourceFolderIds,
+      organizationIndex
+    )
+    const isSelected = selectionOrigin !== "none"
     const isHighlighted = highlightedSourceId === source.id
     const sourceStatus = statusGuardrailsEnabled
       ? source.status || "ready"
@@ -672,6 +793,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     const canMoveUp = sourceOrderIndex > 0
     const canMoveDown = sourceOrderIndex >= 0 && sourceOrderIndex < sources.length - 1
     const isDropTarget = draggedSourceId != null && draggedSourceId !== source.id
+    const assignedFolderIds = organizationIndex.folderIdsBySourceId.get(source.id) || []
     const sourceTypeLabel = t(`playground:sources.type.${source.type}`, source.type)
     const sourceStatusLabel = isProcessing
       ? t("playground:sources.statusProcessing", "Processing")
@@ -782,9 +904,19 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               >
                 {sourceStatusLabel}
               </span>
-              {isSelected && (
+              {selectionOrigin === "direct" && (
                 <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
-                  {t("playground:sources.selectedBadge", "Selected")}
+                  {t("playground:sources.selectedDirectBadge", "Direct")}
+                </span>
+              )}
+              {selectionOrigin === "folder" && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                  {t("playground:sources.selectedFolderBadge", "From folder")}
+                </span>
+              )}
+              {selectionOrigin === "both" && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                  {t("playground:sources.selectedBothBadge", "Direct + folder")}
                 </span>
               )}
             </div>
@@ -844,6 +976,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             isSelected ? "border border-primary/20 bg-primary/5" : ""
           }`}
         >
+          <SourceFolderMembershipMenu
+            sourceTitle={source.title}
+            folderOptions={sourceFolderOptions}
+            selectedFolderIds={assignedFolderIds}
+            onChange={(folderIds) => assignSourceToFolders(source.id, folderIds)}
+          />
           <Tooltip title={t("playground:sources.previewAnnotate", "Preview & annotate")}>
             <button
               type="button"
@@ -1089,6 +1227,18 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               </Popconfirm>
             </div>
           )}
+        </div>
+      )}
+
+      {folderTreeNodes.length > 0 && (
+        <div className="border-b border-border px-4 py-2">
+          <SourceFolderTree
+            nodes={folderTreeNodes}
+            activeFolderId={activeFolderId}
+            selectionStateByFolderId={selectionStateByFolderId}
+            onFocusFolder={setActiveFolder}
+            onToggleFolderSelection={toggleSourceFolderSelection}
+          />
         </div>
       )}
 
