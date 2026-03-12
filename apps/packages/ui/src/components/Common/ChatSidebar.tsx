@@ -19,7 +19,10 @@ import {
 import { useSetting } from "@/hooks/useSetting"
 
 import { useDebounce } from "@/hooks/useDebounce"
-import { useServerChatHistory } from "@/hooks/useServerChatHistory"
+import {
+  SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE,
+  useServerChatHistory
+} from "@/hooks/useServerChatHistory"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useStoreMessageOption } from "@/store/option"
 import { useFolderStore } from "@/store/folder"
@@ -96,11 +99,13 @@ export function ChatSidebar({
   )
 
   // Server chat count for tab badge
-  const { data: serverChatData } = useServerChatHistory("", {
+  const { total: serverChatCount = 0 } = useServerChatHistory("", {
     enabled: serverHistoryOverviewEnabled,
-    mode: "overview"
+    mode: "overview",
+    page: 1,
+    limit: SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE,
+    filterMode: "all"
   })
-  const serverChatCount = serverChatData?.length ?? 0
 
   const sidebarShortcuts = useMemo(
     () => normalizeSidebarShortcutSelection(shortcutSelection),

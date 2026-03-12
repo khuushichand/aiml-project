@@ -8,7 +8,11 @@ import { browser } from "wxt/browser"
 
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { useConnectionState } from "@/hooks/useConnectionState"
-import { useServerChatHistory, type ServerChatHistoryItem } from "@/hooks/useServerChatHistory"
+import {
+  SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE,
+  useServerChatHistory,
+  type ServerChatHistoryItem
+} from "@/hooks/useServerChatHistory"
 import { useSetting } from "@/hooks/useSetting"
 import { useClearChat } from "@/hooks/chat/useClearChat"
 import { useSelectServerChat } from "@/hooks/chat/useSelectServerChat"
@@ -246,6 +250,7 @@ export function ServerChatList({
 
   const {
     data: serverChatData,
+    total: serverChatTotal = 0,
     sidebarRefreshState,
     hasUsableData,
     isShowingStaleData,
@@ -253,9 +258,13 @@ export function ServerChatList({
   } = useServerChatHistory(searchQuery, {
     deletedOnly: isTrashView,
     enabled: hasSearchQuery || serverHistoryOverviewEnabled,
-    mode: hasSearchQuery ? "search" : "overview"
+    mode: hasSearchQuery ? "search" : "overview",
+    page: currentPage,
+    limit: SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE,
+    filterMode: chatTypeFilter
   })
   const serverChats = serverChatData || []
+  const isServerPagedOverview = !hasSearchQuery && (chatTypeFilter === "all" || isTrashView)
 
   React.useEffect(() => {
     if (hasSearchQuery) {
@@ -318,19 +327,22 @@ export function ServerChatList({
     () => [...pinnedChats, ...unpinnedChats],
     [pinnedChats, unpinnedChats]
   )
+  const totalChatCount = isServerPagedOverview ? serverChatTotal : orderedChats.length
   const totalPages = Math.max(
     1,
-    Math.ceil(orderedChats.length / CHAT_HISTORY_PAGE_SIZE)
+    Math.ceil(totalChatCount / CHAT_HISTORY_PAGE_SIZE)
   )
   const currentPageSafe = Math.min(currentPage, totalPages)
   const pageStartIndex = (currentPageSafe - 1) * CHAT_HISTORY_PAGE_SIZE
   const pagedChats = React.useMemo(
     () =>
-      orderedChats.slice(
-        pageStartIndex,
-        pageStartIndex + CHAT_HISTORY_PAGE_SIZE
-      ),
-    [orderedChats, pageStartIndex]
+      isServerPagedOverview
+        ? orderedChats
+        : orderedChats.slice(
+            pageStartIndex,
+            pageStartIndex + CHAT_HISTORY_PAGE_SIZE
+          ),
+    [isServerPagedOverview, orderedChats, pageStartIndex]
   )
   const pagedPinnedChats = React.useMemo(
     () => pagedChats.filter((chat) => pinnedChatSet.has(chat.id)),
@@ -340,7 +352,7 @@ export function ServerChatList({
     () => pagedChats.filter((chat) => !pinnedChatSet.has(chat.id)),
     [pagedChats, pinnedChatSet]
   )
-  const pageStartNumber = orderedChats.length === 0 ? 0 : pageStartIndex + 1
+  const pageStartNumber = pagedChats.length === 0 ? 0 : pageStartIndex + 1
   const pageEndNumber = pageStartIndex + pagedChats.length
   const hasMultiplePages = totalPages > 1
   const visibleChatIds = React.useMemo(
@@ -1386,7 +1398,7 @@ export function ServerChatList({
                   defaultValue: "Showing {{start}}-{{end}} of {{total}} chats",
                   start: pageStartNumber,
                   end: pageEndNumber,
-                  total: orderedChats.length
+                  total: totalChatCount
                 })}
               </div>
               <div className="flex flex-wrap items-center gap-2">

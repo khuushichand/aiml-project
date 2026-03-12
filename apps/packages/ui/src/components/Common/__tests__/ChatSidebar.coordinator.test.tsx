@@ -24,7 +24,8 @@ vi.mock("@/hooks/useDebounce", () => ({
 }))
 
 vi.mock("@/hooks/useServerChatHistory", () => ({
-  useServerChatHistory: () => ({ data: [] })
+  SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE: 25,
+  useServerChatHistory: () => ({ data: [], total: 0 })
 }))
 
 vi.mock("@/hooks/chat/useClearChat", () => ({

@@ -13,7 +13,10 @@ describe("validateSelectedChatModelAvailability", () => {
     })
 
     expect(result).toEqual({ status: "valid" })
-    expect(fetchModels).toHaveBeenCalledWith({ returnEmpty: true })
+    expect(fetchModels).toHaveBeenCalledWith({
+      returnEmpty: true,
+      allowNetwork: false
+    })
   })
 
   it("returns an advisory result when the selected model is missing from the cached catalog", async () => {
@@ -29,7 +32,10 @@ describe("validateSelectedChatModelAvailability", () => {
       status: "unknown",
       reason: "model-unavailable-in-cache"
     })
-    expect(fetchModels).toHaveBeenCalledWith({ returnEmpty: true })
+    expect(fetchModels).toHaveBeenCalledWith({
+      returnEmpty: true,
+      allowNetwork: false
+    })
   })
 
   it("returns an advisory result when no cached models are loaded", async () => {
@@ -43,6 +49,9 @@ describe("validateSelectedChatModelAvailability", () => {
       status: "unknown",
       reason: "catalog-empty"
     })
-    expect(fetchModels).toHaveBeenCalledWith({ returnEmpty: true })
+    expect(fetchModels).toHaveBeenCalledWith({
+      returnEmpty: true,
+      allowNetwork: false
+    })
   })
 })

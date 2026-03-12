@@ -27,6 +27,7 @@ vi.mock("@/hooks/useDebounce", () => ({
 }))
 
 vi.mock("@/hooks/useServerChatHistory", () => ({
+  SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE: 25,
   useServerChatHistory: (...args: unknown[]) => useServerChatHistoryMock(...args)
 }))
 

@@ -222,6 +222,19 @@ export class TldwModelsService {
     return models.filter(m => m.type === 'chat')
   }
 
+  async getCachedChatModels(): Promise<ModelInfo[]> {
+    await this.ensureStorageLoaded()
+    const config = await tldwClient.getConfig().catch(() => null)
+    const scopeKey = this.buildCacheScope(config)
+    if (this.cacheScopeKey && this.cacheScopeKey !== scopeKey) {
+      this.cachedModels = null
+      this.lastFetchTime = 0
+      this.lastForcedFetchTime = 0
+    }
+    this.cacheScopeKey = scopeKey
+    return (this.cachedModels || []).filter((model) => model.type === "chat")
+  }
+
   /**
    * Get embedding models only
    */

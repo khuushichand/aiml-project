@@ -98,6 +98,7 @@ vi.mock("@/hooks/useConnectionState", () => ({
 }))
 
 vi.mock("@/hooks/useServerChatHistory", () => ({
+  SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE: 25,
   useServerChatHistory: () => historyState.value
 }))
 

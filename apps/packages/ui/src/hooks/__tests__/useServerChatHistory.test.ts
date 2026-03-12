@@ -218,6 +218,46 @@ describe("useServerChatHistory", () => {
     queryClient.clear()
   })
 
+  it("fetches only the requested overview page when server pagination is supported", async () => {
+    listChatsWithMetaMock.mockResolvedValueOnce({
+      chats: [createChat(26), createChat(27)],
+      total: 60
+    })
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(
+      () =>
+        useServerChatHistory("", {
+          enabled: true,
+          mode: "overview",
+          page: 2,
+          limit: 25,
+          filterMode: "all"
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() =>
+      expect(result.current.data.map((chat) => chat.id)).toEqual([
+        "chat-26",
+        "chat-27"
+      ])
+    )
+
+    expect(listChatsWithMetaMock).toHaveBeenCalledTimes(1)
+    expect(listChatsWithMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 25,
+        offset: 25,
+        ordering: "-updated_at"
+      }),
+      expect.anything()
+    )
+    expect(result.current.total).toBe(60)
+
+    queryClient.clear()
+  })
+
   it("falls back to deleted-chat overview filtering when search mode targets trash chats", async () => {
     listChatsWithMetaMock.mockResolvedValueOnce({
       chats: [createChat(9, { title: "Quota cleanup" })],

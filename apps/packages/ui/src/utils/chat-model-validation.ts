@@ -22,7 +22,7 @@ export const validateSelectedChatModelAvailability = async (
 ): Promise<SelectedChatModelValidationResult> => {
   const normalizedSelectedModel = normalizeChatModelId(selectedModelId)
   const fetchModels = options?.fetchModels ?? fetchChatModels
-  const models = await fetchModels({ returnEmpty: true })
+  const models = await fetchModels({ returnEmpty: true, allowNetwork: false })
   const availableIds = buildAvailableChatModelIds(models as any[])
 
   if (availableIds.size === 0) {
