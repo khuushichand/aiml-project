@@ -2,15 +2,18 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
 
 const historyState = vi.hoisted(() => ({
   value: {
     data: [],
+    total: 0,
     status: "success",
     isLoading: false,
     sidebarRefreshState: "ready",
     hasUsableData: false,
-    isShowingStaleData: false
+    isShowingStaleData: false,
+    isServerPagedResult: false
   }
 }))
 
@@ -97,6 +100,7 @@ vi.mock("@/hooks/useConnectionState", () => ({
 }))
 
 vi.mock("@/hooks/useServerChatHistory", () => ({
+  SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE: 25,
   useServerChatHistory: () => historyState.value
 }))
 
@@ -192,25 +196,45 @@ describe("ServerChatList reliability states", () => {
     vi.clearAllMocks()
     historyState.value = {
       data: [],
+      total: 0,
       status: "success",
       isLoading: false,
       sidebarRefreshState: "ready",
       hasUsableData: false,
-      isShowingStaleData: false
+      isShowingStaleData: false,
+      isServerPagedResult: false
     }
     mocks.deleteChat.mockResolvedValue(undefined)
     mocks.restoreChat.mockResolvedValue(undefined)
     mocks.confirmDanger.mockResolvedValue(true)
+    useChatSurfaceCoordinatorStore.setState({
+      routeId: "chat",
+      surface: "webui",
+      visiblePanels: {
+        "server-history": true,
+        "mcp-tools": false,
+        "audio-health": false,
+        "model-catalog": false
+      },
+      engagedPanels: {
+        "server-history": true,
+        "mcp-tools": false,
+        "audio-health": false,
+        "model-catalog": false
+      }
+    })
   })
 
   it("shows a recoverable refresh warning when old chat data is still usable", () => {
     historyState.value = {
       data: [createChat()],
+      total: 1,
       status: "error",
       isLoading: false,
       sidebarRefreshState: "recoverable-error",
       hasUsableData: true,
-      isShowingStaleData: true
+      isShowingStaleData: true,
+      isServerPagedResult: false
     }
 
     render(<ServerChatList searchQuery="" />)
@@ -224,11 +248,13 @@ describe("ServerChatList reliability states", () => {
   it("shows an unavailable message instead of an empty state when refresh failed without usable data", () => {
     historyState.value = {
       data: [],
+      total: 0,
       status: "error",
       isLoading: false,
       sidebarRefreshState: "recoverable-error",
       hasUsableData: false,
-      isShowingStaleData: false
+      isShowingStaleData: false,
+      isServerPagedResult: false
     }
 
     render(<ServerChatList searchQuery="" />)
@@ -242,11 +268,13 @@ describe("ServerChatList reliability states", () => {
   it("shows conflict-specific delete feedback when delete still fails after retry", async () => {
     historyState.value = {
       data: [createChat()],
+      total: 1,
       status: "success",
       isLoading: false,
       sidebarRefreshState: "ready",
       hasUsableData: true,
-      isShowingStaleData: false
+      isShowingStaleData: false,
+      isServerPagedResult: false
     }
     mocks.deleteChat.mockRejectedValueOnce(
       Object.assign(new Error("409 conflict: expected version mismatch"), {
@@ -262,6 +290,29 @@ describe("ServerChatList reliability states", () => {
       expect(antdMessage.error).toHaveBeenCalledWith(
         "This chat changed on the server. Refresh and try again."
       )
+    })
+  })
+
+  it("keeps server-paged search rows visible when navigating beyond page 1", async () => {
+    historyState.value = {
+      data: [createChat({ id: "chat-26", title: "Search page 2 row" })],
+      total: 50,
+      status: "success",
+      isLoading: false,
+      sidebarRefreshState: "ready",
+      hasUsableData: true,
+      isShowingStaleData: false,
+      isServerPagedResult: true
+    }
+
+    render(<ServerChatList searchQuery="quota" />)
+
+    expect(screen.getByText("Search page 2 row")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Next" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Search page 2 row")).toBeInTheDocument()
+      expect(screen.getByDisplayValue("2")).toBeInTheDocument()
     })
   })
 })

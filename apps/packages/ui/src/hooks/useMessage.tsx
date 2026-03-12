@@ -1,10 +1,6 @@
 import React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import {
-  fetchChatModels,
-  promptForRag,
-  systemPromptForNonRag
-} from "~/services/tldw-server"
+import { promptForRag, systemPromptForNonRag } from "~/services/tldw-server"
 import { useStoreMessageOption, type Message } from "~/store/option"
 import { useStoreMessage } from "~/store"
 import { getContentFromCurrentTab } from "~/libs/get-html"
@@ -75,10 +71,9 @@ import type { ChatDocuments } from "@/models/ChatTypes"
 import type { UploadedFile } from "@/db/dexie/types"
 import { applyMcpModuleDisclosureFromToolCalls } from "@/utils/mcp-disclosure"
 import {
-  buildAvailableChatModelIds,
-  findUnavailableChatModel,
   normalizeChatModelId
 } from "@/utils/chat-model-availability"
+import { validateSelectedChatModelAvailability } from "@/utils/chat-model-validation"
 import { discardAbortedTurnIfRequested } from "@/hooks/chat/abort-turn-cleanup"
 import {
   collectGreetings,
@@ -239,99 +234,42 @@ export const useMessage = () => {
         return false
       }
 
-      const describeUnavailableModel = (models: any[]): {
-        unavailableModel: string | null
-        emptyCatalog: boolean
-      } => {
-        const availableIds = buildAvailableChatModelIds(models as any[])
-        if (availableIds.size === 0) {
-          return { unavailableModel: normalizedSelectedModel, emptyCatalog: true }
-        }
-        return {
-          unavailableModel: findUnavailableChatModel(
-            [normalizedSelectedModel],
-            availableIds
-          ),
-          emptyCatalog: false
-        }
-      }
-
       try {
-        const resolvedProvider = (
-          await resolveApiProviderForModel({
-            modelId: normalizedSelectedModel,
-            explicitProvider: currentChatModelSettings.apiProvider
-          })
+        const validation = await validateSelectedChatModelAvailability(
+          normalizedSelectedModel
         )
-          .trim()
-          .toLowerCase()
-        const shouldForceOpenRouterRefresh = resolvedProvider === "openrouter"
 
-        const initialModels = shouldForceOpenRouterRefresh
-          ? await fetchChatModels({
-              returnEmpty: true,
-              forceRefresh: true,
-              refreshOpenRouter: true
-            })
-          : await fetchChatModels({ returnEmpty: true })
-        let latestModels = initialModels
-
-        let { unavailableModel, emptyCatalog } =
-          describeUnavailableModel(latestModels)
-
-        if (unavailableModel && !emptyCatalog && !shouldForceOpenRouterRefresh) {
-          latestModels = await fetchChatModels({
-            returnEmpty: true,
-            forceRefresh: true,
-            refreshOpenRouter: false
-          })
-          ;({ unavailableModel, emptyCatalog } =
-            describeUnavailableModel(latestModels))
-        }
-
-        if (!unavailableModel) {
+        if (validation.status === "valid") {
           return true
         }
 
-        if (emptyCatalog) {
-          notification.error({
-            message: t("error"),
-            description: t(
-              "playground:composer.validationModelCatalogUnavailableInline",
-              "Unable to verify model availability because no models are currently loaded. Refresh models and try again."
-            )
-          })
-          return false
-        }
-
-        const fallbackModel =
-          latestModels[0]?.model ?? latestModels[0]?.name ?? null
-        if (typeof fallbackModel === "string" && fallbackModel.trim().length > 0) {
-          setSelectedModel(fallbackModel.trim())
-        } else {
-          setSelectedModel(null)
-        }
-        notification.error({
-          message: t("error"),
-          description: t(
-            "playground:composer.validationModelUnavailableInline",
-            "Selected model is not available on this server. Refresh models or choose a different model."
-          )
+        notification.warning({
+          message: t("warning", "Warning"),
+          description:
+            validation.reason === "catalog-empty"
+              ? t(
+                  "playground:composer.validationModelCatalogUnavailableInline",
+                  "Unable to verify model availability from the cached catalog. Continuing without refreshing; refresh models if this request fails."
+                )
+              : t(
+                  "playground:composer.validationModelUnavailableInline",
+                  "Selected model may be stale or unavailable. Continuing without refreshing; refresh models or choose a different model if this request fails."
+                )
         })
-        return false
+        return true
       } catch (error) {
         console.error("Failed to validate selected model availability:", error)
-        notification.error({
-          message: t("error"),
+        notification.warning({
+          message: t("warning", "Warning"),
           description: t(
             "playground:composer.validationModelCatalogUnavailableInline",
-            "Unable to verify model availability because no models are currently loaded. Refresh models and try again."
+            "Unable to verify model availability from the cached catalog. Continuing without refreshing; refresh models if this request fails."
           )
         })
-        return false
+        return true
       }
     },
-    [currentChatModelSettings.apiProvider, notification, setSelectedModel, t]
+    [notification, t]
   )
 
   const resetServerChatState = () => {

@@ -43,6 +43,7 @@ import {
   SETTINGS_HISTORY_ID_PARAM,
   SETTINGS_SERVER_CHAT_ID_PARAM
 } from "@/utils/settings-return"
+import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
 import { useNavigate } from "react-router-dom"
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
@@ -101,6 +102,13 @@ export const Playground = () => {
     ReturnType<typeof setTimeout> | null
   >(null)
   const initializePlaygroundRef = React.useRef(false)
+  const setRouteContext = useChatSurfaceCoordinatorStore(
+    (state) => state.setRouteContext
+  )
+
+  React.useEffect(() => {
+    setRouteContext({ routeId: "chat", surface: "webui" })
+  }, [setRouteContext])
 
   const showDropFeedback = React.useCallback(
     (feedback: { type: "info" | "error" | "warning"; message: string }) => {
@@ -233,6 +241,7 @@ export const Playground = () => {
   // Session persistence for draft restoration
   const {
     restoreSession,
+    sessionScopeReady,
     hasPersistedSession,
     persistedHistoryId,
     persistedServerChatId
@@ -301,7 +310,7 @@ export const Playground = () => {
   ])
 
   React.useEffect(() => {
-    if (initializePlaygroundRef.current) {
+    if (!sessionScopeReady || initializePlaygroundRef.current) {
       return
     }
     initializePlaygroundRef.current = true
@@ -316,7 +325,7 @@ export const Playground = () => {
     return () => {
       cancelled = true
     }
-  }, [initializePlayground])
+  }, [initializePlayground, sessionScopeReady])
 
   useCharacterGreeting({
     playgroundReady,

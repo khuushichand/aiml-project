@@ -101,6 +101,15 @@ export function useMcpToolsControl({
     }
   }, [hasMcp, mcpHealthState])
 
+  const mcpNotCheckedYet = React.useMemo(
+    () =>
+      hasMcp &&
+      mcpHealthState === "unknown" &&
+      !mcpToolsLoading &&
+      mcpTools.length === 0,
+    [hasMcp, mcpHealthState, mcpTools.length, mcpToolsLoading]
+  )
+
   const mcpDisabledReason = React.useMemo(() => {
     if (!hasMcp) {
       return t("playground:composer.mcpToolsUnavailable", "MCP tools unavailable")
@@ -135,19 +144,26 @@ export function useMcpToolsControl({
     }
     const countLabel = mcpToolsLoading
       ? t("playground:composer.mcpToolsLoading", "Loading tools...")
-      : t("playground:tools.mcpSummary", "{{count}} tools", { count: mcpTools.length })
+      : mcpNotCheckedYet
+        ? t("playground:composer.mcpToolsNotChecked", "Not checked yet")
+        : t("playground:tools.mcpSummary", "{{count}} tools", {
+            count: mcpTools.length
+          })
     return t(
       "playground:composer.mcpAriaLabel",
       "MCP tools: {{choice}}, {{summary}}",
       { choice: mcpChoiceLabel, summary: countLabel }
     )
-  }, [hasMcp, mcpChoiceLabel, mcpTools.length, mcpToolsLoading, t])
+  }, [hasMcp, mcpChoiceLabel, mcpNotCheckedYet, mcpTools.length, mcpToolsLoading, t])
 
   const mcpSummaryLabel = React.useMemo(() => {
     if (!hasMcp) return t("playground:composer.mcpToolsUnavailable", "MCP unavailable")
     if (mcpToolsLoading) return t("playground:composer.mcpToolsLoading", "Loading tools...")
+    if (mcpNotCheckedYet) {
+      return t("playground:composer.mcpToolsNotChecked", "Not checked yet")
+    }
     return t("playground:tools.mcpSummary", "{{count}} tools", { count: mcpTools.length })
-  }, [hasMcp, mcpToolsLoading, mcpTools.length, t])
+  }, [hasMcp, mcpNotCheckedYet, mcpToolsLoading, mcpTools.length, t])
 
   const mcpStatusLabel = React.useMemo(() => {
     if (!hasMcp) {
@@ -156,8 +172,14 @@ export function useMcpToolsControl({
     if (mcpHealthState === "unhealthy") {
       return t("playground:composer.mcpToolsUnhealthy", "MCP tools are offline")
     }
+    if (mcpNotCheckedYet) {
+      return t(
+        "playground:composer.mcpToolsCheckAvailability",
+        "Open this panel to check availability"
+      )
+    }
     return mcpSummaryLabel
-  }, [hasMcp, mcpHealthState, mcpSummaryLabel, t])
+  }, [hasMcp, mcpHealthState, mcpNotCheckedYet, mcpSummaryLabel, t])
 
   return {
     mcpPopoverOpen,
