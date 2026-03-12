@@ -940,7 +940,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
           <Checkbox
             checked={isSelected}
             disabled={!isReady}
-            onChange={() => toggleSourceSelection(source.id)}
+            onChange={() => {
+              if (selectionOrigin === "folder") {
+                return
+              }
+              toggleSourceSelection(source.id)
+            }}
           />
         </div>
         <div className="flex min-w-0 flex-1 items-start gap-2">

@@ -267,4 +267,38 @@ describe("SourcesPane Stage 3 source folders", () => {
     ).not.toBeDisabled()
     expect(screen.getByText("Remove (1)")).toBeInTheDocument()
   })
+
+  it("does not add direct selection when clicking a folder-derived source checkbox", () => {
+    workspaceStoreState.selectedSourceIds = []
+    workspaceStoreState.selectedSourceFolderIds = ["folder-quotes"]
+    mockGetEffectiveSelectedSources.mockReturnValue([workspaceStoreState.sources[1]])
+
+    render(<SourcesPane />)
+
+    const checkbox = screen
+      .getByTestId("source-checkbox-hitarea-s2")
+      .querySelector("input[type='checkbox']")
+    expect(checkbox).toBeTruthy()
+
+    if (checkbox) {
+      fireEvent.click(checkbox)
+    }
+
+    expect(mockToggleSourceSelection).not.toHaveBeenCalled()
+  })
+
+  it("still toggles direct selection for direct-plus-folder rows", () => {
+    render(<SourcesPane />)
+
+    const checkbox = screen
+      .getByTestId("source-checkbox-hitarea-s1")
+      .querySelector("input[type='checkbox']")
+    expect(checkbox).toBeTruthy()
+
+    if (checkbox) {
+      fireEvent.click(checkbox)
+    }
+
+    expect(mockToggleSourceSelection).toHaveBeenCalledWith("s1")
+  })
 })

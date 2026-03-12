@@ -95,6 +95,31 @@ const LOREBOOK_DEBUG_ENTRYPOINT_HREF = buildChatLorebookDebugPath({
 })
 const EMPTY_STRING_ARRAY: string[] = []
 
+const useEffectiveSelectedSources = (): WorkspaceSource[] => {
+  const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const selectedSourceFolderIds =
+    useWorkspaceStore((s) => s.selectedSourceFolderIds) ?? EMPTY_STRING_ARRAY
+  const sources = useWorkspaceStore((s) => s.sources)
+  const getSelectedSources = useWorkspaceStore((s) => s.getSelectedSources)
+  const getEffectiveSelectedSources = useWorkspaceStore(
+    (s) => s.getEffectiveSelectedSources
+  )
+
+  return React.useMemo(
+    () =>
+      typeof getEffectiveSelectedSources === "function"
+        ? getEffectiveSelectedSources()
+        : getSelectedSources(),
+    [
+      getEffectiveSelectedSources,
+      getSelectedSources,
+      selectedSourceFolderIds,
+      selectedSourceIds,
+      sources
+    ]
+  )
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null
 
@@ -527,24 +552,7 @@ const ChatContextIndicator: React.FC = () => {
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
   const selectedSourceFolderIds =
     useWorkspaceStore((s) => s.selectedSourceFolderIds) ?? EMPTY_STRING_ARRAY
-  const sources = useWorkspaceStore((s) => s.sources)
-  const getSelectedSources = useWorkspaceStore((s) => s.getSelectedSources)
-  const getEffectiveSelectedSources = useWorkspaceStore(
-    (s) => s.getEffectiveSelectedSources
-  )
-  const selectedSources = React.useMemo(
-    () =>
-      typeof getEffectiveSelectedSources === "function"
-        ? getEffectiveSelectedSources()
-        : getSelectedSources(),
-    [
-      getEffectiveSelectedSources,
-      getSelectedSources,
-      selectedSourceFolderIds,
-      selectedSourceIds,
-      sources
-    ]
-  )
+  const selectedSources = useEffectiveSelectedSources()
   const [showAllSources, setShowAllSources] = React.useState(false)
 
   React.useEffect(() => {
@@ -1157,11 +1165,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const selectedSourceFolderIds =
     useWorkspaceStore((s) => s.selectedSourceFolderIds) ?? EMPTY_STRING_ARRAY
   const sources = useWorkspaceStore((s) => s.sources)
-  const getSelectedSources = useWorkspaceStore((s) => s.getSelectedSources)
   const getSelectedMediaIds = useWorkspaceStore((s) => s.getSelectedMediaIds)
-  const getEffectiveSelectedSources = useWorkspaceStore(
-    (s) => s.getEffectiveSelectedSources
-  )
   const getEffectiveSelectedMediaIds = useWorkspaceStore(
     (s) => s.getEffectiveSelectedMediaIds
   )
@@ -1295,19 +1299,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const { containerRef, isAutoScrollToBottom, autoScrollToBottom } =
     useSmartScroll(messages, streaming, 120)
 
-  const selectedSources = React.useMemo(
-    () =>
-      typeof getEffectiveSelectedSources === "function"
-        ? getEffectiveSelectedSources()
-        : getSelectedSources(),
-    [
-      getEffectiveSelectedSources,
-      getSelectedSources,
-      selectedSourceFolderIds,
-      selectedSourceIds,
-      sources
-    ]
-  )
+  const selectedSources = useEffectiveSelectedSources()
   const effectiveSelectedSourceIds = React.useMemo(
     () => selectedSources.map((source) => source.id),
     [selectedSources]
