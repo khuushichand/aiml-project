@@ -86,6 +86,10 @@ class WorkspaceSourceReorderRequest(BaseModel):
     ordered_ids: list[str]
 
 
+class StatusResponse(BaseModel):
+    ok: bool = True
+
+
 # --- Artifact schemas ---
 
 class WorkspaceArtifactCreateRequest(BaseModel):

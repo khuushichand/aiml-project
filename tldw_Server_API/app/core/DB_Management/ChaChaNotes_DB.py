@@ -3044,6 +3044,101 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 35;
 """
+
+    _MIGRATION_SQL_V35_TO_V36_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 36 - Workspaces table + conversation scope (2026-03-12)
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS workspaces (
+    id            TEXT    PRIMARY KEY NOT NULL,
+    name          TEXT    NOT NULL,
+    description   TEXT,
+    metadata_json TEXT    NOT NULL DEFAULT '{}',
+    archived      BOOLEAN NOT NULL DEFAULT false,
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted       BOOLEAN NOT NULL DEFAULT false,
+    client_id     TEXT    NOT NULL DEFAULT 'unknown',
+    version       INTEGER NOT NULL DEFAULT 1
+);
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'global';
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_conversations_scope ON conversations(scope_type, workspace_id);
+
+UPDATE db_schema_version
+   SET version = 36
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 36;
+"""
+
+    _MIGRATION_SQL_V36_TO_V37_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 37 - Workspace sub-resources + settings (2026-03-12)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS tag TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_title TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_subtitle TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_color TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_provider TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_model TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_voice TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_speed REAL DEFAULT 1.0;
+
+CREATE TABLE IF NOT EXISTS workspace_sources (
+    id            TEXT    NOT NULL,
+    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    media_id      INTEGER NOT NULL,
+    title         TEXT    NOT NULL,
+    source_type   TEXT    NOT NULL,
+    url           TEXT,
+    position      INTEGER NOT NULL DEFAULT 0,
+    selected      BOOLEAN NOT NULL DEFAULT true,
+    added_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version       INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (workspace_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_ws_sources_workspace ON workspace_sources(workspace_id);
+
+CREATE TABLE IF NOT EXISTS workspace_artifacts (
+    id              TEXT    NOT NULL,
+    workspace_id    TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    artifact_type   TEXT    NOT NULL,
+    title           TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'pending',
+    content         TEXT,
+    total_tokens    INTEGER,
+    total_cost_usd  REAL,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at    TIMESTAMP,
+    version         INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (workspace_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_ws_artifacts_workspace ON workspace_artifacts(workspace_id);
+
+CREATE TABLE IF NOT EXISTS workspace_notes (
+    id            SERIAL PRIMARY KEY,
+    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    title         TEXT    NOT NULL DEFAULT '',
+    content       TEXT    NOT NULL DEFAULT '',
+    keywords_json TEXT    NOT NULL DEFAULT '[]',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted       BOOLEAN NOT NULL DEFAULT false,
+    version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_ws_notes_workspace ON workspace_notes(workspace_id);
+
+UPDATE db_schema_version
+   SET version = 37
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 37;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -5960,6 +6055,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 35:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V34_TO_V35, conn, expected_version=35)
                 current_version = 35
+            if current_version < 36:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36_POSTGRES, conn, expected_version=36)
+                current_version = 36
+            if current_version < 37:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V36_TO_V37_POSTGRES, conn, expected_version=37)
+                current_version = 37
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -5970,7 +6071,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
             if current_version < target_version:
                 logger.warning(
-                    'ChaChaNotes PostgreSQL schema is at version {} but code expects {}. Pending migrations will be addressed in a future update.',
+                    'ChaChaNotes PostgreSQL schema is at version {} but code expects {}. '
+                    'Some migrations may not yet be available for PostgreSQL.',
                     current_version,
                     target_version,
                 )

@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.workspace_schemas import (
+    StatusResponse,
     WorkspaceArtifactCreateRequest,
     WorkspaceArtifactResponse,
     WorkspaceArtifactUpdateRequest,
@@ -199,7 +199,8 @@ async def list_sources(
     workspace_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> list[WorkspaceSourceResponse]:
+    """List all sources belonging to a workspace."""
     _require_workspace(db, workspace_id)
     return [_src_to_response(s) for s in db.list_workspace_sources(workspace_id)]
 
@@ -215,7 +216,8 @@ async def add_source(
     body: WorkspaceSourceCreateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> WorkspaceSourceResponse:
+    """Add a media source to a workspace."""
     _require_workspace(db, workspace_id)
     src = db.add_workspace_source(workspace_id, body.model_dump())
     return _src_to_response(src)
@@ -232,7 +234,8 @@ async def update_source(
     body: WorkspaceSourceUpdateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> WorkspaceSourceResponse:
+    """Update a workspace source with optimistic locking."""
     _require_workspace(db, workspace_id)
     updates = body.model_dump(exclude_unset=True, exclude={"version"})
     try:
@@ -253,13 +256,14 @@ async def delete_source(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
+    """Remove a source from a workspace."""
     _require_workspace(db, workspace_id)
     db.delete_workspace_source(workspace_id, source_id)
 
 
 @router.put(
     "/{workspace_id}/sources/selection",
-    status_code=200,
+    response_model=StatusResponse,
     summary="Batch-update source selection",
 )
 async def update_source_selection(
@@ -267,15 +271,16 @@ async def update_source_selection(
     body: WorkspaceSourceSelectionRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> StatusResponse:
+    """Set which sources are selected in a workspace (batch operation)."""
     _require_workspace(db, workspace_id)
     db.update_workspace_source_selection(workspace_id, selected_ids=body.selected_ids)
-    return {"ok": True}
+    return StatusResponse()
 
 
 @router.put(
     "/{workspace_id}/sources/reorder",
-    status_code=200,
+    response_model=StatusResponse,
     summary="Reorder workspace sources",
 )
 async def reorder_sources(
@@ -283,10 +288,11 @@ async def reorder_sources(
     body: WorkspaceSourceReorderRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> StatusResponse:
+    """Reorder workspace sources by providing an ordered list of IDs."""
     _require_workspace(db, workspace_id)
     db.reorder_workspace_sources(workspace_id, body.ordered_ids)
-    return {"ok": True}
+    return StatusResponse()
 
 
 # ── Artifacts ───────────────────────────────────────────────────
@@ -300,7 +306,8 @@ async def list_artifacts(
     workspace_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> list[WorkspaceArtifactResponse]:
+    """List all artifacts belonging to a workspace."""
     _require_workspace(db, workspace_id)
     return [_art_to_response(a) for a in db.list_workspace_artifacts(workspace_id)]
 
@@ -316,7 +323,8 @@ async def add_artifact(
     body: WorkspaceArtifactCreateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> WorkspaceArtifactResponse:
+    """Add an artifact to a workspace."""
     _require_workspace(db, workspace_id)
     art = db.add_workspace_artifact(workspace_id, body.model_dump())
     return _art_to_response(art)
@@ -333,7 +341,8 @@ async def update_artifact(
     body: WorkspaceArtifactUpdateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> WorkspaceArtifactResponse:
+    """Update a workspace artifact with optimistic locking."""
     _require_workspace(db, workspace_id)
     updates = body.model_dump(exclude_unset=True, exclude={"version"})
     try:
@@ -354,6 +363,7 @@ async def delete_artifact(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
+    """Remove an artifact from a workspace."""
     _require_workspace(db, workspace_id)
     db.delete_workspace_artifact(workspace_id, artifact_id)
 
@@ -369,7 +379,8 @@ async def list_notes(
     workspace_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> list[WorkspaceNoteResponse]:
+    """List all notes belonging to a workspace."""
     _require_workspace(db, workspace_id)
     return [_note_to_response(n) for n in db.list_workspace_notes(workspace_id)]
 
@@ -385,7 +396,8 @@ async def add_note(
     body: WorkspaceNoteCreateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> WorkspaceNoteResponse:
+    """Add a note to a workspace."""
     _require_workspace(db, workspace_id)
     note = db.add_workspace_note(workspace_id, body.model_dump())
     return _note_to_response(note)
@@ -402,7 +414,8 @@ async def update_note(
     body: WorkspaceNoteUpdateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
-):
+) -> WorkspaceNoteResponse:
+    """Update a workspace note with optimistic locking."""
     _require_workspace(db, workspace_id)
     updates = body.model_dump(exclude_unset=True, exclude={"version"})
     try:
@@ -423,5 +436,6 @@ async def delete_note(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
+    """Remove a note from a workspace."""
     _require_workspace(db, workspace_id)
     db.delete_workspace_note(workspace_id, note_id)

@@ -4490,6 +4490,8 @@ async def list_chat_conversations(
     order_by: Literal["bm25", "recency", "hybrid", "topic"] = Query("recency", description="Ranking mode"),
     limit: int = Query(50, ge=1, le=200, description="Items per page"),
     offset: int = Query(0, ge=0, description="Offset"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Scope filter: 'global' or 'workspace'"),
+    workspace_id: str | None = Query(None, description="Workspace ID (required when scope_type='workspace')"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
@@ -4520,6 +4522,8 @@ async def list_chat_conversations(
             start_date=start_iso,
             end_date=end_iso,
             date_field=date_field,
+            scope_type=scope_type,
+            workspace_id=workspace_id,
         )
 
         max_bm25 = max((row.get("bm25_raw") or 0.0) for row in rows) if rows else 0.0
