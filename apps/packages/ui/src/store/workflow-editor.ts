@@ -45,6 +45,7 @@ import type {
   HumanApprovalRequest,
   HumanApprovalResponse,
   EditorHistoryEntry,
+  WorkflowRunInvestigation,
   ServerWorkflowDefinition,
   ValidationIssue
 } from "@/types/workflow-editor"
@@ -54,7 +55,10 @@ import {
   humanizeStepType,
   type StepRegistry
 } from "@/components/WorkflowEditor/step-registry"
-import { getWorkflowStepTypes } from "@/services/tldw/workflows"
+import {
+  getWorkflowInvestigation,
+  getWorkflowStepTypes
+} from "@/services/tldw/workflows"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Keys
@@ -83,6 +87,9 @@ interface UIState extends EditorUIState {
 
 interface ExecutionState extends WorkflowRunState {
   isConnected: boolean
+  runInvestigation: WorkflowRunInvestigation | null
+  runInvestigationLoading: boolean
+  runInvestigationError: string | null
 }
 
 interface HistoryState {
@@ -173,6 +180,8 @@ interface ExecutionActions {
   setPendingApproval: (request: HumanApprovalRequest | null) => void
   respondToApproval: (response: HumanApprovalResponse) => void
   setRunError: (error: string | null) => void
+  loadRunInvestigation: (runId: string) => Promise<void>
+  clearRunInvestigation: () => void
   resetExecution: () => void
   setConnected: (connected: boolean) => void
 }
@@ -249,7 +258,10 @@ const initialExecutionState: ExecutionState = {
   currentNodeId: undefined,
   pendingApproval: null,
   error: undefined,
-  isConnected: false
+  isConnected: false,
+  runInvestigation: null,
+  runInvestigationLoading: false,
+  runInvestigationError: null
 }
 
 const initialHistoryState: HistoryState = {
@@ -682,15 +694,21 @@ export const useWorkflowEditorStore = createWithEqualityFn<WorkflowEditorState>(
         nodeStates: {},
         currentNodeId: undefined,
         pendingApproval: null,
-        error: undefined
+        error: undefined,
+        runInvestigation: null,
+        runInvestigationLoading: false,
+        runInvestigationError: null
       })
     },
 
     stopRun: () => {
-      set((state) => ({
+      set(() => ({
         status: "cancelled",
         completedAt: Date.now(),
-        currentNodeId: undefined
+        currentNodeId: undefined,
+        runInvestigation: null,
+        runInvestigationLoading: false,
+        runInvestigationError: null
       }))
     },
 
@@ -799,7 +817,55 @@ export const useWorkflowEditorStore = createWithEqualityFn<WorkflowEditorState>(
       set({
         error,
         status: error ? "failed" : get().status,
-        completedAt: error ? Date.now() : undefined
+        completedAt: error ? Date.now() : undefined,
+        runInvestigation: error ? null : get().runInvestigation,
+        runInvestigationLoading: false,
+        runInvestigationError: null
+      })
+    },
+
+    loadRunInvestigation: async (runId) => {
+      if (!runId) return
+      const state = get()
+      if (state.runInvestigationLoading) return
+      if (
+        state.runInvestigation?.run_id === runId &&
+        !state.runInvestigationError
+      ) {
+        return
+      }
+
+      set({
+        runInvestigationLoading: true,
+        runInvestigationError: null
+      })
+
+      try {
+        const investigation = await getWorkflowInvestigation(runId)
+        if (get().runId && get().runId !== runId) return
+        set({
+          runInvestigation: investigation,
+          runInvestigationLoading: false,
+          runInvestigationError: null
+        })
+      } catch (error) {
+        if (get().runId && get().runId !== runId) return
+        set({
+          runInvestigation: null,
+          runInvestigationLoading: false,
+          runInvestigationError:
+            error instanceof Error
+              ? error.message
+              : "Could not load run diagnostics."
+        })
+      }
+    },
+
+    clearRunInvestigation: () => {
+      set({
+        runInvestigation: null,
+        runInvestigationLoading: false,
+        runInvestigationError: null
       })
     },
 
