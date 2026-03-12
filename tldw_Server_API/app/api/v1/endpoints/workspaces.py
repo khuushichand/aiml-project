@@ -29,6 +29,7 @@ router = APIRouter()
 
 
 def _ws_to_response(ws: dict) -> WorkspaceResponse:
+    """Convert a workspace DB row dict to a WorkspaceResponse schema."""
     return WorkspaceResponse(
         id=ws["id"],
         name=ws.get("name"),
@@ -48,6 +49,7 @@ def _ws_to_response(ws: dict) -> WorkspaceResponse:
 
 
 def _src_to_response(src: dict) -> WorkspaceSourceResponse:
+    """Convert a workspace source DB row dict to a WorkspaceSourceResponse schema."""
     return WorkspaceSourceResponse(
         id=src["id"],
         workspace_id=src["workspace_id"],
@@ -63,6 +65,7 @@ def _src_to_response(src: dict) -> WorkspaceSourceResponse:
 
 
 def _art_to_response(art: dict) -> WorkspaceArtifactResponse:
+    """Convert a workspace artifact DB row dict to a WorkspaceArtifactResponse schema."""
     return WorkspaceArtifactResponse(
         id=art["id"],
         workspace_id=art["workspace_id"],
@@ -79,6 +82,7 @@ def _art_to_response(art: dict) -> WorkspaceArtifactResponse:
 
 
 def _note_to_response(note: dict) -> WorkspaceNoteResponse:
+    """Convert a workspace note DB row dict to a WorkspaceNoteResponse schema."""
     return WorkspaceNoteResponse(
         id=note["id"],
         workspace_id=note["workspace_id"],
@@ -92,6 +96,7 @@ def _note_to_response(note: dict) -> WorkspaceNoteResponse:
 
 
 def _require_workspace(db: CharactersRAGDB, workspace_id: str) -> dict:
+    """Fetch a workspace or raise 404 if not found."""
     ws = db.get_workspace(workspace_id)
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")

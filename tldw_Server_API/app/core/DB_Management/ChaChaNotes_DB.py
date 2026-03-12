@@ -12078,6 +12078,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         List conversations for a given user (client_id), ordered by last_modified DESC.
@@ -12086,6 +12088,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             client_id: The user/client identifier as string.
             limit: Max number of rows to return.
             offset: Number of rows to skip.
+            scope_type: Optional scope filter ('global' or 'workspace').
+            workspace_id: Optional workspace ID filter (used with scope_type='workspace').
 
         Returns:
             List of conversation records.
@@ -12100,13 +12104,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             deleted_clause = "deleted = 0"
 
+        params: list[Any] = [client_id]
+        scope_clause = ""
+        if scope_type:
+            scope_clause += " AND scope_type = ?"
+            params.append(scope_type)
+            if scope_type == "workspace" and workspace_id:
+                scope_clause += " AND workspace_id = ?"
+                params.append(workspace_id)
+
         query = (
             "SELECT * FROM conversations "  # nosec B608
-            f"WHERE client_id = ? AND {deleted_clause} "
+            f"WHERE client_id = ? AND {deleted_clause}{scope_clause} "
             "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
+        params.extend([limit, offset])
         try:
-            cursor = self.execute_query(query, (client_id, limit, offset))
+            cursor = self.execute_query(query, tuple(params))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
         except CharactersRAGDBError as e:
@@ -13405,25 +13419,32 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
 
     def update_workspace_source_selection(self, workspace_id: str, *, selected_ids: list[str]) -> None:
-        """Batch-update selection: mark listed ids as selected, all others as unselected."""
+        """Batch-update selection: mark listed ids as selected, all others as unselected.
+
+        Bumps the version of every affected row so clients holding stale versions
+        will see a conflict on their next individual update.
+        """
         with self.transaction() as conn:
             conn.execute(
-                "UPDATE workspace_sources SET selected = 0 WHERE workspace_id = ?",
+                "UPDATE workspace_sources SET selected = 0, version = version + 1 WHERE workspace_id = ?",
                 (workspace_id,),
             )
             if selected_ids:
                 placeholders = ", ".join("?" for _ in selected_ids)
                 conn.execute(
-                    f"UPDATE workspace_sources SET selected = 1 WHERE workspace_id = ? AND id IN ({placeholders})",  # nosec B608
+                    f"UPDATE workspace_sources SET selected = 1, version = version + 1 WHERE workspace_id = ? AND id IN ({placeholders})",  # nosec B608
                     (workspace_id, *selected_ids),
                 )
 
     def reorder_workspace_sources(self, workspace_id: str, ordered_ids: list[str]) -> None:
-        """Set position of sources based on list order."""
+        """Set position of sources based on list order.
+
+        Bumps the version of every reordered row for conflict detection.
+        """
         with self.transaction() as conn:
             for idx, source_id in enumerate(ordered_ids):
                 conn.execute(
-                    "UPDATE workspace_sources SET position = ? WHERE workspace_id = ? AND id = ?",
+                    "UPDATE workspace_sources SET position = ?, version = version + 1 WHERE workspace_id = ? AND id = ?",
                     (idx, workspace_id, source_id),
                 )
 
