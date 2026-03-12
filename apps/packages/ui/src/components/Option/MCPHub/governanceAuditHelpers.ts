@@ -47,6 +47,15 @@ export type GovernanceAuditInlineAction = {
   object_id: string
   confirm_title?: string | null
   confirm_description?: string | null
+} | {
+  kind: "clear_path_scope_reference"
+  label: string
+  object_id: string
+  object_kind: "policy_assignment" | "permission_profile"
+  confirm_title: string
+  confirm_description: string
+  success_message: string
+  error_message: string
 }
 
 export const FINDING_TYPE_ORDER: McpHubGovernanceAuditFindingType[] = [
@@ -300,6 +309,43 @@ export const buildAuditInlineAction = (
 ): GovernanceAuditInlineAction | null => {
   const objectId = _safeString(item.object_id)
   const objectLabel = _safeString(item.object_label) || objectId
+  const details = (item.details ?? {}) as Record<string, unknown>
+  const referenceField = _safeString(details.reference_field)
+  const referenceObjectKind = _safeString(details.reference_object_kind)
+
+  if (
+    item.finding_type === "broken_object_reference" &&
+    objectId &&
+    referenceField === "path_scope_object_id" &&
+    referenceObjectKind === "path_scope_object" &&
+    (item.object_kind === "policy_assignment" || item.object_kind === "permission_profile")
+  ) {
+    if (item.object_kind === "policy_assignment") {
+      return {
+        kind: "clear_path_scope_reference",
+        label: "Clear broken path scope",
+        object_id: objectId,
+        object_kind: "policy_assignment",
+        confirm_title: "Clear the broken path scope reference from this assignment?",
+        confirm_description:
+          "This removes the broken path scope object reference only. Inline policy and other assignment settings stay unchanged.",
+        success_message: "Broken path scope cleared from assignment.",
+        error_message: "Failed to clear broken path scope from assignment."
+      }
+    }
+    return {
+      kind: "clear_path_scope_reference",
+      label: "Clear broken path scope",
+      object_id: objectId,
+      object_kind: "permission_profile",
+      confirm_title: "Clear the broken path scope reference from this permission profile?",
+      confirm_description:
+        "This removes the broken path scope object reference only. Policy content stays unchanged.",
+      success_message: "Broken path scope cleared from permission profile.",
+      error_message: "Failed to clear broken path scope from permission profile."
+    }
+  }
+
   if (
     item.finding_type !== "external_server_configuration_issue" ||
     item.object_kind !== "external_server" ||

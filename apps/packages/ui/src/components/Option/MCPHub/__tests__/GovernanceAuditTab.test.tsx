@@ -6,13 +6,17 @@ import userEvent from "@testing-library/user-event"
 const mocks = vi.hoisted(() => ({
   listGovernanceAuditFindings: vi.fn(),
   updateExternalServer: vi.fn(),
+  updatePermissionProfile: vi.fn(),
+  updatePolicyAssignment: vi.fn(),
   copyToClipboard: vi.fn(),
   downloadBlob: vi.fn()
 }))
 
 vi.mock("@/services/tldw/mcp-hub", () => ({
   listGovernanceAuditFindings: (...args: unknown[]) => mocks.listGovernanceAuditFindings(...args),
-  updateExternalServer: (...args: unknown[]) => mocks.updateExternalServer(...args)
+  updateExternalServer: (...args: unknown[]) => mocks.updateExternalServer(...args),
+  updatePermissionProfile: (...args: unknown[]) => mocks.updatePermissionProfile(...args),
+  updatePolicyAssignment: (...args: unknown[]) => mocks.updatePolicyAssignment(...args)
 }))
 
 vi.mock("@/utils/clipboard", () => ({
@@ -42,6 +46,29 @@ describe("GovernanceAuditTab", () => {
       auth_template_present: true,
       auth_template_valid: false,
       auth_template_blocked_reason: "required_slot_secret_missing"
+    })
+    mocks.updatePermissionProfile.mockResolvedValue({
+      id: 41,
+      name: "Writer Profile",
+      owner_scope_type: "user",
+      owner_scope_id: 7,
+      mode: "custom",
+      path_scope_object_id: null,
+      policy_document: {},
+      is_active: true
+    })
+    mocks.updatePolicyAssignment.mockResolvedValue({
+      id: 11,
+      target_type: "persona",
+      target_id: "researcher",
+      owner_scope_type: "user",
+      owner_scope_id: 7,
+      profile_id: null,
+      path_scope_object_id: null,
+      workspace_source_mode: "named",
+      workspace_set_object_id: 51,
+      inline_policy_document: {},
+      is_active: true
     })
     mocks.listGovernanceAuditFindings.mockResolvedValue({
       items: [
@@ -217,6 +244,120 @@ describe("GovernanceAuditTab", () => {
     confirmSpy.mockRestore()
   })
 
+  it("shows and executes the inline clear-path-scope action for assignment broken references", async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    mocks.listGovernanceAuditFindings
+      .mockResolvedValueOnce({
+        items: [
+          {
+            finding_type: "broken_object_reference",
+            severity: "error",
+            scope_type: "user",
+            scope_id: 7,
+            object_kind: "policy_assignment",
+            object_id: "11",
+            object_label: "researcher",
+            message: "Assignment references an inactive path scope object.",
+            details: {
+              reference_field: "path_scope_object_id",
+              reference_object_kind: "path_scope_object",
+              reference_object_id: "62",
+              reference_reason: "inactive_reference"
+            },
+            navigate_to: {
+              tab: "assignments",
+              object_kind: "policy_assignment",
+              object_id: "11"
+            }
+          }
+        ],
+        total: 1,
+        counts: { error: 1, warning: 0 }
+      })
+      .mockResolvedValueOnce({
+        items: [],
+        total: 0,
+        counts: { error: 0, warning: 0 }
+      })
+
+    render(<GovernanceAuditTab />)
+
+    expect(await screen.findByText("researcher")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Clear broken path scope" }))
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Clear the broken path scope reference from this assignment?\n\nThis removes the broken path scope object reference only. Inline policy and other assignment settings stay unchanged."
+    )
+    await waitFor(() => {
+      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith("11", {
+        path_scope_object_id: null
+      })
+    })
+    await waitFor(() => {
+      expect(mocks.listGovernanceAuditFindings).toHaveBeenCalledTimes(2)
+    })
+    expect(await screen.findByText("Broken path scope cleared from assignment.")).toBeTruthy()
+    confirmSpy.mockRestore()
+  })
+
+  it("shows and executes the inline clear-path-scope action for profile broken references", async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    mocks.listGovernanceAuditFindings
+      .mockResolvedValueOnce({
+        items: [
+          {
+            finding_type: "broken_object_reference",
+            severity: "error",
+            scope_type: "user",
+            scope_id: 7,
+            object_kind: "permission_profile",
+            object_id: "41",
+            object_label: "Writer Profile",
+            message: "Permission profile references a missing path scope object.",
+            details: {
+              reference_field: "path_scope_object_id",
+              reference_object_kind: "path_scope_object",
+              reference_object_id: "999",
+              reference_reason: "missing_reference"
+            },
+            navigate_to: {
+              tab: "profiles",
+              object_kind: "permission_profile",
+              object_id: "41"
+            }
+          }
+        ],
+        total: 1,
+        counts: { error: 1, warning: 0 }
+      })
+      .mockResolvedValueOnce({
+        items: [],
+        total: 0,
+        counts: { error: 0, warning: 0 }
+      })
+
+    render(<GovernanceAuditTab />)
+
+    expect(await screen.findByText("Writer Profile")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Clear broken path scope" }))
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Clear the broken path scope reference from this permission profile?\n\nThis removes the broken path scope object reference only. Policy content stays unchanged."
+    )
+    await waitFor(() => {
+      expect(mocks.updatePermissionProfile).toHaveBeenCalledWith("41", {
+        path_scope_object_id: null
+      })
+    })
+    await waitFor(() => {
+      expect(mocks.listGovernanceAuditFindings).toHaveBeenCalledTimes(2)
+    })
+    expect(await screen.findByText("Broken path scope cleared from permission profile.")).toBeTruthy()
+    confirmSpy.mockRestore()
+  })
+
   it("shows inline action failure feedback without hiding the finding", async () => {
     const user = userEvent.setup()
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
@@ -257,6 +398,53 @@ describe("GovernanceAuditTab", () => {
     })
     expect(await screen.findByText("Failed to deactivate server.")).toBeTruthy()
     expect(screen.getByText("Docs Managed")).toBeTruthy()
+    confirmSpy.mockRestore()
+  })
+
+  it("shows clear-path-scope failure feedback without hiding the finding", async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    mocks.updatePolicyAssignment.mockRejectedValueOnce(new Error("mutation failed"))
+    mocks.listGovernanceAuditFindings.mockResolvedValueOnce({
+      items: [
+        {
+          finding_type: "broken_object_reference",
+          severity: "error",
+          scope_type: "user",
+          scope_id: 7,
+          object_kind: "policy_assignment",
+          object_id: "11",
+          object_label: "researcher",
+          message: "Assignment references an inactive path scope object.",
+          details: {
+            reference_field: "path_scope_object_id",
+            reference_object_kind: "path_scope_object",
+            reference_object_id: "62",
+            reference_reason: "inactive_reference"
+          },
+          navigate_to: {
+            tab: "assignments",
+            object_kind: "policy_assignment",
+            object_id: "11"
+          }
+        }
+      ],
+      total: 1,
+      counts: { error: 1, warning: 0 }
+    })
+
+    render(<GovernanceAuditTab />)
+
+    expect(await screen.findByText("researcher")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Clear broken path scope" }))
+
+    await waitFor(() => {
+      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith("11", {
+        path_scope_object_id: null
+      })
+    })
+    expect(await screen.findByText("Failed to clear broken path scope from assignment.")).toBeTruthy()
+    expect(screen.getByText("researcher")).toBeTruthy()
     confirmSpy.mockRestore()
   })
 

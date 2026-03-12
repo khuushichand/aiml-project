@@ -3,6 +3,8 @@ import { Alert, Button, Card, Empty, List, Space, Tag, Typography } from "antd"
 
 import {
   listGovernanceAuditFindings,
+  updatePermissionProfile,
+  updatePolicyAssignment,
   updateExternalServer,
   type McpHubGovernanceAuditFinding,
   type McpHubGovernanceAuditNavigateTarget
@@ -212,10 +214,22 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
       if (action.kind === "deactivate_external_server") {
         await updateExternalServer(action.object_id, { enabled: false })
         setActionStatus({ type: "success", message: "Server deactivated." })
+      } else if (action.object_kind === "policy_assignment") {
+        await updatePolicyAssignment(action.object_id, { path_scope_object_id: null })
+        setActionStatus({ type: "success", message: action.success_message })
+      } else {
+        await updatePermissionProfile(action.object_id, { path_scope_object_id: null })
+        setActionStatus({ type: "success", message: action.success_message })
       }
       await loadAuditFindings()
     } catch {
-      setActionStatus({ type: "error", message: "Failed to deactivate server." })
+      setActionStatus({
+        type: "error",
+        message:
+          action.kind === "deactivate_external_server"
+            ? "Failed to deactivate server."
+            : action.error_message
+      })
     } finally {
       setPendingActionObjectId(null)
     }

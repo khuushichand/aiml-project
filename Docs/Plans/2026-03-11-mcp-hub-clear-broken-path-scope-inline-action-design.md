@@ -1,7 +1,7 @@
 # MCP Hub Clear Broken Path Scope Inline Action Design
 
 Date: 2026-03-11
-Status: Approved for planning
+Status: Implemented
 
 ## Goal
 
@@ -214,4 +214,3 @@ exists after refresh, the row remains visible.
 - backend audit-remediation endpoint
 - bulk actions
 - confirmation flows with user choices
-

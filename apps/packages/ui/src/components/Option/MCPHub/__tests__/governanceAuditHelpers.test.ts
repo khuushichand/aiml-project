@@ -119,6 +119,74 @@ describe("buildAuditRemediationSteps", () => {
 })
 
 describe("buildAuditInlineAction", () => {
+  it("returns a deterministic clear-path-scope action for eligible assignment broken references", () => {
+    const result = buildAuditInlineAction(
+      makeFinding({
+        finding_type: "broken_object_reference",
+        object_kind: "policy_assignment",
+        object_id: "11",
+        object_label: "Researcher",
+        details: {
+          reference_field: "path_scope_object_id",
+          reference_object_kind: "path_scope_object",
+          reference_object_id: "62",
+          reference_reason: "inactive_reference"
+        },
+        navigate_to: {
+          tab: "assignments",
+          object_kind: "policy_assignment",
+          object_id: "11"
+        }
+      })
+    )
+
+    expect(result).toEqual({
+      kind: "clear_path_scope_reference",
+      label: "Clear broken path scope",
+      object_kind: "policy_assignment",
+      object_id: "11",
+      confirm_title: "Clear the broken path scope reference from this assignment?",
+      confirm_description:
+        "This removes the broken path scope object reference only. Inline policy and other assignment settings stay unchanged.",
+      success_message: "Broken path scope cleared from assignment.",
+      error_message: "Failed to clear broken path scope from assignment."
+    })
+  })
+
+  it("returns a deterministic clear-path-scope action for eligible profile broken references", () => {
+    const result = buildAuditInlineAction(
+      makeFinding({
+        finding_type: "broken_object_reference",
+        object_kind: "permission_profile",
+        object_id: "41",
+        object_label: "Writer Profile",
+        details: {
+          reference_field: "path_scope_object_id",
+          reference_object_kind: "path_scope_object",
+          reference_object_id: "999",
+          reference_reason: "missing_reference"
+        },
+        navigate_to: {
+          tab: "profiles",
+          object_kind: "permission_profile",
+          object_id: "41"
+        }
+      })
+    )
+
+    expect(result).toEqual({
+      kind: "clear_path_scope_reference",
+      label: "Clear broken path scope",
+      object_kind: "permission_profile",
+      object_id: "41",
+      confirm_title: "Clear the broken path scope reference from this permission profile?",
+      confirm_description:
+        "This removes the broken path scope object reference only. Policy content stays unchanged.",
+      success_message: "Broken path scope cleared from permission profile.",
+      error_message: "Failed to clear broken path scope from permission profile."
+    })
+  })
+
   it("returns a deterministic deactivate action for eligible external server findings", () => {
     const result = buildAuditInlineAction(
       makeFinding({
@@ -148,8 +216,14 @@ describe("buildAuditInlineAction", () => {
   it("returns null for non-eligible findings", () => {
     const result = buildAuditInlineAction(
       makeFinding({
-        finding_type: "assignment_validation_blocker",
-        object_kind: "policy_assignment"
+        finding_type: "broken_object_reference",
+        object_kind: "policy_assignment",
+        details: {
+          reference_field: "workspace_set_object_id",
+          reference_object_kind: "workspace_set_object",
+          reference_object_id: "51",
+          reference_reason: "inactive_reference"
+        }
       })
     )
 

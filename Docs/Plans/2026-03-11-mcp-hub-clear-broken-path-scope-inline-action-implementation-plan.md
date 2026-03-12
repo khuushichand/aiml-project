@@ -8,9 +8,13 @@
 
 **Tech Stack:** React, TypeScript, Ant Design, Vitest, existing MCP Hub client service helpers
 
+**Status:** Complete
+
 ---
 
 ### Task 1: Add Red Tests For The New Action
+
+**Status:** Complete
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/apps/packages/ui/src/components/Option/MCPHub/__tests__/governanceAuditHelpers.test.ts`
@@ -57,6 +61,8 @@ Do not commit yet. Continue to Task 2 once the red tests fail as expected.
 
 ### Task 2: Extend The Audit Action Helper
 
+**Status:** Complete
+
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/apps/packages/ui/src/components/Option/MCPHub/governanceAuditHelpers.ts`
 
@@ -99,6 +105,8 @@ Expected: helper tests pass, tab interaction tests still fail
 Do not commit yet. Continue to Task 3.
 
 ### Task 3: Wire The New Action Into GovernanceAuditTab
+
+**Status:** Complete
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/apps/packages/ui/src/components/Option/MCPHub/GovernanceAuditTab.tsx`
@@ -153,6 +161,8 @@ Do not commit yet. Continue to Task 4.
 
 ### Task 4: Run Wider MCP Hub UI Verification
 
+**Status:** Complete
+
 **Files:**
 - No code changes expected
 
@@ -178,6 +188,8 @@ Confirm:
 Do not commit yet. Continue to Task 5.
 
 ### Task 5: Mark Docs Implemented And Commit
+
+**Status:** Complete
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/Docs/Plans/2026-03-11-mcp-hub-clear-broken-path-scope-inline-action-design.md`
