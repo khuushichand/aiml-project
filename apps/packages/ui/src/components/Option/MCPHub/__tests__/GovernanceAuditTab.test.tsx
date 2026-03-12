@@ -358,6 +358,63 @@ describe("GovernanceAuditTab", () => {
     confirmSpy.mockRestore()
   })
 
+  it("shows and executes the inline clear-profile action for assignment broken profile references", async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    mocks.listGovernanceAuditFindings
+      .mockResolvedValueOnce({
+        items: [
+          {
+            finding_type: "broken_object_reference",
+            severity: "error",
+            scope_type: "user",
+            scope_id: 7,
+            object_kind: "policy_assignment",
+            object_id: "14",
+            object_label: "missing-profile",
+            message: "Assignment references a missing permission profile.",
+            details: {
+              reference_field: "profile_id",
+              reference_object_kind: "permission_profile",
+              reference_object_id: "999",
+              reference_reason: "missing_reference"
+            },
+            navigate_to: {
+              tab: "assignments",
+              object_kind: "policy_assignment",
+              object_id: "14"
+            }
+          }
+        ],
+        total: 1,
+        counts: { error: 1, warning: 0 }
+      })
+      .mockResolvedValueOnce({
+        items: [],
+        total: 0,
+        counts: { error: 0, warning: 0 }
+      })
+
+    render(<GovernanceAuditTab />)
+
+    expect(await screen.findByText("missing-profile")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Clear broken profile" }))
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Clear the broken permission profile reference from this assignment?\n\nThis removes the broken permission profile reference only. Inline policy and other assignment settings stay unchanged."
+    )
+    await waitFor(() => {
+      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith("14", {
+        profile_id: null
+      })
+    })
+    await waitFor(() => {
+      expect(mocks.listGovernanceAuditFindings).toHaveBeenCalledTimes(2)
+    })
+    expect(await screen.findByText("Broken permission profile cleared from assignment.")).toBeTruthy()
+    confirmSpy.mockRestore()
+  })
+
   it("shows inline action failure feedback without hiding the finding", async () => {
     const user = userEvent.setup()
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
@@ -445,6 +502,53 @@ describe("GovernanceAuditTab", () => {
     })
     expect(await screen.findByText("Failed to clear broken path scope from assignment.")).toBeTruthy()
     expect(screen.getByText("researcher")).toBeTruthy()
+    confirmSpy.mockRestore()
+  })
+
+  it("shows clear-profile failure feedback without hiding the finding", async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    mocks.updatePolicyAssignment.mockRejectedValueOnce(new Error("mutation failed"))
+    mocks.listGovernanceAuditFindings.mockResolvedValueOnce({
+      items: [
+        {
+          finding_type: "broken_object_reference",
+          severity: "error",
+          scope_type: "user",
+          scope_id: 7,
+          object_kind: "policy_assignment",
+          object_id: "14",
+          object_label: "missing-profile",
+          message: "Assignment references a missing permission profile.",
+          details: {
+            reference_field: "profile_id",
+            reference_object_kind: "permission_profile",
+            reference_object_id: "999",
+            reference_reason: "missing_reference"
+          },
+          navigate_to: {
+            tab: "assignments",
+            object_kind: "policy_assignment",
+            object_id: "14"
+          }
+        }
+      ],
+      total: 1,
+      counts: { error: 1, warning: 0 }
+    })
+
+    render(<GovernanceAuditTab />)
+
+    expect(await screen.findByText("missing-profile")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Clear broken profile" }))
+
+    await waitFor(() => {
+      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith("14", {
+        profile_id: null
+      })
+    })
+    expect(await screen.findByText("Failed to clear broken permission profile from assignment.")).toBeTruthy()
+    expect(screen.getByText("missing-profile")).toBeTruthy()
     confirmSpy.mockRestore()
   })
 

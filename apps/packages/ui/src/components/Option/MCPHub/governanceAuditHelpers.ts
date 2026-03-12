@@ -56,6 +56,15 @@ export type GovernanceAuditInlineAction = {
   confirm_description: string
   success_message: string
   error_message: string
+} | {
+  kind: "clear_permission_profile_reference"
+  label: string
+  object_id: string
+  object_kind: "policy_assignment"
+  confirm_title: string
+  confirm_description: string
+  success_message: string
+  error_message: string
 }
 
 export const FINDING_TYPE_ORDER: McpHubGovernanceAuditFindingType[] = [
@@ -190,7 +199,11 @@ export const buildAuditRemediationSteps = (
     const consumerLabel =
       item.object_kind === "permission_profile" ? "permission profile" : "assignment"
     const referenceLabel =
-      referenceField === "workspace_set_object_id" ? "workspace set" : "path scope"
+      referenceField === "workspace_set_object_id"
+        ? "workspace set"
+        : referenceField === "profile_id"
+          ? "permission profile"
+          : "path scope"
     return {
       steps: [
         `Open the affected ${consumerLabel}.`,
@@ -312,6 +325,26 @@ export const buildAuditInlineAction = (
   const details = (item.details ?? {}) as Record<string, unknown>
   const referenceField = _safeString(details.reference_field)
   const referenceObjectKind = _safeString(details.reference_object_kind)
+
+  if (
+    item.finding_type === "broken_object_reference" &&
+    objectId &&
+    referenceField === "profile_id" &&
+    referenceObjectKind === "permission_profile" &&
+    item.object_kind === "policy_assignment"
+  ) {
+    return {
+      kind: "clear_permission_profile_reference",
+      label: "Clear broken profile",
+      object_id: objectId,
+      object_kind: "policy_assignment",
+      confirm_title: "Clear the broken permission profile reference from this assignment?",
+      confirm_description:
+        "This removes the broken permission profile reference only. Inline policy and other assignment settings stay unchanged.",
+      success_message: "Broken permission profile cleared from assignment.",
+      error_message: "Failed to clear broken permission profile from assignment."
+    }
+  }
 
   if (
     item.finding_type === "broken_object_reference" &&

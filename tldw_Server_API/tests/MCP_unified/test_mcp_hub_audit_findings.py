@@ -74,6 +74,19 @@ class _Repo:
                 "created_at": now,
                 "updated_at": now,
             },
+            {
+                "id": 43,
+                "name": "Inactive Writer Profile",
+                "description": None,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "mode": "custom",
+                "path_scope_object_id": None,
+                "policy_document": {},
+                "is_active": False,
+                "created_at": now,
+                "updated_at": now,
+            },
         ]
         self.workspace_sets = [
             {
@@ -164,7 +177,55 @@ class _Repo:
                 "is_active": True,
                 "created_at": now,
                 "updated_at": now,
-            }
+            },
+            {
+                "id": 14,
+                "target_type": "persona",
+                "target_id": "missing-profile",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "profile_id": 999,
+                "path_scope_object_id": None,
+                "workspace_source_mode": None,
+                "workspace_set_object_id": None,
+                "inline_policy_document": {},
+                "approval_policy_id": None,
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "id": 15,
+                "target_type": "persona",
+                "target_id": "inactive-profile",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "profile_id": 43,
+                "path_scope_object_id": None,
+                "workspace_source_mode": None,
+                "workspace_set_object_id": None,
+                "inline_policy_document": {},
+                "approval_policy_id": None,
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "id": 16,
+                "target_type": "persona",
+                "target_id": "scope-mismatch-profile",
+                "owner_scope_type": "org",
+                "owner_scope_id": 9,
+                "profile_id": 41,
+                "path_scope_object_id": None,
+                "workspace_source_mode": None,
+                "workspace_set_object_id": None,
+                "inline_policy_document": {},
+                "approval_policy_id": None,
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
         ]
         self.external_servers = [
             {
@@ -463,6 +524,24 @@ async def test_list_governance_audit_findings_returns_workspace_and_external_fin
     )
     assert any(
         finding["details"].get("reference_field") == "workspace_set_object_id"
+        and finding["details"].get("reference_reason") == "scope_incompatible_reference"
+        and finding["object_kind"] == "policy_assignment"
+        for finding in broken_findings
+    )
+    assert any(
+        finding["details"].get("reference_field") == "profile_id"
+        and finding["details"].get("reference_reason") == "missing_reference"
+        and finding["object_kind"] == "policy_assignment"
+        for finding in broken_findings
+    )
+    assert any(
+        finding["details"].get("reference_field") == "profile_id"
+        and finding["details"].get("reference_reason") == "inactive_reference"
+        and finding["object_kind"] == "policy_assignment"
+        for finding in broken_findings
+    )
+    assert any(
+        finding["details"].get("reference_field") == "profile_id"
         and finding["details"].get("reference_reason") == "scope_incompatible_reference"
         and finding["object_kind"] == "policy_assignment"
         for finding in broken_findings

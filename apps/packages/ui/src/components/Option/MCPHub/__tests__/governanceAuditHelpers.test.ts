@@ -187,6 +187,40 @@ describe("buildAuditInlineAction", () => {
     })
   })
 
+  it("returns a deterministic clear-profile action for eligible assignment broken profile references", () => {
+    const result = buildAuditInlineAction(
+      makeFinding({
+        finding_type: "broken_object_reference",
+        object_kind: "policy_assignment",
+        object_id: "14",
+        object_label: "missing-profile",
+        details: {
+          reference_field: "profile_id",
+          reference_object_kind: "permission_profile",
+          reference_object_id: "999",
+          reference_reason: "missing_reference"
+        },
+        navigate_to: {
+          tab: "assignments",
+          object_kind: "policy_assignment",
+          object_id: "14"
+        }
+      })
+    )
+
+    expect(result).toEqual({
+      kind: "clear_permission_profile_reference",
+      label: "Clear broken profile",
+      object_kind: "policy_assignment",
+      object_id: "14",
+      confirm_title: "Clear the broken permission profile reference from this assignment?",
+      confirm_description:
+        "This removes the broken permission profile reference only. Inline policy and other assignment settings stay unchanged.",
+      success_message: "Broken permission profile cleared from assignment.",
+      error_message: "Failed to clear broken permission profile from assignment."
+    })
+  })
+
   it("returns a deterministic deactivate action for eligible external server findings", () => {
     const result = buildAuditInlineAction(
       makeFinding({

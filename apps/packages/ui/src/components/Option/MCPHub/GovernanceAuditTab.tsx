@@ -214,6 +214,9 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
       if (action.kind === "deactivate_external_server") {
         await updateExternalServer(action.object_id, { enabled: false })
         setActionStatus({ type: "success", message: "Server deactivated." })
+      } else if (action.kind === "clear_permission_profile_reference") {
+        await updatePolicyAssignment(action.object_id, { profile_id: null })
+        setActionStatus({ type: "success", message: action.success_message })
       } else if (action.object_kind === "policy_assignment") {
         await updatePolicyAssignment(action.object_id, { path_scope_object_id: null })
         setActionStatus({ type: "success", message: action.success_message })

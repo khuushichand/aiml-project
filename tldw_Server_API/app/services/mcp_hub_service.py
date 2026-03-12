@@ -428,6 +428,54 @@ class McpHubService:
             }
         return None
 
+    async def inspect_permission_profile_reference(
+        self,
+        *,
+        profile_id: int | None,
+        target_scope_type: str,
+        target_scope_id: int | None,
+    ) -> dict[str, Any] | None:
+        if profile_id is None:
+            return None
+        row = await self.repo.get_permission_profile(int(profile_id))
+        if not row:
+            return {
+                "reference_field": "profile_id",
+                "reference_object_kind": "permission_profile",
+                "reference_object_id": str(profile_id),
+                "reference_reason": "missing_reference",
+                "reference_scope_type": None,
+                "reference_scope_id": None,
+                "reference_label": None,
+            }
+        if not bool(row.get("is_active", True)):
+            return {
+                "reference_field": "profile_id",
+                "reference_object_kind": "permission_profile",
+                "reference_object_id": str(row.get("id") or profile_id),
+                "reference_reason": "inactive_reference",
+                "reference_scope_type": row.get("owner_scope_type"),
+                "reference_scope_id": row.get("owner_scope_id"),
+                "reference_label": row.get("name"),
+            }
+        scope_reason = self._scope_reference_reason(
+            object_scope_type=str(row.get("owner_scope_type") or "global"),
+            object_scope_id=row.get("owner_scope_id"),
+            target_scope_type=str(target_scope_type or "global"),
+            target_scope_id=target_scope_id,
+        )
+        if scope_reason:
+            return {
+                "reference_field": "profile_id",
+                "reference_object_kind": "permission_profile",
+                "reference_object_id": str(row.get("id") or profile_id),
+                "reference_reason": scope_reason,
+                "reference_scope_type": row.get("owner_scope_type"),
+                "reference_scope_id": row.get("owner_scope_id"),
+                "reference_label": row.get("name"),
+            }
+        return None
+
     @staticmethod
     def _multi_root_validation_error(
         *,
@@ -822,6 +870,41 @@ class McpHubService:
                 or assignment.get("id")
                 or ""
             )
+            broken_profile_reference = await self.inspect_permission_profile_reference(
+                profile_id=assignment.get("profile_id"),
+                target_scope_type=str(assignment.get("owner_scope_type") or "global"),
+                target_scope_id=assignment.get("owner_scope_id"),
+            )
+            if broken_profile_reference:
+                reference_label = str(
+                    broken_profile_reference.get("reference_label")
+                    or broken_profile_reference.get("reference_object_id")
+                    or ""
+                )
+                findings.append(
+                    self._make_governance_audit_finding(
+                        finding_type="broken_object_reference",
+                        severity="error",
+                        scope_type=str(assignment.get("owner_scope_type") or "global"),
+                        scope_id=assignment.get("owner_scope_id"),
+                        object_kind="policy_assignment",
+                        object_id=str(assignment.get("id") or ""),
+                        object_label=assignment_label,
+                        message=f"Assignment references a {str(broken_profile_reference.get('reference_reason') or '').replace('_', ' ')} permission profile.",
+                        details=broken_profile_reference,
+                        navigate_to={
+                            "tab": "assignments",
+                            "object_kind": "policy_assignment",
+                            "object_id": str(assignment.get("id") or ""),
+                        },
+                        related_object_kind=str(
+                            broken_profile_reference.get("reference_object_kind") or "permission_profile"
+                        ),
+                        related_object_id=str(broken_profile_reference.get("reference_object_id") or ""),
+                        related_object_label=reference_label or None,
+                    )
+                )
+
             broken_path_scope_reference = await self.inspect_path_scope_object_reference(
                 path_scope_object_id=assignment.get("path_scope_object_id"),
                 target_scope_type=str(assignment.get("owner_scope_type") or "global"),
