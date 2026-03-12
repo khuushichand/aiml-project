@@ -143,10 +143,20 @@ export type McpHubWorkspaceSetObject = {
   owner_scope_type: McpHubScopeType
   owner_scope_id?: number | null
   is_active: boolean
+  readiness_summary?: McpHubWorkspaceSourceReadinessSummary | null
   created_by?: number | null
   updated_by?: number | null
   created_at?: string | null
   updated_at?: string | null
+}
+
+export type McpHubWorkspaceSourceReadinessSummary = {
+  is_multi_root_ready: boolean
+  warning_codes: string[]
+  warning_message?: string | null
+  conflicting_workspace_ids: string[]
+  conflicting_workspace_roots: string[]
+  unresolved_workspace_ids: string[]
 }
 
 export type McpHubWorkspaceSetObjectCreateInput = {
@@ -180,6 +190,7 @@ export type McpHubSharedWorkspace = {
   owner_scope_type: "global" | "org" | "team"
   owner_scope_id?: number | null
   is_active: boolean
+  readiness_summary?: McpHubWorkspaceSourceReadinessSummary | null
   created_by?: number | null
   updated_by?: number | null
   created_at?: string | null

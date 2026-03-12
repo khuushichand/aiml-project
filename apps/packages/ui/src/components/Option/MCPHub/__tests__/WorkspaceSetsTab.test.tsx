@@ -37,7 +37,15 @@ describe("WorkspaceSetsTab", () => {
         description: "User-scoped reusable workspaces",
         owner_scope_type: "user",
         owner_scope_id: 7,
-        is_active: true
+        is_active: true,
+        readiness_summary: {
+          is_multi_root_ready: false,
+          warning_codes: ["multi_root_overlap_warning"],
+          warning_message: "May overlap with another trusted root in multi-root assignments.",
+          conflicting_workspace_ids: ["workspace-alpha", "workspace-beta"],
+          conflicting_workspace_roots: ["/repo", "/repo/docs"],
+          unresolved_workspace_ids: []
+        }
       }
     ])
     mocks.listSharedWorkspaces.mockResolvedValue([])
@@ -66,7 +74,8 @@ describe("WorkspaceSetsTab", () => {
     render(<WorkspaceSetsTab />)
 
     expect(await screen.findByText("Primary Workspace Set")).toBeTruthy()
-    expect(screen.getByText(/workspace-alpha/i)).toBeTruthy()
+    expect(screen.getAllByText(/workspace-alpha/i).length).toBeGreaterThan(0)
+    expect(await screen.findByText(/may overlap with another trusted root/i)).toBeTruthy()
 
     await user.click(screen.getByRole("button", { name: /new workspace set/i }))
     await user.type(screen.getByLabelText(/workspace set name/i), "Docs Workspaces")

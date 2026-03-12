@@ -742,6 +742,7 @@ def _workspace_set_object_row_to_response(row: dict[str, Any]) -> WorkspaceSetOb
         owner_scope_type=str(row.get("owner_scope_type") or "user"),
         owner_scope_id=row.get("owner_scope_id"),
         is_active=bool(row.get("is_active")),
+        readiness_summary=row.get("readiness_summary"),
         created_by=row.get("created_by"),
         updated_by=row.get("updated_by"),
         created_at=row.get("created_at"),
@@ -769,6 +770,7 @@ def _shared_workspace_row_to_response(row: dict[str, Any]) -> SharedWorkspaceRes
         owner_scope_type=str(row.get("owner_scope_type") or "team"),
         owner_scope_id=row.get("owner_scope_id"),
         is_active=bool(row.get("is_active")),
+        readiness_summary=row.get("readiness_summary"),
         created_by=row.get("created_by"),
         updated_by=row.get("updated_by"),
         created_at=row.get("created_at"),
@@ -1329,6 +1331,10 @@ async def create_workspace_set_object(
         )
     except BadRequestError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    row = dict(row)
+    row["readiness_summary"] = await svc.get_workspace_set_readiness_summary(
+        workspace_set_object_id=int(row.get("id") or 0)
+    )
     return _workspace_set_object_row_to_response(row)
 
 
@@ -1353,7 +1359,14 @@ async def list_workspace_set_objects(
             )
         )
     rows = _dedupe_rows(rows)
-    return [_workspace_set_object_row_to_response(row) for row in rows]
+    rows_with_readiness: list[dict[str, Any]] = []
+    for row in rows:
+        enriched = dict(row)
+        enriched["readiness_summary"] = await svc.get_workspace_set_readiness_summary(
+            workspace_set_object_id=int(row.get("id") or 0)
+        )
+        rows_with_readiness.append(enriched)
+    return [_workspace_set_object_row_to_response(row) for row in rows_with_readiness]
 
 
 @router.put("/workspace-set-objects/{workspace_set_object_id}", response_model=WorkspaceSetObjectResponse)
@@ -1508,6 +1521,10 @@ async def create_shared_workspace(
         )
     except BadRequestError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    row = dict(row)
+    row["readiness_summary"] = await svc.get_shared_workspace_readiness_summary(
+        shared_workspace_id=int(row.get("id") or 0)
+    )
     return _shared_workspace_row_to_response(row)
 
 
@@ -1534,7 +1551,14 @@ async def list_shared_workspaces(
             )
         )
     rows = _dedupe_rows(rows)
-    return [_shared_workspace_row_to_response(row) for row in rows]
+    rows_with_readiness: list[dict[str, Any]] = []
+    for row in rows:
+        enriched = dict(row)
+        enriched["readiness_summary"] = await svc.get_shared_workspace_readiness_summary(
+            shared_workspace_id=int(row.get("id") or 0)
+        )
+        rows_with_readiness.append(enriched)
+    return [_shared_workspace_row_to_response(row) for row in rows_with_readiness]
 
 
 @router.put("/shared-workspaces/{shared_workspace_id}", response_model=SharedWorkspaceResponse)

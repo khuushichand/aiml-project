@@ -168,6 +168,12 @@ export const PolicyAssignmentsTab = () => {
     () => getManagedExternalServers(externalServers),
     [externalServers]
   )
+  const selectedWorkspaceSet = useMemo(
+    () =>
+      workspaceSetObjects.find((workspaceSet) => String(workspaceSet.id) === String(workspaceSetObjectId)) ||
+      null,
+    [workspaceSetObjectId, workspaceSetObjects]
+  )
   const bindingModes = useMemo(
     () =>
       new Map(
@@ -683,10 +689,23 @@ export const PolicyAssignmentsTab = () => {
                       <option value="">Select a workspace set</option>
                       {workspaceSetObjects.map((workspaceSet) => (
                         <option key={workspaceSet.id} value={workspaceSet.id}>
-                          {workspaceSet.name}
+                          {workspaceSet.readiness_summary && !workspaceSet.readiness_summary.is_multi_root_ready
+                            ? `${workspaceSet.name} (overlap warning)`
+                            : workspaceSet.name}
                         </option>
                       ))}
                     </select>
+                    {selectedWorkspaceSet?.readiness_summary &&
+                    !selectedWorkspaceSet.readiness_summary.is_multi_root_ready ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        title={
+                          selectedWorkspaceSet.readiness_summary.warning_message ||
+                          "This workspace set is not currently multi-root-ready."
+                        }
+                      />
+                    ) : null}
                     <Typography.Text type="secondary">
                       Preserved inline workspace rows remain stored but inactive while a named workspace set is selected.
                     </Typography.Text>

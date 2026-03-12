@@ -313,6 +313,29 @@ export const WorkspaceSetsTab = () => {
               {workspaceSet.description ? (
                 <Typography.Text type="secondary">{workspaceSet.description}</Typography.Text>
               ) : null}
+              {workspaceSet.readiness_summary && !workspaceSet.readiness_summary.is_multi_root_ready ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  title={
+                    workspaceSet.readiness_summary.warning_message ||
+                    "This workspace source is not currently multi-root-ready."
+                  }
+                  description={[
+                    workspaceSet.readiness_summary.conflicting_workspace_ids?.length
+                      ? `Workspaces: ${workspaceSet.readiness_summary.conflicting_workspace_ids.join(", ")}`
+                      : null,
+                    workspaceSet.readiness_summary.conflicting_workspace_roots?.length
+                      ? `Roots: ${workspaceSet.readiness_summary.conflicting_workspace_roots.join(", ")}`
+                      : null,
+                    workspaceSet.readiness_summary.unresolved_workspace_ids?.length
+                      ? `Unresolved workspaces: ${workspaceSet.readiness_summary.unresolved_workspace_ids.join(", ")}`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                />
+              ) : null}
               {(membersByObjectId[workspaceSet.id] || []).length > 0 ? (
                 <Space wrap size={4}>
                   {(membersByObjectId[workspaceSet.id] || []).map((member) => (

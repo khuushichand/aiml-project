@@ -30,7 +30,15 @@ describe("SharedWorkspacesTab", () => {
         absolute_root: "/srv/shared/docs",
         owner_scope_type: "team",
         owner_scope_id: 21,
-        is_active: true
+        is_active: true,
+        readiness_summary: {
+          is_multi_root_ready: false,
+          warning_codes: ["multi_root_overlap_warning"],
+          warning_message: "May conflict with other visible shared roots in multi-root assignments.",
+          conflicting_workspace_ids: ["shared-docs", "shared-docs-nested"],
+          conflicting_workspace_roots: ["/srv/shared/docs", "/srv/shared/docs/archive"],
+          unresolved_workspace_ids: []
+        }
       }
     ])
     mocks.createSharedWorkspace.mockResolvedValue({
@@ -50,6 +58,7 @@ describe("SharedWorkspacesTab", () => {
 
     expect(await screen.findByText("Shared Docs")).toBeTruthy()
     expect(screen.getByText("/srv/shared/docs")).toBeTruthy()
+    expect(await screen.findByText(/may conflict with other visible shared roots/i)).toBeTruthy()
 
     await user.click(screen.getByRole("button", { name: /new shared workspace/i }))
     await user.type(screen.getByLabelText(/shared workspace id/i), "shared-research")

@@ -167,7 +167,15 @@ describe("PolicyAssignmentsTab", () => {
         name: "Primary Workspace Set",
         owner_scope_type: "user",
         owner_scope_id: 7,
-        is_active: true
+        is_active: true,
+        readiness_summary: {
+          is_multi_root_ready: false,
+          warning_codes: ["multi_root_overlap_warning"],
+          warning_message: "May overlap with another trusted root in multi-root assignments.",
+          conflicting_workspace_ids: ["workspace-alpha", "workspace-beta"],
+          conflicting_workspace_roots: ["/repo", "/repo/docs"],
+          unresolved_workspace_ids: []
+        }
       }
     ])
     mocks.getEffectivePolicy.mockResolvedValue({
@@ -454,6 +462,7 @@ describe("PolicyAssignmentsTab", () => {
     await user.type(screen.getByLabelText(/target id/i), "analyst")
     await user.click(screen.getByRole("radio", { name: /use named workspace set/i }))
     await user.selectOptions(screen.getByLabelText(/assignment named workspace set/i), "51")
+    expect(await screen.findByText(/may overlap with another trusted root/i)).toBeTruthy()
     await user.click(screen.getByRole("button", { name: /save assignment/i }))
 
     expect(mocks.createPolicyAssignment).toHaveBeenCalledWith({
@@ -500,9 +509,12 @@ describe("PolicyAssignmentsTab", () => {
     await user.selectOptions(screen.getByLabelText(/assignment named workspace set/i), "51")
     await user.click(screen.getByRole("button", { name: /save assignment/i }))
 
-    const alert = await screen.findByRole("alert")
-    expect(alert.textContent).toMatch(/named workspace source contains overlapping roots for multi-root execution/i)
-    expect(alert.textContent).toMatch(/workspace-alpha, workspace-beta/i)
-    expect(alert.textContent).toMatch(/\/repo, \/repo\/docs/i)
+    const alerts = await screen.findAllByRole("alert")
+    const errorAlert = alerts.find((alert) =>
+      alert.textContent?.match(/named workspace source contains overlapping roots for multi-root execution/i)
+    )
+    expect(errorAlert?.textContent).toMatch(/named workspace source contains overlapping roots for multi-root execution/i)
+    expect(errorAlert?.textContent).toMatch(/workspace-alpha, workspace-beta/i)
+    expect(errorAlert?.textContent).toMatch(/\/repo, \/repo\/docs/i)
   })
 })

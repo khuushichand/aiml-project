@@ -179,6 +179,44 @@ class _FakePolicyService:
         ]
         self.approval_decisions = []
 
+    async def get_workspace_set_readiness_summary(self, *, workspace_set_object_id: int):
+        if int(workspace_set_object_id) == 51:
+            return {
+                "is_multi_root_ready": False,
+                "warning_codes": ["multi_root_overlap_warning"],
+                "warning_message": "May overlap with another trusted root in multi-root assignments.",
+                "conflicting_workspace_ids": ["workspace-alpha", "workspace-beta"],
+                "conflicting_workspace_roots": ["/repo", "/repo/docs"],
+                "unresolved_workspace_ids": [],
+            }
+        return {
+            "is_multi_root_ready": True,
+            "warning_codes": [],
+            "warning_message": None,
+            "conflicting_workspace_ids": [],
+            "conflicting_workspace_roots": [],
+            "unresolved_workspace_ids": [],
+        }
+
+    async def get_shared_workspace_readiness_summary(self, *, shared_workspace_id: int):
+        if int(shared_workspace_id) == 71:
+            return {
+                "is_multi_root_ready": False,
+                "warning_codes": ["multi_root_overlap_warning"],
+                "warning_message": "May conflict with other visible shared roots in multi-root assignments.",
+                "conflicting_workspace_ids": ["shared-docs", "shared-docs-nested"],
+                "conflicting_workspace_roots": ["/srv/shared/docs", "/srv/shared/docs/archive"],
+                "unresolved_workspace_ids": [],
+            }
+        return {
+            "is_multi_root_ready": True,
+            "warning_codes": [],
+            "warning_message": None,
+            "conflicting_workspace_ids": [],
+            "conflicting_workspace_roots": [],
+            "unresolved_workspace_ids": [],
+        }
+
     async def list_permission_profiles(self, **_kwargs):
         return self.permission_profiles
 
@@ -1029,6 +1067,7 @@ def test_create_workspace_set_object_returns_created_payload() -> None:
     assert payload["name"] == "Primary Workspace Set"
     assert payload["owner_scope_type"] == "user"
     assert payload["owner_scope_id"] == 7
+    assert "readiness_summary" in payload
 
 
 def test_create_shared_workspace_entry_returns_created_payload() -> None:
@@ -1057,6 +1096,7 @@ def test_create_shared_workspace_entry_returns_created_payload() -> None:
     assert payload["workspace_id"] == "shared-docs"
     assert payload["owner_scope_type"] == "team"
     assert payload["owner_scope_id"] == 21
+    assert "readiness_summary" in payload
 
 
 def test_create_shared_workspace_entry_rejects_user_scope() -> None:

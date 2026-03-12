@@ -218,6 +218,26 @@ export const SharedWorkspacesTab = () => {
                 </Button>
               </Space>
               <Typography.Text type="secondary">{entry.absolute_root}</Typography.Text>
+              {entry.readiness_summary && !entry.readiness_summary.is_multi_root_ready ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  title={
+                    entry.readiness_summary.warning_message ||
+                    "May conflict with other visible shared roots in multi-root assignments."
+                  }
+                  description={[
+                    entry.readiness_summary.conflicting_workspace_ids?.length
+                      ? `Workspaces: ${entry.readiness_summary.conflicting_workspace_ids.join(", ")}`
+                      : null,
+                    entry.readiness_summary.conflicting_workspace_roots?.length
+                      ? `Roots: ${entry.readiness_summary.conflicting_workspace_roots.join(", ")}`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                />
+              ) : null}
             </Space>
           </List.Item>
         )}

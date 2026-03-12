@@ -160,6 +160,28 @@ def _roots_overlap(left: Path, right: Path) -> bool:
     return left == right or left in right.parents or right in left.parents
 
 
+def _workspace_source_readiness_summary(
+    *,
+    warning_codes: list[str] | None = None,
+    warning_message: str | None = None,
+    conflicting_workspace_ids: list[str] | None = None,
+    conflicting_workspace_roots: list[str] | None = None,
+    unresolved_workspace_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    codes = _unique(_as_str_list(warning_codes or []))
+    conflict_ids = _unique(_as_str_list(conflicting_workspace_ids or []))
+    conflict_roots = _unique(_as_str_list(conflicting_workspace_roots or []))
+    unresolved = _unique(_as_str_list(unresolved_workspace_ids or []))
+    return {
+        "is_multi_root_ready": not (codes or conflict_ids or conflict_roots or unresolved),
+        "warning_codes": codes,
+        "warning_message": str(warning_message or "").strip() or None,
+        "conflicting_workspace_ids": conflict_ids,
+        "conflicting_workspace_roots": conflict_roots,
+        "unresolved_workspace_ids": unresolved,
+    }
+
+
 class McpHubService:
     """Business logic for MCP Hub profile and external server management."""
 
@@ -526,6 +548,118 @@ class McpHubService:
             if any(str(member.get("workspace_id") or "").strip() == workspace_id for member in members):
                 return True
         return False
+
+    async def get_workspace_set_readiness_summary(
+        self,
+        *,
+        workspace_set_object_id: int,
+    ) -> dict[str, Any]:
+        workspace_set = await self.repo.get_workspace_set_object(workspace_set_object_id)
+        if not workspace_set:
+            return _workspace_source_readiness_summary()
+        owner_scope_type = str(workspace_set.get("owner_scope_type") or "user").strip().lower()
+        owner_scope_id = workspace_set.get("owner_scope_id")
+        trust_source = "shared_registry" if owner_scope_type != "user" else "user_local"
+        workspace_ids = _unique(
+            _as_str_list(
+                [
+                    row.get("workspace_id")
+                    for row in await self.repo.list_workspace_set_members(workspace_set_object_id)
+                ]
+            )
+        )
+        resolved_roots: list[tuple[str, Path]] = []
+        unresolved_workspace_ids: list[str] = []
+        for workspace_id in workspace_ids:
+            resolved = await self.workspace_root_resolver.resolve_for_context(
+                session_id=None,
+                user_id=str(owner_scope_id) if trust_source == "user_local" and owner_scope_id is not None else None,
+                workspace_id=workspace_id,
+                workspace_trust_source=trust_source,
+                owner_scope_type=owner_scope_type,
+                owner_scope_id=owner_scope_id,
+            )
+            workspace_root = str(resolved.get("workspace_root") or "").strip()
+            if not workspace_root:
+                unresolved_workspace_ids.append(workspace_id)
+                continue
+            resolved_roots.append((workspace_id, Path(workspace_root).expanduser().resolve(strict=False)))
+
+        for index, (left_workspace_id, left_root) in enumerate(resolved_roots):
+            for right_workspace_id, right_root in resolved_roots[index + 1 :]:
+                if not _roots_overlap(left_root, right_root):
+                    continue
+                return _workspace_source_readiness_summary(
+                    warning_codes=["multi_root_overlap_warning"],
+                    warning_message="May overlap with another trusted root in multi-root assignments.",
+                    conflicting_workspace_ids=[left_workspace_id, right_workspace_id],
+                    conflicting_workspace_roots=[str(left_root), str(right_root)],
+                    unresolved_workspace_ids=unresolved_workspace_ids,
+                )
+
+        if unresolved_workspace_ids:
+            return _workspace_source_readiness_summary(
+                warning_codes=["workspace_unresolvable_warning"],
+                warning_message="Contains workspace ids that do not currently resolve through the expected trust source.",
+                unresolved_workspace_ids=unresolved_workspace_ids,
+            )
+
+        return _workspace_source_readiness_summary()
+
+    async def get_shared_workspace_readiness_summary(
+        self,
+        *,
+        shared_workspace_id: int,
+    ) -> dict[str, Any]:
+        row = await self.repo.get_shared_workspace_entry(shared_workspace_id)
+        if not row:
+            return _workspace_source_readiness_summary()
+        current_root = str(row.get("absolute_root") or "").strip()
+        if not current_root:
+            return _workspace_source_readiness_summary(
+                warning_codes=["workspace_unresolvable_warning"],
+                warning_message="Shared workspace root is unavailable.",
+                unresolved_workspace_ids=[str(row.get("workspace_id") or "")],
+            )
+        current_path = Path(current_root).expanduser().resolve(strict=False)
+        scope_type = str(row.get("owner_scope_type") or "team").strip().lower()
+        scope_id = row.get("owner_scope_id")
+        visible_entries: list[dict[str, Any]] = []
+        visible_entries.extend(
+            await self.repo.list_shared_workspace_entries(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+        if scope_type != "global":
+            visible_entries.extend(
+                await self.repo.list_shared_workspace_entries(
+                    owner_scope_type="global",
+                    owner_scope_id=None,
+                )
+            )
+        seen: set[int] = set()
+        for entry in visible_entries:
+            entry_id = int(entry.get("id") or 0)
+            if entry_id == int(shared_workspace_id) or entry_id in seen:
+                continue
+            seen.add(entry_id)
+            candidate_root = str(entry.get("absolute_root") or "").strip()
+            if not candidate_root:
+                continue
+            candidate_path = Path(candidate_root).expanduser().resolve(strict=False)
+            if not _roots_overlap(current_path, candidate_path):
+                continue
+            return _workspace_source_readiness_summary(
+                warning_codes=["multi_root_overlap_warning"],
+                warning_message="May conflict with other visible shared roots in multi-root assignments.",
+                conflicting_workspace_ids=[
+                    str(row.get("workspace_id") or ""),
+                    str(entry.get("workspace_id") or ""),
+                ],
+                conflicting_workspace_roots=[str(current_path), str(candidate_path)],
+            )
+        return _workspace_source_readiness_summary()
 
     @classmethod
     def _credential_slot_required_permission(cls, privilege_class: str) -> str:

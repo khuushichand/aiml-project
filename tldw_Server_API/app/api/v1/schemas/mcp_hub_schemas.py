@@ -222,6 +222,7 @@ class WorkspaceSetObjectResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     is_active: bool
+    readiness_summary: WorkspaceSourceReadinessSummaryResponse | None = None
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None
@@ -265,10 +266,20 @@ class SharedWorkspaceResponse(BaseModel):
     owner_scope_type: Literal["global", "org", "team"]
     owner_scope_id: int | None = None
     is_active: bool
+    readiness_summary: WorkspaceSourceReadinessSummaryResponse | None = None
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None
     updated_at: datetime | str | None = None
+
+
+class WorkspaceSourceReadinessSummaryResponse(BaseModel):
+    is_multi_root_ready: bool = True
+    warning_codes: list[str] = Field(default_factory=list)
+    warning_message: str | None = None
+    conflicting_workspace_ids: list[str] = Field(default_factory=list)
+    conflicting_workspace_roots: list[str] = Field(default_factory=list)
+    unresolved_workspace_ids: list[str] = Field(default_factory=list)
 
 
 class PolicyOverrideUpsertRequest(BaseModel):
