@@ -125,3 +125,14 @@ def test_workflows_db_step_attempt_crud(tmp_path):
     assert attempts[0]["attempt_number"] == 1
     assert attempts[0]["status"] == "failed"
     assert attempts[0]["metadata_json"]["result"] == "failed"
+
+
+def test_workflows_db_step_attempt_indexes_exist(tmp_path):
+    db = WorkflowsDatabase(str(tmp_path / "workflows.db"))
+
+    rows = db._conn.cursor().execute("PRAGMA index_list('workflow_step_attempts')").fetchall()
+    index_names = {row["name"] for row in rows}
+
+    assert "idx_step_attempts_run_attempts" in index_names
+    assert "idx_step_attempts_run_step_attempts" in index_names
+    assert "idx_step_attempts_step_run_attempts" in index_names

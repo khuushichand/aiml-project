@@ -777,10 +777,10 @@ class WorkflowEngine:
                         self._complete_step_attempt_record(
                             attempt_id=attempt_id,
                             step_type=step_type,
-                            status="waiting_human",
+                            status=status_flag,
                         )
                         with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
-                            self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last_outputs)
+                            self.db.complete_step_run(step_run_id=step_run_id, status=status_flag, outputs=last_outputs)
                         try:
                             on_timeout = str(step.get("on_timeout") or "").strip() or None
                             timeout_cfg = step_cfg.get("timeout_seconds") if isinstance(step_cfg, dict) else None
@@ -1197,13 +1197,14 @@ class WorkflowEngine:
             context.update({"last": last})
             context[str(sid)] = last
             if last.get("__status__") in {"waiting_human", "waiting_approval"}:
+                wait_status = str(last["__status__"])
                 self._complete_step_attempt_record(
                     attempt_id=attempt_id,
                     step_type=stype,
-                    status="waiting_human",
+                    status=wait_status,
                 )
                 with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
-                    self.db.complete_step_run(step_run_id=step_run_id, status="waiting_human", outputs=last)
+                    self.db.complete_step_run(step_run_id=step_run_id, status=wait_status, outputs=last)
                 try:
                     on_timeout = str(step.get("on_timeout") or "").strip() or None
                     timeout_cfg = scfg.get("timeout_seconds") if isinstance(scfg, dict) else None

@@ -127,6 +127,41 @@ def test_waiting_run_keeps_secrets_and_releases_slot(workflows_db: WorkflowsData
     assert stats["active_workflows"] == 0
 
 
+def test_wait_for_approval_persists_waiting_approval_status(workflows_db: WorkflowsDatabase):
+    definition = {
+        "name": "await-approval",
+        "steps": [
+            {
+                "id": "approve",
+                "type": "wait_for_approval",
+                "config": {"assigned_to_user_id": "user"},
+                "on_success": "next",
+            },
+            {"id": "next", "type": "log", "config": {"message": "done"}},
+        ],
+    }
+    run_id = "approval-run"
+    workflows_db.create_run(
+        run_id=run_id,
+        tenant_id="tenant",
+        user_id="user",
+        inputs={},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot=definition,
+    )
+    engine = WorkflowEngine(workflows_db)
+    engine.submit(run_id, RunMode.ASYNC)
+
+    status = _wait_for_status(workflows_db, run_id)
+    assert status == "waiting_approval"
+    step_runs = workflows_db.list_step_runs(run_id=run_id)
+    attempts = workflows_db.list_step_attempts(run_id=run_id, step_id="approve")
+
+    assert step_runs[0]["status"] == "waiting_approval"
+    assert attempts[0]["status"] == "waiting_approval"
+
+
 def test_continue_run_clears_secrets(workflows_db: WorkflowsDatabase):
     scheduler = WorkflowScheduler.instance()
     definition = {
@@ -165,6 +200,53 @@ def test_continue_run_clears_secrets(workflows_db: WorkflowsDatabase):
     stats = scheduler.stats()
     assert stats["active_tenants"] == 0
     assert stats["active_workflows"] == 0
+
+
+def test_continue_run_preserves_waiting_approval_status(workflows_db: WorkflowsDatabase):
+    definition = {
+        "name": "resume-to-approval",
+        "steps": [
+            {
+                "id": "wait",
+                "type": "wait_for_human",
+                "config": {"assigned_to_user_id": "user"},
+                "on_success": "approve",
+            },
+            {
+                "id": "approve",
+                "type": "wait_for_approval",
+                "config": {"assigned_to_user_id": "user"},
+                "on_success": "next",
+            },
+            {"id": "next", "type": "log", "config": {"message": "finished"}},
+        ],
+    }
+    run_id = "resume-approval-run"
+    workflows_db.create_run(
+        run_id=run_id,
+        tenant_id="tenant",
+        user_id="user",
+        inputs={},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot=definition,
+    )
+
+    engine = WorkflowEngine(workflows_db)
+    engine.submit(run_id, RunMode.ASYNC)
+    status = _wait_for_status(workflows_db, run_id)
+    assert status == "waiting_human"
+
+    asyncio.run(engine.continue_run(run_id, after_step_id="wait", last_outputs={"approved": True}))
+
+    status = _wait_for_status(workflows_db, run_id)
+    assert status == "waiting_approval"
+    step_runs = workflows_db.list_step_runs(run_id=run_id)
+    approval_step_run = next(step_run for step_run in step_runs if step_run["step_id"] == "approve")
+    attempts = workflows_db.list_step_attempts(run_id=run_id, step_id="approve")
+
+    assert approval_step_run["status"] == "waiting_approval"
+    assert attempts[0]["status"] == "waiting_approval"
 
 
 def test_continue_run_restores_step_context_bindings(workflows_db: WorkflowsDatabase):

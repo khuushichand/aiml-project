@@ -191,6 +191,9 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
 CREATE INDEX IF NOT EXISTS idx_workflows_owner ON workflows(owner_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at);
+CREATE INDEX IF NOT EXISTS idx_step_attempts_run_attempts ON workflow_step_attempts(run_id, attempt_number, started_at);
+CREATE INDEX IF NOT EXISTS idx_step_attempts_run_step_attempts ON workflow_step_attempts(run_id, step_id, attempt_number, started_at);
+CREATE INDEX IF NOT EXISTS idx_step_attempts_step_run_attempts ON workflow_step_attempts(step_run_id, attempt_number, started_at);
     CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq);
 
 -- Ensure uniqueness of per-run event sequence
@@ -480,7 +483,7 @@ class WorkflowRun:
 
 
 class WorkflowsDatabase:
-    _CURRENT_SCHEMA_VERSION = 7
+    _CURRENT_SCHEMA_VERSION = 8
     """Workflow persistence adapter supporting SQLite and DatabaseBackend instances."""
 
     def __init__(
@@ -728,6 +731,7 @@ class WorkflowsDatabase:
             5: self._backend_migrate_to_v5,
             6: self._backend_migrate_to_v6,
             7: self._backend_migrate_to_v7,
+            8: self._backend_migrate_to_v8,
         }
 
     def _backend_migrate_to_v1(self, conn) -> None:
@@ -970,6 +974,33 @@ class WorkflowsDatabase:
             connection=conn,
         )
 
+    def _backend_migrate_to_v8(self, conn) -> None:
+        if not self.backend:
+            return
+        backend = self.backend
+        ident = backend.escape_identifier
+        index_definitions = (
+            (
+                "idx_step_attempts_run_attempts",
+                ("run_id", "attempt_number", "started_at"),
+            ),
+            (
+                "idx_step_attempts_run_step_attempts",
+                ("run_id", "step_id", "attempt_number", "started_at"),
+            ),
+            (
+                "idx_step_attempts_step_run_attempts",
+                ("step_run_id", "attempt_number", "started_at"),
+            ),
+        )
+        for index_name, columns in index_definitions:
+            cols = ", ".join(ident(column) for column in columns)
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident(index_name)} "  # nosec B608
+                f"ON {ident('workflow_step_attempts')} ({cols})",
+                connection=conn,
+            )
+
     def _initialize_schema_backend(self) -> None:
         if not self.backend:
             return
@@ -1138,6 +1169,15 @@ class WorkflowsDatabase:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status)")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_runs_idempotency_lookup ON workflow_runs(tenant_id, user_id, idempotency_key, created_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_step_attempts_run_attempts ON workflow_step_attempts(run_id, attempt_number, started_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_step_attempts_run_step_attempts ON workflow_step_attempts(run_id, step_id, attempt_number, started_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_step_attempts_step_run_attempts ON workflow_step_attempts(step_run_id, attempt_number, started_at)"
         )
         # Partial indexes for frequently accessed statuses (supported on modern SQLite)
         try:
