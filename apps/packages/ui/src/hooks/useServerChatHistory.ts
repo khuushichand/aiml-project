@@ -4,6 +4,7 @@ import { useConnectionState } from "@/hooks/useConnectionState"
 import { useConnectionStore } from "@/store/connection"
 import { isRecoverableAuthConfigError } from "@/services/auth-errors"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
+import type { ChatScope } from "@/types/chat-scope"
 
 export type ServerChatHistoryItem = ServerChatSummary & {
   createdAtMs: number
@@ -168,6 +169,7 @@ type UseServerChatHistoryOptions = {
   enabled?: boolean
   includeDeleted?: boolean
   deletedOnly?: boolean
+  scope?: ChatScope
 }
 
 export const useServerChatHistory = (
@@ -180,9 +182,10 @@ export const useServerChatHistory = (
   const isEnabled = isConnected && (options?.enabled ?? true)
   const includeDeleted = options?.includeDeleted ?? false
   const deletedOnly = options?.deletedOnly ?? false
+  const scope = options?.scope
 
   const query = useQuery({
-    queryKey: ["serverChatHistory", { includeDeleted, deletedOnly }],
+    queryKey: ["serverChatHistory", { includeDeleted, deletedOnly, scope }],
     enabled: isEnabled,
     queryFn: async ({ signal }): Promise<ServerChatHistoryItem[]> => {
       await tldwClient.initialize().catch(() => null)
@@ -197,7 +200,7 @@ export const useServerChatHistory = (
                 ...(includeDeleted ? { include_deleted: true } : {}),
                 ...(deletedOnly ? { deleted_only: true } : {})
               },
-              { signal: pageSignal }
+              { signal: pageSignal, scope }
             ),
           {
             signal

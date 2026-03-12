@@ -1,3 +1,5 @@
+import type { ChatScope } from "@/types/chat-scope"
+import { toChatScopeParams } from "@/types/chat-scope"
 import { Storage } from "@plasmohq/storage"
 import { createSafeStorage, safeStorageSerde } from "@/utils/safe-storage"
 import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
@@ -4073,9 +4075,9 @@ export class TldwApiClient {
 
   async listChats(
     params?: Record<string, any>,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; scope?: ChatScope }
   ): Promise<ServerChatSummary[]> {
-    const query = this.buildQuery(params)
+    const query = this.buildQuery({ ...toChatScopeParams(options?.scope), ...params })
     const data = await bgRequest<any>({
       path: `/api/v1/chats/${query}`,
       method: "GET",
@@ -4104,9 +4106,9 @@ export class TldwApiClient {
 
   async listChatsWithMeta(
     params?: Record<string, any>,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; scope?: ChatScope }
   ): Promise<{ chats: ServerChatSummary[]; total: number }> {
-    const query = this.buildQuery(params)
+    const query = this.buildQuery({ ...toChatScopeParams(options?.scope), ...params })
     const data = await bgRequest<any>({
       path: `/api/v1/chats/${query}`,
       method: "GET",
@@ -4143,12 +4145,12 @@ export class TldwApiClient {
     }
   }
 
-  async createChat(payload: Record<string, any>): Promise<ServerChatSummary> {
+  async createChat(payload: Record<string, any>, options?: { scope?: ChatScope }): Promise<ServerChatSummary> {
     const res = await bgRequest<any>({
       path: "/api/v1/chats/",
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: payload
+      body: { ...toChatScopeParams(options?.scope), ...payload }
     })
     return this.normalizeChatSummary(res)
   }

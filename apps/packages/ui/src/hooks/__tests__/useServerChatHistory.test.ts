@@ -186,6 +186,38 @@ describe("useServerChatHistory", () => {
   })
 })
 
+describe("useServerChatHistory scope forwarding", () => {
+  it("passes workspace scope through to listChatsWithMeta", async () => {
+    listChatsWithMetaMock.mockResolvedValueOnce({
+      chats: [createChat(1)],
+      total: 1
+    })
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(
+      () =>
+        useServerChatHistory("", {
+          scope: { type: "workspace", workspaceId: "workspace-a" }
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() => expect(result.current.data).toHaveLength(1))
+
+    expect(listChatsWithMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: expect.any(Number),
+        offset: expect.any(Number)
+      }),
+      expect.objectContaining({
+        scope: { type: "workspace", workspaceId: "workspace-a" }
+      })
+    )
+
+    queryClient.clear()
+  })
+})
+
 describe("filterServerChatHistoryItems", () => {
   it("filters case-insensitively by title, topic, and state", () => {
     const mapped = mapServerChatHistoryItems([
