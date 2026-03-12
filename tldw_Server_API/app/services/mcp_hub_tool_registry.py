@@ -9,6 +9,16 @@ from tldw_Server_API.app.core.MCP_unified.modules.registry import ModuleRegistry
 
 _KNOWN_RISK_CLASSES = ("low", "medium", "high", "unclassified")
 _KNOWN_METADATA_SOURCES = ("explicit", "heuristic", "fallback")
+_SUPPORTED_PATH_ARGUMENT_HINTS = (
+    "path",
+    "file_path",
+    "target_path",
+    "cwd",
+    "paths",
+    "file_paths",
+    "files[].path",
+)
+_PHASE_ONE_PATH_ENFORCEABLE_TOOLS = frozenset()
 _CATEGORY_DEFAULTS: dict[str, dict[str, Any]] = {
     "execution": {
         "risk_class": "high",
@@ -85,6 +95,7 @@ _STRONG_EXPLICIT_KEYS = frozenset(
     {
         "capabilities",
         "mutates_state",
+        "path_argument_hints",
         "path_boundable",
         "risk_class",
         "supports_arguments_preview",
@@ -240,7 +251,13 @@ class McpHubToolRegistryService:
         uses_processes = self._resolve_bool(metadata, "uses_processes", defaults["uses_processes"])
         uses_network = self._resolve_bool(metadata, "uses_network", defaults["uses_network"])
         uses_credentials = self._resolve_bool(metadata, "uses_credentials", defaults["uses_credentials"])
-        path_boundable = self._resolve_bool(metadata, "path_boundable", defaults["path_boundable"])
+        path_argument_hints = self._resolve_path_argument_hints(metadata=metadata, tool_def=tool_def)
+        path_boundable = self._resolve_path_boundable(
+            tool_name=tool_name,
+            metadata=metadata,
+            default=defaults["path_boundable"],
+            path_argument_hints=path_argument_hints,
+        )
         supports_arguments_preview = self._resolve_bool(
             metadata,
             "supports_arguments_preview",
@@ -273,6 +290,7 @@ class McpHubToolRegistryService:
             "uses_credentials": uses_credentials,
             "supports_arguments_preview": supports_arguments_preview,
             "path_boundable": path_boundable,
+            "path_argument_hints": path_argument_hints,
             "metadata_source": metadata_source,
             "metadata_warnings": metadata_warnings,
         }
@@ -281,6 +299,46 @@ class McpHubToolRegistryService:
     def _resolve_bool(metadata: dict[str, Any], key: str, default: bool) -> bool:
         value = _as_bool(metadata.get(key))
         return default if value is None else value
+
+    @staticmethod
+    def _resolve_path_argument_hints(*, metadata: dict[str, Any], tool_def: dict[str, Any]) -> list[str]:
+        hints = [
+            hint
+            for hint in _as_str_list(metadata.get("path_argument_hints"))
+            if hint in _SUPPORTED_PATH_ARGUMENT_HINTS
+        ]
+        if hints:
+            return _unique(hints)
+
+        input_schema = _as_dict(tool_def.get("inputSchema"))
+        properties = _as_dict(input_schema.get("properties"))
+        inferred: list[str] = []
+        for candidate in _SUPPORTED_PATH_ARGUMENT_HINTS:
+            if candidate == "files[].path":
+                files_schema = _as_dict(properties.get("files"))
+                items_schema = _as_dict(files_schema.get("items"))
+                nested_properties = _as_dict(items_schema.get("properties"))
+                if "path" in nested_properties:
+                    inferred.append(candidate)
+                continue
+            if candidate in properties:
+                inferred.append(candidate)
+        return _unique(inferred)
+
+    @staticmethod
+    def _resolve_path_boundable(
+        *,
+        tool_name: str,
+        metadata: dict[str, Any],
+        default: bool,
+        path_argument_hints: list[str],
+    ) -> bool:
+        explicit = _as_bool(metadata.get("path_boundable"))
+        if explicit is not None:
+            return explicit
+        if tool_name in _PHASE_ONE_PATH_ENFORCEABLE_TOOLS and default and path_argument_hints:
+            return True
+        return False
 
     def _resolve_category(self, *, tool_name: str, metadata: dict[str, Any]) -> tuple[str, str]:
         category = str(metadata.get("category") or "").strip().lower()

@@ -69,41 +69,115 @@ def _normalized_command(value: Any) -> str | None:
     return None
 
 
-def _scope_fingerprint_payload(tool_args: Any) -> dict[str, Any]:
+def _scope_fingerprint_payload(
+    tool_args: Any,
+    *,
+    scope_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Select a small canonical subset of tool args for scope hashing."""
     if not isinstance(tool_args, dict):
-        return {}
-    payload: dict[str, Any] = {}
-    for key in ("command", "cmd", "args", "arguments"):
-        command = _normalized_command(tool_args.get(key))
-        if command:
-            payload["command"] = command
-            break
-    for key in ("path", "file_path", "url"):
-        value = str(tool_args.get(key) or "").strip()
-        if value:
-            payload[key] = value
-    for key in ("paths", "file_paths"):
-        raw = tool_args.get(key)
-        if isinstance(raw, (list, tuple)):
-            values = [str(entry).strip() for entry in raw if str(entry).strip()]
+        payload = {}
+    else:
+        payload = {}
+        for key in ("command", "cmd", "args", "arguments"):
+            command = _normalized_command(tool_args.get(key))
+            if command:
+                payload["command"] = command
+                break
+        for key in ("path", "file_path", "url"):
+            value = str(tool_args.get(key) or "").strip()
+            if value:
+                payload[key] = value
+        for key in ("paths", "file_paths"):
+            raw = tool_args.get(key)
+            if isinstance(raw, (list, tuple)):
+                values = [str(entry).strip() for entry in raw if str(entry).strip()]
+                if values:
+                    payload[key] = values[:_SUMMARY_MAX_ITEMS]
+        files = tool_args.get("files")
+        if isinstance(files, list):
+            file_paths = [
+                str(item.get("path") or "").strip()
+                for item in files
+                if isinstance(item, dict) and str(item.get("path") or "").strip()
+            ]
+            if file_paths:
+                payload["files"] = file_paths[:_SUMMARY_MAX_ITEMS]
+    if isinstance(scope_payload, dict):
+        scope_context: dict[str, Any] = {}
+        for key in (
+            "path_scope_mode",
+            "workspace_id",
+            "workspace_root",
+            "scope_root",
+            "selected_workspace_trust_source",
+            "workspace_source_mode",
+            "server_id",
+            "server_name",
+            "reason",
+        ):
+            value = str(scope_payload.get(key) or "").strip()
+            if value:
+                scope_context[key] = value
+        assignment_id = scope_payload.get("selected_assignment_id")
+        if assignment_id not in (None, ""):
+            scope_context["selected_assignment_id"] = str(assignment_id).strip()
+        blocked_reason = str(scope_payload.get("blocked_reason") or "").strip()
+        if blocked_reason:
+            scope_context["blocked_reason"] = blocked_reason
+        normalized_paths = scope_payload.get("normalized_paths")
+        if isinstance(normalized_paths, list):
+            values = [str(entry).strip() for entry in normalized_paths if str(entry).strip()]
             if values:
-                payload[key] = values[:_SUMMARY_MAX_ITEMS]
-    files = tool_args.get("files")
-    if isinstance(files, list):
-        file_paths = [
-            str(item.get("path") or "").strip()
-            for item in files
-            if isinstance(item, dict) and str(item.get("path") or "").strip()
-        ]
-        if file_paths:
-            payload["files"] = file_paths[:_SUMMARY_MAX_ITEMS]
+                scope_context["normalized_paths"] = values[:_SUMMARY_MAX_ITEMS]
+        path_allowlist_prefixes = scope_payload.get("path_allowlist_prefixes")
+        if isinstance(path_allowlist_prefixes, list):
+            values = [str(entry).strip() for entry in path_allowlist_prefixes if str(entry).strip()]
+            if values:
+                scope_context["path_allowlist_prefixes"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
+        allowed_workspace_ids = scope_payload.get("allowed_workspace_ids")
+        if isinstance(allowed_workspace_ids, list):
+            values = [str(entry).strip() for entry in allowed_workspace_ids if str(entry).strip()]
+            if values:
+                scope_context["allowed_workspace_ids"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
+        workspace_bundle_ids = scope_payload.get("workspace_bundle_ids")
+        if isinstance(workspace_bundle_ids, list):
+            values = [str(entry).strip() for entry in workspace_bundle_ids if str(entry).strip()]
+            if values:
+                scope_context["workspace_bundle_ids"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
+        workspace_bundle_roots = scope_payload.get("workspace_bundle_roots")
+        if isinstance(workspace_bundle_roots, list):
+            values = [str(entry).strip() for entry in workspace_bundle_roots if str(entry).strip()]
+            if values:
+                scope_context["workspace_bundle_roots"] = sorted(values)[:_SUMMARY_MAX_ITEMS]
+        path_workspace_map = scope_payload.get("path_workspace_map")
+        if isinstance(path_workspace_map, dict):
+            values = [
+                f"{str(key).strip()}->{str(value).strip()}"
+                for key, value in sorted(path_workspace_map.items(), key=lambda item: str(item[0]))
+                if str(key).strip() and str(value).strip()
+            ]
+            if values:
+                scope_context["path_workspace_map"] = values[:_SUMMARY_MAX_ITEMS]
+        for key in ("requested_slots", "bound_slots", "missing_bound_slots", "missing_secret_slots"):
+            raw = scope_payload.get(key)
+            if isinstance(raw, list):
+                values = [str(entry).strip() for entry in raw if str(entry).strip()]
+                if values:
+                    scope_context[key] = sorted(values)[:_SUMMARY_MAX_ITEMS]
+        if scope_context:
+            payload["scope_context"] = scope_context
     return payload
 
 
-def _scope_key_for_tool_call(tool_name: str, tool_args: Any) -> str:
+def _scope_key_for_tool_call(
+    tool_name: str,
+    tool_args: Any,
+    *,
+    scope_payload: dict[str, Any] | None = None,
+) -> str:
     """Build a stable scope key for a tool invocation."""
-    fingerprint_payload = _scope_fingerprint_payload(tool_args)
+    fingerprint_payload = _scope_fingerprint_payload(tool_args, scope_payload=scope_payload)
     if fingerprint_payload:
         canonical = json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
@@ -239,6 +313,9 @@ class McpHubApprovalService:
         tool_def: dict[str, Any] | None,
         is_write: bool | None,
         within_effective_policy: bool,
+        force_approval: bool = False,
+        approval_reason: str | None = None,
+        scope_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         policy = dict(effective_policy or {})
         approval_policy_id = policy.get("approval_policy_id")
@@ -265,7 +342,7 @@ class McpHubApprovalService:
 
         context_key = _context_key_for_request(context)
         conversation_id = _conversation_id_for_request(context)
-        scope_key = _scope_key_for_tool_call(tool_name, tool_args)
+        scope_key = _scope_key_for_tool_call(tool_name, tool_args, scope_payload=scope_payload)
         existing = await self.repo.find_active_approval_decision(
             approval_policy_id=int(approval_policy_id) if approval_policy_id is not None else None,
             context_key=context_key,
@@ -291,8 +368,10 @@ class McpHubApprovalService:
                 return {"status": "allow", "reason": "active_approval", "decision": existing}
 
         should_require = False
-        reason = "outside_profile"
-        if approval_mode == "ask_every_time":
+        reason = str(approval_reason or "outside_profile").strip() or "outside_profile"
+        if force_approval:
+            should_require = True
+        elif approval_mode == "ask_every_time":
             should_require = True
             reason = "always_require_approval"
         elif approval_mode == "ask_on_sensitive_actions":
@@ -317,6 +396,7 @@ class McpHubApprovalService:
                 "reason": reason,
                 "duration_options": _duration_options(rules),
                 "arguments_summary": _arguments_summary(tool_args),
+                "scope_context": dict(scope_payload or {}) if isinstance(scope_payload, dict) else None,
             },
         }
 
