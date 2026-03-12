@@ -402,7 +402,7 @@ const applyCharacterFolderToTags = (
 }
 
 const countPopulatedImportFields = (record: Record<string, unknown>): number =>
-  Object.values(record).reduce((count, value) => {
+  Object.values(record).reduce<number>((count, value) => {
     if (value == null) return count
     if (typeof value === "string") {
       return value.trim().length > 0 ? count + 1 : count
@@ -6199,7 +6199,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             }
           ),
           description:
-            sanitizeServerErrorMessage(error?.message) ||
+            sanitizeServerErrorMessage(
+              error?.message,
+              t("settings:manageCharacters.notification.someError", {
+                defaultValue: "Something went wrong. Please try again later"
+              })
+            ) ||
             t("settings:manageCharacters.notification.someError", {
               defaultValue: "Something went wrong. Please try again later"
             })
@@ -6333,7 +6338,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             defaultValue: "Failed to create persona"
           }),
           description:
-            sanitizeServerErrorMessage(error?.message) ||
+            sanitizeServerErrorMessage(
+              error?.message,
+              t("settings:manageCharacters.notification.someError", {
+                defaultValue: "Something went wrong. Please try again later"
+              })
+            ) ||
             t("settings:manageCharacters.notification.someError", {
               defaultValue: "Something went wrong. Please try again later"
             })
@@ -9161,7 +9171,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             <span>
               {t("settings:manageCharacters.conversations.avgMessages", {
                 defaultValue: "Avg messages: {{count}}",
-                count: averageConversationMessageCountLabel
+                count: Number(averageConversationMessageCountLabel)
               })}
             </span>
           </div>

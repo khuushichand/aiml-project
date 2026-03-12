@@ -98,9 +98,15 @@ vi.mock("antd", async () => {
   )
 
   const Spin = () => <div data-testid="template-preview-loading">Loading</div>
+  const Button = ({ children, onClick, ...rest }: any) => (
+    <button type="button" onClick={() => onClick?.()} {...rest}>
+      {children}
+    </button>
+  )
 
   return {
     Alert,
+    Button,
     Radio: {
       Group: RadioGroup,
       Button: RadioButton

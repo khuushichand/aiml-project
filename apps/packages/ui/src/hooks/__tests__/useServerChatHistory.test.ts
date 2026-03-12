@@ -36,10 +36,10 @@ vi.mock("@/store/connection", () => ({
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
-    initialize: (...args: unknown[]) => initializeMock(...args),
-    listChatsWithMeta: (...args: unknown[]) => listChatsWithMetaMock(...args),
-    searchConversationsWithMeta: (...args: unknown[]) =>
-      searchConversationsWithMetaMock(...args)
+    initialize: () => initializeMock(),
+    listChatsWithMeta: (params?: unknown) => listChatsWithMetaMock(params),
+    searchConversationsWithMeta: (query?: unknown, params?: unknown) =>
+      searchConversationsWithMetaMock(query, params)
   }
 }))
 

@@ -238,9 +238,8 @@ describe("WorldBooksManager bulk operations stage-2 set-priority action", () => 
     tldwClientMock.bulkWorldBookEntries.mockResolvedValueOnce({
       success: false,
       affected_count: 1,
-      failed_ids: [2],
-      message: "partial"
-    })
+      failed_ids: [2]
+    } as any)
 
     render(<WorldBooksManager />)
     await selectTwoEntries(user)

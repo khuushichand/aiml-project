@@ -249,6 +249,9 @@ type DefaultCharacterPreferenceQueryResult = {
 
 const CONTEXT_FOOTPRINT_THRESHOLD_PERCENT = 40
 
+const toText = (value: unknown): string =>
+  typeof value === "string" ? value : String(value)
+
 const estimateTokensFromText = (value: string): number => {
   const normalized = value.trim()
   if (!normalized) return 0
@@ -364,8 +367,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     documentContext,
     selectedKnowledge,
     ragMediaIds,
-    compareAutoDisabledFlag,
-    setCompareAutoDisabledFlag,
     chatLoopState = {
       status: "idle",
       pendingApprovals: [],
@@ -934,23 +935,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [compareFeatureEnabled, compareMode, setCompareMode])
 
-  React.useEffect(() => {
-    if (compareAutoDisabledFlag) {
-      notificationApi.info({
-        message: t(
-          "playground:compareDisabledNotice",
-          "Compare mode was turned off"
-        ),
-        description: t(
-          "playground:compareDisabledNoticeDesc",
-          "The compare feature was disabled. Your model selections are saved."
-        ),
-        duration: 4
-      })
-      setCompareAutoDisabledFlag(false)
-    }
-  }, [compareAutoDisabledFlag, setCompareAutoDisabledFlag, notificationApi, t])
-
   // Auto-select model on initial load when no model is selected
   // Priority: 1) First favorite model, 2) First available model
   React.useEffect(() => {
@@ -1184,9 +1168,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           ? t(`playground:presets.${currentPreset.key}.label`, currentPreset.label)
           : currentPresetKey
         setModeAnnouncement(
-          t("playground:composer.presetChanged", "{{preset}} preset applied.", {
-            preset: presetLabel
-          } as any)
+          toText(
+            t("playground:composer.presetChanged", "{{preset}} preset applied.", {
+              preset: presetLabel
+            } as any)
+          )
         )
       }
     }
@@ -6251,10 +6237,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (currentPreset && currentPreset.key !== "custom") {
       items.push({
         id: "preset",
-        label: t("playground:composer.context.preset", "Preset"),
-        value: t(
-          `playground:presets.${currentPreset.key}.label`,
-          currentPreset.label
+        label: toText(t("playground:composer.context.preset", "Preset")),
+        value: toText(
+          t(
+            `playground:presets.${currentPreset.key}.label`,
+            currentPreset.label
+          )
         ),
         tone: "active",
         onClick: () => setOpenModelSettings(true)
@@ -6264,12 +6252,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (selectedCharacter?.name) {
       items.push({
         id: "character",
-        label: t("playground:composer.context.character", "Character"),
+        label: toText(t("playground:composer.context.character", "Character")),
         value: characterPendingApply
-          ? t(
-              "playground:composer.context.characterNextTurn",
-              "{{name}} (next turn)",
-              { name: selectedCharacter.name } as any
+          ? toText(
+              t(
+                "playground:composer.context.characterNextTurn",
+                "{{name}} (next turn)",
+                { name: selectedCharacter.name } as any
+              )
             )
           : selectedCharacter.name,
         tone: "active",
@@ -6280,8 +6270,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (contextToolsOpen) {
       items.push({
         id: "knowledge",
-        label: t("playground:composer.context.knowledge", "Knowledge"),
-        value: t("common:open", "Open"),
+        label: toText(t("playground:composer.context.knowledge", "Knowledge")),
+        value: toText(t("common:open", "Open")),
         tone: "active",
         onClick: () => setContextToolsOpen(false)
       })
@@ -6290,8 +6280,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (ragPinnedResults.length > 0) {
       items.push({
         id: "ragPinned",
-        label: t("playground:composer.context.pinnedSources", "Pinned"),
-        value: String(
+        label: toText(t("playground:composer.context.pinnedSources", "Pinned")),
+        value: toText(
           t("playground:composer.context.pinnedCount", {
             defaultValue: "{{count}} sources",
             count: ragPinnedResults.length
@@ -6305,8 +6295,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (webSearch) {
       items.push({
         id: "webSearch",
-        label: t("playground:composer.context.webSearch", "Web search"),
-        value: t("common:on", "On"),
+        label: toText(t("playground:composer.context.webSearch", "Web search")),
+        value: toText(t("common:on", "On")),
         tone: "active",
         onClick: handleToggleWebSearch
       })
@@ -6314,7 +6304,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (sessionUsageSummary.totalTokens > 0) {
       items.push({
         id: "sessionUsage",
-        label: t("playground:composer.context.session", "Session"),
+        label: toText(t("playground:composer.context.session", "Session")),
         value: sessionUsageLabel,
         tone: "neutral",
         onClick: openSessionInsightsModal
@@ -6327,7 +6317,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ) {
       items.push({
         id: "prompt",
-        label: t("playground:composer.context.prompt", "Prompt"),
+        label: toText(t("playground:composer.context.prompt", "Prompt")),
         value: promptSummaryLabel,
         tone: "active"
       })
@@ -6336,10 +6326,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (currentChatModelSettings.jsonMode) {
       items.push({
         id: "json",
-        label: t("playground:composer.context.json", "JSON mode"),
-        value: t(
-          "playground:composer.context.jsonShort",
-          "Object responses"
+        label: toText(t("playground:composer.context.json", "JSON mode")),
+        value: toText(
+          t(
+            "playground:composer.context.jsonShort",
+            "Object responses"
+          )
         ),
         tone: "active",
         onClick: () => updateChatModelSetting("jsonMode", undefined)
@@ -6349,7 +6341,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (showTokenBudgetWarning) {
       items.push({
         id: "budget",
-        label: t("playground:composer.context.budget", "Budget"),
+        label: toText(t("playground:composer.context.budget", "Budget")),
         value: `${tokenBudgetRiskLabel}${
           projectedBudget.utilizationPercent != null
             ? ` • ${Math.round(projectedBudget.utilizationPercent)}%`
@@ -6362,7 +6354,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (tokenBudgetRisk.level !== "unknown" && !showTokenBudgetWarning) {
       items.push({
         id: "truncationRisk",
-        label: t("playground:composer.context.truncationRisk", "Truncation"),
+        label: toText(t("playground:composer.context.truncationRisk", "Truncation")),
         value: tokenBudgetRiskLabel,
         tone:
           tokenBudgetRisk.level === "high" || tokenBudgetRisk.level === "critical"
@@ -6374,13 +6366,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (nonMessageContextPercent != null) {
       items.push({
         id: "contextMix",
-        label: t("playground:composer.context.contextMix", "Context mix"),
-        value: t(
-          "playground:composer.context.nonMessageShare",
-          "{{percent}}% non-message",
-          {
-            percent: Math.max(0, Math.round(nonMessageContextPercent))
-          } as any
+        label: toText(t("playground:composer.context.contextMix", "Context mix")),
+        value: toText(
+          t(
+            "playground:composer.context.nonMessageShare",
+            "{{percent}}% non-message",
+            {
+              percent: Math.max(0, Math.round(nonMessageContextPercent))
+            } as any
+          )
         ),
         tone: showNonMessageContextWarning ? "warning" : "neutral",
         onClick: openContextWindowModal
@@ -6390,8 +6384,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (temporaryChat) {
       items.push({
         id: "temporary",
-        label: t("playground:composer.context.temporary", "Temporary"),
-        value: t("playground:composer.context.notSaved", "Not saved"),
+        label: toText(t("playground:composer.context.temporary", "Temporary")),
+        value: toText(t("playground:composer.context.notSaved", "Not saved")),
         tone: "warning"
       })
     }
@@ -6596,12 +6590,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       if (compareModeActive && compareCapabilityIncompatibilities.length > 0) {
         warnings.push({
           id: "compare-capability",
-          text: t(
-            "playground:composer.conflict.compareCapabilities",
-            "Compare models have incompatible capabilities: {{details}}. Outputs may not be directly comparable.",
-            {
-              details: compareCapabilityIncompatibilities.join(", ")
-            } as any
+          text: toText(
+            t(
+              "playground:composer.conflict.compareCapabilities",
+              "Compare models have incompatible capabilities: {{details}}. Outputs may not be directly comparable.",
+              {
+                details: compareCapabilityIncompatibilities.join(", ")
+              } as any
+            )
           ),
           actionLabel: t(
             "playground:composer.conflict.reviewModels",
@@ -6645,12 +6641,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       if (showNonMessageContextWarning) {
         warnings.push({
           id: "context-footprint",
-          text: t(
-            "playground:composer.conflict.contextFootprint",
-            "Non-message context is using {{percent}}% of the context window. Trim character/prompt/source context before sending.",
-            {
-              percent: Math.round(nonMessageContextPercent || 0)
-            } as any
+          text: toText(
+            t(
+              "playground:composer.conflict.contextFootprint",
+              "Non-message context is using {{percent}}% of the context window. Trim character/prompt/source context before sending.",
+              {
+                percent: Math.round(nonMessageContextPercent || 0)
+              } as any
+            )
           ),
           actionLabel: largestContextContributor
             ? t(
@@ -7818,12 +7816,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                             )}
                           </span>
                           <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] font-medium text-primaryStrong">
-                            {t(
-                              "playground:composer.compareActivationCount",
-                              "{{count}} models",
-                              {
-                                count: compareSelectedModels.length
-                              } as any
+                            {toText(
+                              t(
+                                "playground:composer.compareActivationCount",
+                                "{{count}} models",
+                                {
+                                  count: compareSelectedModels.length
+                                } as any
+                              )
                             )}
                           </span>
                         </div>
@@ -8551,23 +8551,27 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                     ) : null}
                     {imagePromptRefineLatencyMs != null ? (
                       <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
-                        {t(
-                          "playground:imageGeneration.refineLatency",
-                          "{{ms}} ms",
-                          { ms: imagePromptRefineLatencyMs } as any
+                        {toText(
+                          t(
+                            "playground:imageGeneration.refineLatency",
+                            "{{ms}} ms",
+                            { ms: imagePromptRefineLatencyMs } as any
+                          )
                         )}
                       </span>
                     ) : null}
                     {imagePromptRefineDiff ? (
                       <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
-                        {t(
-                          "playground:imageGeneration.refineOverlap",
-                          "{{percent}}% overlap",
-                          {
-                            percent: Math.round(
-                              imagePromptRefineDiff.overlapRatio * 100
-                            )
-                          } as any
+                        {toText(
+                          t(
+                            "playground:imageGeneration.refineOverlap",
+                            "{{percent}}% overlap",
+                            {
+                              percent: Math.round(
+                                imagePromptRefineDiff.overlapRatio * 100
+                              )
+                            } as any
+                          )
                         )}
                       </span>
                     ) : null}
@@ -9000,10 +9004,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                 {t("playground:composer.context.pinnedSources", "Pinned")}
               </div>
               <div className="mt-1">
-                {t("playground:composer.context.pinnedCount", {
-                  defaultValue: "{{count}} sources",
-                  count: startupTemplatePreview.ragPinnedResults.length
-                } as any)}
+                {toText(
+                  t("playground:composer.context.pinnedCount", {
+                    defaultValue: "{{count}} sources",
+                    count: startupTemplatePreview.ragPinnedResults.length
+                  } as any)
+                )}
               </div>
               {startupTemplatePromptResolution?.source === "prompt-studio" && (
                 <div className="mt-1 text-[11px] text-text-muted">

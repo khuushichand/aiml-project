@@ -92,7 +92,7 @@ const normalizeFewShotExamplesForForm = (
           ? candidate.output
           : readExampleRecordValue(candidate.outputs, "output")
 
-      return {
+      const normalizedExample: DrawerFewShotExample = {
         input,
         output,
         explanation:
@@ -100,6 +100,7 @@ const normalizeFewShotExamplesForForm = (
             ? candidate.explanation
             : null
       }
+      return normalizedExample
     })
     .filter((example): example is DrawerFewShotExample => {
       if (!example) return false

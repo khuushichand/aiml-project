@@ -268,9 +268,9 @@ const _confirmWithBrowserPrompt = (message: string): boolean => {
 
 const IDLE_ROUTE_BLOCKER: ReturnType<typeof useBlocker> = {
   state: "unblocked",
-  proceed: () => undefined,
-  reset: () => undefined
-}
+  proceed: undefined,
+  reset: undefined
+} as ReturnType<typeof useBlocker>
 
 const useCompatibleRouteBlocker = (
   when: boolean
@@ -1589,7 +1589,9 @@ const SidepanelPersona = ({
           {t("sidepanel:persona.connect", "Connect")}
         </Button>
       ) : (
-        <Button size="small" onClick={disconnect}>
+        <Button size="small" onClick={() => {
+          disconnect()
+        }}>
           {t("sidepanel:persona.disconnect", "Disconnect")}
         </Button>
       )}

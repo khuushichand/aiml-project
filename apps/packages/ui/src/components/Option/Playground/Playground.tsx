@@ -1,6 +1,6 @@
 import React from "react"
 import { PlaygroundForm } from "./PlaygroundForm"
-import { PlaygroundChat } from "./PlaygroundChat"
+import { PlaygroundChat, type PlaygroundChatHandle } from "./PlaygroundChat"
 import { ChatErrorBoundary } from "@/components/Common/Playground/ChatErrorBoundary"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { usePlaygroundSessionPersistence } from "@/hooks/usePlaygroundSessionPersistence"
@@ -46,6 +46,10 @@ import {
 } from "@/utils/settings-return"
 import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
 import { useNavigate } from "react-router-dom"
+
+const toText = (value: unknown): string =>
+  typeof value === "string" ? value : String(value)
+
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
   const artifactsTriggerRef = React.useRef<HTMLButtonElement>(null)
@@ -84,6 +88,7 @@ export const Playground = () => {
   const { setSystemPrompt } = useStoreChatModelSettings()
   const { containerRef, isAutoScrollToBottom, autoScrollToBottom } =
     useSmartScroll(messages, streaming, 120)
+  const playgroundChatRef = React.useRef<PlaygroundChatHandle>(null)
 
   const [dropState, setDropState] = React.useState<
     "idle" | "dragging" | "error"
@@ -494,6 +499,9 @@ export const Playground = () => {
   )
   const scrollToMessageIndex = React.useCallback(
     (index: number) => {
+      // Prefer imperative handle — works with virtualized off-screen messages
+      if (playgroundChatRef.current?.scrollToBlockByMessageIndex(index)) return true
+      // Fallback to DOM query
       const container = containerRef.current
       if (!container) return false
       const target = container.querySelector<HTMLElement>(`[data-index="${index}"]`)
@@ -654,19 +662,25 @@ export const Playground = () => {
   const branchForkPointLabel = React.useMemo(() => {
     if (!parentMeta?.parentHistoryId) return null
     if (parentMeta.clusterId) {
-      return t("playground:branching.forkPointCluster", "Fork point: {{cluster}}", {
-        cluster: parentMeta.clusterId
-      } as any)
+      return toText(
+        t("playground:branching.forkPointCluster", "Fork point: {{cluster}}", {
+          cluster: parentMeta.clusterId
+        } as any)
+      )
     }
-    return t("playground:branching.forkPointParent", "Fork point: {{historyId}}", {
-      historyId: parentMeta.parentHistoryId
-    } as any)
+    return toText(
+      t("playground:branching.forkPointParent", "Fork point: {{historyId}}", {
+        historyId: parentMeta.parentHistoryId
+      } as any)
+    )
   }, [parentMeta?.clusterId, parentMeta?.parentHistoryId, t])
   const branchDepthLabel = React.useMemo(() => {
     if (branchDepth <= 0) return null
-    return t("playground:branching.depth", "Depth {{depth}}", {
-      depth: branchDepth
-    } as any)
+    return toText(
+      t("playground:branching.depth", "Depth {{depth}}", {
+        depth: branchDepth
+      } as any)
+    )
   }, [branchDepth, t])
   const compareActive = compareFeatureEnabled && compareMode
   const compactFeatureNoticeVisible =
@@ -676,10 +690,10 @@ export const Playground = () => {
     activeArtifact && artifactsPinned ? 1 : 0
   const artifactHistoryCount = artifactHistory.length
   const artifactBadgeLabel = artifactsOpen
-    ? t("playground:regions.artifactsOpen", "Artifacts panel open")
+    ? toText(t("playground:regions.artifactsOpen", "Artifacts panel open"))
     : activeArtifact
-      ? t("playground:regions.artifactsAvailable", "Artifacts ready")
-      : t("playground:regions.artifactsClosed", "Artifacts panel closed")
+      ? toText(t("playground:regions.artifactsAvailable", "Artifacts ready"))
+      : toText(t("playground:regions.artifactsClosed", "Artifacts panel closed"))
   const closeArtifactsWithFocusReturn = React.useCallback(() => {
     closeArtifacts()
     requestAnimationFrame(() => {
@@ -1019,9 +1033,11 @@ export const Playground = () => {
                       data-testid="playground-artifacts-unread"
                       className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-white"
                     >
-                      {t("playground:regions.artifactsNew", "New {{count}}", {
-                        count: artifactUnreadCount
-                      } as any)}
+                      {toText(
+                        t("playground:regions.artifactsNew", "New {{count}}", {
+                          count: artifactUnreadCount
+                        } as any)
+                      )}
                     </span>
                   )}
                   {artifactPinnedCount > 0 && (
@@ -1029,9 +1045,15 @@ export const Playground = () => {
                       data-testid="playground-artifacts-pinned"
                       className="rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] font-medium text-text-subtle"
                     >
-                      {t("playground:regions.artifactsPinned", "Pinned {{count}}", {
-                        count: artifactPinnedCount
-                      } as any)}
+                      {toText(
+                        t(
+                          "playground:regions.artifactsPinned",
+                          "Pinned {{count}}",
+                          {
+                            count: artifactPinnedCount
+                          } as any
+                        )
+                      )}
                     </span>
                   )}
                   {artifactHistoryCount > 0 && (
@@ -1039,9 +1061,11 @@ export const Playground = () => {
                       data-testid="playground-artifacts-count"
                       className="rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] text-text-subtle"
                     >
-                      {t("playground:regions.artifactsCount", "{{count}} total", {
-                        count: artifactHistoryCount
-                      } as any)}
+                      {toText(
+                        t("playground:regions.artifactsCount", "{{count}} total", {
+                          count: artifactHistoryCount
+                        } as any)
+                      )}
                     </span>
                   )}
                 </button>
@@ -1118,18 +1142,20 @@ export const Playground = () => {
                   aria-live="polite"
                 >
                   {threadSearchMatches.length > 0
-                    ? t(
-                        "playground:search.matchCount",
-                        "{{current}} / {{total}}",
-                        {
-                          current: Math.min(
-                            threadSearchActiveIndex + 1,
-                            threadSearchMatches.length
-                          ),
-                          total: threadSearchMatches.length
-                        } as any
+                    ? toText(
+                        t(
+                          "playground:search.matchCount",
+                          "{{current}} / {{total}}",
+                          {
+                            current: Math.min(
+                              threadSearchActiveIndex + 1,
+                              threadSearchMatches.length
+                            ),
+                            total: threadSearchMatches.length
+                          } as any
+                        )
                       )
-                    : t("playground:search.noMatches", "No matches")}
+                    : toText(t("playground:search.noMatches", "No matches"))}
                 </span>
                 <button
                   type="button"
@@ -1188,6 +1214,7 @@ export const Playground = () => {
             <div className="mx-auto w-full max-w-[64rem] pb-6">
               <ChatErrorBoundary>
                 <PlaygroundChat
+                  ref={playgroundChatRef}
                   searchQuery={threadSearchQuery.trim()}
                   matchedMessageIndices={threadSearchMatchSet}
                   activeSearchMessageIndex={threadSearchActiveMessageIndex}

@@ -686,22 +686,28 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
           type: "error",
           key: "workspace-note-version-conflict",
           duration: 8,
-          content: t(
-            "playground:studio.versionConflict",
-            "Note was modified elsewhere. Reload the latest version to merge your draft."
-          ),
-          btn: currentNote.id ? (
-            <Button
-              size="small"
-              type="link"
-              onClick={() => {
-                messageApi.destroy("workspace-note-version-conflict")
-                void handleReloadLatestAfterConflict()
-              }}
-            >
-              {t("common:reload", "Reload latest")}
-            </Button>
-          ) : undefined
+          content: (
+            <div className="flex items-center gap-2">
+              <span>
+                {t(
+                  "playground:studio.versionConflict",
+                  "Note was modified elsewhere. Reload the latest version to merge your draft."
+                )}
+              </span>
+              {currentNote.id ? (
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={() => {
+                    messageApi.destroy("workspace-note-version-conflict")
+                    void handleReloadLatestAfterConflict()
+                  }}
+                >
+                  {t("common:reload", "Reload latest")}
+                </Button>
+              ) : null}
+            </div>
+          )
         })
       } else {
         messageApi.error(

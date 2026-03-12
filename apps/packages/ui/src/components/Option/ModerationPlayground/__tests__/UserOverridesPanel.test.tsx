@@ -25,7 +25,7 @@ vi.mock("lucide-react", () => ({
 // Helpers — mock ctx and overrides
 // ---------------------------------------------------------------------------
 
-function makeCtx(overrideProps: Partial<ReturnType<typeof makeCtx>> = {}) {
+function makeCtx(overrideProps: Record<string, unknown> = {}) {
   return {
     scope: "user" as const,
     setScope: vi.fn(),
@@ -39,7 +39,7 @@ function makeCtx(overrideProps: Partial<ReturnType<typeof makeCtx>> = {}) {
   }
 }
 
-function makeOverrides(overrideProps: Partial<ReturnType<typeof makeOverrides>> = {}) {
+function makeOverrides(overrideProps: Record<string, unknown> = {}) {
   return {
     draft: {
       enabled: true,

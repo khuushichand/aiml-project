@@ -538,7 +538,9 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
         dateRangeStartIso,
         dateRangeEndIso
       ]
-        .map((value) => buildCsvCell(value))
+        .map((value) =>
+          buildCsvCell(typeof value === "boolean" ? String(value) : value)
+        )
         .join(",")
     })
 

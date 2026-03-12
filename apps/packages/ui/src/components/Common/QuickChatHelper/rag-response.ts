@@ -54,7 +54,7 @@ const normalizeCitations = (
       .map((item) => {
         if (!item || typeof item !== "object") return null
         const entry = item as Record<string, unknown>
-        return {
+        const citation: QuickChatRagCitation = {
           title:
             toStringValue(entry.title) ||
             toStringValue(entry.source) ||
@@ -62,6 +62,7 @@ const normalizeCitations = (
           source: toStringValue(entry.source),
           url: toStringValue(entry.url)
         }
+        return citation
       })
       .filter((item): item is QuickChatRagCitation => item !== null)
   }

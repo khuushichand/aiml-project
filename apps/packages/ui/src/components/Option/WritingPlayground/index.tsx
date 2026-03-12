@@ -6943,7 +6943,7 @@ export const WritingPlayground = () => {
         }}
         tabBadges={{
           inspect: responseInspectorRowsAll.length > 0 ? (
-            <Tag size="small" color="blue" className="!m-0 !px-1 !text-[10px]">
+            <Tag color="blue" className="!m-0 !px-1 !text-[10px]">
               {responseInspectorRowsAll.length}
             </Tag>
           ) : null

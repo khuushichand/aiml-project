@@ -9,7 +9,10 @@ import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator
 
 const useSettingMock = vi.hoisted(() => vi.fn())
 const useServerChatHistoryMock = vi.hoisted(() =>
-  vi.fn(() => ({ data: [], isLoading: false }))
+  vi.fn((..._args: [string, Record<string, unknown>]) => ({
+    data: [],
+    isLoading: false
+  }))
 )
 
 vi.mock("react-i18next", () => ({
@@ -28,7 +31,8 @@ vi.mock("@/hooks/useDebounce", () => ({
 
 vi.mock("@/hooks/useServerChatHistory", () => ({
   SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE: 25,
-  useServerChatHistory: (...args: unknown[]) => useServerChatHistoryMock(...args)
+  useServerChatHistory: (...args: [string, Record<string, unknown>]) =>
+    useServerChatHistoryMock(...args)
 }))
 
 vi.mock("@/hooks/chat/useClearChat", () => ({

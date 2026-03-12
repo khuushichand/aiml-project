@@ -223,9 +223,10 @@ describe("NotesManagerPage stage 31 single-note export/copy parity", () => {
     await waitFor(() => {
       expect(clipboardWriteText).toHaveBeenCalledTimes(2)
     })
-    expect(clipboardWriteText.mock.calls[0][0]).toBe("Single note body")
-    expect(String(clipboardWriteText.mock.calls[1][0])).toContain("# Export parity note")
-    expect(String(clipboardWriteText.mock.calls[1][0])).toContain("Single note body")
+    const clipboardCalls = clipboardWriteText.mock.calls as unknown as Array<[string]>
+    expect(clipboardCalls[0]?.[0]).toBe("Single note body")
+    expect(String(clipboardCalls[1]?.[0])).toContain("# Export parity note")
+    expect(String(clipboardCalls[1]?.[0])).toContain("Single note body")
 
     fireEvent.click(screen.getByTestId("export-md-action"))
     fireEvent.click(screen.getByTestId("export-json-action"))

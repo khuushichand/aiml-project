@@ -493,7 +493,7 @@ const WorldBookTestMatchingModal: React.FC<WorldBookTestMatchingModalProps> = ({
   const [result, setResult] = React.useState<WorldBookTestResult | null>(null)
 
   const testableWorldBooks = React.useMemo(
-    () =>
+    (): Array<Record<string, any> & { id: number }> =>
       (worldBooks || [])
         .map((book) => ({
           ...book,
@@ -1357,7 +1357,10 @@ export const WorldBooksManager: React.FC = () => {
             keywords: normalizeKeywordList(entry?.keywords),
             contentPreview: truncateImportPreviewContent(entry?.content)
           }))
-        const worldBookSettings = payload?.world_book || {}
+        const worldBookSettings =
+          payload?.world_book && typeof payload.world_book === "object"
+            ? (payload.world_book as Record<string, unknown>)
+            : {}
         setImportPreview({
           name,
           entryCount,
@@ -1797,7 +1800,7 @@ export const WorldBooksManager: React.FC = () => {
 
   const handleMatrixCellKeyDown = React.useCallback(
     (
-      event: React.KeyboardEvent<HTMLInputElement>,
+      event: React.KeyboardEvent<HTMLElement>,
       rowIndex: number,
       colIndex: number
     ) => {

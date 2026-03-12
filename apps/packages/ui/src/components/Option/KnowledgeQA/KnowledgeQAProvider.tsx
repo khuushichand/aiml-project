@@ -1485,7 +1485,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           overrideSettings.include_media_ids,
           state.pinnedSourceFilters.mediaIds
         ),
-        include_note_ids: mergeStringFilters(
+        include_note_ids: mergeNumberFilters(
           state.settings.include_note_ids,
           overrideSettings.include_note_ids,
           state.pinnedSourceFilters.noteIds
@@ -2292,7 +2292,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const setPinnedSourceFilters = useCallback((filters: PinnedSourceFilters) => {
     const normalized: PinnedSourceFilters = {
       mediaIds: mergeNumberFilters(filters.mediaIds),
-      noteIds: mergeStringFilters(filters.noteIds),
+      noteIds: mergeNumberFilters(filters.noteIds),
     }
     dispatch({ type: "SET_PINNED_SOURCE_FILTERS", payload: normalized })
   }, [])

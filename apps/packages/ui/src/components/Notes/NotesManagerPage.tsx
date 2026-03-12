@@ -73,7 +73,9 @@ import type {
   RemoteVersionInfo,
   NotesAssistAction,
   EditProvenanceState,
+  MonitoringAlertSeverity,
   MonitoringNoticeState,
+  ExportFormat,
   ExportProgressState,
   NotesListViewMode,
   MoodboardSummary,
@@ -1214,11 +1216,12 @@ const NotesManagerPage: React.FC = () => {
       return items.map(mapNoteListItem)
     }
     // Browse list with pagination when no filters
-    const res = await bgRequest<any>({
-      path:
-        `/api/v1/notes/?page=${page}&results_per_page=${pageSize}` +
+    const browsePath =
+      (`/api/v1/notes/?page=${page}&results_per_page=${pageSize}` +
         `&sort_by=${NOTE_SORT_API_PARAMS[sortOption].sortBy}` +
-        `&sort_order=${NOTE_SORT_API_PARAMS[sortOption].sortOrder}`,
+        `&sort_order=${NOTE_SORT_API_PARAMS[sortOption].sortOrder}`) as `/${string}`
+    const res = await bgRequest<any>({
+      path: browsePath,
       method: 'GET' as any
     })
     const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : [])
@@ -2953,18 +2956,20 @@ const NotesManagerPage: React.FC = () => {
           continue
         }
 
-        setOfflineDraftQueue((current) => {
-          const existing = current[syncResult.key]
-          if (!existing) return current
-          return {
-            ...current,
-            [syncResult.key]: {
-              ...existing,
-              syncState: 'error',
-              lastError: syncResult.message
+        if (syncResult.status === 'error') {
+          setOfflineDraftQueue((current) => {
+            const existing = current[syncResult.key]
+            if (!existing) return current
+            return {
+              ...current,
+              [syncResult.key]: {
+                ...existing,
+                syncState: 'error',
+                lastError: syncResult.message
+              }
             }
-          }
-        })
+          })
+        }
       }
     } finally {
       offlineSyncInFlightRef.current = false

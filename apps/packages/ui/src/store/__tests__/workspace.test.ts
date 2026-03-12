@@ -216,9 +216,7 @@ describe("workspace store snapshot persistence", () => {
   it("creates workspaces with empty workspaceBanner defaults", () => {
     useWorkspaceStore.getState().initializeWorkspace("Banner Test")
     const state = useWorkspaceStore.getState()
-    const snapshot = state.workspaceSnapshots[state.workspaceId] as
-      | Record<string, unknown>
-      | undefined
+    const snapshot = state.workspaceSnapshots[state.workspaceId]
 
     expect(snapshot?.workspaceBanner).toEqual({
       title: "",

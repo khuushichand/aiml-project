@@ -92,8 +92,15 @@ describe("CreateTab flexible composition", () => {
       expect(createQuestionMutateAsync).toHaveBeenCalledTimes(2)
     })
 
-    const firstPayload = createQuestionMutateAsync.mock.calls[0][0]
-    const secondPayload = createQuestionMutateAsync.mock.calls[1][0]
+    const createQuestionCalls = createQuestionMutateAsync.mock
+      .calls as unknown as Array<[{
+        question: {
+          question_text: string
+          order_index: number
+        }
+      }]>
+    const firstPayload = createQuestionCalls[0]?.[0]
+    const secondPayload = createQuestionCalls[1]?.[0]
 
     expect(firstPayload.question.question_text).toBe("Second question")
     expect(firstPayload.question.order_index).toBe(0)

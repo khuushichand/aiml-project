@@ -32,7 +32,7 @@ export const TutorialPrompt: React.FC = () => {
   const { t } = useTranslation(["tutorials", "common"])
   const location = useLocation()
   const [api, contextHolder] = notification.useNotification()
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const timeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
   const notificationKeyRef = useRef<string | null>(null)
   const shownRef = useRef<Set<string>>(new Set())
   const lastPromptShownAtRef = useRef(0)
@@ -99,7 +99,7 @@ export const TutorialPrompt: React.FC = () => {
     const delayMs = Math.max(PROMPT_DELAY_MS, cooldownRemaining)
 
     // Show notification after a delay
-    timeoutRef.current = window.setTimeout(() => {
+    timeoutRef.current = globalThis.setTimeout(() => {
       lastPromptShownAtRef.current = Date.now()
       activePromptPageRef.current = pageKey
 

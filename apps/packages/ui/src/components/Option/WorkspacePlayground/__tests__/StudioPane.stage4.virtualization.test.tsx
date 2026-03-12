@@ -276,7 +276,7 @@ describe("StudioPane Stage 4 outputs virtualization", () => {
       expect(screen.getByText("Artifact 30")).toBeInTheDocument()
     })
 
-    const row = screen.getByText("Artifact 30").closest("div.group")
+    const row = screen.getByText("Artifact 30").closest("div.group") as HTMLElement | null
     expect(row).toBeTruthy()
     if (row) {
       expect(

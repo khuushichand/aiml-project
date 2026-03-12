@@ -56,11 +56,18 @@ const resolveTimelineMessageType = (
 const shouldHideTimelineMessage = (message: TimelineMessageShape): boolean =>
   resolveTimelineMessageType(message) === IMAGE_GENERATION_USER_MESSAGE_TYPE;
 
+const toText = (value: unknown): string =>
+  typeof value === "string" ? value : String(value);
+
 type PlaygroundChatProps = {
   searchQuery?: string;
   matchedMessageIndices?: Set<number>;
   activeSearchMessageIndex?: number | null;
   scrollParentRef?: React.RefObject<HTMLDivElement>;
+};
+
+export type PlaygroundChatHandle = {
+  scrollToBlockByMessageIndex: (messageIndex: number) => boolean;
 };
 
 const PerModelMiniComposer: React.FC<{
@@ -151,12 +158,12 @@ const buildBlocks = (messages: TimelineMessageShape[]): TimelineBlock[] => {
   return blocks;
 };
 
-export const PlaygroundChat = ({
+export const PlaygroundChat = React.forwardRef<PlaygroundChatHandle, PlaygroundChatProps>(({
   searchQuery,
   matchedMessageIndices,
   activeSearchMessageIndex = null,
   scrollParentRef,
-}: PlaygroundChatProps) => {
+}, ref) => {
   const { t } = useTranslation(["playground", "common"]);
   const notification = useAntdNotification();
   const {
@@ -776,9 +783,7 @@ export const PlaygroundChat = ({
         const candidate = messages[i];
         if (
           !candidate?.isBot &&
-          !isImageGenerationMessageType(
-            candidate?.messageType ?? candidate?.message_type,
-          )
+          !isImageGenerationMessageType(candidate?.messageType)
         ) {
           return candidate;
         }
@@ -864,6 +869,28 @@ export const PlaygroundChat = ({
     overscan: 3,
     enabled: chatVirtualization && Boolean(scrollParentRef?.current),
   });
+
+  // Expose imperative scroll for search navigation (works with virtualized off-screen messages)
+  React.useImperativeHandle(ref, () => ({
+    scrollToBlockByMessageIndex(messageIndex: number) {
+      const blockIndex = blocks.findIndex((b) =>
+        b.kind === "single"
+          ? b.index === messageIndex
+          : b.userIndex === messageIndex || b.assistantIndices.includes(messageIndex)
+      );
+      if (blockIndex < 0) return false;
+      if (chatVirtualization && virtualizer) {
+        virtualizer.scrollToIndex(blockIndex, { align: "center" });
+      } else {
+        const container = scrollParentRef?.current;
+        if (!container) return false;
+        const target = container.querySelector<HTMLElement>(`[data-index="${blockIndex}"]`);
+        if (!target) return false;
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      return true;
+    },
+  }), [blocks, chatVirtualization, virtualizer, scrollParentRef]);
 
   // Stable callbacks for PlaygroundMessage — eliminates inline closures in blocks.map()
   const handleEditMessage = React.useCallback(
@@ -1109,10 +1136,12 @@ export const PlaygroundChat = ({
       setCompareContinuationModeForCluster(block.clusterId, "winner");
       setClusterCollapsed(true);
       notification.success({
-        message: t(
-          "playground:composer.compareContinueContract",
-          "Next turns continue with {{model}} only. Re-enable Compare to send to multiple models again.",
-          { model: getModelLabel(modelKey) } as any,
+        message: toText(
+          t(
+            "playground:composer.compareContinueContract",
+            "Next turns continue with {{model}} only. Re-enable Compare to send to multiple models again.",
+            { model: getModelLabel(modelKey) } as any,
+          ),
         ),
       });
     };
@@ -1468,9 +1497,11 @@ export const PlaygroundChat = ({
             const tokenCount = getTokenCount(message?.generationInfo);
             const tokenLabel =
               tokenCount !== null
-                ? t("playground:composer.compareTokens", "Tokens: {{count}}", {
-                    count: tokenCount,
-                  })
+                ? toText(
+                    t("playground:composer.compareTokens", "Tokens: {{count}}", {
+                      count: tokenCount,
+                    }),
+                  )
                 : null;
             const costUsd = resolveMessageCostUsd(message?.generationInfo);
             const costLabel = costUsd != null ? formatCost(costUsd) : null;
@@ -1611,18 +1642,22 @@ export const PlaygroundChat = ({
               <div
                 key={`c-${blockIndex}-${index}`}
                 role="article"
-                aria-label={t(
-                  "playground:composer.compareCardAria",
-                  "{{model}} response from {{provider}}",
-                  {
-                    model: getModelLabel(modelKey),
-                    provider:
-                      providerLabel ||
-                      t(
-                        "playground:composer.compareProviderCustom",
-                        "Custom provider",
-                      ),
-                  } as any,
+                aria-label={toText(
+                  t(
+                    "playground:composer.compareCardAria",
+                    "{{model}} response from {{provider}}",
+                    {
+                      model: getModelLabel(modelKey),
+                      provider:
+                        providerLabel ||
+                        toText(
+                          t(
+                            "playground:composer.compareProviderCustom",
+                            "Custom provider",
+                          ),
+                        ),
+                    } as any,
+                  ),
                 )}
                 className={`rounded-md border border-border bg-surface p-2 shadow-sm ${
                   isChosenCard ? "ring-1 ring-success" : ""
@@ -1642,9 +1677,11 @@ export const PlaygroundChat = ({
                     </span>
                     <span className="truncate text-[10px] text-text-subtle">
                       {providerLabel ||
-                        t(
-                          "playground:composer.compareProviderCustom",
-                          "Custom provider",
+                        toText(
+                          t(
+                            "playground:composer.compareProviderCustom",
+                            "Custom provider",
+                          ),
                         )}
                     </span>
                   </div>
@@ -1665,18 +1702,22 @@ export const PlaygroundChat = ({
                         )}
                       </span>
                       <span className="text-[10px] text-primaryStrong/80">
-                        {t(
-                          "playground:composer.comparePreviewBudget",
-                          "~{{count}} chars",
-                          { count: normalizedPreviewBudget } as any,
+                        {toText(
+                          t(
+                            "playground:composer.comparePreviewBudget",
+                            "~{{count}} chars",
+                            { count: normalizedPreviewBudget } as any,
+                          ),
                         )}
                       </span>
                     </div>
                     <p className="whitespace-pre-wrap">
                       {normalizedPreviewText ||
-                        t(
-                          "playground:composer.comparePreviewEmpty",
-                          "No preview text available.",
+                        toText(
+                          t(
+                            "playground:composer.comparePreviewEmpty",
+                            "No preview text available.",
+                          ),
                         )}
                     </p>
                   </div>
@@ -1689,27 +1730,33 @@ export const PlaygroundChat = ({
                     <div className="mb-1 flex items-center justify-between gap-2">
                       <span className="text-[10px] font-semibold uppercase tracking-wide text-text">
                         {isDiffBaselineCard
-                          ? t(
-                              "playground:composer.compareDiffBaselineLabel",
-                              "Diff baseline",
+                          ? toText(
+                              t(
+                                "playground:composer.compareDiffBaselineLabel",
+                                "Diff baseline",
+                              ),
                             )
-                          : t(
-                              "playground:composer.compareDiffVsLabel",
-                              "Diff vs {{model}}",
-                              {
-                                model: getModelLabel(
-                                  diffBaselineModelKey || modelKey,
-                                ),
-                              } as any,
+                          : toText(
+                              t(
+                                "playground:composer.compareDiffVsLabel",
+                                "Diff vs {{model}}",
+                                {
+                                  model: getModelLabel(
+                                    diffBaselineModelKey || modelKey,
+                                  ),
+                                } as any,
+                              ),
                             )}
                       </span>
                       <span className="text-[10px] text-text-subtle">
-                        {t(
-                          "playground:composer.compareDiffOverlap",
-                          "{{percent}}% overlap",
-                          {
-                            percent: Math.round(diffPreview.overlapRatio * 100),
-                          } as any,
+                        {toText(
+                          t(
+                            "playground:composer.compareDiffOverlap",
+                            "{{percent}}% overlap",
+                            {
+                              percent: Math.round(diffPreview.overlapRatio * 100),
+                            } as any,
+                          ),
                         )}
                       </span>
                     </div>
@@ -1924,10 +1971,12 @@ export const PlaygroundChat = ({
                     {costLabel && (
                       <span
                         className="inline-flex items-center gap-1 text-[10px] text-text-subtle"
-                        aria-label={t(
-                          "playground:composer.compareCost",
-                          "Cost: {{cost}}",
-                          { cost: costLabel } as any,
+                        aria-label={toText(
+                          t(
+                            "playground:composer.compareCost",
+                            "Cost: {{cost}}",
+                            { cost: costLabel } as any,
+                          ),
                         )}
                       >
                         <DollarSign className="h-3 w-3" aria-hidden="true" />
@@ -2215,4 +2264,6 @@ export const PlaygroundChat = ({
       </div>
     </>
   );
-};
+});
+
+PlaygroundChat.displayName = "PlaygroundChat";

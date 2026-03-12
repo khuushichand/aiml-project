@@ -2,10 +2,31 @@ import fs from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 
+/**
+ * Guard test: ensures critical recovery patterns exist in the
+ * useChatActions module (facade + sub-modules).
+ */
+const readChatActionsSources = () => {
+  const dir = path.resolve(__dirname, "..")
+  const files = [
+    "useChatActions.ts",
+    "useCharacterChatMode.ts",
+    "chat-action-utils.ts",
+  ]
+  return files
+    .map((f) => {
+      try {
+        return fs.readFileSync(path.join(dir, f), "utf8")
+      } catch {
+        return ""
+      }
+    })
+    .join("\n")
+}
+
 describe("useChatActions interruption recovery guard", () => {
   it("marks interrupted assistant variants with recovery metadata", () => {
-    const sourcePath = path.resolve(__dirname, "../useChatActions.ts")
-    const source = fs.readFileSync(sourcePath, "utf8")
+    const source = readChatActionsSources()
 
     expect(source).toContain("interrupted: true")
     expect(source).toContain("interruptionReason")

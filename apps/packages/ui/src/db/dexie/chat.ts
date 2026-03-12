@@ -13,6 +13,7 @@ import {
   Webshare,
 
 } from "./types"
+import type { UpdateSpec } from "dexie"
 import { db } from './schema';
 import { getAllModelNicknames } from "./nickname";
 const PAGE_SIZE = 30;
@@ -307,7 +308,7 @@ export class PageAssistDatabase {
     message_id: string,
     updates: { images?: string[]; generationInfo?: any }
   ) {
-    const patch: Record<string, unknown> = {}
+    const patch: UpdateSpec<Message> = {}
     if (Array.isArray(updates.images)) {
       patch.images = updates.images
     }

@@ -1,7 +1,15 @@
-import React, { Component, Suspense, forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
+import React, {
+  Component,
+  Suspense,
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react"
 import type { ReactNode } from "react"
-import type { editor as MonacoEditor } from "monaco-editor"
-import type { Monaco } from "@monaco-editor/react"
+import type { Monaco, OnMount } from "@monaco-editor/react"
 
 const Monaco = React.lazy(() => import("@monaco-editor/react"))
 
@@ -47,7 +55,7 @@ interface TemplateCodeEditorProps {
 
 export const TemplateCodeEditor = forwardRef<TemplateCodeEditorHandle, TemplateCodeEditorProps>(
   ({ value, onChange, format, height = 400, readOnly, validationErrors }, ref) => {
-    const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
+    const editorRef = useRef<Parameters<OnMount>[0] | null>(null)
     const monacoRef = useRef<Monaco | null>(null)
     const [useFallback, setUseFallback] = useState(false)
 
@@ -108,8 +116,8 @@ export const TemplateCodeEditor = forwardRef<TemplateCodeEditorHandle, TemplateC
       [onChange],
     )
 
-    const handleEditorMount = useCallback(
-      (editor: MonacoEditor.IStandaloneCodeEditor, monaco: Monaco) => {
+    const handleEditorMount = useCallback<OnMount>(
+      (editor, monaco) => {
         editorRef.current = editor
         monacoRef.current = monaco
       },

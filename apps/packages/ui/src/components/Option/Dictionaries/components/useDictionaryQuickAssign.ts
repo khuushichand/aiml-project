@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import React from "react"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
+  type DictionaryChatState,
   formatDictionaryChatReferenceTitle,
   normalizeDictionaryChatState,
   resolveDictionaryChatReferenceId,
@@ -49,7 +50,7 @@ type UseDictionaryQuickAssignResult = {
     chat: any
     chatId: string
     title: string
-    state: string
+    state: DictionaryChatState
   }>
   openQuickAssignModal: (dictionary: any) => void
   closeQuickAssignModal: () => void
@@ -246,7 +247,7 @@ export function useDictionaryQuickAssign({
           chat: any
           chatId: string
           title: string
-          state: string
+          state: DictionaryChatState
         } => value != null),
     [filteredAssignableChats]
   )

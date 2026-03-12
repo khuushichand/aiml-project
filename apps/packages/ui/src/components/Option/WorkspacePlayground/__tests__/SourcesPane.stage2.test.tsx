@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { WorkspaceSource } from "@/types/workspace"
 import { SourcesPane } from "../SourcesPane"
 import { WORKSPACE_SOURCE_DRAG_TYPE } from "../drag-source"
 const { mockScheduleWorkspaceUndoAction, mockUndoWorkspaceAction } = vi.hoisted(
@@ -19,7 +20,7 @@ const mockRestoreSource = vi.fn()
 const mockReorderSource = vi.fn()
 const mockClearSourceFocusTarget = vi.fn()
 
-const defaultSources = [
+const defaultSources: WorkspaceSource[] = [
   {
     id: "s1",
     mediaId: 1,
@@ -39,7 +40,7 @@ const defaultSources = [
 ]
 
 const workspaceStoreState = {
-  sources: [...defaultSources],
+  sources: [...defaultSources] as WorkspaceSource[],
   selectedSourceIds: [] as string[],
   sourceSearchQuery: "",
   sourceFocusTarget: null as { sourceId: string; token: number } | null,

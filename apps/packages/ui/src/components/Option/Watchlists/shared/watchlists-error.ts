@@ -13,7 +13,10 @@ type ErrorKind =
   | "server"
   | "unknown"
 
-type Translator = (...args: any[]) => string
+type Translator = (...args: any[]) => unknown
+
+const toText = (value: unknown, fallback = ""): string =>
+  typeof value === "string" && value.trim().length > 0 ? value : fallback
 
 export interface WatchlistsMappedError {
   kind: ErrorKind
@@ -183,72 +186,102 @@ const getNextStep = (
   context: string
 ): string => {
   if (kind === "auth") {
-    return t(
-      "watchlists:errors.next.auth",
-      "Verify your login/API key permissions for {{context}}, then retry.",
-      { context }
+    return toText(
+      t(
+        "watchlists:errors.next.auth",
+        "Verify your login/API key permissions for {{context}}, then retry.",
+        { context }
+      ),
+      "Verify your login/API key permissions for {{context}}, then retry."
     )
   }
   if (kind === "rate_limit") {
-    return t(
-      "watchlists:errors.next.rateLimit",
-      "Reduce monitor frequency or wait briefly before retrying.",
-      { context }
+    return toText(
+      t(
+        "watchlists:errors.next.rateLimit",
+        "Reduce monitor frequency or wait briefly before retrying.",
+        { context }
+      ),
+      "Reduce monitor frequency or wait briefly before retrying."
     )
   }
   if (kind === "timeout") {
-    return t(
-      "watchlists:errors.next.timeout",
-      "Retry now. If this continues, reduce scope or schedule intensity.",
-      { context }
+    return toText(
+      t(
+        "watchlists:errors.next.timeout",
+        "Retry now. If this continues, reduce scope or schedule intensity.",
+        { context }
+      ),
+      "Retry now. If this continues, reduce scope or schedule intensity."
     )
   }
   if (kind === "validation") {
-    return t(
-      "watchlists:errors.next.validation",
-      "Review highlighted values for {{context}}, then retry.",
-      { context }
+    return toText(
+      t(
+        "watchlists:errors.next.validation",
+        "Review highlighted values for {{context}}, then retry.",
+        { context }
+      ),
+      "Review highlighted values for {{context}}, then retry."
     )
   }
   if (kind === "dns") {
-    return t(
-      "watchlists:errors.next.dns",
-      "Verify the source host resolves correctly and retry.",
-      { context }
+    return toText(
+      t(
+        "watchlists:errors.next.dns",
+        "Verify the source host resolves correctly and retry.",
+        { context }
+      ),
+      "Verify the source host resolves correctly and retry."
     )
   }
   if (kind === "tls") {
-    return t(
-      "watchlists:errors.next.tls",
-      "Verify TLS certificate settings for the endpoint and retry.",
-      { context }
+    return toText(
+      t(
+        "watchlists:errors.next.tls",
+        "Verify TLS certificate settings for the endpoint and retry.",
+        { context }
+      ),
+      "Verify TLS certificate settings for the endpoint and retry."
     )
   }
   if (kind === "network") {
-    return t(
-      "watchlists:errors.next.network",
-      "Check server connection and try again.",
-      { context }
+    return toText(
+      t(
+        "watchlists:errors.next.network",
+        "Check server connection and try again.",
+        { context }
+      ),
+      "Check server connection and try again."
     )
   }
   if (kind === "server") {
-    return t(
-      "watchlists:errors.next.server",
-      "Retry in a moment. If this keeps failing, check server logs.",
-      { context }
+    return toText(
+      t(
+        "watchlists:errors.next.server",
+        "Retry in a moment. If this keeps failing, check server logs.",
+        { context }
+      ),
+      "Retry in a moment. If this keeps failing, check server logs."
     )
   }
   if (kind === "not_found") {
-    return t(
-      "watchlists:errors.next.notFound",
-      "Refresh the list and confirm the requested records still exist.",
-      { context }
+    return toText(
+      t(
+        "watchlists:errors.next.notFound",
+        "Refresh the list and confirm the requested records still exist.",
+        { context }
+      ),
+      "Refresh the list and confirm the requested records still exist."
     )
   }
-  return t(
-    "watchlists:errors.next.generic",
-    "Retry the request. If the problem continues, review server diagnostics.",
-    { context }
+  return toText(
+    t(
+      "watchlists:errors.next.generic",
+      "Retry the request. If the problem continues, review server diagnostics.",
+      { context }
+    ),
+    "Retry the request. If the problem continues, review server diagnostics."
   )
 }
 
@@ -266,17 +299,25 @@ export const mapWatchlistsError = (
   const rawMessage = formatErrorMessage(error, fallbackMessage)
   const kind = classifyError(status, rawMessage)
   const severity = toSeverity(kind)
-  const operation = operationLabel || t("watchlists:errors.operation.load", "load")
-  const title = t("watchlists:errors.title", "Could not {{operation}} {{context}}.", {
-    operation,
-    context
-  })
+  const operation =
+    operationLabel ||
+    toText(t("watchlists:errors.operation.load", "load"), "load")
+  const title = toText(
+    t("watchlists:errors.title", "Could not {{operation}} {{context}}.", {
+      operation,
+      context
+    }),
+    `Could not ${operation} ${context}.`
+  )
   const nextStep = getNextStep(kind, t, context)
   const details = isGeneric(rawMessage)
     ? ""
-    : t("watchlists:errors.details", "Details: {{message}}", {
-        message: rawMessage
-      })
+    : toText(
+        t("watchlists:errors.details", "Details: {{message}}", {
+          message: rawMessage
+        }),
+        `Details: ${rawMessage}`
+      )
   const description = details ? `${nextStep} ${details}` : nextStep
 
   return {

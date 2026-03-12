@@ -33,16 +33,22 @@ const {
   useMutationMock: vi.fn(),
   useQueryClientMock: vi.fn(),
   useNavigateMock: vi.fn(),
-  useCharacterShortcutsMock: vi.fn(),
+  useCharacterShortcutsMock: vi.fn((_options?: any) => undefined),
   generateFullCharacterMock: vi.fn(),
-  generateFieldMock: vi.fn(async () => "Generated value"),
+  generateFieldMock: vi.fn(
+    async (
+      _field?: string,
+      _values?: Record<string, unknown>,
+      _options?: Record<string, unknown>
+    ) => "Generated value"
+  ),
   cancelGenerationMock: vi.fn(),
   clearGenerationErrorMock: vi.fn(),
   useStorageMock: vi.fn(),
   exportCharacterToJSONMock: vi.fn(),
   exportCharacterToPNGMock: vi.fn(),
   exportCharactersToJSONMock: vi.fn(),
-  confirmDangerMock: vi.fn(async () => true),
+  confirmDangerMock: vi.fn(async (_config?: Record<string, unknown>) => true),
   navigateMock: vi.fn(),
   setSelectedCharacterMock: vi.fn(),
   focusComposerMock: vi.fn(),
@@ -72,7 +78,10 @@ const {
     })),
     listChats: vi.fn(async () => []),
     createChat: vi.fn(async () => ({ id: "quick-chat-session-default" })),
-    createCharacter: vi.fn(async () => ({ id: "char-1" })),
+    createCharacter: vi.fn(
+      async (_payload?: Record<string, unknown>) =>
+        ({ id: "char-1" }) as { id: string | number }
+    ),
     updateCharacter: vi.fn(async () => ({})),
     deleteCharacter: vi.fn(async () => ({})),
     deleteChat: vi.fn(async () => undefined),
@@ -86,7 +95,13 @@ const {
       changed_count: 0
     })),
     revertCharacter: vi.fn(async () => ({})),
-    importCharacterFile: vi.fn(async () => ({ success: true })),
+    importCharacterFile: vi.fn(
+      async (
+        _file?: File,
+        _options?: { allowImageOnly?: boolean }
+      ) =>
+        ({ success: true }) as { success: boolean; message?: string }
+    ),
     exportCharacter: vi.fn(async () => ({})),
     completeCharacterChatTurn: vi.fn(async () => ({
       assistant_content: "Quick chat response"
@@ -2114,7 +2129,7 @@ describe("CharactersManager first-use onboarding", () => {
       return makeUseQueryResult({})
     })
 
-    const writeTextMock = vi.fn(async () => undefined)
+    const writeTextMock = vi.fn(async (_text: string) => undefined)
     const originalClipboard = (navigator as Navigator & { clipboard?: Clipboard }).clipboard
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -4416,7 +4431,9 @@ describe("CharactersManager first-use onboarding", () => {
       expect(screen.queryByTestId("character-import-status-failure")).not.toBeInTheDocument()
     })
 
-    const thirdCallFile = tldwClientMock.importCharacterFile.mock.calls[2]?.[0]
+    const importCharacterFileCalls = tldwClientMock.importCharacterFile.mock
+      .calls as unknown as Array<[File, { allowImageOnly?: boolean }?]>
+    const thirdCallFile = importCharacterFileCalls[2]?.[0]
     expect(thirdCallFile?.name).toBe("retry-two.json")
   })
 

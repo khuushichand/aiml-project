@@ -6235,6 +6235,7 @@ export class TldwApiClient {
     title?: string
     tags?: string[]
     notes?: string
+    archive_mode?: "use_default" | "always" | "never"
     status?: string
     favorite?: boolean
     summary?: string

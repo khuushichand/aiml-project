@@ -33,7 +33,7 @@ export interface RunNotificationGroup {
   hint: string | null
 }
 
-type Translator = (...args: any[]) => string
+type Translator = (...args: any[]) => unknown
 
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running", "queued"])
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"])
@@ -90,7 +90,7 @@ const resolveHintCopy = (
   if (!t) return fallback
   try {
     const translated = t(key, fallback, options)
-    if (!translated || translated === key) {
+    if (typeof translated !== "string" || !translated || translated === key) {
       return fallback
     }
     return translated

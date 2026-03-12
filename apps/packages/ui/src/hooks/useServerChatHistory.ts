@@ -101,11 +101,13 @@ export const deriveServerChatHistoryViewState = ({
   error: unknown
 }): {
   data: ServerChatHistoryItem[]
+  total: number
   sidebarRefreshState: "recoverable-error"
   hasUsableData: boolean
   isShowingStaleData: boolean
 } => ({
   data: previousData,
+  total: previousData.length,
   sidebarRefreshState: "recoverable-error",
   hasUsableData: previousData.length > 0,
   isShowingStaleData: previousData.length > 0
