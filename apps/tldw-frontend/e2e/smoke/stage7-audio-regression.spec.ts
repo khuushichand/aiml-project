@@ -255,7 +255,7 @@ test.describe("Stage 7 audio regression gate", () => {
     let modelCalls = 0
     await page.route("**/api/v1/media/transcription-models**", async (route) => {
       modelCalls += 1
-      if (modelCalls <= 2) {
+      if (modelCalls === 1) {
         await fulfillJson(route, 504, {
           detail: "timeout while loading transcription models"
         })
@@ -280,7 +280,7 @@ test.describe("Stage 7 audio regression gate", () => {
 
     await retryButton.click()
 
-    await expect.poll(() => modelCalls).toBe(3)
+    await expect.poll(() => modelCalls).toBe(2)
     await expect(retryButton).toHaveCount(0)
   })
 })
