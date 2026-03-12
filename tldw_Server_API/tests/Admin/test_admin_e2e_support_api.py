@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -12,6 +13,16 @@ from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manage
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
 from tldw_Server_API.app.services.registration_service import reset_registration_service
+
+pytestmark = pytest.mark.integration
+
+
+def _set_fixture_password_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('TLDW_ADMIN_E2E_ADMIN_PASSWORD', 'AdminPass123!')
+    monkeypatch.setenv('TLDW_ADMIN_E2E_OWNER_PASSWORD', 'AdminPass123!')
+    monkeypatch.setenv('TLDW_ADMIN_E2E_SUPER_ADMIN_PASSWORD', 'AdminPass123!')
+    monkeypatch.setenv('TLDW_ADMIN_E2E_MEMBER_PASSWORD', 'MemberPass123!')
+    monkeypatch.setenv('TLDW_ADMIN_E2E_REQUESTER_PASSWORD', 'RequesterPass123!')
 
 
 async def _reset_auth_runtime() -> None:
@@ -63,6 +74,7 @@ async def e2e_client(tmp_path, monkeypatch):
     monkeypatch.setenv('TLDW_DB_BACKUP_PATH', str(backup_root))
     monkeypatch.setenv('USER_DB_BASE_DIR', str(user_db_base_dir))
     monkeypatch.setenv('MONITORING_ALERTS_DB', str(monitoring_db_path))
+    _set_fixture_password_env(monkeypatch)
 
     await _reset_auth_runtime()
 
@@ -95,6 +107,73 @@ async def single_user_e2e_client(tmp_path, monkeypatch):
     monkeypatch.setenv('MONITORING_ALERTS_DB', str(monitoring_db_path))
     monkeypatch.setenv('SINGLE_USER_API_KEY', 'single-user-admin-key')
     monkeypatch.setenv('SINGLE_USER_TEST_API_KEY', 'single-user-admin-key')
+    _set_fixture_password_env(monkeypatch)
+
+    await _reset_auth_runtime()
+
+    import tldw_Server_API.app.main as app_main
+
+    app = importlib.reload(app_main).app
+    with TestClient(app) as client:
+        yield client
+
+    await _reset_auth_runtime()
+
+
+@pytest_asyncio.fixture
+async def e2e_client_without_fixture_passwords(tmp_path, monkeypatch):
+    db_path = tmp_path / 'authnz_with_missing_fixture_passwords.db'
+    jobs_db_path = tmp_path / 'jobs_with_missing_fixture_passwords.db'
+    monitoring_db_path = tmp_path / 'monitoring_with_missing_fixture_passwords.db'
+    backup_root = tmp_path / 'backups'
+    user_db_base_dir = tmp_path / 'user_dbs'
+    monkeypatch.setenv('AUTH_MODE', 'multi_user')
+    monkeypatch.setenv('DATABASE_URL', f'sqlite:///{db_path}')
+    monkeypatch.setenv('JOBS_DB_PATH', str(jobs_db_path))
+    monkeypatch.setenv('JWT_SECRET_KEY', 'playwright-test-secret-1234567890')
+    monkeypatch.setenv('JWT_ALGORITHM', 'HS256')
+    monkeypatch.setenv('DEFER_HEAVY_STARTUP', 'true')
+    monkeypatch.setenv('TEST_MODE', 'true')
+    monkeypatch.setenv('ENABLE_ADMIN_E2E_TEST_MODE', 'true')
+    monkeypatch.setenv('TLDW_DB_BACKUP_PATH', str(backup_root))
+    monkeypatch.setenv('USER_DB_BASE_DIR', str(user_db_base_dir))
+    monkeypatch.setenv('MONITORING_ALERTS_DB', str(monitoring_db_path))
+    monkeypatch.delenv('TLDW_ADMIN_E2E_ADMIN_PASSWORD', raising=False)
+    monkeypatch.delenv('TLDW_ADMIN_E2E_OWNER_PASSWORD', raising=False)
+    monkeypatch.delenv('TLDW_ADMIN_E2E_SUPER_ADMIN_PASSWORD', raising=False)
+    monkeypatch.delenv('TLDW_ADMIN_E2E_MEMBER_PASSWORD', raising=False)
+    monkeypatch.delenv('TLDW_ADMIN_E2E_REQUESTER_PASSWORD', raising=False)
+
+    await _reset_auth_runtime()
+
+    import tldw_Server_API.app.main as app_main
+
+    app = importlib.reload(app_main).app
+    with TestClient(app) as client:
+        yield client
+
+    await _reset_auth_runtime()
+
+
+@pytest_asyncio.fixture
+async def e2e_client_with_unsafe_backup_path(tmp_path, monkeypatch):
+    db_path = tmp_path / 'authnz_with_unsafe_backup_path.db'
+    jobs_db_path = tmp_path / 'jobs_with_unsafe_backup_path.db'
+    monitoring_db_path = tmp_path / 'monitoring_with_unsafe_backup_path.db'
+    user_db_base_dir = tmp_path / 'user_dbs'
+    unsafe_backup_root = Path.cwd() / 'unsafe-admin-e2e-backups'
+    monkeypatch.setenv('AUTH_MODE', 'multi_user')
+    monkeypatch.setenv('DATABASE_URL', f'sqlite:///{db_path}')
+    monkeypatch.setenv('JOBS_DB_PATH', str(jobs_db_path))
+    monkeypatch.setenv('JWT_SECRET_KEY', 'playwright-test-secret-1234567890')
+    monkeypatch.setenv('JWT_ALGORITHM', 'HS256')
+    monkeypatch.setenv('DEFER_HEAVY_STARTUP', 'true')
+    monkeypatch.setenv('TEST_MODE', 'true')
+    monkeypatch.setenv('ENABLE_ADMIN_E2E_TEST_MODE', 'true')
+    monkeypatch.setenv('TLDW_DB_BACKUP_PATH', str(unsafe_backup_root))
+    monkeypatch.setenv('USER_DB_BASE_DIR', str(user_db_base_dir))
+    monkeypatch.setenv('MONITORING_ALERTS_DB', str(monitoring_db_path))
+    _set_fixture_password_env(monkeypatch)
 
     await _reset_auth_runtime()
 
@@ -137,6 +216,16 @@ def test_admin_e2e_seed_returns_debug_role_principals(e2e_client):
     assert payload['users']['super_admin']['key'] == 'jwt_super_admin'
 
 
+def test_admin_e2e_seed_requires_explicit_fixture_passwords(e2e_client_without_fixture_passwords):
+    response = e2e_client_without_fixture_passwords.post(
+        '/api/v1/test-support/admin-e2e/seed',
+        json={'scenario': 'jwt_admin'},
+    )
+
+    assert response.status_code == 500
+    assert response.json()['detail'] == 'admin_e2e_fixture_secret_missing'
+
+
 def test_admin_e2e_seed_returns_single_user_login_key(single_user_e2e_client):
     response = single_user_e2e_client.post(
         '/api/v1/test-support/admin-e2e/seed',
@@ -157,6 +246,13 @@ def test_single_user_api_key_can_read_users_me(single_user_e2e_client):
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload['username'] == 'single_user'
+
+
+def test_admin_e2e_reset_rejects_unsafe_backup_paths(e2e_client_with_unsafe_backup_path):
+    response = e2e_client_with_unsafe_backup_path.post('/api/v1/test-support/admin-e2e/reset')
+
+    assert response.status_code == 500
+    assert response.json()['detail'] == 'admin_e2e_backup_path_must_be_temp_scoped'
 
 
 def test_admin_e2e_bootstrap_jwt_session_returns_cookie_payload(e2e_client):

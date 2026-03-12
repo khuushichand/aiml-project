@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { getFixturePasswordEnv } from './fixture-secrets';
 import { type RealBackendProjectEnv } from './project-env';
 
 export type ManagedBackendProcess = {
@@ -55,6 +56,7 @@ export const buildBackendEnv = (
   overrides: Record<string, string> = {},
 ): NodeJS.ProcessEnv => ({
   ...process.env,
+  ...getFixturePasswordEnv(),
   SERVER_LABEL: project.serverLabel,
   SERVER_PORT: String(project.apiPort),
   E2E_TEST_BASE_URL: project.apiBaseUrl,

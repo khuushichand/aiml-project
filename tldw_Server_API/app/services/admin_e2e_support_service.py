@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 import os
 import secrets
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -93,23 +95,12 @@ async def _clear_admin_monitoring_state() -> dict[str, int]:
         if await repo.delete_rule(int(rule["id"])):
             deleted_rules += 1
 
-    pool = await get_db_pool()
-    async with pool.transaction() as conn:
-        if getattr(repo.db_pool, "pool", None):
-            deleted_state_result = await conn.execute("DELETE FROM admin_alert_state")
-            deleted_events_result = await conn.execute("DELETE FROM admin_alert_events")
-            deleted_state = int(str(deleted_state_result).split()[-1])
-            deleted_events = int(str(deleted_events_result).split()[-1])
-        else:
-            deleted_state_cursor = await conn.execute("DELETE FROM admin_alert_state")
-            deleted_events_cursor = await conn.execute("DELETE FROM admin_alert_events")
-            deleted_state = int(getattr(deleted_state_cursor, "rowcount", 0) or 0)
-            deleted_events = int(getattr(deleted_events_cursor, "rowcount", 0) or 0)
+    overlay_reset = await repo.clear_state_and_events()
 
     return {
         "deleted_rules": deleted_rules,
-        "deleted_states": deleted_state,
-        "deleted_events": deleted_events,
+        "deleted_states": overlay_reset["deleted_states"],
+        "deleted_events": overlay_reset["deleted_events"],
     }
 
 
@@ -156,15 +147,52 @@ def _seed_monitoring_alert_store() -> dict[str, Any]:
     }
 
 
+async def _seed_monitoring_alert_store_async() -> dict[str, Any]:
+    """Seed the monitoring alerts SQLite store off the event loop."""
+    return await asyncio.to_thread(_seed_monitoring_alert_store)
+
+
+async def _clear_monitoring_alert_rows_async() -> int:
+    """Clear seeded monitoring-alert rows off the event loop."""
+    return await asyncio.to_thread(_clear_monitoring_alert_rows)
+
+
+def _resolve_safe_backup_dir() -> Path | None:
+    raw_backup_root = str(os.getenv("TLDW_DB_BACKUP_PATH") or "").strip()
+    if not raw_backup_root:
+        return None
+
+    backup_dir = Path(raw_backup_root).expanduser().resolve(strict=False)
+    allowed_roots = {
+        Path(tempfile.gettempdir()).resolve(),
+        Path("/tmp").resolve(),
+    }
+    for allowed_root in allowed_roots:
+        try:
+            backup_dir.relative_to(allowed_root)
+            return backup_dir
+        except ValueError:
+            continue
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="admin_e2e_backup_path_must_be_temp_scoped",
+    )
+
+
 def _clear_backup_artifacts() -> int:
-    backup_root = str(os.getenv("TLDW_DB_BACKUP_PATH") or "").strip()
-    if not backup_root:
+    backup_dir = _resolve_safe_backup_dir()
+    if backup_dir is None:
         return 0
-    backup_dir = Path(backup_root)
     if not backup_dir.exists():
         return 0
     shutil.rmtree(backup_dir)
     return 1
+
+
+async def _clear_backup_artifacts_async() -> int:
+    """Delete seeded backup artifacts off the event loop."""
+    return await asyncio.to_thread(_clear_backup_artifacts)
 
 
 async def reset_admin_e2e_state() -> dict[str, Any]:
@@ -172,8 +200,8 @@ async def reset_admin_e2e_state() -> dict[str, Any]:
     _SEEDED_PRINCIPALS.clear()
     deleted_schedules = await _soft_delete_all_backup_schedules()
     monitoring_reset = await _clear_admin_monitoring_state()
-    deleted_monitoring_alerts = _clear_monitoring_alert_rows()
-    deleted_backup_dirs = _clear_backup_artifacts()
+    deleted_monitoring_alerts = await _clear_monitoring_alert_rows_async()
+    deleted_backup_dirs = await _clear_backup_artifacts_async()
     logger.debug(
         "Admin e2e reset completed: deleted_schedules={} deleted_rules={} deleted_states={} deleted_events={} deleted_monitoring_alerts={} deleted_backup_dirs={}",
         deleted_schedules,
@@ -186,12 +214,15 @@ async def reset_admin_e2e_state() -> dict[str, Any]:
     return {"ok": True}
 
 
-def _fixture_secret(name: str, default_parts: tuple[str, ...]) -> str:
-    """Return an env-overridable fixture secret without hardcoding it as a static literal."""
+def _fixture_secret(name: str) -> str:
+    """Return a required fixture secret for admin e2e multi-user scenarios."""
     configured = str(os.getenv(name) or "").strip()
     if configured:
         return configured
-    return "".join(default_parts)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="admin_e2e_fixture_secret_missing",
+    )
 
 
 def _hash_fixture_password(password: str) -> str:
@@ -455,11 +486,16 @@ def _seed_dsr_subject_store_data(*, user_id: int) -> None:
     _seed_audit_store(user_id=user_id, audit_count=2)
 
 
+async def _seed_dsr_subject_store_data_async(*, user_id: int) -> None:
+    """Seed per-user DSR fixture stores off the event loop."""
+    await asyncio.to_thread(_seed_dsr_subject_store_data, user_id=user_id)
+
+
 async def seed_admin_e2e_scenario(scenario: str) -> dict[str, Any]:
     """Create deterministic users and fixtures for admin-ui real-backend browser tests."""
     settings = get_settings()
-    _clear_monitoring_alert_rows()
-    seeded_alert = _seed_monitoring_alert_store()
+    await _clear_monitoring_alert_rows_async()
+    seeded_alert = await _seed_monitoring_alert_store_async()
     if settings.AUTH_MODE != "multi_user":
         if scenario == "single_user_admin":
             single_user = get_single_user_instance()
@@ -491,11 +527,11 @@ async def seed_admin_e2e_scenario(scenario: str) -> dict[str, Any]:
     users_repo = AuthnzUsersRepo(db_pool=pool)
     orgs_repo = AuthnzOrgsTeamsRepo(db_pool=pool)
 
-    admin_password = _fixture_secret("TLDW_ADMIN_E2E_ADMIN_PASSWORD", ("Admin", "Pass", "123", "!"))
-    owner_password = _fixture_secret("TLDW_ADMIN_E2E_OWNER_PASSWORD", ("Admin", "Pass", "123", "!"))
-    super_admin_password = _fixture_secret("TLDW_ADMIN_E2E_SUPER_ADMIN_PASSWORD", ("Admin", "Pass", "123", "!"))
-    member_password = _fixture_secret("TLDW_ADMIN_E2E_MEMBER_PASSWORD", ("Member", "Pass", "123", "!"))
-    requester_password = _fixture_secret("TLDW_ADMIN_E2E_REQUESTER_PASSWORD", ("Requester", "Pass", "123", "!"))
+    admin_password = _fixture_secret("TLDW_ADMIN_E2E_ADMIN_PASSWORD")
+    owner_password = _fixture_secret("TLDW_ADMIN_E2E_OWNER_PASSWORD")
+    super_admin_password = _fixture_secret("TLDW_ADMIN_E2E_SUPER_ADMIN_PASSWORD")
+    member_password = _fixture_secret("TLDW_ADMIN_E2E_MEMBER_PASSWORD")
+    requester_password = _fixture_secret("TLDW_ADMIN_E2E_REQUESTER_PASSWORD")
 
     admin_user = await _ensure_user(
         users_repo=users_repo,
@@ -542,7 +578,7 @@ async def seed_admin_e2e_scenario(scenario: str) -> dict[str, Any]:
     await orgs_repo.add_org_member(org_id=org_id, user_id=int(requester_user["id"]), role="member")
 
     if scenario == "dsr_jwt_admin":
-        _seed_dsr_subject_store_data(user_id=int(requester_user["id"]))
+        await _seed_dsr_subject_store_data_async(user_id=int(requester_user["id"]))
 
     _SEEDED_PRINCIPALS["jwt_admin"] = {
         "user_id": int(admin_user["id"]),

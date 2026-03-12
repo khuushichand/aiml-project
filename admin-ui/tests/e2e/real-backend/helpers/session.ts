@@ -1,5 +1,6 @@
 import { type Page } from '@playwright/test';
 
+import { getFixturePassword } from './fixture-secrets';
 import { type RealBackendProjectEnv } from './project-env';
 
 export type SeedScenario = 'jwt_admin' | 'dsr_jwt_admin' | 'single_user_admin';
@@ -55,15 +56,15 @@ export class SeededSession {
 
   private getPasswordForAlias(alias: SeedAlias): string {
     if (alias === 'admin') {
-      return process.env.TLDW_ADMIN_E2E_ADMIN_PASSWORD || 'AdminPass123!';
+      return getFixturePassword('admin');
     }
     if (alias === 'owner') {
-      return process.env.TLDW_ADMIN_E2E_OWNER_PASSWORD || 'AdminPass123!';
+      return getFixturePassword('owner');
     }
     if (alias === 'super_admin') {
-      return process.env.TLDW_ADMIN_E2E_SUPER_ADMIN_PASSWORD || 'AdminPass123!';
+      return getFixturePassword('super_admin');
     }
-    return process.env.TLDW_ADMIN_E2E_MEMBER_PASSWORD || 'MemberPass123!';
+    return getFixturePassword('member');
   }
 
   private async primeAuthenticatedSession(): Promise<void> {
@@ -174,18 +175,14 @@ export class SeededSession {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         await this.page.goto('/login?postAuthSmoke=1');
         loginResult = await this.page.evaluate(
-          async ({ username, password }) => {
-            const formData = new URLSearchParams();
-            formData.append('username', username);
-            formData.append('password', password);
-
+          async ({ apiKey }) => {
             try {
-              const response = await fetch('/api/auth/login', {
+              const response = await fetch('/api/auth/apikey', {
                 method: 'POST',
                 headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'Content-Type': 'application/json',
                 },
-                body: formData.toString(),
+                body: JSON.stringify({ apiKey }),
                 credentials: 'include',
               });
               return {
@@ -200,8 +197,7 @@ export class SeededSession {
             }
           },
           {
-            username: principal.username,
-            password: this.getPasswordForAlias(alias),
+            apiKey: principal.key,
           },
         );
         if (loginResult.ok) {
