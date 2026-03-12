@@ -31,7 +31,9 @@ export function useResizablePanel({
         const parsed = parseInt(saved, 10)
         if (!isNaN(parsed)) return Math.max(min, Math.min(max, parsed))
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      console.warn(`Failed to read panel width from localStorage for ${storageKey}:`, error)
+    }
     return defaultWidth
   })
 
@@ -69,7 +71,9 @@ export function useResizablePanel({
   useEffect(() => {
     try {
       localStorage.setItem(storageKey, String(width))
-    } catch { /* ignore */ }
+    } catch (error) {
+      console.warn(`Failed to persist panel width to localStorage for ${storageKey}:`, error)
+    }
   }, [storageKey, width])
 
   return { width, handleMouseDown }

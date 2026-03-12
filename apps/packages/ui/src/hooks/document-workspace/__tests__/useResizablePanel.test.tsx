@@ -78,4 +78,47 @@ describe("useResizablePanel", () => {
 
     expect(result.current.width).toBe(320)
   })
+
+  it("warns when reading the persisted width from localStorage fails", () => {
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("storage blocked")
+    })
+
+    const { result } = renderHook(() =>
+      useResizablePanel({
+        key: "left-panel",
+        defaultWidth: 280,
+        min: 240,
+        max: 480
+      })
+    )
+
+    expect(result.current.width).toBe(280)
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      "Failed to read panel width from localStorage for document-workspace-panel-left-panel:",
+      expect.any(Error)
+    )
+  })
+
+  it("warns when persisting the width to localStorage fails", () => {
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota exceeded")
+    })
+
+    renderHook(() =>
+      useResizablePanel({
+        key: "right-panel",
+        defaultWidth: 320,
+        min: 240,
+        max: 480
+      })
+    )
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      "Failed to persist panel width to localStorage for document-workspace-panel-right-panel:",
+      expect.any(Error)
+    )
+  })
 })

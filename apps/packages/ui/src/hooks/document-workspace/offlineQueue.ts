@@ -181,11 +181,12 @@ export async function updateQuizAnswers(
 export async function getQuizHistory(documentId: number): Promise<QuizHistoryEntry[]> {
   try {
     const db = getDB()
-    return await db.quizHistory
+    const entries = await db.quizHistory
       .where("documentId")
       .equals(documentId)
-      .reverse()
       .sortBy("createdAt")
+
+    return entries.reverse()
   } catch (error) {
     console.error("Failed to get quiz history:", error)
     return []

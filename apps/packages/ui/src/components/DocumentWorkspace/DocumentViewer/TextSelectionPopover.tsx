@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef, useEffect } from "react"
+import React, { useCallback, useState, useRef, useEffect, useLayoutEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { Button, Dropdown, message, Modal, Spin, Select } from "antd"
 import type { MenuProps } from "antd"
@@ -67,8 +67,16 @@ export const TextSelectionPopover: React.FC<TextSelectionPopoverProps> = ({
   }, [onClose])
 
   // Adjust position to keep popover in viewport
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (isMobileView) {
+      setAdjustedPosition(position)
+      setPositionReady(true)
+      return
+    }
+
     if (!popoverRef.current) return
+
+    setPositionReady(false)
 
     const rect = popoverRef.current.getBoundingClientRect()
     const viewportWidth = window.innerWidth
@@ -94,8 +102,12 @@ export const TextSelectionPopover: React.FC<TextSelectionPopoverProps> = ({
     }
 
     setAdjustedPosition({ x, y })
-    setPositionReady(true)
-  }, [position])
+    const animationFrame = window.requestAnimationFrame(() => {
+      setPositionReady(true)
+    })
+
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [isMobileView, position])
 
   // Copy to clipboard
   const handleCopy = useCallback(async () => {
