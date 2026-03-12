@@ -4,6 +4,7 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PlaygroundForm } from "../PlaygroundForm"
+import { fetchChatModels } from "@/services/tldw-server"
 
 const onSubmitMock = vi.hoisted(() => vi.fn(async (_payload: unknown) => null))
 const createChatCompletionMock = vi.hoisted(() =>
@@ -1012,6 +1013,7 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
   beforeEach(() => {
     onSubmitMock.mockClear()
     createChatCompletionMock.mockClear()
+    vi.mocked(fetchChatModels).mockClear()
     playgroundFormMessageOptionState.value = createMessageOptionState()
     playgroundFormConnectionState.phase = "connected"
     playgroundFormConnectionState.isConnected = true
@@ -1066,6 +1068,25 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
         message: "Queue this while offline"
       })
     ])
+  })
+
+  it("does not force a provider refresh on the first successful send", async () => {
+    const user = userEvent.setup()
+    render(<PlaygroundForm droppedFiles={[]} />)
+
+    await user.type(screen.getByTestId("composer-textarea"), "hello")
+    await user.click(screen.getByRole("button", { name: "Send message" }))
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled()
+    })
+
+    expect(vi.mocked(fetchChatModels)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ forceRefresh: true })
+    )
+    expect(vi.mocked(fetchChatModels)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ refreshOpenRouter: true })
+    )
   })
 
   it("supports create -> refine -> accept flow and submits refine metadata", async () => {
