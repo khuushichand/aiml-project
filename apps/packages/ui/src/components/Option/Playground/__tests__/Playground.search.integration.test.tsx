@@ -114,6 +114,7 @@ vi.mock("@/hooks/useMessageOption", () => ({
 vi.mock("@/hooks/usePlaygroundSessionPersistence", () => ({
   usePlaygroundSessionPersistence: () => ({
     restoreSession: vi.fn(async () => false),
+    sessionScopeReady: true,
     hasPersistedSession: false,
     persistedHistoryId: null,
     persistedServerChatId: null

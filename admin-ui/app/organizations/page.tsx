@@ -21,11 +21,10 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormField } from '@/components/ui/form';
 import { Plus, Eye, Search, BookmarkPlus, BookmarkX, Pencil, Trash2 } from 'lucide-react';
-import { Organization } from '@/types';
+import type { Organization, PlanTier, Subscription } from '@/types';
 import { api } from '@/lib/api-client';
 import {
   EMPTY_BILLING_CELL_PLACEHOLDER,
-  fetchOrganizationPlanMap,
   isBillingEnabled,
   type OrganizationPlanMap,
 } from '@/lib/billing';

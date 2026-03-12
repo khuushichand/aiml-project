@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef, useEffect } from "react"
+import React, { useCallback, useState, useRef, useEffect, useLayoutEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { Button, Dropdown, message, Modal, Spin, Select } from "antd"
 import type { MenuProps } from "antd"
@@ -15,6 +15,7 @@ import { useTranslate } from "@/hooks/document-workspace/useTranslate"
 import { useDocumentTTS } from "@/hooks/document-workspace/useDocumentTTS"
 import { useMobile } from "@/hooks/useMediaQuery"
 import type { AnnotationColor } from "../types"
+import { HIGHLIGHT_COLORS, TARGET_LANGUAGES } from "../config"
 
 interface TextSelectionPopoverProps {
   text: string
@@ -23,27 +24,6 @@ interface TextSelectionPopoverProps {
   /** Optional CFI location for EPUB annotations */
   epubCfi?: string
 }
-
-// theme-exempt: user annotation colors
-const HIGHLIGHT_COLORS: Array<{ key: AnnotationColor; label: string; color: string }> = [
-  { key: "yellow", label: "Yellow", color: "#fef08a" },
-  { key: "green", label: "Green", color: "#bbf7d0" },
-  { key: "blue", label: "Blue", color: "#bfdbfe" },
-  { key: "pink", label: "Pink", color: "#fbcfe8" }
-]
-
-const TARGET_LANGUAGES = [
-  { value: "English", label: "English" },
-  { value: "Spanish", label: "Spanish" },
-  { value: "French", label: "French" },
-  { value: "German", label: "German" },
-  { value: "Chinese", label: "Chinese" },
-  { value: "Japanese", label: "Japanese" },
-  { value: "Korean", label: "Korean" },
-  { value: "Portuguese", label: "Portuguese" },
-  { value: "Russian", label: "Russian" },
-  { value: "Arabic", label: "Arabic" }
-]
 
 /**
  * Floating popover that appears when text is selected in the PDF viewer.
@@ -61,6 +41,7 @@ export const TextSelectionPopover: React.FC<TextSelectionPopoverProps> = ({
   const [translatedText, setTranslatedText] = useState<string | null>(null)
   const [targetLanguage, setTargetLanguage] = useState("English")
   const [adjustedPosition, setAdjustedPosition] = useState(position)
+  const [positionReady, setPositionReady] = useState(false)
 
   const { mutateAsync: translate, isPending: translating } = useTranslate()
   const { speak, state: ttsState, stop: stopTTS } = useDocumentTTS()
@@ -86,8 +67,16 @@ export const TextSelectionPopover: React.FC<TextSelectionPopoverProps> = ({
   }, [onClose])
 
   // Adjust position to keep popover in viewport
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (isMobileView) {
+      setAdjustedPosition(position)
+      setPositionReady(true)
+      return
+    }
+
     if (!popoverRef.current) return
+
+    setPositionReady(false)
 
     const rect = popoverRef.current.getBoundingClientRect()
     const viewportWidth = window.innerWidth
@@ -113,7 +102,12 @@ export const TextSelectionPopover: React.FC<TextSelectionPopoverProps> = ({
     }
 
     setAdjustedPosition({ x, y })
-  }, [position])
+    const animationFrame = window.requestAnimationFrame(() => {
+      setPositionReady(true)
+    })
+
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [isMobileView, position])
 
   // Copy to clipboard
   const handleCopy = useCallback(async () => {
@@ -337,7 +331,10 @@ export const TextSelectionPopover: React.FC<TextSelectionPopoverProps> = ({
           className="fixed z-[100] flex items-center gap-1 rounded-lg border border-border bg-surface p-1.5 shadow-lg"
           style={{
             left: adjustedPosition.x,
-            top: adjustedPosition.y
+            top: adjustedPosition.y,
+            opacity: positionReady ? 1 : 0,
+            pointerEvents: positionReady ? "auto" : "none",
+            transition: "opacity 100ms"
           }}
         >
           {actionButtons}

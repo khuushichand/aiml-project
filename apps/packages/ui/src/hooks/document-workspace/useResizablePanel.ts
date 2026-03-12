@@ -1,0 +1,80 @@
+import { useState, useCallback, useEffect, useRef } from "react"
+
+interface UseResizablePanelOptions {
+  key: string
+  defaultWidth: number
+  min: number
+  max: number
+  /** Which edge the drag handle sits on. "right" (default) means handle is on the right edge of the panel, "left" means handle is on the left edge (drag direction is inverted). */
+  edge?: "left" | "right"
+}
+
+interface UseResizablePanelReturn {
+  width: number
+  handleMouseDown: (e: React.MouseEvent) => void
+}
+
+export function useResizablePanel({
+  key,
+  defaultWidth,
+  min,
+  max,
+  edge = "right"
+}: UseResizablePanelOptions): UseResizablePanelReturn {
+  const storageKey = `document-workspace-panel-${key}`
+
+  const [width, setWidth] = useState(() => {
+    if (typeof window === "undefined") return defaultWidth
+    try {
+      const saved = localStorage.getItem(storageKey)
+      if (saved) {
+        const parsed = parseInt(saved, 10)
+        if (!isNaN(parsed)) return Math.max(min, Math.min(max, parsed))
+      }
+    } catch (error) {
+      console.warn(`Failed to read panel width from localStorage for ${storageKey}:`, error)
+    }
+    return defaultWidth
+  })
+
+  const draggingRef = useRef(false)
+  const startXRef = useRef(0)
+  const startWidthRef = useRef(0)
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    draggingRef.current = true
+    startXRef.current = e.clientX
+    startWidthRef.current = width
+  }, [width])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!draggingRef.current) return
+      const rawDelta = e.clientX - startXRef.current
+      const delta = edge === "left" ? -rawDelta : rawDelta
+      const newWidth = Math.max(min, Math.min(max, startWidthRef.current + delta))
+      setWidth(newWidth)
+    }
+    const handleMouseUp = () => {
+      draggingRef.current = false
+    }
+    document.addEventListener("mousemove", handleMouseMove)
+    document.addEventListener("mouseup", handleMouseUp)
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove)
+      document.removeEventListener("mouseup", handleMouseUp)
+    }
+  }, [min, max, edge])
+
+  // Persist to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, String(width))
+    } catch (error) {
+      console.warn(`Failed to persist panel width to localStorage for ${storageKey}:`, error)
+    }
+  }, [storageKey, width])
+
+  return { width, handleMouseDown }
+}

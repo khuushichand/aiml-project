@@ -1005,6 +1005,7 @@ const SidepanelChat = () => {
             snapshotsById: { [initialTab.id]: restoredSnapshot }
           })
           applySnapshot(restoredSnapshot)
+          setIsRestoringChat(false)
         }
       }
     } finally {

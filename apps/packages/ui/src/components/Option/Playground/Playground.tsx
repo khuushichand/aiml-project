@@ -1,6 +1,7 @@
 import React from "react"
 import { PlaygroundForm } from "./PlaygroundForm"
 import { PlaygroundChat } from "./PlaygroundChat"
+import { ChatErrorBoundary } from "@/components/Common/Playground/ChatErrorBoundary"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { usePlaygroundSessionPersistence } from "@/hooks/usePlaygroundSessionPersistence"
 import { shouldRestorePersistedPlaygroundSession } from "@/hooks/playground-session-restore"
@@ -43,6 +44,7 @@ import {
   SETTINGS_HISTORY_ID_PARAM,
   SETTINGS_SERVER_CHAT_ID_PARAM
 } from "@/utils/settings-return"
+import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
 import { useNavigate } from "react-router-dom"
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
@@ -88,6 +90,7 @@ export const Playground = () => {
   >("idle")
   const [threadSearchOpen, setThreadSearchOpen] = React.useState(false)
   const [threadSearchQuery, setThreadSearchQuery] = React.useState("")
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = React.useState("")
   const [threadSearchActiveIndex, setThreadSearchActiveIndex] = React.useState(0)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = React.useState(false)
   const [dropFeedback, setDropFeedback] = React.useState<
@@ -101,6 +104,19 @@ export const Playground = () => {
     ReturnType<typeof setTimeout> | null
   >(null)
   const initializePlaygroundRef = React.useRef(false)
+  const setRouteContext = useChatSurfaceCoordinatorStore(
+    (state) => state.setRouteContext
+  )
+
+  React.useEffect(() => {
+    setRouteContext({ routeId: "chat", surface: "webui" })
+  }, [setRouteContext])
+
+  // Debounce search query to avoid running collectThreadSearchMatches on every keystroke
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchQuery(threadSearchQuery), 200)
+    return () => clearTimeout(timer)
+  }, [threadSearchQuery])
 
   const showDropFeedback = React.useCallback(
     (feedback: { type: "info" | "error" | "warning"; message: string }) => {
@@ -233,6 +249,7 @@ export const Playground = () => {
   // Session persistence for draft restoration
   const {
     restoreSession,
+    sessionScopeReady,
     hasPersistedSession,
     persistedHistoryId,
     persistedServerChatId
@@ -301,7 +318,7 @@ export const Playground = () => {
   ])
 
   React.useEffect(() => {
-    if (initializePlaygroundRef.current) {
+    if (!sessionScopeReady || initializePlaygroundRef.current) {
       return
     }
     initializePlaygroundRef.current = true
@@ -316,7 +333,7 @@ export const Playground = () => {
     return () => {
       cancelled = true
     }
-  }, [initializePlayground])
+  }, [initializePlayground, sessionScopeReady])
 
   useCharacterGreeting({
     playgroundReady,
@@ -436,8 +453,8 @@ export const Playground = () => {
 
   const pendingTimelineActionRef = React.useRef<TimelineActionDetail | null>(null)
   const threadSearchMatches = React.useMemo(
-    () => collectThreadSearchMatches(messages, threadSearchQuery),
-    [messages, threadSearchQuery]
+    () => collectThreadSearchMatches(messages, debouncedSearchQuery),
+    [messages, debouncedSearchQuery]
   )
   const threadSearchMatchSet = React.useMemo(
     () => new Set(threadSearchMatches),
@@ -1169,11 +1186,14 @@ export const Playground = () => {
             aria-label={t("playground:aria.chatTranscript", "Chat messages")}
             className="custom-scrollbar flex-1 min-h-0 w-full overflow-x-hidden overflow-y-auto px-4">
             <div className="mx-auto w-full max-w-[64rem] pb-6">
-              <PlaygroundChat
-                searchQuery={threadSearchQuery.trim()}
-                matchedMessageIndices={threadSearchMatchSet}
-                activeSearchMessageIndex={threadSearchActiveMessageIndex}
-              />
+              <ChatErrorBoundary>
+                <PlaygroundChat
+                  searchQuery={threadSearchQuery.trim()}
+                  matchedMessageIndices={threadSearchMatchSet}
+                  activeSearchMessageIndex={threadSearchActiveMessageIndex}
+                  scrollParentRef={containerRef}
+                />
+              </ChatErrorBoundary>
             </div>
           </div>
           <div

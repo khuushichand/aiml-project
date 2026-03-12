@@ -33,7 +33,7 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 | **Dia** | Local PyTorch | EN | ✅ (dialogue prompts) | Multi-speaker dialogue specialist |
 | **VibeVoice** | Local PyTorch | 12 | ✅ (Any) | Long-form (90min), spontaneous music |
 | **VibeVoice Realtime** | WS adapter | EN | ❌ | Low-latency streaming (requires realtime backend) |
-| **Qwen3-TTS** | Local PyTorch | Multi (auto/zh/en/ja/ko/de/fr/ru/pt/es/it) | ✅ (CustomVoice) | Multilingual CustomVoice/VoiceDesign/Base |
+| **Qwen3-TTS** | Runtime-aware local/remote | Multi (auto/zh/en/ja/ko/de/fr/ru/pt/es/it) | Runtime-dependent | One provider key with `upstream`, `mlx`, or `remote` execution |
 | **IndexTTS2** | Local PyTorch | EN/zh | ✅ (reference) | Zero-shot cloning, emotion prompts, low-latency streaming |
 | **NeuTTS** | Local (Hybrid) | EN | ✅ (3-15s) | Instant voice cloning, optional GGUF streaming |
 | **Supertonic** | Local ONNX | Varies (model) | ❌ | User-supplied voice styles |
@@ -41,6 +41,63 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 | **EchoTTS** | Local PyTorch | EN | ✅ (reference) | CUDA-only voice cloning |
 
 \* Current adapter configuration targets English (`tts-1` / `tts-1-hd`). Additional languages depend on OpenAI model availability.
+
+### Qwen3-TTS Runtime Modes
+
+`qwen3_tts` keeps one public provider key and selects an internal runtime with `providers.qwen3_tts.runtime`.
+
+- `auto`: prefers `mlx` on Apple Silicon macOS and `upstream` elsewhere
+- `upstream`: in-process `qwen_tts`
+- `mlx`: in-process `mlx-audio`
+- `remote`: OpenAI-compatible hosted or sidecar backend
+
+MLX v1 scope:
+
+- preset-speaker synthesis only
+- uploaded `custom:<voice_id>` voices are rejected
+- `Base` and `VoiceDesign` requests are rejected
+- stream requests are accepted and return buffered fallback chunks
+
+Config examples:
+
+```yaml
+providers:
+  qwen3_tts:
+    enabled: true
+    runtime: "mlx"
+    model: "auto"
+    model_path: null
+    mlx_model: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
+    device: "mps"
+```
+
+```yaml
+providers:
+  qwen3_tts:
+    enabled: true
+    runtime: "remote"
+    base_url: "http://127.0.0.1:8001/v1/audio/speech"
+    api_key: "${QWEN_REMOTE_API_KEY}"
+    capability_override:
+      supports_streaming: true
+      supports_voice_cloning: true
+      supports_emotion_control: false
+      supported_modes: ["custom_voice_preset", "voice_clone"]
+      supported_voices: ["Cherry", "Ethan"]
+      supports_uploaded_custom_voices: false
+```
+
+Remote Qwen requests extend the normal OpenAI `/audio/speech` payload through `extra_body` fields:
+
+- `ref_audio_b64`
+- `ref_text`
+- `voice_clone_prompt`
+- `x_vector_only_mode`
+- `description`
+
+Remote capability reporting defaults to conservative values until `capability_override` is set. This keeps `/api/v1/audio/health` and provider metadata aligned with the actual hosted backend. Voice catalogs stay empty unless `capability_override.supported_voices` is provided explicitly.
+
+See `TTS-DEPLOYMENT.md` for Apple Silicon smoke-test steps.
 
 ### IndexTTS2 Adapter
 

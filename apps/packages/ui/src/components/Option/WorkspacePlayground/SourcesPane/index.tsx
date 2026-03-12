@@ -39,7 +39,22 @@ import {
   scheduleWorkspaceUndoAction,
   undoWorkspaceAction
 } from "../undo-manager"
+import {
+  collectDescendantSourceIds,
+  createWorkspaceOrganizationIndex,
+  deriveEffectiveSelectedSourceIds,
+  getFolderSelectionState,
+  getSourceSelectionOrigin
+} from "@/store/workspace-organization"
 import { AddSourceModal } from "./AddSourceModal"
+import {
+  SourceFolderMembershipMenu,
+  type SourceFolderMembershipOption
+} from "./SourceFolderMembershipMenu"
+import {
+  SourceFolderTree,
+  type SourceFolderTreeNode
+} from "./SourceFolderTree"
 
 // Icon mapping for source types
 const SOURCE_TYPE_ICONS: Record<WorkspaceSourceType, React.ElementType> = {
@@ -107,14 +122,26 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   // Store state
   const sources = useWorkspaceStore((s) => s.sources)
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const sourceFolders = useWorkspaceStore((s) => s.sourceFolders) || []
+  const sourceFolderMemberships = useWorkspaceStore(
+    (s) => s.sourceFolderMemberships
+  ) || []
+  const selectedSourceFolderIds = useWorkspaceStore(
+    (s) => s.selectedSourceFolderIds
+  ) || []
+  const activeFolderId = useWorkspaceStore((s) => s.activeFolderId) || null
   const sourceSearchQuery = useWorkspaceStore((s) => s.sourceSearchQuery)
   const sourceFocusTarget = useWorkspaceStore((s) => s.sourceFocusTarget)
 
   // Store actions
   const toggleSourceSelection = useWorkspaceStore((s) => s.toggleSourceSelection)
+  const toggleSourceFolderSelection = useWorkspaceStore(
+    (s) => s.toggleSourceFolderSelection
+  ) || (() => undefined)
   const selectAllSources = useWorkspaceStore((s) => s.selectAllSources)
   const deselectAllSources = useWorkspaceStore((s) => s.deselectAllSources)
   const setSourceSearchQuery = useWorkspaceStore((s) => s.setSourceSearchQuery)
+  const setActiveFolder = useWorkspaceStore((s) => s.setActiveFolder) || (() => undefined)
   const clearSourceFocusTarget = useWorkspaceStore(
     (s) => s.clearSourceFocusTarget
   )
@@ -124,6 +151,11 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   const removeSources = useWorkspaceStore((s) => s.removeSources)
   const restoreSource = useWorkspaceStore((s) => s.restoreSource)
   const reorderSource = useWorkspaceStore((s) => s.reorderSource)
+  const createSourceFolder = useWorkspaceStore((s) => s.createSourceFolder) || null
+  const assignSourceToFolders =
+    useWorkspaceStore((s) => s.assignSourceToFolders) || (() => undefined)
+  const getEffectiveSelectedSources =
+    useWorkspaceStore((s) => s.getEffectiveSelectedSources) || null
   const sourceItemRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
   const sourceListContainerRef = React.useRef<HTMLDivElement | null>(null)
   const [highlightedSourceId, setHighlightedSourceId] = React.useState<
@@ -208,56 +240,101 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     [addSource, messageApi, t]
   )
 
-  const handleBatchRemoveSelected = React.useCallback(() => {
-    const selectedSources = sources.filter((s) =>
-      selectedSourceIds.includes(s.id)
-    )
-    const selectedIds = selectedSources.map((s) => s.id)
-    const selectedWereSelected = [...selectedSourceIds]
-
-    const undoHandle = scheduleWorkspaceUndoAction({
-      apply: () => {
-        removeSources(selectedIds)
-      },
-      undo: () => {
-        for (const source of selectedSources) {
-          restoreSource(source, { select: selectedWereSelected.includes(source.id) })
-        }
-      }
-    })
-
-    messageApi.open({
-      type: "warning",
-      duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
-      content: t("playground:sources.batchRemoved", "{{count}} sources removed", {
-        count: selectedSources.length
+  const organizationIndex = React.useMemo(
+    () =>
+      createWorkspaceOrganizationIndex({
+        sources,
+        sourceFolders,
+        sourceFolderMemberships
       }),
-      btn: (
-        <Button
-          size="small"
-          onClick={() => undoWorkspaceAction(undoHandle.id)}
-        >
-          {t("common:undo", "Undo")}
-        </Button>
-      )
-    })
-  }, [
-    sources,
-    selectedSourceIds,
-    removeSources,
-    restoreSource,
-    messageApi,
-    t
-  ])
+    [sourceFolderMemberships, sourceFolders, sources]
+  )
+
+  const buildFolderTreeNode = React.useCallback(
+    (folderId: string): SourceFolderTreeNode | null => {
+      const folder = organizationIndex.folderById.get(folderId)
+      if (!folder) {
+        return null
+      }
+
+      return {
+        id: folder.id,
+        name: folder.name,
+        sourceCount: collectDescendantSourceIds(organizationIndex, folder.id).length,
+        children: (organizationIndex.childrenByFolderId.get(folder.id) || [])
+          .map((childId) => buildFolderTreeNode(childId))
+          .filter((node): node is SourceFolderTreeNode => Boolean(node))
+      }
+    },
+    [organizationIndex]
+  )
+
+  const folderTreeNodes = React.useMemo(
+    () =>
+      organizationIndex.rootFolderIds
+        .map((folderId) => buildFolderTreeNode(folderId))
+        .filter((node): node is SourceFolderTreeNode => Boolean(node)),
+    [buildFolderTreeNode, organizationIndex.rootFolderIds]
+  )
+
+  const sourceFolderOptions = React.useMemo<SourceFolderMembershipOption[]>(() => {
+    const flattened: SourceFolderMembershipOption[] = []
+
+    const walk = (nodes: SourceFolderTreeNode[], depth: number) => {
+      for (const node of nodes) {
+        flattened.push({
+          id: node.id,
+          name: node.name,
+          depth
+        })
+        walk(node.children, depth + 1)
+      }
+    }
+
+    walk(folderTreeNodes, 0)
+    return flattened
+  }, [folderTreeNodes])
+
+  const selectionStateByFolderId = React.useMemo(
+    () =>
+      Object.fromEntries(
+        sourceFolders.map((folder) => [
+          folder.id,
+          getFolderSelectionState(
+            organizationIndex,
+            folder.id,
+            selectedSourceIds,
+            selectedSourceFolderIds
+          )
+        ])
+      ) as Record<string, "unchecked" | "checked" | "indeterminate">,
+    [
+      organizationIndex,
+      selectedSourceFolderIds,
+      selectedSourceIds,
+      sourceFolders
+    ]
+  )
+
+  const activeFolderSourceIds = React.useMemo(
+    () =>
+      activeFolderId
+        ? new Set(collectDescendantSourceIds(organizationIndex, activeFolderId))
+        : null,
+    [activeFolderId, organizationIndex]
+  )
 
   // Filter sources based on search query
   const filteredSources = React.useMemo(() => {
-    if (!sourceSearchQuery.trim()) return sources
+    const scopedSources = activeFolderSourceIds
+      ? sources.filter((source) => activeFolderSourceIds.has(source.id))
+      : sources
+    if (!sourceSearchQuery.trim()) return scopedSources
     const query = sourceSearchQuery.toLowerCase()
-    return sources.filter((source) =>
+    return scopedSources.filter((source) =>
       source.title.toLowerCase().includes(query)
     )
-  }, [sources, sourceSearchQuery])
+  }, [activeFolderSourceIds, sourceSearchQuery, sources])
 
   const useVirtualizedSources =
     filteredSources.length > SOURCE_VIRTUALIZATION_THRESHOLD
@@ -281,15 +358,104 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     ? filteredSources.slice(virtualStartIndex, virtualEndIndex)
     : filteredSources
 
+  const effectiveSelectedSourceEntries = React.useMemo(() => {
+    if (typeof getEffectiveSelectedSources === "function") {
+      return getEffectiveSelectedSources()
+    }
+
+    const effectiveSelectedIds = new Set(
+      deriveEffectiveSelectedSourceIds(
+        organizationIndex,
+        selectedSourceIds,
+        selectedSourceFolderIds
+      )
+    )
+    return sources.filter((source) => effectiveSelectedIds.has(source.id))
+  }, [
+    getEffectiveSelectedSources,
+    organizationIndex,
+    selectedSourceFolderIds,
+    selectedSourceIds,
+    sources
+  ])
+  const effectiveSelectedCount = effectiveSelectedSourceEntries.length
   const allSelected =
-    sources.length > 0 && selectedSourceIds.length === sources.length
-  const someSelected = selectedSourceIds.length > 0 && !allSelected
-  const selectedSourceEntries = React.useMemo(
-    () => sources.filter((source) => selectedSourceIds.includes(source.id)),
-    [selectedSourceIds, sources]
-  )
+    organizationIndex.readySourceIds.size > 0 &&
+    effectiveSelectedCount === organizationIndex.readySourceIds.size
+  const someSelected = effectiveSelectedCount > 0 && !allSelected
+  const selectedSourceEntries = effectiveSelectedSourceEntries
   const singleSelectedSource =
     selectedSourceEntries.length === 1 ? selectedSourceEntries[0] : null
+
+  const clearEffectiveSelection = React.useCallback(() => {
+    deselectAllSources()
+    for (const folderId of [...new Set(selectedSourceFolderIds)]) {
+      toggleSourceFolderSelection(folderId)
+    }
+  }, [
+    deselectAllSources,
+    selectedSourceFolderIds,
+    toggleSourceFolderSelection
+  ])
+
+  const handleBatchRemoveSelected = React.useCallback(() => {
+    if (effectiveSelectedSourceEntries.length === 0) {
+      return
+    }
+
+    const removedSourceEntries = effectiveSelectedSourceEntries
+      .map((source) => ({
+        source,
+        index: sources.findIndex((entry) => entry.id === source.id),
+        wasDirectlySelected: selectedSourceIds.includes(source.id),
+        folderIds: [...(organizationIndex.folderIdsBySourceId.get(source.id) || [])]
+      }))
+      .filter((entry) => entry.index >= 0)
+    const selectedIds = removedSourceEntries.map((entry) => entry.source.id)
+
+    const undoHandle = scheduleWorkspaceUndoAction({
+      apply: () => {
+        removeSources(selectedIds)
+      },
+      undo: () => {
+        for (const entry of [...removedSourceEntries].sort((a, b) => a.index - b.index)) {
+          restoreSource(entry.source, {
+            index: entry.index,
+            select: entry.wasDirectlySelected
+          })
+          if (entry.folderIds.length > 0) {
+            assignSourceToFolders(entry.source.id, entry.folderIds)
+          }
+        }
+      }
+    })
+
+    messageApi.open({
+      type: "warning",
+      duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+      content: t("playground:sources.batchRemoved", "{{count}} sources removed", {
+        count: removedSourceEntries.length
+      }),
+      btn: (
+        <Button
+          size="small"
+          onClick={() => undoWorkspaceAction(undoHandle.id)}
+        >
+          {t("common:undo", "Undo")}
+        </Button>
+      )
+    })
+  }, [
+    assignSourceToFolders,
+    effectiveSelectedSourceEntries,
+    messageApi,
+    organizationIndex.folderIdsBySourceId,
+    removeSources,
+    restoreSource,
+    selectedSourceIds,
+    sources,
+    t
+  ])
   const previewSource = previewSourceId
     ? sources.find((source) => source.id === previewSourceId) || null
     : null
@@ -299,11 +465,19 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
 
   const handleSelectAllToggle = () => {
     if (allSelected || someSelected) {
-      deselectAllSources()
+      clearEffectiveSelection()
     } else {
       selectAllSources()
     }
   }
+
+  const handleCreateSourceFolder = React.useCallback(() => {
+    if (typeof createSourceFolder !== "function") {
+      return
+    }
+
+    createSourceFolder("New folder", activeFolderId)
+  }, [activeFolderId, createSourceFolder])
 
   const resetAnnotationEditor = React.useCallback(() => {
     setAnnotationQuoteDraft("")
@@ -496,6 +670,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     (source: (typeof sources)[number]) => {
       const sourceIndex = sources.findIndex((entry) => entry.id === source.id)
       const wasSelected = selectedSourceIds.includes(source.id)
+      const assignedFolderIds = organizationIndex.folderIdsBySourceId.get(source.id) || []
       const undoHandle = scheduleWorkspaceUndoAction({
         apply: () => {
           removeSource(source.id)
@@ -505,6 +680,9 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             index: sourceIndex,
             select: wasSelected
           })
+          if (assignedFolderIds.length > 0) {
+            assignSourceToFolders(source.id, assignedFolderIds)
+          }
         }
       })
 
@@ -548,7 +726,16 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
         }
       }
     },
-    [messageApi, removeSource, restoreSource, selectedSourceIds, sources, t]
+    [
+      assignSourceToFolders,
+      messageApi,
+      organizationIndex.folderIdsBySourceId,
+      removeSource,
+      restoreSource,
+      selectedSourceIds,
+      sources,
+      t
+    ]
   )
 
   React.useEffect(() => {
@@ -634,7 +821,13 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
 
   const renderSourceRow = (source: (typeof filteredSources)[number]) => {
     const Icon = SOURCE_TYPE_ICONS[source.type] || File
-    const isSelected = selectedSourceIds.includes(source.id)
+    const selectionOrigin = getSourceSelectionOrigin(
+      source.id,
+      selectedSourceIds,
+      selectedSourceFolderIds,
+      organizationIndex
+    )
+    const isSelected = selectionOrigin !== "none"
     const isHighlighted = highlightedSourceId === source.id
     const sourceStatus = statusGuardrailsEnabled
       ? source.status || "ready"
@@ -672,6 +865,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     const canMoveUp = sourceOrderIndex > 0
     const canMoveDown = sourceOrderIndex >= 0 && sourceOrderIndex < sources.length - 1
     const isDropTarget = draggedSourceId != null && draggedSourceId !== source.id
+    const assignedFolderIds = organizationIndex.folderIdsBySourceId.get(source.id) || []
     const sourceTypeLabel = t(`playground:sources.type.${source.type}`, source.type)
     const sourceStatusLabel = isProcessing
       ? t("playground:sources.statusProcessing", "Processing")
@@ -746,7 +940,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
           <Checkbox
             checked={isSelected}
             disabled={!isReady}
-            onChange={() => toggleSourceSelection(source.id)}
+            onChange={() => {
+              if (selectionOrigin === "folder") {
+                return
+              }
+              toggleSourceSelection(source.id)
+            }}
           />
         </div>
         <div className="flex min-w-0 flex-1 items-start gap-2">
@@ -782,9 +981,19 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               >
                 {sourceStatusLabel}
               </span>
-              {isSelected && (
+              {selectionOrigin === "direct" && (
                 <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
-                  {t("playground:sources.selectedBadge", "Selected")}
+                  {t("playground:sources.selectedDirectBadge", "Direct")}
+                </span>
+              )}
+              {selectionOrigin === "folder" && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                  {t("playground:sources.selectedFolderBadge", "From folder")}
+                </span>
+              )}
+              {selectionOrigin === "both" && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                  {t("playground:sources.selectedBothBadge", "Direct + folder")}
                 </span>
               )}
             </div>
@@ -844,6 +1053,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             isSelected ? "border border-primary/20 bg-primary/5" : ""
           }`}
         >
+          <SourceFolderMembershipMenu
+            sourceTitle={source.title}
+            folderOptions={sourceFolderOptions}
+            selectedFolderIds={assignedFolderIds}
+            onChange={(folderIds) => assignSourceToFolders(source.id, folderIds)}
+          />
           <Tooltip title={t("playground:sources.previewAnnotate", "Preview & annotate")}>
             <button
               type="button"
@@ -1026,24 +1241,24 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               className="[@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11"
             >
               <span className="text-text-muted">
-                {selectedSourceIds.length > 0
+                {effectiveSelectedCount > 0
                   ? t("playground:sources.selectedCount", "{{count}} selected", {
-                      count: selectedSourceIds.length
+                      count: effectiveSelectedCount
                     })
                   : t("playground:sources.selectAll", "Select all")}
               </span>
             </Checkbox>
-            {selectedSourceIds.length > 0 && (
+            {effectiveSelectedCount > 0 && (
               <button
                 type="button"
-                onClick={deselectAllSources}
+                onClick={clearEffectiveSelection}
                 className="text-primary hover:underline"
               >
                 {t("common:clear", "Clear")}
               </button>
             )}
           </div>
-          {selectedSourceIds.length > 0 && (
+          {effectiveSelectedCount > 0 && (
             <div
               data-testid="sources-selected-actions"
               className="mt-2 flex flex-wrap items-center gap-2"
@@ -1052,7 +1267,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
                 {t(
                   "playground:sources.selectedForChat",
                   "{{count}} selected for grounded chat",
-                  { count: selectedSourceIds.length }
+                  { count: effectiveSelectedCount }
                 )}
               </span>
               <button
@@ -1070,7 +1285,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
                 title={t(
                   "playground:sources.batchRemoveConfirm",
                   "Remove {{count}} selected sources?",
-                  { count: selectedSourceIds.length }
+                  { count: effectiveSelectedCount }
                 )}
                 onConfirm={handleBatchRemoveSelected}
                 okText={t("common:remove", "Remove")}
@@ -1083,7 +1298,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
                   className="rounded border border-error/30 bg-error/10 px-2 py-0.5 text-[11px] font-medium text-error transition hover:bg-error/20"
                 >
                   {t("playground:sources.removeCount", "Remove ({{count}})", {
-                    count: selectedSourceIds.length
+                    count: effectiveSelectedCount
                   })}
                 </button>
               </Popconfirm>
@@ -1091,6 +1306,18 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
           )}
         </div>
       )}
+
+      <div className="border-b border-border px-4 py-2">
+        <SourceFolderTree
+          nodes={folderTreeNodes}
+          activeFolderId={activeFolderId}
+          selectionStateByFolderId={selectionStateByFolderId}
+          onClearFocus={() => setActiveFolder(null)}
+          onCreateFolder={handleCreateSourceFolder}
+          onFocusFolder={setActiveFolder}
+          onToggleFolderSelection={toggleSourceFolderSelection}
+        />
+      </div>
 
       {/* Source list */}
       <div

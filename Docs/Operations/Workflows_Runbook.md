@@ -43,22 +43,38 @@ Operational guidance for running, migrating, backing up, and troubleshooting the
 
 ## Incident Triage
 
-1) User cannot see run
+1) Failed run / repeated retries
+   - Start with `GET /api/v1/workflows/runs/{run_id}/investigation`.
+   - Use `primary_failure.reason_code_core`, `category`, `blame_scope`, `retryable`, and `recommended_actions` to classify the incident.
+   - If the investigation identifies a failed step, follow with `GET /api/v1/workflows/runs/{run_id}/steps/{step_id}/attempts` to inspect retry history.
+   - Decide rerun policy from both the failure metadata and the step replay metadata:
+     - Safe replay: transient failure on a replay-safe step.
+     - Conditional replay: transient failure on a side-effecting or human-reviewed step.
+     - Fix-before-rerun: definition, input, or policy failures. Run `POST /api/v1/workflows/preflight` after the change before retrying.
+   - If the derived investigation looks stale or incomplete, fall back to `GET /runs/{run_id}/events` and artifact/log inspection.
+2) User cannot see run
    - Check tenant and owner constraints; admins can filter with `owner=`.
    - Confirm DB instance: the API and tests should use the same DB path/URL; check `DATABASE_URL_WORKFLOWS`.
-2) Webhook not firing
+3) Webhook not firing
    - Confirm `WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS` is not set.
    - Check `webhook_delivery` events for `blocked|failed`.
    - Validate egress policy and allowlists; inspect DLQ with `SELECT * FROM workflow_webhook_dlq`.
    - If using signatures, ensure receiver computes HMAC over `"{ts}.{body}"` with header `X-Signature-Timestamp`.
-3) Event stream out of order / missing
+4) Event stream out of order / missing
    - Validate uniqueness of `(run_id, event_seq)` and counters table health.
-4) “database is locked” (SQLite)
+5) “database is locked” (SQLite)
    - WAL mode and busy timeout should handle most cases; reduce concurrency or move to Postgres.
-5) Artifact download 404/403
+6) Artifact download 404/403
    - Verify artifact exists for the run (`GET /runs/{run_id}/artifacts`).
    - Check path containment vs recorded `workdir` (strict mode may block).
    - In tests, ensure the route uses the same DB instance as the test fixture.
+
+## Authoring Checks
+
+- Use `POST /api/v1/workflows/preflight` before rollout, after definition edits, and before retrying a failed run from a changed workflow revision.
+- Treat `definition_invalid` as a release blocker.
+- Treat `unsafe_replay_step` warnings as rollout review items, not cosmetic lint.
+- For persistent incidents, compare the failing run’s `status_reason` and latest attempt `reason_code_core` before deciding whether to rollback or replay.
 
 ## Maintenance
 

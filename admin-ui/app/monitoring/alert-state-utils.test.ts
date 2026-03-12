@@ -20,7 +20,7 @@ const makeAlert = (overrides: Partial<SystemAlert> = {}): SystemAlert => ({
 });
 
 describe('alert-state-utils', () => {
-  it('preserves local assignment/snooze/metadata when refreshing alerts', () => {
+  it('prefers authoritative alert overlay data while preserving local fallbacks for missing values', () => {
     const existing = [
       makeAlert({
         id: 'a1',
@@ -42,9 +42,9 @@ describe('alert-state-utils', () => {
     expect(mergeAlertsWithLocalState(incoming, existing)).toEqual([
       makeAlert({
         id: 'a1',
-        assigned_to: 'user-2',
+        assigned_to: 'user-1',
         snoozed_until: '2026-02-27T12:00:00Z',
-        metadata: { escalation: 'manual' },
+        metadata: { escalation: 'auto' },
       }),
       makeAlert({ id: 'a2' }),
     ]);

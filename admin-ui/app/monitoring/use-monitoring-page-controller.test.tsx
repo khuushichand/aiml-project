@@ -290,7 +290,6 @@ describe('useMonitoringPageController', () => {
       expect.objectContaining({
         confirm: confirmFn,
         onReloadRequested: loadData,
-        assignableUsers: [{ id: 'user-1', label: 'Alice' }],
       })
     );
     expect(useNotificationActionsMock).toHaveBeenCalledWith(

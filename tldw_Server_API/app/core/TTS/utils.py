@@ -4,6 +4,7 @@ Utility helpers for TTS modules.
 Currently includes:
 - parse_bool: robust conversion of common string/numeric values to boolean.
 - estimate_max_new_tokens: heuristic sizing for TTS generation.
+- resolve_qwen3_runtime_name: shared Qwen3 runtime selection logic.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import hmac
 import json
 import math
 import os
+import platform
 import re
 import unicodedata
 from typing import Any
@@ -88,6 +90,16 @@ def estimate_max_new_tokens(
     if min_tokens < 0:
         min_tokens = 0
     return max(min_tokens, min(est, max_cap))
+
+
+def resolve_qwen3_runtime_name(configured_runtime: Any) -> str:
+    """Resolve the effective Qwen3 runtime for the current host."""
+    normalized = str(configured_runtime or "auto").strip().lower()
+    if normalized in {"upstream", "mlx", "remote"}:
+        return normalized
+    if platform.system() == "Darwin" and platform.machine().lower() == "arm64":
+        return "mlx"
+    return "upstream"
 
 
 def clean_text_for_tts(text: str | None) -> str:

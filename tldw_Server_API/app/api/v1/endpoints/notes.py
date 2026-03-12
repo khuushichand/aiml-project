@@ -98,6 +98,8 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Personalization import (
+    build_note_bulk_import_activity,
+    record_companion_activity_events_bulk,
     record_note_created,
     record_note_deleted,
     record_note_restored,
@@ -820,6 +822,29 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) 
         "requested_count": len(desired),
         "attached_count": attached_count,
     }
+
+
+def _build_import_note_companion_event(
+    *,
+    db: CharactersRAGDB,
+    note_id: str | int,
+    operation: str,
+    patch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reload an imported note and build a stable companion activity payload."""
+    reloaded_note = db.get_note_by_id(str(note_id))
+    if not reloaded_note:
+        raise CharactersRAGDBError(
+            f"Imported {str(operation).replace('_', ' ')} note could not be reloaded."
+        )
+    reloaded_note = _attach_keywords_inline(db, reloaded_note)
+    return build_note_bulk_import_activity(
+        note=reloaded_note,
+        operation=operation,
+        route="/api/v1/notes/import",
+        surface="api.notes.import",
+        patch=patch,
+    )
 
 
 def _normalize_keyword_tokens(tokens: Optional[list[str]]) -> list[str]:
@@ -1604,6 +1629,7 @@ async def import_notes(
             "skipped_count": 0,
             "failed_count": 0,
         }
+        companion_events: list[dict[str, Any]] = []
 
         for item in payload.items:
             file_result = NotesImportFileResult(
@@ -1644,13 +1670,14 @@ async def import_notes(
                         continue
 
                     if existing_note and payload.duplicate_strategy == "overwrite":
+                        update_patch = {
+                            "title": parsed_note["title"],
+                            "content": parsed_note["content"],
+                        }
                         expected_version = int(existing_note.get("version", 1))
                         db.update_note(
                             note_id=str(imported_id),
-                            update_data={
-                                "title": parsed_note["title"],
-                                "content": parsed_note["content"],
-                            },
+                            update_data=update_patch,
                             expected_version=expected_version,
                         )
                         if parsed_note.get("keywords_provided"):
@@ -1659,6 +1686,14 @@ async def import_notes(
                                 note_id=str(imported_id),
                                 keywords=parsed_note.get("keywords", []),
                             )
+                        companion_events.append(
+                            _build_import_note_companion_event(
+                                db=db,
+                                note_id=str(imported_id),
+                                operation="import_overwrite",
+                                patch=update_patch,
+                            )
+                        )
                         file_result.updated_count += 1
                         continue
 
@@ -1676,6 +1711,13 @@ async def import_notes(
                             note_id=str(created_note_id),
                             keywords=parsed_note.get("keywords", []),
                         )
+                    companion_events.append(
+                        _build_import_note_companion_event(
+                            db=db,
+                            note_id=str(created_note_id),
+                            operation="import_create",
+                        )
+                    )
                     file_result.created_count += 1
                 except ConflictError as conflict_err:
                     # If "create_copy" still conflicts (for example, stale imported ID edge case),
@@ -1695,6 +1737,13 @@ async def import_notes(
                                     note_id=str(created_note_id),
                                     keywords=parsed_note.get("keywords", []),
                                 )
+                            companion_events.append(
+                                _build_import_note_companion_event(
+                                    db=db,
+                                    note_id=str(created_note_id),
+                                    operation="import_create",
+                                )
+                            )
                             file_result.created_count += 1
                             continue
                         except _NOTES_NONCRITICAL_EXCEPTIONS as retry_err:
@@ -1714,6 +1763,11 @@ async def import_notes(
             totals["failed_count"] += file_result.failed_count
             files.append(file_result)
 
+        await _run_db_call(
+            record_companion_activity_events_bulk,
+            user_id=current_user.id,
+            events=companion_events,
+        )
         return NotesImportResponse(files=files, **totals)
     except HTTPException:
         raise
@@ -3457,6 +3511,7 @@ async def bulk_create_notes(
         current_user: User = Depends(get_request_user)
 ):
     results: list[NoteBulkCreateItemResult] = []
+    companion_events: list[dict[str, Any]] = []
     created = 0
     failed = 0
     # Enforce centralized per-request rate limit (notes.bulk_create)
@@ -3548,6 +3603,14 @@ async def bulk_create_notes(
             if not nd:
                 raise CharactersRAGDBError("Created note could not be retrieved.")
             nd = _attach_keywords_inline(db, nd)
+            companion_events.append(
+                build_note_bulk_import_activity(
+                    note=nd,
+                    operation="bulk_create",
+                    route="/api/v1/notes/bulk",
+                    surface="api.notes.bulk",
+                )
+            )
             results.append(NoteBulkCreateItemResult(success=True, note=nd))
             created += 1
         except _NOTES_NONCRITICAL_EXCEPTIONS as e:
@@ -3555,6 +3618,11 @@ async def bulk_create_notes(
             results.append(NoteBulkCreateItemResult(success=False, error=str(e)))
             failed += 1
 
+    await _run_db_call(
+        record_companion_activity_events_bulk,
+        user_id=current_user.id,
+        events=companion_events,
+    )
     response_payload = NoteBulkCreateResponse(results=results, created_count=created, failed_count=failed)
     response_status = status.HTTP_200_OK if failed == 0 else status.HTTP_207_MULTI_STATUS
     return JSONResponse(content=jsonable_encoder(response_payload), status_code=response_status)

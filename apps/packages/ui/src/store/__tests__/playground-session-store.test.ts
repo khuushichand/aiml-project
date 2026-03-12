@@ -11,9 +11,24 @@ describe("playground-session-store", () => {
 
   it("treats a fresh queue-only session as valid", () => {
     usePlaygroundSessionStore.getState().saveSession({
+      scopeKey: "scope:a",
       queuedMessages: [buildQueuedRequest({ promptText: "Run this later" })]
     })
 
     expect(usePlaygroundSessionStore.getState().isSessionValid()).toBe(true)
+  })
+
+  it("rejects persisted sessions when the expected scope key changes", () => {
+    usePlaygroundSessionStore.getState().saveSession({
+      scopeKey: "scope:a",
+      queuedMessages: [buildQueuedRequest({ promptText: "Run this later" })]
+    })
+
+    expect(usePlaygroundSessionStore.getState().isSessionValid("scope:a")).toBe(
+      true
+    )
+    expect(usePlaygroundSessionStore.getState().isSessionValid("scope:b")).toBe(
+      false
+    )
   })
 })

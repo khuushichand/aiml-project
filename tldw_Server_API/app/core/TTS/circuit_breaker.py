@@ -360,6 +360,10 @@ class CircuitBreaker:
 CircuitOpenError = TTSCircuitOpenError
 
 
+def build_qwen_runtime_breaker_key(provider_name: str, runtime_name: str) -> str:
+    return f"{provider_name}:{runtime_name}"
+
+
 class CircuitBreakerManager:
     """Manages circuit breakers for all TTS providers."""
 

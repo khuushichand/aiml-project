@@ -188,8 +188,20 @@ def test_workflows_postgres_schema_migration_adds_missing_columns(pg_database_co
             assert _column_exists(backend, conn, "workflow_step_runs", "assigned_to")
 
             assert backend.table_exists("workflow_artifacts", connection=conn)
+            assert backend.table_exists("workflow_step_attempts", connection=conn)
             # Per-run event counters table present
             assert backend.table_exists("workflow_event_counters", connection=conn)
+            for column in (
+                "attempt_id",
+                "tenant_id",
+                "run_id",
+                "step_run_id",
+                "step_id",
+                "attempt_number",
+                "status",
+                "metadata_json",
+            ):
+                assert _column_exists(backend, conn, "workflow_step_attempts", column)
 
             version = backend.execute(
                 "SELECT version FROM workflow_schema_version LIMIT 1",

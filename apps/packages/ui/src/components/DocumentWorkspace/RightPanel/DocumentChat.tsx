@@ -6,7 +6,8 @@ import {
   Trash2,
   AlertCircle,
   BookOpen,
-  StopCircle
+  StopCircle,
+  Sparkles
 } from "lucide-react"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { useDocumentChat } from "@/hooks/document-workspace/useDocumentChat"
@@ -154,15 +155,17 @@ export const DocumentChat: React.FC = () => {
     suggestionsCollapsed
   ])
 
-  // Handle suggested question click
+  // Handle suggested question click - auto-send
   const handleQuestionClick = useCallback(
-    (question: string) => {
-      setInputValue(question)
-      if (textareaRef.current) {
-        textareaRef.current.focus()
-      }
+    async (question: string) => {
+      if (!hasSelectedModel || isProcessing || streaming) return
+      setSuggestionsCollapsed(true)
+      await onSubmit({
+        message: question,
+        image: ""
+      })
     },
-    [setInputValue]
+    [hasSelectedModel, isProcessing, streaming, onSubmit]
   )
 
   // Handle keyboard events in textarea
@@ -217,7 +220,7 @@ export const DocumentChat: React.FC = () => {
   }
 
   const hasMessages = messages.length > 0
-  const showSuggestions = !hasMessages && !suggestionsCollapsed
+  const showSuggestions = !suggestionsCollapsed
 
   return (
     <div className="flex h-full flex-col">
@@ -251,6 +254,20 @@ export const DocumentChat: React.FC = () => {
         </div>
       )}
 
+      {/* Show suggestions button when collapsed */}
+      {hasMessages && suggestionsCollapsed && (
+        <div className="flex justify-center border-b border-border py-1">
+          <button
+            type="button"
+            onClick={() => setSuggestionsCollapsed(false)}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-text-muted transition-colors hover:bg-hover hover:text-text"
+          >
+            <Sparkles className="h-3 w-3" />
+            {t("option:documentWorkspace.showSuggestions", "Show suggestions")}
+          </button>
+        </div>
+      )}
+
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto">
         {showSuggestions && (
@@ -272,51 +289,62 @@ export const DocumentChat: React.FC = () => {
               }
             >
               {messages.map((message, index) => (
-                <PlaygroundMessage
-                  key={message.id || `msg-${index}`}
-                  isBot={message.isBot}
-                  message={message.message}
-                  name={message.name}
-                  role={message.role}
-                  images={message.images || []}
-                  currentMessageIndex={index}
-                  totalMessages={messages.length}
-                  onRegenerate={regenerateLastMessage}
-                  isProcessing={isProcessing}
-                  sources={message.sources}
-                  onEditFormSubmit={(value, isSend) => {
-                    editMessage(index, value, !message.isBot, isSend)
-                  }}
-                  onDeleteMessage={() => {
-                    deleteMessage(index)
-                  }}
-                  isTTSEnabled={ttsEnabled}
-                  generationInfo={message?.generationInfo}
-                  isStreaming={streaming}
-                  modelImage={message?.modelImage}
-                  modelName={message?.modelName}
-                  createdAt={message?.createdAt}
-                  temporaryChat={temporaryChat}
-                  onStopStreaming={stopStreamingRequest}
-                  onContinue={() => {
-                    onSubmit({
-                      image: "",
-                      message: "",
-                      isContinue: true
-                    })
-                  }}
-                  documents={message?.documents}
-                  actionInfo={actionInfo}
-                  serverChatId={serverChatId}
-                  serverMessageId={message.serverMessageId}
-                  messageId={message.id}
-                  discoSkillComment={message.discoSkillComment}
-                  conversationInstanceId={`doc-${activeDocumentId}`}
-                  hideCopy={false}
-                  hideEditAndRegenerate={false}
-                  toolCalls={message?.toolCalls}
-                  toolResults={message?.toolResults}
-                />
+                <div key={message.id || `msg-${index}`}>
+                  <PlaygroundMessage
+                    isBot={message.isBot}
+                    message={message.message}
+                    name={message.name}
+                    role={message.role}
+                    images={message.images || []}
+                    currentMessageIndex={index}
+                    totalMessages={messages.length}
+                    onRegenerate={regenerateLastMessage}
+                    isProcessing={isProcessing}
+                    sources={message.sources}
+                    onEditFormSubmit={(idx, value, isUser, isSend) => {
+                      editMessage(idx, value, isUser, isSend)
+                    }}
+                    onDeleteMessage={(idx) => {
+                      deleteMessage(idx)
+                    }}
+                    isTTSEnabled={ttsEnabled}
+                    generationInfo={message?.generationInfo}
+                    isStreaming={streaming}
+                    modelImage={message?.modelImage}
+                    modelName={message?.modelName}
+                    createdAt={message?.createdAt}
+                    temporaryChat={temporaryChat}
+                    onStopStreaming={stopStreamingRequest}
+                    onContinue={() => {
+                      onSubmit({
+                        image: "",
+                        message: "",
+                        isContinue: true
+                      })
+                    }}
+                    documents={message?.documents}
+                    actionInfo={actionInfo}
+                    serverChatId={serverChatId}
+                    serverMessageId={message.serverMessageId}
+                    messageId={message.id}
+                    discoSkillComment={message.discoSkillComment}
+                    conversationInstanceId={`doc-${activeDocumentId}`}
+                    hideCopy={false}
+                    hideEditAndRegenerate={false}
+                    toolCalls={message?.toolCalls}
+                    toolResults={message?.toolResults}
+                  />
+                  {message.isBot && message.sources && message.sources.length > 0 && (
+                    <div className="ml-10 mt-1 flex items-center gap-1 text-xs text-text-muted">
+                      <Tooltip title={t("option:documentWorkspace.usesDocumentContext", "Uses document context")}>
+                        <span className="flex items-center gap-1">
+                          <BookOpen className="h-3 w-3" />
+                          <span>{message.sources.length} source{message.sources.length !== 1 ? "s" : ""}</span>
+                        </span>
+                      </Tooltip>
+                    </div>
+                  )}
+                </div>
               ))}
             </Suspense>
             <div ref={messagesEndRef} />

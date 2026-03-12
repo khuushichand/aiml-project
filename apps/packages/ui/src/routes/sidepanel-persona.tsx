@@ -1,7 +1,12 @@
 import React from "react"
 import { Button, Checkbox, Input, Select, Tag, Typography } from "antd"
 import { CheckCircle2, Send, XCircle } from "lucide-react"
-import { useBlocker, useLocation, useNavigate } from "react-router-dom"
+import {
+  UNSAFE_DataRouterContext,
+  useBlocker,
+  useLocation,
+  useNavigate
+} from "react-router-dom"
 import { useTranslation } from "react-i18next"
 
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
@@ -15,7 +20,10 @@ import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
-import { isCompanionConsentRequiredResponse } from "@/services/companion"
+import {
+  fetchCompanionConversationPrompts,
+  isCompanionConsentRequiredResponse
+} from "@/services/companion"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { buildPersonaWebSocketUrl } from "@/services/persona-stream"
 import {
@@ -254,8 +262,22 @@ const _confirmWithBrowserPrompt = (message: string): boolean => {
   try {
     return window.confirm(message)
   } catch {
-    return true
+      return true
   }
+}
+
+const IDLE_ROUTE_BLOCKER: ReturnType<typeof useBlocker> = {
+  state: "unblocked",
+  proceed: () => undefined,
+  reset: () => undefined
+}
+
+const useCompatibleRouteBlocker = (
+  when: boolean
+): ReturnType<typeof useBlocker> => {
+  const dataRouterContext = React.useContext(UNSAFE_DataRouterContext)
+  if (!dataRouterContext) return IDLE_ROUTE_BLOCKER
+  return useBlocker(when)
 }
 
 type PersonaRouteMode = "persona" | "companion"
@@ -267,6 +289,7 @@ type SidepanelPersonaProps = {
 }
 
 const DEFAULT_PERSONA_ID = "research_assistant"
+const DEFAULT_COMPANION_PROMPT_QUERY = "resume recent companion work"
 
 const SidepanelPersona = ({
   mode = "persona",
@@ -333,6 +356,9 @@ const SidepanelPersona = ({
   const [connected, setConnected] = React.useState(false)
   const [connecting, setConnecting] = React.useState(false)
   const [savingCompanionCheckIn, setSavingCompanionCheckIn] = React.useState(false)
+  const [companionPrompts, setCompanionPrompts] = React.useState<
+    Array<{ prompt_id: string; label: string; prompt_text: string }>
+  >([])
   const [error, setError] = React.useState<string | null>(null)
   const [input, setInput] = React.useState("")
   const [logs, setLogs] = React.useState<PersonaLogEntry[]>([])
@@ -361,6 +387,54 @@ const SidepanelPersona = ({
     setPersonaStateContextEnabled(false)
     setPersonaStateContextProfileDefault(false)
   }, [isCompanionMode])
+
+  React.useEffect(() => {
+    if (!isCompanionMode || capsLoading || !capabilities?.hasPersonalization) {
+      setCompanionPrompts([])
+      return
+    }
+
+    const promptQuery = input.trim() || DEFAULT_COMPANION_PROMPT_QUERY
+    let cancelled = false
+    const timeoutId = window.setTimeout(() => {
+      fetchCompanionConversationPrompts(promptQuery)
+        .then((payload) => {
+          if (cancelled) return
+          setCompanionPrompts(
+            Array.isArray(payload.prompts)
+              ? payload.prompts
+                  .filter(
+                    (item) =>
+                      item &&
+                      typeof item.prompt_text === "string" &&
+                      item.prompt_text.trim().length > 0
+                  )
+                  .slice(0, 3)
+                  .map((item) => ({
+                    prompt_id: item.prompt_id,
+                    label: item.label,
+                    prompt_text: item.prompt_text
+                  }))
+              : []
+          )
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setCompanionPrompts([])
+          }
+        })
+    }, input.trim() ? 200 : 0)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeoutId)
+    }
+  }, [
+    capabilities?.hasPersonalization,
+    capsLoading,
+    input,
+    isCompanionMode
+  ])
 
   const applySessionPreferences = React.useCallback(
     (preferences?: PersonaSessionPreferences | null) => {
@@ -1049,7 +1123,9 @@ const SidepanelPersona = ({
     soulMd !== savedSoulMd ||
     identityMd !== savedIdentityMd ||
     heartbeatMd !== savedHeartbeatMd
-  const routeNavigationBlocker = useBlocker(hasUnsavedPersonaStateChanges)
+  const routeNavigationBlocker = useCompatibleRouteBlocker(
+    hasUnsavedPersonaStateChanges
+  )
   const stateDirtyLabel = hasUnsavedPersonaStateChanges
     ? t("sidepanel:persona.stateDirty", "unsaved")
     : t("sidepanel:persona.stateSaved", "saved")
@@ -1941,42 +2017,63 @@ const SidepanelPersona = ({
   )
 
   const composerPanel = (
-    <div className="flex items-end gap-2">
-      <Input.TextArea
-        value={input}
-        autoSize={{ minRows: 2, maxRows: 4 }}
-        onChange={(event) => setInput(event.target.value)}
-        placeholder={
-          isCompanionMode
-            ? "Ask Companion..."
-            : t("sidepanel:persona.inputPlaceholder", "Ask Persona...")
-        }
-        onPressEnter={(event) => {
-          if (event.shiftKey) return
-          event.preventDefault()
-          sendUserMessage()
-        }}
-      />
-      {capabilities?.hasPersonalization ? (
-        <Button
-          data-testid="persona-save-checkin-button"
-          disabled={!canSaveCompanionCheckIn}
-          loading={savingCompanionCheckIn}
-          onClick={() => {
-            void saveCompanionCheckIn()
-          }}
+    <div className="flex flex-col gap-2">
+      {isCompanionMode && companionPrompts.length ? (
+        <div
+          className="flex flex-wrap gap-2"
+          data-testid="companion-conversation-prompts"
         >
-          {t("sidepanel:persona.saveCheckIn", "Save check-in")}
-        </Button>
+          {companionPrompts.map((prompt) => (
+            <Button
+              key={prompt.prompt_id}
+              size="small"
+              onClick={() => {
+                setInput(prompt.prompt_text)
+              }}
+              type="default"
+            >
+              {prompt.label}
+            </Button>
+          ))}
+        </div>
       ) : null}
-      <Button
-        type="primary"
-        icon={<Send className="h-4 w-4" />}
-        disabled={!canSend}
-        onClick={sendUserMessage}
-      >
-        {t("common:send", "Send")}
-      </Button>
+      <div className="flex items-end gap-2">
+        <Input.TextArea
+          value={input}
+          autoSize={{ minRows: 2, maxRows: 4 }}
+          onChange={(event) => setInput(event.target.value)}
+          placeholder={
+            isCompanionMode
+              ? "Ask Companion..."
+              : t("sidepanel:persona.inputPlaceholder", "Ask Persona...")
+          }
+          onPressEnter={(event) => {
+            if (event.shiftKey) return
+            event.preventDefault()
+            sendUserMessage()
+          }}
+        />
+        {capabilities?.hasPersonalization ? (
+          <Button
+            data-testid="persona-save-checkin-button"
+            disabled={!canSaveCompanionCheckIn}
+            loading={savingCompanionCheckIn}
+            onClick={() => {
+              void saveCompanionCheckIn()
+            }}
+          >
+            {t("sidepanel:persona.saveCheckIn", "Save check-in")}
+          </Button>
+        ) : null}
+        <Button
+          type="primary"
+          icon={<Send className="h-4 w-4" />}
+          disabled={!canSend}
+          onClick={sendUserMessage}
+        >
+          {t("common:send", "Send")}
+        </Button>
+      </div>
     </div>
   )
 

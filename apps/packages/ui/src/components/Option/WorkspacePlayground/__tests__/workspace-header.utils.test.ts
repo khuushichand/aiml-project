@@ -5,7 +5,8 @@ import {
   buildWorkspaceBibtex,
   createWorkspaceBibtexFilename,
   filterSavedWorkspaces,
-  formatWorkspaceLastAccessed
+  formatWorkspaceLastAccessed,
+  groupWorkspacesByCollection
 } from "../workspace-header.utils"
 
 const baseNow = new Date("2026-02-18T12:00:00.000Z")
@@ -16,6 +17,7 @@ const createWorkspace = (
   id: overrides.id || "workspace-1",
   name: overrides.name || "Workspace",
   tag: overrides.tag || "workspace:workspace",
+  collectionId: overrides.collectionId ?? null,
   createdAt: overrides.createdAt || new Date("2026-02-01T00:00:00.000Z"),
   lastAccessedAt:
     overrides.lastAccessedAt || new Date("2026-02-18T11:59:30.000Z"),
@@ -87,6 +89,48 @@ describe("workspace header utils", () => {
     expect(filterSavedWorkspaces(workspaces, "beta")).toHaveLength(1)
     expect(filterSavedWorkspaces(workspaces, "workspace:gamma")).toHaveLength(1)
     expect(filterSavedWorkspaces(workspaces, "missing")).toHaveLength(0)
+  })
+
+  it("groups workspaces into collection buckets and unassigned", () => {
+    const groups = groupWorkspacesByCollection(
+      [
+        {
+          id: "collection-a",
+          name: "Topic A",
+          description: null,
+          createdAt: new Date("2026-02-01T00:00:00.000Z"),
+          updatedAt: new Date("2026-02-01T00:00:00.000Z")
+        }
+      ],
+      [
+        createWorkspace({
+          id: "workspace-a",
+          name: "Alpha",
+          collectionId: "collection-a"
+        }),
+        createWorkspace({
+          id: "workspace-b",
+          name: "Beta",
+          collectionId: null
+        }),
+        createWorkspace({
+          id: "workspace-c",
+          name: "Gamma",
+          collectionId: "missing-collection"
+        })
+      ]
+    )
+
+    expect(groups).toHaveLength(2)
+    expect(groups[0]?.collection?.id).toBe("collection-a")
+    expect(groups[0]?.workspaces.map((workspace) => workspace.id)).toEqual([
+      "workspace-a"
+    ])
+    expect(groups[1]?.id).toBe("unassigned")
+    expect(groups[1]?.workspaces.map((workspace) => workspace.id)).toEqual([
+      "workspace-b",
+      "workspace-c"
+    ])
   })
 
   it("ships at least three workspace templates", () => {
