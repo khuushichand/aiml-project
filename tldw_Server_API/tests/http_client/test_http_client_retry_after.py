@@ -1,5 +1,7 @@
 import pytest
 import time
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 
 pytestmark = pytest.mark.unit
@@ -14,6 +16,17 @@ def _has_httpx():
 
 
 requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installed")
+
+
+def test_parse_retry_after_delay_seconds_accepts_http_date():
+    from tldw_Server_API.app.core.http_client import _parse_retry_after_delay_seconds
+
+    now = datetime(2026, 3, 11, 20, 0, 0, tzinfo=timezone.utc)
+    retry_after = format_datetime(now + timedelta(seconds=5), usegmt=True)
+
+    delay = _parse_retry_after_delay_seconds(retry_after, now=now)
+
+    assert delay == pytest.approx(5.0, abs=1e-6)
 
 
 @requires_httpx

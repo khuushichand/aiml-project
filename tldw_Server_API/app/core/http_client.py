@@ -26,6 +26,8 @@ import time  # noqa: E402
 from collections.abc import AsyncIterator, Iterable  # noqa: E402
 from contextlib import asynccontextmanager, suppress  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from email.utils import parsedate_to_datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 from typing import Any, Protocol, TypedDict  # noqa: E402
@@ -1373,6 +1375,29 @@ def _decorrelated_jitter_sleep(prev: float, base_ms: int, cap_s: int) -> float:
     return sleep
 
 
+def _parse_retry_after_delay_seconds(
+    retry_after: str | None,
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    """Parse Retry-After as delta-seconds or HTTP-date and return seconds to wait."""
+    if not retry_after:
+        return None
+    try:
+        return max(0.0, float(retry_after.strip()))
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    try:
+        parsed = parsedate_to_datetime(retry_after.strip())
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        current = now or datetime.now(timezone.utc)
+        return max(0.0, (parsed - current).total_seconds())
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
 def _should_retry(method: str, status: int | None, exc: Exception | None, policy: RetryPolicy) -> tuple[bool, str]:
     m = method.upper()
     if exc is not None:
@@ -2259,12 +2284,7 @@ async def _afetch_httpx(
                             # Honor Retry-After
                             delay = 0.0
                             if retry.respect_retry_after:
-                                ra = resp.headers.get("retry-after")
-                                if ra:
-                                    try:
-                                        delay = float(ra)
-                                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
-                                        delay = 0.0
+                                delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
                             if delay <= 0:
                                 delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                             logger.debug(
@@ -2533,12 +2553,7 @@ async def _afetch_aiohttp(
                     pass
                 delay = 0.0
                 if retry.respect_retry_after:
-                    ra = resp.headers.get("retry-after")
-                    if ra:
-                        try:
-                            delay = float(ra)
-                        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
-                            delay = 0.0
+                    delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
                 if delay <= 0:
                     delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                 logger.debug(
@@ -2905,12 +2920,7 @@ def _fetch_httpx_response(
                         get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
                     delay = 0.0
                     if retry.respect_retry_after:
-                        ra = resp.headers.get("retry-after")
-                        if ra:
-                            try:
-                                delay = float(ra)
-                            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
-                                delay = 0.0
+                        delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
                     if delay <= 0:
                         delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                     logger.debug(
@@ -3259,12 +3269,7 @@ async def _astream_bytes_httpx(
                                 )
                             delay = 0.0
                             if retry.respect_retry_after:
-                                ra = resp.headers.get("retry-after")
-                                if ra:
-                                    try:
-                                        delay = float(ra)
-                                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
-                                        delay = 0.0
+                                delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
                             if delay <= 0:
                                 delay = _decorrelated_jitter_sleep(
                                     sleep_s,
@@ -3470,12 +3475,7 @@ async def _astream_bytes_aiohttp(
                                 )
                             delay = 0.0
                             if retry.respect_retry_after:
-                                ra = resp.headers.get("retry-after")
-                                if ra:
-                                    try:
-                                        delay = float(ra)
-                                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
-                                        delay = 0.0
+                                delay = _parse_retry_after_delay_seconds(resp.headers.get("retry-after")) or 0.0
                             if delay <= 0:
                                 delay = _decorrelated_jitter_sleep(
                                     sleep_s,
@@ -3556,10 +3556,49 @@ async def _astream_bytes_aiohttp(
                 )
                 await asyncio.sleep(delay)
                 sleep_s = delay
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
+                network_exc = NetworkError(e.__class__.__name__)
+                if yielded_any:
+                    _log_outbound_request(
+                        method=method,
+                        url=str(getattr(resp, "url", url)),
+                        status_code=int(getattr(resp, "status", 0) or 0),
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=network_exc.__class__.__name__,
+                    )
+                    raise network_exc from e
+                should, rsn = _should_retry(method, None, network_exc, retry)
+                if not should or attempt == attempts:
+                    _log_outbound_request(
+                        method=method,
+                        url=str(getattr(resp, "url", url)),
+                        status_code=0,
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=network_exc.__class__.__name__,
+                    )
+                    raise network_exc from e
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+                    get_metrics_registry().increment(
+                        "http_client_retries_total",
+                        1,
+                        labels={"reason": rsn},
+                    )
+                delay = _decorrelated_jitter_sleep(
+                    sleep_s,
+                    retry.backoff_base_ms,
+                    retry.backoff_cap_s,
+                )
+                logger.debug(
+                    f"astream_bytes network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
+                )
+                await asyncio.sleep(delay)
+                sleep_s = delay
     except asyncio.CancelledError:
         raise
-    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
-        raise NetworkError(e.__class__.__name__) from e
 
 
 async def astream_bytes(
