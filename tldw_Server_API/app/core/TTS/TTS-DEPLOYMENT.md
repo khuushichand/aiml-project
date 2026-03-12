@@ -298,6 +298,7 @@ providers:
       supports_voice_cloning: true
       supports_emotion_control: false
       supported_modes: [custom_voice_preset, voice_clone]
+      supported_voices: [Cherry, Ethan]
       supports_uploaded_custom_voices: false
 ```
 

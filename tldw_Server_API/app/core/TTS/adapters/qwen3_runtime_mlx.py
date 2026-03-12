@@ -112,7 +112,7 @@ class Qwen3MlxRuntime:
 
     def _resolve_speaker(self, request: TTSRequest) -> str:
         speaker = self.adapter._resolve_speaker(request.voice)
-        if not speaker:
+        if not speaker or speaker not in self.adapter.CUSTOMVOICE_SPEAKERS:
             raise TTSValidationError(
                 "MLX runtime requires a preset Qwen3 speaker",
                 provider=self.adapter.PROVIDER_KEY,

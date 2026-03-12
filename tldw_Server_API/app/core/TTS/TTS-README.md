@@ -83,6 +83,7 @@ providers:
       supports_voice_cloning: true
       supports_emotion_control: false
       supported_modes: ["custom_voice_preset", "voice_clone"]
+      supported_voices: ["Cherry", "Ethan"]
       supports_uploaded_custom_voices: false
 ```
 
@@ -94,7 +95,7 @@ Remote Qwen requests extend the normal OpenAI `/audio/speech` payload through `e
 - `x_vector_only_mode`
 - `description`
 
-Remote capability reporting defaults to conservative values until `capability_override` is set. This keeps `/api/v1/audio/health` and provider metadata aligned with the actual hosted backend.
+Remote capability reporting defaults to conservative values until `capability_override` is set. This keeps `/api/v1/audio/health` and provider metadata aligned with the actual hosted backend. Voice catalogs stay empty unless `capability_override.supported_voices` is provided explicitly.
 
 See `TTS-DEPLOYMENT.md` for Apple Silicon smoke-test steps.
 

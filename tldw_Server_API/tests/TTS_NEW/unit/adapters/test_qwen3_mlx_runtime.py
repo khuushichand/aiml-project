@@ -7,6 +7,7 @@ import pytest
 
 from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, TTSRequest
 from tldw_Server_API.app.core.TTS.adapters.qwen3_tts_adapter import Qwen3TTSAdapter
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSValidationError
 
 
 @pytest.mark.asyncio
@@ -69,6 +70,27 @@ async def test_mlx_runtime_generates_preset_speaker_audio(fake_mlx_audio_module,
 
     assert response.audio_content
     assert response.metadata["runtime"] == "mlx"
+
+
+@pytest.mark.asyncio
+async def test_mlx_runtime_rejects_unknown_non_custom_voice(fake_mlx_audio_module, monkeypatch):
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+
+    adapter = Qwen3TTSAdapter({"runtime": "mlx", "device": "mps"})
+
+    await adapter.ensure_initialized()
+
+    request = TTSRequest(
+        text="hello",
+        voice="not-a-real-speaker",
+        format=AudioFormat.PCM,
+        stream=False,
+    )
+    request.model = "auto"
+
+    with pytest.raises(TTSValidationError):
+        await adapter.generate(request)
 
 
 @pytest.mark.asyncio

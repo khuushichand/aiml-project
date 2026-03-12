@@ -37,9 +37,7 @@ class RemoteQwenRuntime:
             self.provider_name = getattr(adapter, "provider_name", self.provider_key)
             self.sample_rate = getattr(adapter, "sample_rate", 24000)
             self.supported_languages = set(getattr(adapter, "SUPPORTED_LANGUAGES", {"en"}))
-            self.supported_voices = [
-                getattr(adapter, "CUSTOMVOICE_SPEAKERS", []),
-            ][0]
+            self.supported_voices: list[str] = []
         else:
             self._adapter = None
             self.config = dict(adapter_or_config or {})
@@ -71,6 +69,19 @@ class RemoteQwenRuntime:
         if isinstance(override, dict):
             return dict(override)
         return {}
+
+    def _resolve_supported_voices(self, override: dict[str, Any]) -> list[str]:
+        configured = override.get("supported_voices")
+        if not isinstance(configured, list):
+            return list(self.supported_voices)
+        voices: list[str] = []
+        for voice in configured:
+            if not isinstance(voice, str):
+                continue
+            normalized = voice.strip()
+            if normalized:
+                voices.append(normalized)
+        return voices
 
     def _is_httpx_exception(self, exc: Exception) -> bool:
         module = getattr(exc.__class__, "__module__", "")
@@ -169,10 +180,11 @@ class RemoteQwenRuntime:
     async def get_capabilities(self) -> TTSCapabilities:
         override = self._capability_override()
         supported_voices = []
-        if self.supported_voices:
+        runtime_supported_voices = self._resolve_supported_voices(override)
+        if runtime_supported_voices:
             from .base import VoiceInfo
 
-            supported_voices = [VoiceInfo(id=voice, name=voice) for voice in self.supported_voices]
+            supported_voices = [VoiceInfo(id=voice, name=voice) for voice in runtime_supported_voices]
         supports_streaming = self._coerce_bool(override.get("supports_streaming"), default=False)
         supports_voice_cloning = self._coerce_bool(override.get("supports_voice_cloning"), default=False)
         supports_emotion_control = self._coerce_bool(override.get("supports_emotion_control"), default=False)

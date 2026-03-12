@@ -1,5 +1,6 @@
 import httpx
 import pytest
+from types import SimpleNamespace
 
 from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, TTSRequest
 from tldw_Server_API.app.core.TTS.adapters.qwen3_runtime_remote import RemoteQwenRuntime
@@ -49,6 +50,24 @@ async def test_remote_runtime_capabilities_default_to_conservative_values():
 
 
 @pytest.mark.asyncio
+async def test_remote_runtime_does_not_advertise_local_speakers_by_default():
+    runtime = RemoteQwenRuntime(
+        SimpleNamespace(
+            config={"base_url": "http://127.0.0.1:8001/v1/audio/speech", "api_key": "test-key"},
+            PROVIDER_KEY="qwen3_tts",
+            provider_name="Qwen3TTS",
+            sample_rate=24000,
+            SUPPORTED_LANGUAGES={"en"},
+            CUSTOMVOICE_SPEAKERS=["Cherry", "Ethan"],
+        )
+    )
+
+    caps = await runtime.get_capabilities()
+
+    assert caps.supported_voices == []
+
+
+@pytest.mark.asyncio
 async def test_remote_runtime_capabilities_allow_override():
     runtime = RemoteQwenRuntime(
         {
@@ -59,6 +78,7 @@ async def test_remote_runtime_capabilities_allow_override():
                 "supports_voice_cloning": True,
                 "supports_emotion_control": True,
                 "supported_modes": ["custom_voice_preset", "uploaded_custom_voice"],
+                "supported_voices": ["Cherry", "Ethan"],
                 "supports_uploaded_custom_voices": True,
             },
         }
@@ -69,6 +89,7 @@ async def test_remote_runtime_capabilities_allow_override():
     assert caps.supports_streaming is True
     assert caps.supports_voice_cloning is True
     assert caps.supports_emotion_control is True
+    assert [voice.id for voice in caps.supported_voices] == ["Cherry", "Ethan"]
     assert caps.metadata["supported_modes"] == ["custom_voice_preset", "uploaded_custom_voice"]
     assert caps.metadata["supports_uploaded_custom_voices"] is True
 
