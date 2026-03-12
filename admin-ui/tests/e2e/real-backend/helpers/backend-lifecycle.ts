@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
 import { type RealBackendProjectEnv } from './project-env';
 
@@ -11,11 +10,44 @@ export type ManagedBackendProcess = {
   args: string[];
 };
 
-const currentDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(currentDir, '../../../../..');
+const repoRoot = resolve(process.cwd(), '..');
 const lifecycleScript = resolve(repoRoot, 'tldw_Server_API/scripts/server_lifecycle.py');
 
-const getPythonCommand = (): string => process.env.TLDW_ADMIN_E2E_PYTHON || 'python';
+const getPythonCommand = (): string => {
+  if (process.env.TLDW_ADMIN_E2E_PYTHON) {
+    return process.env.TLDW_ADMIN_E2E_PYTHON;
+  }
+
+  const candidates: string[] = [];
+
+  if (process.env.VIRTUAL_ENV) {
+    candidates.push(
+      resolve(process.env.VIRTUAL_ENV, 'bin/python'),
+      resolve(process.env.VIRTUAL_ENV, 'bin/python3'),
+    );
+  }
+
+  let currentDir = repoRoot;
+  while (true) {
+    candidates.push(
+      resolve(currentDir, '.venv/bin/python'),
+      resolve(currentDir, '.venv/bin/python3'),
+    );
+    const parentDir = resolve(currentDir, '..');
+    if (parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
+  }
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return 'python3';
+};
 
 export const buildBackendEnv = (
   project: RealBackendProjectEnv,
@@ -26,26 +58,81 @@ export const buildBackendEnv = (
   SERVER_PORT: String(project.apiPort),
   E2E_TEST_BASE_URL: project.apiBaseUrl,
   AUTH_MODE: project.authMode,
+  TEST_MODE: 'true',
+  DEFER_HEAVY_STARTUP: 'true',
+  ENABLE_ADMIN_E2E_TEST_MODE: 'true',
+  PYTEST_CURRENT_TEST: process.env.PYTEST_CURRENT_TEST || 'admin-ui-real-backend-e2e',
+  JWT_ALGORITHM: process.env.JWT_ALGORITHM || 'HS256',
+  JWT_SECRET_KEY: process.env.JWT_SECRET_KEY || 'playwright-test-secret-1234567890',
+  SINGLE_USER_API_KEY: process.env.SINGLE_USER_API_KEY || 'single-user-admin-key',
+  SINGLE_USER_TEST_API_KEY: process.env.SINGLE_USER_TEST_API_KEY || 'single-user-admin-key',
+  DATABASE_URL:
+    process.env.DATABASE_URL
+    || `sqlite:////tmp/${project.serverLabel}-authnz.db`,
+  USER_DB_BASE_DIR:
+    process.env.USER_DB_BASE_DIR
+    || `/tmp/${project.serverLabel}-userdbs`,
   ...overrides,
 });
 
-export const startManagedBackend = (
+export const startManagedBackend = async (
   project: RealBackendProjectEnv,
   overrides: Record<string, string> = {},
-): ManagedBackendProcess => {
+): Promise<ManagedBackendProcess> => {
   if (!existsSync(lifecycleScript)) {
     throw new Error(`Server lifecycle script not found at ${lifecycleScript}`);
   }
 
   const command = getPythonCommand();
   const args = [lifecycleScript, 'start'];
-  const process = spawn(command, args, {
+  const childProcess = spawn(command, args, {
     cwd: repoRoot,
     env: buildBackendEnv(project, overrides),
     stdio: 'inherit',
   });
 
-  return { process, command, args };
+  await new Promise<void>((resolvePromise, reject) => {
+    childProcess.once('spawn', () => resolvePromise());
+    childProcess.once('error', reject);
+  });
+
+  return { process: childProcess, command, args };
+};
+
+const wait = async (ms: number): Promise<void> =>
+  new Promise((resolvePromise) => {
+    setTimeout(resolvePromise, ms);
+  });
+
+export const waitForManagedBackend = async (
+  project: RealBackendProjectEnv,
+  timeoutMs = 120_000,
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  const candidates = [
+    '/healthz',
+    '/api/v1/healthz',
+    '/readyz',
+    '/api/v1/readyz',
+    '/health',
+    '/api/v1/health',
+  ];
+
+  while (Date.now() < deadline) {
+    for (const path of candidates) {
+      try {
+        const response = await fetch(`${project.apiBaseUrl}${path}`);
+        if (response.ok || (response.status === 206 && path.endsWith('/health'))) {
+          return;
+        }
+      } catch {
+        // Keep polling until timeout.
+      }
+    }
+    await wait(2_000);
+  }
+
+  throw new Error(`Managed backend for ${project.projectName} did not become healthy within ${timeoutMs}ms`);
 };
 
 export const stopManagedBackend = async (

@@ -1,36 +1,30 @@
-import { expect, test as base, type Page } from '@playwright/test';
+import { expect, test as base } from '@playwright/test';
 
-class LoginPage {
-  constructor(readonly page: Page) {}
-
-  async gotoJwtLogin(): Promise<void> {
-    await this.page.goto('/login');
-  }
-
-  async gotoSingleUserLogin(redirectTo: string): Promise<void> {
-    await this.page.goto(`/login?redirectTo=${encodeURIComponent(redirectTo)}&mode=apikey`);
-  }
-
-  async loginWithPassword(username: string, password: string): Promise<void> {
-    await this.page.getByLabel(/username or email/i).fill(username);
-    await this.page.getByLabel(/^password$/i).fill(password);
-    await this.page.getByRole('button', { name: /sign in/i }).click();
-  }
-
-  async loginWithApiKey(apiKey: string): Promise<void> {
-    await this.page.getByRole('tab', { name: /api key/i }).click();
-    await this.page.locator('#apiKey').fill(apiKey);
-    await this.page.getByRole('button', { name: /connect with api key/i }).click();
-  }
-}
+import { LoginPage } from './login-page';
+import { getProjectEnv, type RealBackendProjectEnv } from './project-env';
+import { SeededSession } from './session';
 
 type RealBackendFixtures = {
+  projectEnv: RealBackendProjectEnv;
   loginPage: LoginPage;
+  seededSession: SeededSession;
+  seedScenario: (scenario: 'jwt_admin' | 'dsr_jwt_admin') => Promise<void>;
 };
 
 export const test = base.extend<RealBackendFixtures>({
+  projectEnv: async ({}, provide, testInfo) => {
+    await provide(getProjectEnv(testInfo.project.name));
+  },
   loginPage: async ({ page }, provide) => {
     await provide(new LoginPage(page));
+  },
+  seededSession: async ({ page, projectEnv }, provide) => {
+    await provide(new SeededSession(page.context(), projectEnv));
+  },
+  seedScenario: async ({ seededSession }, provide) => {
+    await provide(async (scenario) => {
+      await seededSession.seed(scenario);
+    });
   },
 });
 

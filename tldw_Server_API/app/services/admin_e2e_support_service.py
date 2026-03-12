@@ -57,6 +57,7 @@ async def _ensure_user(
 ) -> dict[str, Any]:
     users_db = UsersDB(users_repo.db_pool)
     await users_db.initialize()
+    password_hash = _hash_fixture_password(password)
 
     existing = await users_db.get_user_by_username(username)
     if existing is None:
@@ -66,10 +67,19 @@ async def _ensure_user(
         existing = await users_db.create_user(
             username=username,
             email=email,
-            password_hash=_hash_fixture_password(password),
+            password_hash=password_hash,
             role=role,
             is_active=True,
             is_verified=True,
+        )
+    else:
+        existing = await users_db.update_user(
+            int(existing["id"]),
+            email=email,
+            password_hash=password_hash,
+            is_active=True,
+            is_verified=True,
+            role=role,
         )
 
     if existing is None:
