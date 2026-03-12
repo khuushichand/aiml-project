@@ -10,6 +10,7 @@ export type ChatSurfaceScopeInput = {
   orgId: string | number | null
   userId: string | number | null
   accessToken?: string | null
+  apiKey?: string | null
 }
 
 const normalizeAuthMode = (authMode: string | null | undefined): string => {
@@ -25,6 +26,32 @@ const normalizeOrgScope = (orgId: string | number | null | undefined): string =>
   return normalized ? `org:${normalized}` : "org:none"
 }
 
+const fnv1a36 = (value: string): string => {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash +=
+      (hash << 1) +
+      (hash << 4) +
+      (hash << 7) +
+      (hash << 8) +
+      (hash << 24)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+const deriveSingleUserApiKeyScope = (
+  authMode: string | null | undefined,
+  apiKey: string | null | undefined
+): string | null => {
+  if (normalizeAuthMode(authMode) !== "single-user") {
+    return null
+  }
+
+  const normalizedKey = String(apiKey || "").trim()
+  return normalizedKey ? `key:${fnv1a36(normalizedKey)}` : "key:none"
+}
+
 export const buildChatSurfaceScopeKey = (
   input: ChatSurfaceScopeInput
 ): string => {
@@ -36,12 +63,18 @@ export const buildChatSurfaceScopeKey = (
     authMode: input.authMode,
     accessToken: input.accessToken ?? null
   })
+  const singleUserApiKeyScope = deriveSingleUserApiKeyScope(
+    input.authMode,
+    input.apiKey ?? null
+  )
 
-  return `${serverFingerprint}:${authScope}:${orgScope}:${userScope}`
+  return singleUserApiKeyScope
+    ? `${serverFingerprint}:${authScope}:${orgScope}:${userScope}:${singleUserApiKeyScope}`
+    : `${serverFingerprint}:${authScope}:${orgScope}:${userScope}`
 }
 
 export const buildChatSurfaceScopeKeyFromConfig = (
-  config: Pick<TldwConfig, "serverUrl" | "authMode" | "orgId" | "accessToken"> | null | undefined,
+  config: Pick<TldwConfig, "serverUrl" | "authMode" | "orgId" | "accessToken" | "apiKey"> | null | undefined,
   options?: {
     userId?: string | number | null
   }
@@ -51,5 +84,6 @@ export const buildChatSurfaceScopeKeyFromConfig = (
     authMode: config?.authMode ?? null,
     orgId: config?.orgId ?? null,
     userId: options?.userId ?? null,
-    accessToken: config?.accessToken ?? null
+    accessToken: config?.accessToken ?? null,
+    apiKey: config?.apiKey ?? null
   })

@@ -485,6 +485,28 @@ export const applyAssistantPresentationToMessages = ({
     }
   })
 
+export const reportDeferredAssistantPresentationError = ({
+  stage,
+  assistantKind,
+  assistantId,
+  characterId,
+  error
+}: {
+  stage: "persona-profile" | "character-profile" | "presentation-apply"
+  assistantKind: string | null
+  assistantId: string | null
+  characterId: number | null
+  error: unknown
+}): void => {
+  console.warn("[useServerChatLoader] Deferred assistant presentation failed", {
+    stage,
+    assistantKind,
+    assistantId,
+    characterId,
+    error
+  })
+}
+
 export const useServerChatLoader = ({
   ensureServerChatHistoryId,
   notification,
@@ -707,7 +729,14 @@ export const useServerChatLoader = ({
                     assistantAvatarUrl: selection?.avatar_url ?? null
                   }
                 }
-              } catch {
+              } catch (error) {
+                reportDeferredAssistantPresentationError({
+                  stage: "persona-profile",
+                  assistantKind,
+                  assistantId,
+                  characterId,
+                  error
+                })
                 if (!canCommitCurrentLoad()) {
                   return null
                 }
@@ -742,8 +771,14 @@ export const useServerChatLoader = ({
                     assistantAvatarUrl: selection?.avatar_url ?? null
                   }
                 }
-              } catch {
-                // ignore character lookup failures
+              } catch (error) {
+                reportDeferredAssistantPresentationError({
+                  stage: "character-profile",
+                  assistantKind,
+                  assistantId,
+                  characterId,
+                  error
+                })
               }
               if (!canCommitCurrentLoad()) {
                 return null
@@ -825,7 +860,15 @@ export const useServerChatLoader = ({
                   })
                 )
               })
-              .catch(() => null)
+              .catch((error) => {
+                reportDeferredAssistantPresentationError({
+                  stage: "presentation-apply",
+                  assistantKind,
+                  assistantId,
+                  characterId,
+                  error
+                })
+              })
           }
           if (!temporaryChat && !shouldPreserveLocal && !shouldPreserveAtCommit) {
             try {

@@ -26,7 +26,7 @@ const DEBOUNCE_MS = 1000
 export function usePlaygroundSessionPersistence() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isRestoringRef = useRef(false)
-  const { serverUrl } = useConnectionState()
+  const { serverUrl, lastConfigUpdatedAt } = useConnectionState()
 
   // Session store
   const sessionStore = usePlaygroundSessionStore()
@@ -123,7 +123,7 @@ export function usePlaygroundSessionPersistence() {
     return () => {
       cancelled = true
     }
-  }, [resolveCurrentScopeKey, serverUrl])
+  }, [lastConfigUpdatedAt, resolveCurrentScopeKey, serverUrl])
 
   const buildPersistableSessionSnapshot = useCallback(() => {
     // Don't save while a restore is replaying into the stores.

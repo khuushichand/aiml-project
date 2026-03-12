@@ -37,4 +37,23 @@ describe("chat-surface-scope", () => {
       })
     ).toContain("user:user-42")
   })
+
+  it("changes single-user scope keys when the API key changes without leaking the raw key", () => {
+    const firstScope = buildChatSurfaceScopeKeyFromConfig({
+      serverUrl: "https://prod.example.com",
+      authMode: "single-user",
+      orgId: null,
+      apiKey: "alpha-secret-key"
+    })
+    const secondScope = buildChatSurfaceScopeKeyFromConfig({
+      serverUrl: "https://prod.example.com",
+      authMode: "single-user",
+      orgId: null,
+      apiKey: "beta-secret-key"
+    })
+
+    expect(firstScope).not.toBe(secondScope)
+    expect(firstScope).not.toContain("alpha-secret-key")
+    expect(secondScope).not.toContain("beta-secret-key")
+  })
 })

@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { Message } from "@/store/option"
 import type { ServerChatMessage } from "@/services/tldw/TldwApiClient"
 import {
   applyAssistantPresentationToMessages,
   fetchAllServerChatMessages,
   mapServerChatMessagesToPlaygroundMessages,
+  reportDeferredAssistantPresentationError,
   resolveServerChatAssistantIdentity,
   shouldCommitServerChatLoadResult,
   shouldPreserveLocalMessagesForServerLoad,
@@ -394,5 +395,33 @@ describe("applyAssistantPresentationToMessages", () => {
     expect(result[2]).toMatchObject({
       name: "You"
     })
+  })
+})
+
+describe("reportDeferredAssistantPresentationError", () => {
+  it("logs deferred assistant hydration failures with contextual metadata", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const failure = new Error("character lookup failed")
+
+    reportDeferredAssistantPresentationError({
+      stage: "character-profile",
+      assistantKind: "character",
+      assistantId: "42",
+      characterId: 42,
+      error: failure
+    })
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[useServerChatLoader] Deferred assistant presentation failed",
+      expect.objectContaining({
+        stage: "character-profile",
+        assistantKind: "character",
+        assistantId: "42",
+        characterId: 42,
+        error: failure
+      })
+    )
+
+    warnSpy.mockRestore()
   })
 })
