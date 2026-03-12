@@ -15,6 +15,66 @@ from tldw_Server_API.app.services.mcp_hub_service import McpHubService
 class _Repo:
     def __init__(self) -> None:
         now = datetime.now(timezone.utc).isoformat()
+        self.path_scopes = [
+            {
+                "id": 61,
+                "name": "Active Path Scope",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "path_scope_document": {"path_scope_mode": "workspace_root"},
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "id": 62,
+                "name": "Inactive Path Scope",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "path_scope_document": {"path_scope_mode": "workspace_root"},
+                "is_active": False,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "id": 63,
+                "name": "Team Path Scope",
+                "owner_scope_type": "team",
+                "owner_scope_id": 21,
+                "path_scope_document": {"path_scope_mode": "workspace_root"},
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
+        ]
+        self.permission_profiles = [
+            {
+                "id": 41,
+                "name": "Writer Profile",
+                "description": None,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "mode": "custom",
+                "path_scope_object_id": 999,
+                "policy_document": {},
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "id": 42,
+                "name": "Ops Profile",
+                "description": None,
+                "owner_scope_type": "org",
+                "owner_scope_id": 9,
+                "mode": "custom",
+                "path_scope_object_id": 63,
+                "policy_document": {},
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
+        ]
         self.workspace_sets = [
             {
                 "id": 51,
@@ -64,10 +124,42 @@ class _Repo:
                 "owner_scope_type": "user",
                 "owner_scope_id": 7,
                 "profile_id": None,
-                "path_scope_object_id": None,
+                "path_scope_object_id": 62,
                 "workspace_source_mode": "named",
                 "workspace_set_object_id": 51,
                 "inline_policy_document": {"path_scope_mode": "workspace_root"},
+                "approval_policy_id": None,
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "id": 12,
+                "target_type": "persona",
+                "target_id": "ops",
+                "owner_scope_type": "org",
+                "owner_scope_id": 9,
+                "profile_id": None,
+                "path_scope_object_id": 63,
+                "workspace_source_mode": None,
+                "workspace_set_object_id": None,
+                "inline_policy_document": {},
+                "approval_policy_id": None,
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "id": 13,
+                "target_type": "persona",
+                "target_id": "shared-ops",
+                "owner_scope_type": "org",
+                "owner_scope_id": 9,
+                "profile_id": None,
+                "path_scope_object_id": None,
+                "workspace_source_mode": "named",
+                "workspace_set_object_id": 51,
+                "inline_policy_document": {},
                 "approval_policy_id": None,
                 "is_active": True,
                 "created_at": now,
@@ -177,12 +269,29 @@ class _Repo:
         return rows
 
     async def get_permission_profile(self, profile_id: int):
-        _ = profile_id
+        for row in self.permission_profiles:
+            if int(row["id"]) == int(profile_id):
+                return dict(row)
         return None
 
     async def get_path_scope_object(self, path_scope_object_id: int):
-        _ = path_scope_object_id
+        for row in self.path_scopes:
+            if int(row["id"]) == int(path_scope_object_id):
+                return dict(row)
         return None
+
+    async def list_permission_profiles(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ):
+        rows = list(self.permission_profiles)
+        if owner_scope_type is not None:
+            rows = [row for row in rows if row["owner_scope_type"] == owner_scope_type]
+        if owner_scope_id is not None:
+            rows = [row for row in rows if row["owner_scope_id"] == owner_scope_id]
+        return rows
 
     async def get_policy_override_by_assignment(self, assignment_id: int):
         _ = assignment_id
@@ -331,6 +440,33 @@ async def test_list_governance_audit_findings_returns_workspace_and_external_fin
     assert "assignment_validation_blocker" in finding_types
     assert "external_server_configuration_issue" in finding_types
     assert "external_binding_issue" in finding_types
+    assert "broken_object_reference" in finding_types
+
+    broken_findings = [finding for finding in findings["items"] if finding["finding_type"] == "broken_object_reference"]
+    assert any(
+        finding["details"].get("reference_field") == "path_scope_object_id"
+        and finding["details"].get("reference_reason") == "inactive_reference"
+        and finding["object_kind"] == "policy_assignment"
+        for finding in broken_findings
+    )
+    assert any(
+        finding["details"].get("reference_field") == "path_scope_object_id"
+        and finding["details"].get("reference_reason") == "missing_reference"
+        and finding["object_kind"] == "permission_profile"
+        for finding in broken_findings
+    )
+    assert any(
+        finding["details"].get("reference_field") == "path_scope_object_id"
+        and finding["details"].get("reference_reason") == "scope_incompatible_reference"
+        and finding["object_kind"] == "policy_assignment"
+        for finding in broken_findings
+    )
+    assert any(
+        finding["details"].get("reference_field") == "workspace_set_object_id"
+        and finding["details"].get("reference_reason") == "scope_incompatible_reference"
+        and finding["object_kind"] == "policy_assignment"
+        for finding in broken_findings
+    )
 
 
 def test_audit_findings_endpoint_returns_normalized_payload():
@@ -357,3 +493,4 @@ def test_audit_findings_endpoint_returns_normalized_payload():
     finding_types = {item["finding_type"] for item in payload["items"]}
     assert "assignment_validation_blocker" in finding_types
     assert "workspace_source_readiness_warning" in finding_types
+    assert "broken_object_reference" in finding_types

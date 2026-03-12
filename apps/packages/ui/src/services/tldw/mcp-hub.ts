@@ -23,6 +23,7 @@ export type McpHubWorkspaceTrustSource = "user_local" | "shared_registry"
 export type McpHubCredentialSlotPrivilegeClass = "read" | "write" | "admin" | "custom" | string
 export type McpHubGovernanceAuditSeverity = "error" | "warning"
 export type McpHubGovernanceAuditFindingType =
+  | "broken_object_reference"
   | "assignment_validation_blocker"
   | "workspace_source_readiness_warning"
   | "shared_workspace_overlap_warning"

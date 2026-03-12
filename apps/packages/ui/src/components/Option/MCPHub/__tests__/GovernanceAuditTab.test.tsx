@@ -46,6 +46,30 @@ describe("GovernanceAuditTab", () => {
     mocks.listGovernanceAuditFindings.mockResolvedValue({
       items: [
         {
+          finding_type: "broken_object_reference",
+          severity: "error",
+          scope_type: "user",
+          scope_id: 7,
+          object_kind: "permission_profile",
+          object_id: "41",
+          object_label: "Writer Profile",
+          message: "Permission profile references a missing path scope object.",
+          details: {
+            reference_field: "path_scope_object_id",
+            reference_object_kind: "path_scope_object",
+            reference_object_id: "999",
+            reference_reason: "missing_reference"
+          },
+          navigate_to: {
+            tab: "profiles",
+            object_kind: "permission_profile",
+            object_id: "41"
+          },
+          related_object_kind: "path_scope_object",
+          related_object_id: "999",
+          related_object_label: "999"
+        },
+        {
           finding_type: "assignment_validation_blocker",
           severity: "error",
           scope_type: "user",
@@ -121,9 +145,9 @@ describe("GovernanceAuditTab", () => {
           related_object_label: "Docs Managed"
         }
       ],
-      total: 4,
+      total: 5,
       counts: {
-        error: 2,
+        error: 3,
         warning: 2
       }
     })
@@ -241,9 +265,10 @@ describe("GovernanceAuditTab", () => {
     const onOpen = vi.fn()
     render(<GovernanceAuditTab onOpen={onOpen} />)
 
+    expect(await screen.findByText("Broken references")).toBeTruthy()
     expect(await screen.findByText("Assignment blockers")).toBeTruthy()
-    expect(screen.getByText("4 findings")).toBeTruthy()
-    expect(screen.getByText("2 errors")).toBeTruthy()
+    expect(screen.getByText("5 findings")).toBeTruthy()
+    expect(screen.getByText("3 errors")).toBeTruthy()
     expect(screen.getByText("2 warnings")).toBeTruthy()
     expect(screen.getByText("Top related objects in current filtered findings")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Primary Workspace Set · workspace_set_object · 2 findings" })).toBeTruthy()
@@ -276,7 +301,7 @@ describe("GovernanceAuditTab", () => {
     ).toBeTruthy()
 
     await user.click(screen.getByRole("button", { name: "Clear related object focus" }))
-    expect(screen.getByText("4 findings")).toBeTruthy()
+    expect(screen.getByText("5 findings")).toBeTruthy()
     expect(screen.getByText("Docs Managed")).toBeTruthy()
 
     const blockerSection = screen.getByTestId("audit-group-assignment_validation_blocker")

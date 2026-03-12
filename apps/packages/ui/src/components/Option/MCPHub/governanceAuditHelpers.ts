@@ -50,6 +50,7 @@ export type GovernanceAuditInlineAction = {
 }
 
 export const FINDING_TYPE_ORDER: McpHubGovernanceAuditFindingType[] = [
+  "broken_object_reference",
   "assignment_validation_blocker",
   "workspace_source_readiness_warning",
   "shared_workspace_overlap_warning",
@@ -58,6 +59,7 @@ export const FINDING_TYPE_ORDER: McpHubGovernanceAuditFindingType[] = [
 ]
 
 export const FINDING_TYPE_LABELS: Record<McpHubGovernanceAuditFindingType, string> = {
+  broken_object_reference: "Broken references",
   assignment_validation_blocker: "Assignment blockers",
   workspace_source_readiness_warning: "Multi-root readiness",
   shared_workspace_overlap_warning: "Shared workspace overlap",
@@ -170,8 +172,28 @@ export const buildAuditRemediationSteps = (
     _arrayValues(details.missing_slot_names).length > 0
       ? _arrayValues(details.missing_slot_names)
       : _arrayValues(details.required_slot_names)
+  const referenceField = _safeString(details.reference_field)
+  const referenceReason = _safeString(details.reference_reason)
   const relatedLabel = _safeString(item.related_object_label)
   const messageToken = _messageToken(item)
+
+  if (item.finding_type === "broken_object_reference") {
+    const consumerLabel =
+      item.object_kind === "permission_profile" ? "permission profile" : "assignment"
+    const referenceLabel =
+      referenceField === "workspace_set_object_id" ? "workspace set" : "path scope"
+    return {
+      steps: [
+        `Open the affected ${consumerLabel}.`,
+        `Clear or replace the broken ${referenceLabel} reference.`,
+        "Save again and re-run the audit."
+      ],
+      note:
+        referenceReason === "scope_incompatible_reference"
+          ? "The referenced object is present, but its owner scope is no longer compatible."
+          : null
+    }
+  }
 
   if (item.finding_type === "assignment_validation_blocker") {
     if (conflictingWorkspaceIds.length > 0) {

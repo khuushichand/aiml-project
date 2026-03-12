@@ -253,6 +253,25 @@ class McpHubService:
                 )
 
     @staticmethod
+    def _scope_reference_reason(
+        *,
+        object_scope_type: str,
+        object_scope_id: int | None,
+        target_scope_type: str,
+        target_scope_id: int | None,
+    ) -> str | None:
+        object_rank = _SCOPE_RANK.get(object_scope_type, -1)
+        target_rank = _SCOPE_RANK.get(target_scope_type, -1)
+        if object_rank < 0 or target_rank < 0:
+            return "scope_incompatible_reference"
+        if object_rank > target_rank:
+            return "scope_incompatible_reference"
+        if object_rank == target_rank and object_scope_type != "global":
+            if object_scope_id != target_scope_id:
+                return "scope_incompatible_reference"
+        return None
+
+    @staticmethod
     def _shared_workspace_scope_compatible(
         *,
         target_scope_type: str,
@@ -312,6 +331,102 @@ class McpHubService:
             resource_name="workspace set object",
         )
         return row
+
+    async def inspect_path_scope_object_reference(
+        self,
+        *,
+        path_scope_object_id: int | None,
+        target_scope_type: str,
+        target_scope_id: int | None,
+    ) -> dict[str, Any] | None:
+        if path_scope_object_id is None:
+            return None
+        row = await self.repo.get_path_scope_object(int(path_scope_object_id))
+        if not row:
+            return {
+                "reference_field": "path_scope_object_id",
+                "reference_object_kind": "path_scope_object",
+                "reference_object_id": str(path_scope_object_id),
+                "reference_reason": "missing_reference",
+                "reference_scope_type": None,
+                "reference_scope_id": None,
+                "reference_label": None,
+            }
+        if not bool(row.get("is_active", True)):
+            return {
+                "reference_field": "path_scope_object_id",
+                "reference_object_kind": "path_scope_object",
+                "reference_object_id": str(row.get("id") or path_scope_object_id),
+                "reference_reason": "inactive_reference",
+                "reference_scope_type": row.get("owner_scope_type"),
+                "reference_scope_id": row.get("owner_scope_id"),
+                "reference_label": row.get("name"),
+            }
+        scope_reason = self._scope_reference_reason(
+            object_scope_type=str(row.get("owner_scope_type") or "global"),
+            object_scope_id=row.get("owner_scope_id"),
+            target_scope_type=str(target_scope_type or "global"),
+            target_scope_id=target_scope_id,
+        )
+        if scope_reason:
+            return {
+                "reference_field": "path_scope_object_id",
+                "reference_object_kind": "path_scope_object",
+                "reference_object_id": str(row.get("id") or path_scope_object_id),
+                "reference_reason": scope_reason,
+                "reference_scope_type": row.get("owner_scope_type"),
+                "reference_scope_id": row.get("owner_scope_id"),
+                "reference_label": row.get("name"),
+            }
+        return None
+
+    async def inspect_workspace_set_object_reference(
+        self,
+        *,
+        workspace_set_object_id: int | None,
+        target_scope_type: str,
+        target_scope_id: int | None,
+    ) -> dict[str, Any] | None:
+        if workspace_set_object_id is None:
+            return None
+        row = await self.repo.get_workspace_set_object(int(workspace_set_object_id))
+        if not row:
+            return {
+                "reference_field": "workspace_set_object_id",
+                "reference_object_kind": "workspace_set_object",
+                "reference_object_id": str(workspace_set_object_id),
+                "reference_reason": "missing_reference",
+                "reference_scope_type": None,
+                "reference_scope_id": None,
+                "reference_label": None,
+            }
+        if not bool(row.get("is_active", True)):
+            return {
+                "reference_field": "workspace_set_object_id",
+                "reference_object_kind": "workspace_set_object",
+                "reference_object_id": str(row.get("id") or workspace_set_object_id),
+                "reference_reason": "inactive_reference",
+                "reference_scope_type": row.get("owner_scope_type"),
+                "reference_scope_id": row.get("owner_scope_id"),
+                "reference_label": row.get("name"),
+            }
+        scope_reason = self._scope_reference_reason(
+            object_scope_type=str(row.get("owner_scope_type") or "global"),
+            object_scope_id=row.get("owner_scope_id"),
+            target_scope_type=str(target_scope_type or "global"),
+            target_scope_id=target_scope_id,
+        )
+        if scope_reason:
+            return {
+                "reference_field": "workspace_set_object_id",
+                "reference_object_kind": "workspace_set_object",
+                "reference_object_id": str(row.get("id") or workspace_set_object_id),
+                "reference_reason": scope_reason,
+                "reference_scope_type": row.get("owner_scope_type"),
+                "reference_scope_id": row.get("owner_scope_id"),
+                "reference_label": row.get("name"),
+            }
+        return None
 
     @staticmethod
     def _multi_root_validation_error(
@@ -657,22 +772,131 @@ class McpHubService:
                 )
             )
 
+        permission_profiles = await self.repo.list_permission_profiles(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+        for profile in permission_profiles:
+            broken_reference = await self.inspect_path_scope_object_reference(
+                path_scope_object_id=profile.get("path_scope_object_id"),
+                target_scope_type=str(profile.get("owner_scope_type") or "global"),
+                target_scope_id=profile.get("owner_scope_id"),
+            )
+            if not broken_reference:
+                continue
+            reference_label = str(
+                broken_reference.get("reference_label")
+                or broken_reference.get("reference_object_id")
+                or ""
+            )
+            findings.append(
+                self._make_governance_audit_finding(
+                    finding_type="broken_object_reference",
+                    severity="error",
+                    scope_type=str(profile.get("owner_scope_type") or "global"),
+                    scope_id=profile.get("owner_scope_id"),
+                    object_kind="permission_profile",
+                    object_id=str(profile.get("id") or ""),
+                    object_label=str(profile.get("name") or profile.get("id") or ""),
+                    message=f"Permission profile references a {str(broken_reference.get('reference_reason') or '').replace('_', ' ')} path scope object.",
+                    details=broken_reference,
+                    navigate_to={
+                        "tab": "profiles",
+                        "object_kind": "permission_profile",
+                        "object_id": str(profile.get("id") or ""),
+                    },
+                    related_object_kind=str(broken_reference.get("reference_object_kind") or "path_scope_object"),
+                    related_object_id=str(broken_reference.get("reference_object_id") or ""),
+                    related_object_label=reference_label or None,
+                )
+            )
+
         assignments = await self.repo.list_policy_assignments(
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,
         )
         for assignment in assignments:
+            assignment_label = str(
+                assignment.get("target_id")
+                or assignment.get("target_type")
+                or assignment.get("id")
+                or ""
+            )
+            broken_path_scope_reference = await self.inspect_path_scope_object_reference(
+                path_scope_object_id=assignment.get("path_scope_object_id"),
+                target_scope_type=str(assignment.get("owner_scope_type") or "global"),
+                target_scope_id=assignment.get("owner_scope_id"),
+            )
+            if broken_path_scope_reference:
+                reference_label = str(
+                    broken_path_scope_reference.get("reference_label")
+                    or broken_path_scope_reference.get("reference_object_id")
+                    or ""
+                )
+                findings.append(
+                    self._make_governance_audit_finding(
+                        finding_type="broken_object_reference",
+                        severity="error",
+                        scope_type=str(assignment.get("owner_scope_type") or "global"),
+                        scope_id=assignment.get("owner_scope_id"),
+                        object_kind="policy_assignment",
+                        object_id=str(assignment.get("id") or ""),
+                        object_label=assignment_label,
+                        message=f"Assignment references a {str(broken_path_scope_reference.get('reference_reason') or '').replace('_', ' ')} path scope object.",
+                        details=broken_path_scope_reference,
+                        navigate_to={
+                            "tab": "assignments",
+                            "object_kind": "policy_assignment",
+                            "object_id": str(assignment.get("id") or ""),
+                        },
+                        related_object_kind=str(
+                            broken_path_scope_reference.get("reference_object_kind") or "path_scope_object"
+                        ),
+                        related_object_id=str(broken_path_scope_reference.get("reference_object_id") or ""),
+                        related_object_label=reference_label or None,
+                    )
+                )
+
+            broken_workspace_set_reference = await self.inspect_workspace_set_object_reference(
+                workspace_set_object_id=assignment.get("workspace_set_object_id"),
+                target_scope_type=str(assignment.get("owner_scope_type") or "global"),
+                target_scope_id=assignment.get("owner_scope_id"),
+            )
+            if broken_workspace_set_reference:
+                reference_label = str(
+                    broken_workspace_set_reference.get("reference_label")
+                    or broken_workspace_set_reference.get("reference_object_id")
+                    or ""
+                )
+                findings.append(
+                    self._make_governance_audit_finding(
+                        finding_type="broken_object_reference",
+                        severity="error",
+                        scope_type=str(assignment.get("owner_scope_type") or "global"),
+                        scope_id=assignment.get("owner_scope_id"),
+                        object_kind="policy_assignment",
+                        object_id=str(assignment.get("id") or ""),
+                        object_label=assignment_label,
+                        message=f"Assignment references a {str(broken_workspace_set_reference.get('reference_reason') or '').replace('_', ' ')} workspace set object.",
+                        details=broken_workspace_set_reference,
+                        navigate_to={
+                            "tab": "assignments",
+                            "object_kind": "policy_assignment",
+                            "object_id": str(assignment.get("id") or ""),
+                        },
+                        related_object_kind=str(
+                            broken_workspace_set_reference.get("reference_object_kind") or "workspace_set_object"
+                        ),
+                        related_object_id=str(broken_workspace_set_reference.get("reference_object_id") or ""),
+                        related_object_label=reference_label or None,
+                    )
+                )
+
             blocker = await self.inspect_multi_root_assignment_readiness(
                 actor_id=actor_id,
                 assignment_row=assignment,
             )
             if blocker:
-                assignment_label = str(
-                    assignment.get("target_id")
-                    or assignment.get("target_type")
-                    or assignment.get("id")
-                    or ""
-                )
                 findings.append(
                     self._make_governance_audit_finding(
                         finding_type="assignment_validation_blocker",

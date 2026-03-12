@@ -86,6 +86,36 @@ describe("buildAuditRemediationSteps", () => {
       "Re-run the audit after updating the configuration."
     ])
   })
+
+  it("builds specific steps for broken object references", () => {
+    const result = buildAuditRemediationSteps(
+      makeFinding({
+        finding_type: "broken_object_reference",
+        object_kind: "permission_profile",
+        object_id: "41",
+        object_label: "Writer Profile",
+        message: "Permission profile references a missing path scope object.",
+        details: {
+          reference_field: "path_scope_object_id",
+          reference_object_kind: "path_scope_object",
+          reference_object_id: "999",
+          reference_reason: "missing_reference",
+          reference_label: null
+        },
+        navigate_to: {
+          tab: "profiles",
+          object_kind: "permission_profile",
+          object_id: "41"
+        }
+      })
+    )
+
+    expect(result.steps).toEqual([
+      "Open the affected permission profile.",
+      "Clear or replace the broken path scope reference.",
+      "Save again and re-run the audit."
+    ])
+  })
 })
 
 describe("buildAuditInlineAction", () => {

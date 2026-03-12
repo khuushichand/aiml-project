@@ -1,7 +1,7 @@
 # MCP Hub Broken Reference Audit Findings Implementation Plan
 
 Date: 2026-03-11
-Status: Not Started
+Status: Complete
 
 Linked design:
 - `Docs/Plans/2026-03-11-mcp-hub-broken-reference-audit-findings-design.md`
@@ -13,11 +13,11 @@ broken references on policy assignments and permission profiles.
 
 ## Task List
 
-- Task 1: Not Started
-- Task 2: Not Started
-- Task 3: Not Started
-- Task 4: Not Started
-- Task 5: Not Started
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
 
 ## Task 1: Add Red Backend And UI Tests
 
@@ -38,7 +38,7 @@ implementation.
 - `apps/packages/ui/src/components/Option/MCPHub/__tests__/GovernanceAuditTab.test.tsx`
 - `apps/packages/ui/src/components/Option/MCPHub/__tests__/governanceAuditHelpers.test.ts`
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 2: Add Non-Throwing Reference Inspection Helpers
 
@@ -56,7 +56,7 @@ workspace-set references.
 **Files**:
 - `tldw_Server_API/app/services/mcp_hub_service.py`
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 3: Emit Broken-Reference Findings In The Audit Feed
 
@@ -75,7 +75,7 @@ type/grouping/remediation logic.
 - `apps/packages/ui/src/components/Option/MCPHub/governanceAuditHelpers.ts`
 - `apps/packages/ui/src/components/Option/MCPHub/GovernanceAuditTab.tsx`
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 4: Run Focused Verification
 
@@ -89,7 +89,7 @@ type/grouping/remediation logic.
 - `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/MCP_unified/test_mcp_hub_audit_findings.py -v`
 - `bunx vitest run src/components/Option/MCPHub/__tests__/GovernanceAuditTab.test.tsx src/components/Option/MCPHub/__tests__/governanceAuditHelpers.test.ts`
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 5: Mark Docs Implemented, Run Bandit On Touched Backend Scope, And Commit
 
@@ -108,4 +108,4 @@ type/grouping/remediation logic.
 - `Docs/Plans/2026-03-11-mcp-hub-broken-reference-audit-findings-design.md`
 - `Docs/Plans/2026-03-11-mcp-hub-broken-reference-audit-findings-implementation-plan.md`
 
-**Status**: Not Started
+**Status**: Complete
