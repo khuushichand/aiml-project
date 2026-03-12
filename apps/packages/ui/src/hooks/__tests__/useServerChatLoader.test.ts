@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { Message } from "@/store/option"
 import type { ServerChatMessage } from "@/services/tldw/TldwApiClient"
 import {
+  applyAssistantPresentationToMessages,
   fetchAllServerChatMessages,
   mapServerChatMessagesToPlaygroundMessages,
+  reportDeferredAssistantPresentationError,
+  resolveServerChatAssistantIdentity,
+  shouldCommitServerChatLoadResult,
   shouldPreserveLocalMessagesForServerLoad,
   shouldSkipLoadedServerChatReload
 } from "@/hooks/chat/useServerChatLoader"
@@ -151,6 +155,76 @@ describe("shouldSkipLoadedServerChatReload", () => {
   })
 })
 
+describe("shouldCommitServerChatLoadResult", () => {
+  it("returns true when the same chat is still active and the same controller owns the load", () => {
+    const controller = new AbortController()
+
+    expect(
+      shouldCommitServerChatLoadResult({
+        requestedChatId: "chat-1",
+        activeServerChatId: "chat-1",
+        requestController: controller,
+        activeController: controller
+      })
+    ).toBe(true)
+  })
+
+  it("returns false when a newer chat selection has replaced the active chat", () => {
+    const controller = new AbortController()
+
+    expect(
+      shouldCommitServerChatLoadResult({
+        requestedChatId: "chat-a",
+        activeServerChatId: "chat-b",
+        requestController: controller,
+        activeController: controller
+      })
+    ).toBe(false)
+  })
+
+  it("returns false when the active controller no longer matches the request controller", () => {
+    expect(
+      shouldCommitServerChatLoadResult({
+        requestedChatId: "chat-1",
+        activeServerChatId: "chat-1",
+        requestController: new AbortController(),
+        activeController: new AbortController()
+      })
+    ).toBe(false)
+  })
+})
+
+describe("resolveServerChatAssistantIdentity", () => {
+  it("preserves persona-backed assistant identity from chat metadata", () => {
+    expect(
+      resolveServerChatAssistantIdentity({
+        assistant_kind: "persona",
+        assistant_id: "garden-helper",
+        persona_memory_mode: "read_only",
+        character_id: null
+      } as any)
+    ).toEqual({
+      assistantKind: "persona",
+      assistantId: "garden-helper",
+      characterId: null,
+      personaMemoryMode: "read_only"
+    })
+  })
+
+  it("backfills character-backed assistant identity from legacy character_id", () => {
+    expect(
+      resolveServerChatAssistantIdentity({
+        character_id: 42
+      } as any)
+    ).toEqual({
+      assistantKind: "character",
+      assistantId: "42",
+      characterId: 42,
+      personaMemoryMode: null
+    })
+  })
+})
+
 const createServerMessage = (
   overrides: Partial<ServerChatMessage> = {}
 ): ServerChatMessage => ({
@@ -277,5 +351,77 @@ describe("mapServerChatMessagesToPlaygroundMessages", () => {
       "flux-test-backend"
     )
     expect(mapped[0].generationInfo?.image_generation?.sync?.status).toBe("synced")
+  })
+})
+
+describe("applyAssistantPresentationToMessages", () => {
+  it("updates placeholder assistant labels after deferred enrichment", () => {
+    const result = applyAssistantPresentationToMessages({
+      messages: [
+        createMessage({
+          isBot: true,
+          role: "assistant",
+          name: "Assistant",
+          modelName: "Assistant",
+          modelImage: undefined
+        }),
+        createMessage({
+          isBot: true,
+          role: "assistant",
+          name: "Narrator",
+          modelName: "Narrator",
+          modelImage: "existing-image"
+        }),
+        createMessage({
+          isBot: false,
+          role: "user",
+          name: "You"
+        })
+      ],
+      assistantName: "Archivist",
+      assistantAvatarUrl: "avatar.png"
+    })
+
+    expect(result[0]).toMatchObject({
+      name: "Archivist",
+      modelName: "Archivist",
+      modelImage: "avatar.png"
+    })
+    expect(result[1]).toMatchObject({
+      name: "Narrator",
+      modelName: "Narrator",
+      modelImage: "existing-image"
+    })
+    expect(result[2]).toMatchObject({
+      name: "You"
+    })
+  })
+})
+
+describe("reportDeferredAssistantPresentationError", () => {
+  it("logs deferred assistant hydration failures with contextual metadata", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const failure = new Error("character lookup failed")
+
+    reportDeferredAssistantPresentationError({
+      stage: "character-profile",
+      assistantKind: "character",
+      assistantId: "42",
+      characterId: 42,
+      error: failure
+    })
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[useServerChatLoader] Deferred assistant presentation failed",
+      expect.objectContaining({
+        stage: "character-profile",
+        assistantKind: "character",
+        assistantId: "42",
+        characterId: 42,
+        error: failure
+      })
+    )
+
+    warnSpy.mockRestore()
   })
 })

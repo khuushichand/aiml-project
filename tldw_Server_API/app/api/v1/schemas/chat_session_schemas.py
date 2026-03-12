@@ -9,6 +9,8 @@ from typing import Any, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable")
+ALLOWED_ASSISTANT_KINDS = ("character", "persona")
+ALLOWED_PERSONA_MEMORY_MODES = ("read_only", "read_write")
 
 
 # ========================================================================
@@ -29,7 +31,20 @@ def _validate_conversation_state(value: Optional[str]) -> Optional[str]:
 
 class ChatSessionCreate(BaseModel):
     """Schema for creating a new chat session."""
-    character_id: int = Field(..., description="ID of the character for this chat", gt=0)
+    character_id: int | None = Field(None, description="ID of the character for this chat", gt=0)
+    assistant_kind: Literal["character", "persona"] | None = Field(
+        None,
+        description="Normalized assistant identity kind for this chat",
+    )
+    assistant_id: str | None = Field(
+        None,
+        description="Normalized assistant identity ID for this chat",
+        min_length=1,
+    )
+    persona_memory_mode: Literal["read_only", "read_write"] | None = Field(
+        None,
+        description="Persona durable memory behavior for this chat",
+    )
     title: Optional[str] = Field(None, description="Optional title for the chat session")
     parent_conversation_id: Optional[str] = Field(None, description="Parent conversation ID for forked chats")
     forked_from_message_id: Optional[str] = Field(None, description="Message ID where this fork begins")
@@ -50,6 +65,45 @@ class ChatSessionCreate(BaseModel):
     @classmethod
     def _validate_state(cls, value: Optional[str]) -> Optional[str]:
         return _validate_conversation_state(value)
+
+    @model_validator(mode="after")
+    def _normalize_assistant_identity(self) -> "ChatSessionCreate":
+        if self.assistant_kind is None:
+            self.assistant_kind = "character" if self.character_id is not None else None
+        if self.assistant_kind is None:
+            raise ValueError("Provide either character_id or assistant_kind + assistant_id.")
+
+        if self.assistant_kind not in ALLOWED_ASSISTANT_KINDS:
+            raise ValueError(
+                f"Invalid assistant_kind '{self.assistant_kind}'. Allowed: {', '.join(ALLOWED_ASSISTANT_KINDS)}"
+            )
+
+        if self.assistant_kind == "character":
+            if self.character_id is None:
+                if not self.assistant_id:
+                    raise ValueError("Character chats require character_id or a numeric assistant_id.")
+                try:
+                    self.character_id = int(self.assistant_id)
+                except ValueError as exc:
+                    raise ValueError("Character assistant_id must be numeric.") from exc
+            self.assistant_id = str(self.character_id)
+            if self.persona_memory_mode is not None:
+                raise ValueError("persona_memory_mode is only valid for persona chats.")
+            return self
+
+        if not self.assistant_id:
+            raise ValueError("Persona chats require assistant_id.")
+        self.character_id = None
+
+        if (
+            self.persona_memory_mode is not None
+            and self.persona_memory_mode not in ALLOWED_PERSONA_MEMORY_MODES
+        ):
+            raise ValueError(
+                f"Invalid persona_memory_mode '{self.persona_memory_mode}'. "
+                f"Allowed: {', '.join(ALLOWED_PERSONA_MEMORY_MODES)}"
+            )
+        return self
 
 
 class ChatSessionUpdate(BaseModel):
@@ -78,7 +132,16 @@ class ChatSessionUpdate(BaseModel):
 class ChatSessionResponse(BaseModel):
     """Schema for chat session responses."""
     id: str = Field(..., description="UUID of the chat session")
-    character_id: int = Field(..., description="ID of the associated character")
+    character_id: int | None = Field(None, description="ID of the associated character")
+    assistant_kind: Literal["character", "persona"] | None = Field(
+        None,
+        description="Normalized assistant identity kind for the chat",
+    )
+    assistant_id: str | None = Field(None, description="Normalized assistant identity ID for the chat")
+    persona_memory_mode: Literal["read_only", "read_write"] | None = Field(
+        None,
+        description="Persona durable memory behavior for this chat",
+    )
     title: Optional[str] = Field(None, description="Chat session title")
     rating: Optional[int] = Field(None, description="User rating of the conversation")
     state: str = Field("in-progress", description="Lifecycle state of the conversation")

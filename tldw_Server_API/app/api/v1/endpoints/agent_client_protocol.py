@@ -16,10 +16,17 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.api.v1.endpoints._in_memory_limits import SlidingWindowLimiter
 from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentInfo,
     ACPAgentListResponse,
+    ACPAgentHealthEntry,
+    ACPAgentHealthResponse,
+    ACPAgentRegisterRequest,
+    ACPAgentRegistrationResponse,
+    ACPAgentUpdateRequest,
+    ACPHealthResponse,
     ACPSessionCancelRequest,
     ACPSessionCloseRequest,
     ACPSessionDetailResponse,
@@ -166,6 +173,20 @@ def _acp_record_audit_event(
     }
     with _ACP_AUDIT_LOCK:
         _ACP_AUDIT_EVENTS.append(event)
+    # Persist to SQLite audit DB (best-effort)
+    try:
+        from tldw_Server_API.app.core.DB_Management.ACP_Audit_DB import get_acp_audit_db
+        audit_db = get_acp_audit_db()
+        audit_db.record_event(
+            action=action,
+            user_id=user_id,
+            session_id=session_id,
+            metadata=metadata,
+        )
+        # Flush when buffer reaches threshold to balance durability vs performance
+        audit_db.flush_if_needed(threshold=10)
+    except Exception as exc:
+        logger.warning("ACP audit persistence failed: {}", exc)
     logger.info(
         "ACP audit event action={} user_id={} session_id={}",
         event["action"],
@@ -458,6 +479,7 @@ async def _authenticate_ws(
     websocket: WebSocket,
     token: str | None = None,
     api_key: str | None = None,
+    required_scope: str = "read",
 ) -> int | None:
     """Authenticate a WebSocket connection. Returns user_id or None."""
     # Try JWT token first
@@ -496,7 +518,7 @@ async def _authenticate_ws(
                 api_mgr = await get_api_key_manager()
                 info = await api_mgr.validate_api_key(
                     api_key=api_key,
-                    required_scope="read",
+                    required_scope=required_scope,
                     ip_address=client_ip,
                 )
                 user_id = info.get("user_id") if isinstance(info, dict) else None
@@ -509,9 +531,9 @@ async def _authenticate_ws(
     auth_header = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
     if auth_header:
         if auth_header.lower().startswith("bearer "):
-            return await _authenticate_ws(websocket, token=auth_header[7:].strip())
+            return await _authenticate_ws(websocket, token=auth_header[7:].strip(), required_scope=required_scope)
         elif auth_header.lower().startswith("x-api-key "):
-            return await _authenticate_ws(websocket, api_key=auth_header[10:].strip())
+            return await _authenticate_ws(websocket, api_key=auth_header[10:].strip(), required_scope=required_scope)
 
     # Try Sec-WebSocket-Protocol: bearer,<token> or x-api-key,<key>
     proto_header = websocket.headers.get("sec-websocket-protocol") or websocket.headers.get("Sec-WebSocket-Protocol")
@@ -521,11 +543,115 @@ async def _authenticate_ws(
             scheme = parts[idx].lower()
             value = parts[idx + 1]
             if scheme == "bearer" and value:
-                return await _authenticate_ws(websocket, token=value)
+                return await _authenticate_ws(websocket, token=value, required_scope=required_scope)
             if scheme in {"x-api-key", "api-key"} and value:
-                return await _authenticate_ws(websocket, api_key=value)
+                return await _authenticate_ws(websocket, api_key=value, required_scope=required_scope)
 
     return None
+
+
+async def _record_acp_prompt(
+    *,
+    session_id: str,
+    prompt: list[dict[str, Any]],
+    result: dict[str, Any],
+) -> ACPTokenUsage | None:
+    try:
+        store = await get_acp_session_store()
+        turn_usage_data = await store.record_prompt(session_id, prompt, result)
+        if turn_usage_data:
+            return ACPTokenUsage(
+                prompt_tokens=turn_usage_data.prompt_tokens,
+                completion_tokens=turn_usage_data.completion_tokens,
+                total_tokens=turn_usage_data.total_tokens,
+            )
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Failed to record prompt for session {}", session_id)
+    return None
+
+
+async def _prepare_acp_runtime_prompt(
+    *,
+    session_id: str,
+    prompt: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    try:
+        store = await get_acp_session_store()
+        builder = getattr(store, "build_bootstrap_prompt", None)
+        if callable(builder):
+            return await builder(session_id, prompt)
+    except ValueError as exc:
+        raise ACPResponseError(str(exc)) from exc
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Failed to prepare ACP bootstrap prompt for session {}", session_id)
+    return prompt, False
+
+
+async def _clear_acp_bootstrap_state(session_id: str) -> None:
+    try:
+        store = await get_acp_session_store()
+        clearer = getattr(store, "clear_bootstrap", None)
+        if callable(clearer):
+            await clearer(session_id)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Failed to clear ACP bootstrap state for session {}", session_id)
+
+
+async def _execute_acp_prompt(
+    *,
+    client: Any,
+    session_id: str,
+    prompt: list[dict[str, Any]],
+    user_id: int,
+    require_access_check: bool = True,
+) -> tuple[dict[str, Any], ACPTokenUsage | None]:
+    if require_access_check:
+        await _require_session_access(client, session_id=session_id, user_id=int(user_id))
+
+    runtime_prompt, used_bootstrap = await _prepare_acp_runtime_prompt(
+        session_id=session_id,
+        prompt=prompt,
+    )
+
+    try:
+        await _check_prompt_governance(
+            client,
+            session_id=session_id,
+            prompt=prompt,
+            user_id=int(user_id),
+        )
+        result = await client.prompt(session_id, runtime_prompt)
+    except ACPGovernanceDeniedError:
+        _acp_record_audit_event(
+            action="prompt_blocked",
+            user_id=int(user_id),
+            session_id=session_id,
+            metadata={"reason_code": "governance_blocked"},
+        )
+        raise
+    except ACPResponseError:
+        _acp_record_audit_event(
+            action="prompt_failed",
+            user_id=int(user_id),
+            session_id=session_id,
+            metadata={"reason_code": "failed_runtime"},
+        )
+        raise
+
+    turn_usage = await _record_acp_prompt(
+        session_id=session_id,
+        prompt=prompt,
+        result=result,
+    )
+    if used_bootstrap:
+        await _clear_acp_bootstrap_state(session_id)
+    _acp_record_audit_event(
+        action="prompt",
+        user_id=int(user_id),
+        session_id=session_id,
+        metadata={"prompt_items": len(prompt)},
+    )
+    return result, turn_usage
 
 
 async def _require_session_access(
@@ -581,7 +707,7 @@ async def acp_session_stream(
     - Or via Authorization header: Bearer <token>
     """
     # Authenticate
-    user_id = await _authenticate_ws(websocket, token=token, api_key=api_key)
+    user_id = await _authenticate_ws(websocket, token=token, api_key=api_key, required_scope="write")
     if user_id is None:
         with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=4401)
@@ -692,7 +818,7 @@ async def acp_session_ssh(
     api_key: str | None = Query(None),
 ) -> None:
     """WebSocket SSH proxy for an ACP sandbox session."""
-    user_id = await _authenticate_ws(websocket, token=token, api_key=api_key)
+    user_id = await _authenticate_ws(websocket, token=token, api_key=api_key, required_scope="write")
     if user_id is None:
         with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=4401)
@@ -955,34 +1081,25 @@ async def _handle_client_message(
             })
             return
 
-        governance_decision = None
-        if user_id is not None:
-            governance_decision = await _check_prompt_governance(
-                client,
+        try:
+            result, turn_usage = await _execute_acp_prompt(
+                client=client,
                 session_id=session_id,
                 prompt=prompt,
                 user_id=int(user_id),
+                require_access_check=False,
             )
-            if _governance_action(governance_decision) == "deny":
-                await stream.send_json({
-                    "type": "error",
-                    "code": "governance_blocked",
-                    "message": "Prompt blocked by governance policy",
-                    "session_id": session_id,
-                    "data": {"governance": governance_decision},
-                })
-                return
-
-        try:
-            result = await client.prompt(session_id, prompt)
-            await stream.send_json({
+            response: dict[str, Any] = {
                 "type": "prompt_complete",
                 "session_id": session_id,
                 "stop_reason": result.get("stopReason"),
                 "raw_result": result,
-            })
+            }
+            if turn_usage is not None:
+                response["usage"] = turn_usage.model_dump()
+            await stream.send_json(response)
         except ACPGovernanceDeniedError as e:
-            payload = dict(getattr(e, "governance", {}) or governance_decision or {})
+            payload = dict(getattr(e, "governance", {}) or {})
             await stream.send_json({
                 "type": "error",
                 "code": "governance_blocked",
@@ -1005,6 +1122,228 @@ async def _handle_client_message(
             "message": f"Unknown message type: {msg_type}",
             "session_id": session_id,
         })
+
+
+# ---------------------------------------------------------------------------
+# Health check & setup-guide helpers
+# ---------------------------------------------------------------------------
+
+
+
+def _check_runner_binary() -> dict[str, Any]:
+    """Check if the ACP runner binary is available."""
+    import shutil
+
+    from tldw_Server_API.app.core.Agent_Client_Protocol.config import load_acp_runner_config
+
+    try:
+        cfg = load_acp_runner_config()
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        return {"status": "error", "detail": f"Config load failed: {exc}"}
+
+    # Check binary_path shortcut first
+    if cfg.binary_path:
+        path = os.path.expanduser(cfg.binary_path)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return {"status": "ok", "path": path, "source": "binary_path"}
+        return {
+            "status": "missing",
+            "detail": f"Binary not found at configured path: {cfg.binary_path}",
+            "configured_path": cfg.binary_path,
+        }
+
+    # Check command-based config
+    if not cfg.command:
+        return {
+            "status": "missing",
+            "detail": "No runner_command or runner_binary_path configured in [ACP] section",
+        }
+
+    # If command is an absolute/relative path, check it directly
+    if os.sep in cfg.command or cfg.command.startswith("."):
+        resolved = cfg.command
+        if cfg.cwd:
+            resolved = os.path.join(cfg.cwd, cfg.command)
+        if os.path.isfile(resolved) and os.access(resolved, os.X_OK):
+            return {"status": "ok", "path": resolved, "source": "runner_command"}
+        return {
+            "status": "missing",
+            "detail": f"Runner command not found: {cfg.command}",
+            "configured_command": cfg.command,
+            "configured_cwd": cfg.cwd,
+        }
+
+    # Check if command is on PATH (e.g., "go", "node", or a binary name)
+    which_result = shutil.which(cfg.command)
+    if which_result:
+        return {"status": "ok", "path": which_result, "source": "PATH"}
+
+    return {
+        "status": "missing",
+        "detail": f"Runner command '{cfg.command}' not found on PATH",
+        "configured_command": cfg.command,
+    }
+
+
+def _check_agent_availability(agent_type: str) -> dict[str, Any]:
+    """Check if a downstream agent binary and API keys are available."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
+    entry = registry.get_entry(agent_type)
+    if entry is None:
+        return {
+            "agent_type": agent_type,
+            "status": "unknown",
+            "binary_found": False,
+            "api_key_set": False,
+        }
+    result = entry.check_availability()
+    result["agent_type"] = agent_type
+    return result
+
+
+@router.get(
+    "/health",
+    response_model=ACPHealthResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.health"))],
+)
+async def acp_health(
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """
+    ACP dependency chain health check.
+
+    Validates the full stack: runner binary → downstream agent availability → API keys.
+    Returns structured diagnostics for debugging ACP setup issues.
+    """
+    result: dict[str, Any] = {"timestamp": _now_iso()}
+
+    # 1. Check runner binary
+    runner_status = _check_runner_binary()
+    result["runner"] = runner_status
+
+    # 2. Check downstream agents
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
+    agents_status: list[dict[str, Any]] = []
+    for entry in registry.entries:
+        avail = entry.check_availability()
+        agents_status.append({
+            "agent_type": entry.type,
+            "name": entry.name,
+            "status": avail.get("status", "unknown"),
+            "binary_found": avail.get("binary_found", False),
+            "api_key_set": avail.get("api_key_set", False),
+            "is_configured": avail.get("is_configured", False),
+        })
+    result["agents"] = agents_status
+
+    # 3. Try to probe the runner (if binary is available)
+    runner_probe: dict[str, Any] = {"status": "skipped"}
+    if runner_status.get("status") == "ok":
+        try:
+            client = await get_runner_client()
+            if hasattr(client, "is_running") and client.is_running:
+                runner_probe = {"status": "ok", "detail": "Runner process is alive"}
+                caps = getattr(client, "agent_capabilities", None)
+                if caps:
+                    runner_probe["agent_capabilities"] = caps
+            else:
+                runner_probe = {"status": "not_running", "detail": "Runner process is not started"}
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+            runner_probe = {"status": "error", "detail": str(exc)}
+    result["runner_probe"] = runner_probe
+
+    # 4. Overall status
+    any_agent_available = any(a.get("status") == "available" for a in agents_status)
+    runner_ok = runner_status.get("status") == "ok"
+
+    if runner_ok and any_agent_available:
+        result["overall"] = "ok"
+    elif runner_ok and not any_agent_available:
+        result["overall"] = "degraded"
+        result["message"] = "Runner binary found but no agents are fully configured"
+    elif not runner_ok:
+        result["overall"] = "unavailable"
+        result["message"] = "ACP runner binary not found or not configured"
+    else:
+        result["overall"] = "degraded"
+
+    return result
+
+
+@router.get(
+    "/setup-guide",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.setup_guide"))],
+)
+async def acp_setup_guide(
+    agent_type: str | None = Query(default=None, description="Filter to a specific agent type"),
+    user: User = Depends(get_request_user),
+) -> dict[str, Any]:
+    """
+    Return agent-specific setup instructions.
+
+    Checks current system state and returns actionable steps to get ACP working.
+    """
+    result: dict[str, Any] = {"timestamp": _now_iso(), "guides": []}
+
+    # Runner setup
+    runner_status = _check_runner_binary()
+    runner_guide: dict[str, Any] = {
+        "component": "runner",
+        "status": runner_status.get("status", "unknown"),
+        "steps": [],
+    }
+    if runner_status.get("status") != "ok":
+        runner_guide["steps"] = [
+            "Download the ACP runner binary: run Helper_Scripts/setup_acp.sh",
+            "Or build from source: cd ../tldw-agent && go build -o bin/tldw-agent-acp ./cmd/tldw-agent-acp",
+            "Set runner_binary_path in config.txt [ACP] section, or set ACP_RUNNER_BINARY_PATH env var",
+        ]
+    else:
+        runner_guide["steps"] = ["Runner binary is available - no action needed"]
+    result["runner"] = runner_guide
+
+    # Agent guides from registry
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
+    guides: list[dict[str, Any]] = []
+
+    # Filter to a specific agent if requested and it exists in the registry
+    matched_entry = registry.get_entry(agent_type) if agent_type else None
+    target_entries = [matched_entry] if matched_entry else registry.entries
+
+    for reg_entry in target_entries:
+        avail = reg_entry.check_availability()
+        guide_item: dict[str, Any] = {
+            "agent_type": reg_entry.type,
+            "name": reg_entry.name,
+            "status": avail.get("status", "unknown"),
+            "steps": [],
+        }
+
+        if not avail.get("binary_found", True):
+            steps = list(reg_entry.install_instructions) if reg_entry.install_instructions else []
+            if not steps:
+                steps = [f"Install {reg_entry.name} and ensure the '{reg_entry.command}' command is available"]
+            guide_item["steps"].extend(steps)
+
+        if not avail.get("api_key_set", True) and reg_entry.requires_api_key:
+            guide_item["steps"].append(f"Set {reg_entry.requires_api_key} environment variable or add to .env file")
+
+        if not guide_item["steps"]:
+            guide_item["steps"] = [f"{reg_entry.name} is fully configured"]
+
+        if reg_entry.docs_url:
+            guide_item["docs_url"] = reg_entry.docs_url
+
+        guides.append(guide_item)
+
+    result["guides"] = guides
+    return result
 
 
 def _get_static_agents() -> tuple[list[ACPAgentInfo], str]:
@@ -1058,8 +1397,38 @@ def _get_static_agents() -> tuple[list[ACPAgentInfo], str]:
     return agents, "claude_code"
 
 
+def _get_registry_agents() -> tuple[list[ACPAgentInfo], str] | None:
+    """Try to get agents from YAML registry. Returns None if registry is unavailable."""
+    try:
+        from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+        registry = get_agent_registry()
+        available = registry.get_available_agents()
+        if not available:
+            return None
+        agents: list[ACPAgentInfo] = []
+        for item in available:
+            agents.append(
+                ACPAgentInfo(
+                    type=str(item["type"]),
+                    name=str(item["name"]),
+                    description=str(item.get("description", "")),
+                    is_configured=bool(item.get("is_configured", False)),
+                    requires_api_key=item.get("missing_api_key"),
+                )
+            )
+        return agents, registry.default_type
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
 async def _get_available_agents() -> tuple[list[ACPAgentInfo], str]:
-    """Get list of available agents and their configuration status."""
+    """Get list of available agents: registry → runner → static fallback."""
+    # 1. Try YAML registry first
+    registry_result = _get_registry_agents()
+    if registry_result:
+        return registry_result
+
+    # 2. Try runner's agent/list RPC
     try:
         client = await get_runner_client()
         raw = await client.list_agents()
@@ -1100,7 +1469,11 @@ async def _get_available_agents() -> tuple[list[ACPAgentInfo], str]:
     return agents, default_value
 
 
-@router.get("/agents", response_model=ACPAgentListResponse)
+@router.get(
+    "/agents",
+    response_model=ACPAgentListResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.list"))],
+)
 async def acp_list_agents(
     user: User = Depends(get_request_user),
 ) -> ACPAgentListResponse:
@@ -1113,6 +1486,124 @@ async def acp_list_agents(
     return ACPAgentListResponse(
         agents=agents,
         default_agent=default_agent,
+    )
+
+
+@router.post(
+    "/agents/register",
+    response_model=ACPAgentRegistrationResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.register"))],
+)
+async def acp_register_agent(
+    request: ACPAgentRegisterRequest,
+    user: User = Depends(get_request_user),
+) -> ACPAgentRegistrationResponse:
+    """Register a new agent type dynamically (admin only)."""
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin role required for agent registration")
+
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
+    entry = registry.register_agent(
+        type=request.agent_type,
+        name=request.name,
+        command=request.command,
+        description=request.description,
+        args=request.args,
+        env=request.env,
+        requires_api_key=request.requires_api_key,
+        install_instructions=request.install_instructions,
+        docs_url=request.docs_url,
+    )
+    return ACPAgentRegistrationResponse(status="registered", agent_type=entry.type, name=entry.name)
+
+
+@router.delete(
+    "/agents/{agent_type}",
+    response_model=ACPAgentRegistrationResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.manage"))],
+)
+async def acp_deregister_agent(
+    agent_type: str,
+    user: User = Depends(get_request_user),
+) -> ACPAgentRegistrationResponse:
+    """Remove a dynamically registered agent (admin only)."""
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin role required for agent management")
+
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
+    removed = registry.deregister_agent(agent_type)
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_type}' not found or is a YAML-defined agent",
+        )
+    return ACPAgentRegistrationResponse(status="deregistered", agent_type=agent_type)
+
+
+@router.put(
+    "/agents/{agent_type}",
+    response_model=ACPAgentRegistrationResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.manage"))],
+)
+async def acp_update_agent(
+    agent_type: str,
+    request: ACPAgentUpdateRequest,
+    user: User = Depends(get_request_user),
+) -> ACPAgentRegistrationResponse:
+    """Update a dynamically registered agent (admin only)."""
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin role required for agent management")
+
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+
+    registry = get_agent_registry()
+    updates = request.model_dump(exclude_unset=True, exclude_none=True)
+    entry = registry.update_agent(agent_type, **updates)
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_type}' not found in dynamic registry",
+        )
+    return ACPAgentRegistrationResponse(status="updated", agent_type=entry.type, name=entry.name)
+
+
+@router.get(
+    "/agents/health",
+    response_model=ACPAgentHealthResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.agents.health"))],
+)
+async def acp_agents_health(
+    user: User = Depends(get_request_user),
+) -> ACPAgentHealthResponse:
+    """Get health status for all monitored agents."""
+    import asyncio as _asyncio
+    from tldw_Server_API.app.core.Agent_Client_Protocol.health_monitor import get_health_monitor
+
+    monitor = get_health_monitor()
+    statuses = monitor.get_all_statuses()
+
+    # If no cached statuses, trigger a check on-demand
+    if not statuses and monitor._registry is not None:
+        loop = _asyncio.get_running_loop()
+        await loop.run_in_executor(None, monitor.check_all)
+        statuses = monitor.get_all_statuses()
+
+    return ACPAgentHealthResponse(
+        agents=[
+            ACPAgentHealthEntry(
+                agent_type=s.agent_type,
+                health=s.health,
+                consecutive_failures=s.consecutive_failures,
+                last_check=s.last_check,
+                last_healthy=s.last_healthy,
+                details=s.details,
+            )
+            for s in statuses
+        ]
     )
 
 
@@ -1130,7 +1621,11 @@ def _generate_session_name(cwd: str) -> str:
     return f"{project_name} ({time_str})"
 
 
-@router.post("/sessions/new", response_model=ACPSessionNewResponse)
+@router.post(
+    "/sessions/new",
+    response_model=ACPSessionNewResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.manage"))],
+)
 async def acp_session_new(
     payload: ACPSessionNewRequest,
     user: User = Depends(get_request_user),
@@ -1140,6 +1635,20 @@ async def acp_session_new(
 
     Optionally specify a session name, agent type, tags, and MCP server configs.
     """
+    # Quota check: max concurrent sessions per user
+    try:
+        store = await get_acp_session_store()
+        quota_error = await store.check_session_quota(int(user.id))
+        if quota_error:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=quota_error,
+            )
+    except HTTPException:
+        raise
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Session quota check failed (non-blocking): {}", exc)
+
     # Generate session name if not provided
     session_name = payload.name or _generate_session_name(payload.cwd)
 
@@ -1213,6 +1722,7 @@ async def acp_session_new(
             name=session_name,
             cwd=payload.cwd,
             tags=payload.tags,
+            mcp_servers=mcp_servers_dicts,
             persona_id=resolved_persona_id,
             workspace_id=resolved_workspace_id,
             workspace_group_id=resolved_workspace_group_id,
@@ -1247,41 +1757,39 @@ async def acp_session_new(
     )
 
 
-@router.post("/sessions/prompt", response_model=ACPSessionPromptResponse)
+@router.post(
+    "/sessions/prompt",
+    response_model=ACPSessionPromptResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.manage"))],
+)
 async def acp_session_prompt(
     payload: ACPSessionPromptRequest,
     user: User = Depends(get_request_user),
 ) -> ACPSessionPromptResponse:
     _acp_enforce_control_rate_limit(user_id=int(user.id), action="prompt")
+    # Token quota check
+    try:
+        store = await get_acp_session_store()
+        token_error = await store.check_token_quota(payload.session_id)
+        if token_error:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=token_error,
+            )
+    except HTTPException:
+        raise
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Token quota check failed (non-blocking): {}", exc)
     try:
         client = await get_runner_client()
-        await _require_session_access(client, session_id=payload.session_id, user_id=int(user.id))
-        governance_decision = await _check_prompt_governance(
-            client,
+        result, turn_usage = await _execute_acp_prompt(
+            client=client,
             session_id=payload.session_id,
             prompt=payload.prompt,
             user_id=int(user.id),
         )
-        if _governance_action(governance_decision) == "deny":
-            _acp_record_audit_event(
-                action="prompt_blocked",
-                user_id=int(user.id),
-                session_id=payload.session_id,
-                metadata={"reason_code": "governance_blocked"},
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=_governance_blocked_detail(governance_decision),
-            )
-        result = await client.prompt(payload.session_id, payload.prompt)
     except ACPGovernanceDeniedError as exc:
         logger.warning("ACP session/prompt blocked by governance for user {}: {}", user.id, exc)
-        _acp_record_audit_event(
-            action="prompt_blocked",
-            user_id=int(user.id),
-            session_id=payload.session_id,
-            metadata={"reason_code": "governance_blocked"},
-        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_governance_blocked_detail(
@@ -1293,34 +1801,7 @@ async def acp_session_prompt(
         raise
     except ACPResponseError as exc:
         logger.error("ACP session/prompt failed for user {}: {}", user.id, exc)
-        _acp_record_audit_event(
-            action="prompt_failed",
-            user_id=int(user.id),
-            session_id=payload.session_id,
-            metadata={"reason_code": "failed_runtime", "message": str(exc)},
-        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-    # Record prompt exchange and accumulate token usage
-    turn_usage = None
-    try:
-        store = await get_acp_session_store()
-        turn_usage_data = await store.record_prompt(payload.session_id, payload.prompt, result)
-        if turn_usage_data:
-            turn_usage = ACPTokenUsage(
-                prompt_tokens=turn_usage_data.prompt_tokens,
-                completion_tokens=turn_usage_data.completion_tokens,
-                total_tokens=turn_usage_data.total_tokens,
-            )
-    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-        logger.warning("Failed to record prompt for session {}", payload.session_id)
-
-    _acp_record_audit_event(
-        action="prompt",
-        user_id=int(user.id),
-        session_id=payload.session_id,
-        metadata={"prompt_items": len(payload.prompt)},
-    )
     return ACPSessionPromptResponse(
         stop_reason=result.get("stopReason"),
         raw_result=result,
@@ -1328,7 +1809,10 @@ async def acp_session_prompt(
     )
 
 
-@router.post("/sessions/cancel")
+@router.post(
+    "/sessions/cancel",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.manage"))],
+)
 async def acp_session_cancel(
     payload: ACPSessionCancelRequest,
     user: User = Depends(get_request_user),
@@ -1355,7 +1839,10 @@ async def acp_session_cancel(
     return {"status": "ok"}
 
 
-@router.post("/sessions/close")
+@router.post(
+    "/sessions/close",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.manage"))],
+)
 async def acp_session_close(
     payload: ACPSessionCloseRequest,
     user: User = Depends(get_request_user),
@@ -1412,7 +1899,10 @@ async def acp_session_close(
     return {"status": "ok"}
 
 
-@router.post("/sessions/{session_id}/teardown")
+@router.post(
+    "/sessions/{session_id}/teardown",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.manage"))],
+)
 async def acp_session_teardown(
     session_id: str,
     user: User = Depends(get_request_user),
@@ -1458,7 +1948,10 @@ async def acp_session_teardown(
     return {"status": "ok", "reconciliation": record}
 
 
-@router.get("/sessions/{session_id}/reconciliation")
+@router.get(
+    "/sessions/{session_id}/reconciliation",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
 async def acp_session_reconciliation(
     session_id: str,
     user: User = Depends(get_request_user),
@@ -1474,7 +1967,10 @@ async def acp_session_reconciliation(
     return {"session_id": session_id, "reconciliation": _acp_get_reconciliation(session_id)}
 
 
-@router.post("/sessions/{session_id}/reconcile")
+@router.post(
+    "/sessions/{session_id}/reconcile",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.manage"))],
+)
 async def acp_session_reconcile(
     session_id: str,
     user: User = Depends(get_request_user),
@@ -1523,7 +2019,11 @@ async def acp_session_reconcile(
     return {"status": "ok", "reconciliation": updated}
 
 
-@router.get("/sessions/{session_id}/updates", response_model=ACPSessionUpdatesResponse)
+@router.get(
+    "/sessions/{session_id}/updates",
+    response_model=ACPSessionUpdatesResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
 async def acp_session_updates(
     session_id: str,
     limit: int | None = Query(default=100, ge=1, le=1000),
@@ -1547,7 +2047,11 @@ async def acp_session_updates(
 # -----------------------------------------------------------------------------
 
 
-@router.get("/sessions", response_model=ACPSessionListResponse)
+@router.get(
+    "/sessions",
+    response_model=ACPSessionListResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
 async def acp_list_sessions(
     status_filter: str | None = Query(default=None, alias="status"),
     agent_type: str | None = Query(default=None),
@@ -1575,7 +2079,11 @@ async def acp_list_sessions(
     return ACPSessionListResponse(sessions=sessions, total=total)
 
 
-@router.get("/sessions/{session_id}/detail", response_model=ACPSessionDetailResponse)
+@router.get(
+    "/sessions/{session_id}/detail",
+    response_model=ACPSessionDetailResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
 async def acp_session_detail(
     session_id: str,
     user: User = Depends(get_request_user),
@@ -1588,12 +2096,18 @@ async def acp_session_detail(
     rec = await store.get_session(session_id)
     if not rec:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+    fork_lineage = await store.get_fork_lineage(session_id)
     return ACPSessionDetailResponse(**rec.to_detail_dict(
         has_websocket=client.has_websocket_connections(session_id),
+        fork_lineage=fork_lineage,
     ))
 
 
-@router.get("/sessions/{session_id}/usage", response_model=ACPSessionUsageResponse)
+@router.get(
+    "/sessions/{session_id}/usage",
+    response_model=ACPSessionUsageResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
 async def acp_session_usage(
     session_id: str,
     user: User = Depends(get_request_user),
@@ -1627,7 +2141,10 @@ async def acp_session_usage(
 # -----------------------------------------------------------------------------
 
 
-@router.get("/sessions/{session_id}/events")
+@router.get(
+    "/sessions/{session_id}/events",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
 async def acp_session_events(
     session_id: str,
     limit: int = Query(default=100, ge=1, le=1000),
@@ -1679,7 +2196,10 @@ async def acp_session_events(
     }
 
 
-@router.get("/sessions/{session_id}/artifacts")
+@router.get(
+    "/sessions/{session_id}/artifacts",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
 async def acp_session_artifacts(
     session_id: str,
     user: User = Depends(get_request_user),
@@ -1721,7 +2241,10 @@ async def acp_session_artifacts(
     }
 
 
-@router.get("/sessions/{session_id}/diagnostics")
+@router.get(
+    "/sessions/{session_id}/diagnostics",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
 async def acp_session_diagnostics(
     session_id: str,
     user: User = Depends(get_request_user),
@@ -1750,7 +2273,10 @@ async def acp_session_diagnostics(
     }
 
 
-@router.get("/sessions/{session_id}/audit")
+@router.get(
+    "/sessions/{session_id}/audit",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
 async def acp_session_audit(
     session_id: str,
     user: User = Depends(get_request_user),
@@ -1772,18 +2298,17 @@ async def acp_session_audit(
 # -----------------------------------------------------------------------------
 
 
-@router.post("/sessions/{session_id}/fork", response_model=ACPSessionForkResponse)
+@router.post(
+    "/sessions/{session_id}/fork",
+    response_model=ACPSessionForkResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.manage"))],
+)
 async def acp_session_fork(
     session_id: str,
     payload: ACPSessionForkRequest,
     user: User = Depends(get_request_user),
 ) -> ACPSessionForkResponse:
-    """Fork an ACP session from a specific message index.
-
-    Creates a new session with message history up to the specified index.
-    The forked session starts fresh with no active runner process — call
-    ``/sessions/new`` with the returned session_id to resume.
-    """
+    """Fork an ACP session from a specific message index."""
     _acp_enforce_control_rate_limit(user_id=int(user.id), action="fork")
     client = await get_runner_client()
     await _require_session_access(client, session_id=session_id, user_id=int(user.id))
@@ -1798,8 +2323,42 @@ async def acp_session_fork(
             detail=f"message_index {payload.message_index} exceeds message count {len(source.messages)}",
         )
 
-    import uuid as _uuid
-    new_session_id = str(_uuid.uuid4())
+    fork_messages = list(source.messages[:payload.message_index + 1])
+    if not source.cwd or any(
+        not isinstance(message, dict)
+        or not str(message.get("role") or "").strip()
+        or not isinstance(message.get("content"), str)
+        or not str(message.get("content") or "").strip()
+        for message in fork_messages
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="fork_not_resumable")
+
+    create_session_params = set(inspect.signature(client.create_session).parameters.keys())
+    create_session_kwargs: dict[str, Any] = {}
+    if source.agent_type and "agent_type" in create_session_params:
+        create_session_kwargs["agent_type"] = source.agent_type
+    if "user_id" in create_session_params:
+        create_session_kwargs["user_id"] = int(user.id)
+    optional_tenancy_args = (
+        ("persona_id", source.persona_id),
+        ("workspace_id", source.workspace_id),
+        ("workspace_group_id", source.workspace_group_id),
+        ("scope_snapshot_id", source.scope_snapshot_id),
+    )
+    for field_name, field_value in optional_tenancy_args:
+        if field_value is not None and field_name in create_session_params:
+            create_session_kwargs[field_name] = field_value
+
+    try:
+        new_session_id = await client.create_session(
+            source.cwd,
+            list(source.mcp_servers),
+            **create_session_kwargs,
+        )
+    except ACPResponseError as exc:
+        logger.error("ACP session/fork create_session failed for user {}: {}", user.id, exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
     forked = await store.fork_session(
         source_session_id=session_id,
         new_session_id=new_session_id,
@@ -1808,6 +2367,10 @@ async def acp_session_fork(
         name=payload.name,
     )
     if not forked:
+        closer = getattr(client, "close_session", None)
+        if callable(closer):
+            with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                await closer(new_session_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="fork_failed")
 
     return ACPSessionForkResponse(

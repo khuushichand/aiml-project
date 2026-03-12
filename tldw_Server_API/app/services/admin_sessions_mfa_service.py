@@ -5,10 +5,21 @@ from typing import Any
 from fastapi import HTTPException
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import AdminPrivilegedActionRequest
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse, SessionResponse
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditEventCategory,
+    AuditEventType,
+)
 from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
+from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.services import admin_scope_service
+from tldw_Server_API.app.services.admin_audit_service import (
+    emit_admin_account_audit_event as _emit_admin_account_audit_event,
+)
+from tldw_Server_API.app.services.admin_guardrails_service import verify_privileged_action
 
 _ADMIN_SESSIONS_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -24,7 +35,7 @@ _ADMIN_SESSIONS_NONCRITICAL_EXCEPTIONS = (
 async def list_user_sessions(
     principal: AuthPrincipal,
     user_id: int,
-    session_manager,
+    session_manager: SessionManager,
 ) -> list[SessionResponse]:
     """List active sessions for a user (admin scope)."""
     try:
@@ -56,7 +67,10 @@ async def revoke_user_session(
     principal: AuthPrincipal,
     user_id: int,
     session_id: int,
-    session_manager,
+    session_manager: SessionManager,
+    db: Any,
+    password_service: PasswordService,
+    request: AdminPrivilegedActionRequest,
 ) -> MessageResponse:
     """Revoke a specific session for a user (admin scope)."""
     try:
@@ -65,7 +79,27 @@ async def revoke_user_session(
             user_id,
             require_hierarchy=True,
         )
+        reason = await verify_privileged_action(
+            principal,
+            db,
+            password_service,
+            reason=getattr(request, "reason", None),
+            admin_password=getattr(request, "admin_password", None),
+        )
         await session_manager.revoke_session(session_id=session_id, revoked_by=principal.user_id)
+        await _emit_admin_account_audit_event(
+            actor_id=principal.user_id,
+            target_user_id=user_id,
+            event_type=AuditEventType.AUTH_TOKEN_REVOKED,
+            category=AuditEventCategory.AUTHENTICATION,
+            resource_type="user_session",
+            resource_id=str(session_id),
+            action="admin.user.session.revoke",
+            metadata={
+                "reason": reason,
+                "session_id": session_id,
+            },
+        )
         return MessageResponse(message="Session revoked")
     except HTTPException:
         raise
@@ -77,7 +111,10 @@ async def revoke_user_session(
 async def revoke_all_user_sessions(
     principal: AuthPrincipal,
     user_id: int,
-    session_manager,
+    session_manager: SessionManager,
+    db: Any,
+    password_service: PasswordService,
+    request: AdminPrivilegedActionRequest,
 ) -> MessageResponse:
     """Revoke all sessions for a user (admin scope)."""
     try:
@@ -86,7 +123,27 @@ async def revoke_all_user_sessions(
             user_id,
             require_hierarchy=True,
         )
+        reason = await verify_privileged_action(
+            principal,
+            db,
+            password_service,
+            reason=getattr(request, "reason", None),
+            admin_password=getattr(request, "admin_password", None),
+        )
         await session_manager.revoke_all_user_sessions(user_id=user_id)
+        await _emit_admin_account_audit_event(
+            actor_id=principal.user_id,
+            target_user_id=user_id,
+            event_type=AuditEventType.AUTH_TOKEN_REVOKED,
+            category=AuditEventCategory.AUTHENTICATION,
+            resource_type="user_session",
+            resource_id=str(user_id),
+            action="admin.user.sessions.revoke_all",
+            metadata={
+                "reason": reason,
+                "scope": "all",
+            },
+        )
         return MessageResponse(message="All sessions revoked")
     except HTTPException:
         raise
@@ -118,6 +175,9 @@ async def get_user_mfa_status(
 async def disable_user_mfa(
     principal: AuthPrincipal,
     user_id: int,
+    db: Any,
+    password_service: PasswordService,
+    request: AdminPrivilegedActionRequest,
 ) -> MessageResponse:
     """Disable MFA for a user (admin scope)."""
     try:
@@ -126,10 +186,27 @@ async def disable_user_mfa(
             user_id,
             require_hierarchy=True,
         )
+        reason = await verify_privileged_action(
+            principal,
+            db,
+            password_service,
+            reason=getattr(request, "reason", None),
+            admin_password=getattr(request, "admin_password", None),
+        )
         mfa_service = get_mfa_service()
         success = await mfa_service.disable_mfa(user_id)
         if not success:
             raise HTTPException(status_code=404, detail="MFA not enabled")
+        await _emit_admin_account_audit_event(
+            actor_id=principal.user_id,
+            target_user_id=user_id,
+            event_type=AuditEventType.CONFIG_CHANGED,
+            category=AuditEventCategory.SECURITY,
+            resource_type="user_mfa",
+            resource_id=str(user_id),
+            action="admin.user.mfa.disable",
+            metadata={"reason": reason},
+        )
         return MessageResponse(message="MFA disabled")
     except HTTPException:
         raise

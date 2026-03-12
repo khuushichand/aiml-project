@@ -203,7 +203,12 @@ const MODEL_SETTINGS_KEYS = [
   "slashCommandInjectionMode",
   "apiProvider",
   "extraHeaders",
-  "extraBody"
+  "extraBody",
+  "llamaThinkingBudgetTokens",
+  "llamaGrammarMode",
+  "llamaGrammarId",
+  "llamaGrammarInline",
+  "llamaGrammarOverride"
 ] as const
 
 type ModelSettingsKey = (typeof MODEL_SETTINGS_KEYS)[number]

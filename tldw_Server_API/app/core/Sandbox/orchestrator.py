@@ -18,7 +18,7 @@ from loguru import logger
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.testing import is_truthy
 
-from .models import RunPhase, RunSpec, RunStatus, RuntimeType, Session, SessionSpec
+from .models import RunPhase, RunSpec, RunStatus, RuntimeType, Session, SessionSpec, TrustLevel
 from .policy import SandboxPolicy, SandboxPolicyConfig
 from .store import IdempotencyConflict as StoreIdemConflict
 from .store import get_store
@@ -211,11 +211,51 @@ class SandboxOrchestrator:
                 expires_at = datetime.fromisoformat(str(expires_raw))
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
                 expires_at = None
+        cpu_limit = None
+        if record.get("cpu_limit") is not None:
+            try:
+                cpu_limit = float(record.get("cpu_limit"))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                cpu_limit = None
+        memory_mb = None
+        if record.get("memory_mb") is not None:
+            try:
+                memory_mb = int(record.get("memory_mb"))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                memory_mb = None
+        timeout_sec = 300
+        if record.get("timeout_sec") is not None:
+            try:
+                timeout_sec = int(record.get("timeout_sec"))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                timeout_sec = 300
+        trust_level = None
+        trust_raw = record.get("trust_level")
+        if trust_raw:
+            try:
+                trust_level = TrustLevel(str(trust_raw))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                trust_level = None
         return Session(
             id=sid,
             runtime=runtime,
             base_image=(str(record.get("base_image")) if record.get("base_image") is not None else None),
             expires_at=expires_at,
+            cpu_limit=cpu_limit,
+            memory_mb=memory_mb,
+            timeout_sec=timeout_sec,
+            network_policy=(str(record.get("network_policy") or "deny_all")),
+            env=(
+                {str(k): str(v) for k, v in (record.get("env") or {}).items()}
+                if isinstance(record.get("env"), dict)
+                else {}
+            ),
+            labels=(
+                {str(k): str(v) for k, v in (record.get("labels") or {}).items()}
+                if isinstance(record.get("labels"), dict)
+                else {}
+            ),
+            trust_level=trust_level,
             persona_id=(str(record.get("persona_id")) if record.get("persona_id") is not None else None),
             workspace_id=(str(record.get("workspace_id")) if record.get("workspace_id") is not None else None),
             workspace_group_id=(str(record.get("workspace_group_id")) if record.get("workspace_group_id") is not None else None),
@@ -230,7 +270,7 @@ class SandboxOrchestrator:
             self._sessions.pop(sid, None)
             self._session_roots.pop(sid, None)
 
-    def get_session(self, session_id: str) -> Session | None:
+    def get_session(self, session_id: str, *, allow_cache_on_store_error: bool = True) -> Session | None:
         sid = str(session_id or "").strip()
         if not sid:
             return None
@@ -243,7 +283,9 @@ class SandboxOrchestrator:
                 record = self._store.get_session(sid)
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"store.get_session failed during cache validation: {e}")
-                return cached
+                if allow_cache_on_store_error:
+                    return cached
+                return None
             if not isinstance(record, dict):
                 self._drop_cached_session(sid)
                 return None
@@ -301,6 +343,41 @@ class SandboxOrchestrator:
                 runtime=runtime,
                 base_image=(stored.get("base_image") if stored.get("base_image") is not None else spec.base_image),
                 expires_at=expires_at,
+                cpu_limit=(
+                    float(stored.get("cpu_limit"))
+                    if stored.get("cpu_limit") is not None
+                    else spec.cpu_limit
+                ),
+                memory_mb=(
+                    int(stored.get("memory_mb"))
+                    if stored.get("memory_mb") is not None
+                    else spec.memory_mb
+                ),
+                timeout_sec=(
+                    int(stored.get("timeout_sec"))
+                    if stored.get("timeout_sec") is not None
+                    else spec.timeout_sec
+                ),
+                network_policy=(
+                    str(stored.get("network_policy"))
+                    if stored.get("network_policy") is not None
+                    else spec.network_policy
+                ),
+                env=(
+                    {str(k): str(v) for k, v in (stored.get("env") or {}).items()}
+                    if isinstance(stored.get("env"), dict)
+                    else dict(spec.env or {})
+                ),
+                labels=(
+                    {str(k): str(v) for k, v in (stored.get("labels") or {}).items()}
+                    if isinstance(stored.get("labels"), dict)
+                    else dict(spec.labels or {})
+                ),
+                trust_level=(
+                    TrustLevel(str(stored.get("trust_level")))
+                    if stored.get("trust_level") is not None
+                    else spec.trust_level
+                ),
                 persona_id=(
                     str(stored.get("persona_id"))
                     if stored.get("persona_id") is not None
@@ -332,6 +409,13 @@ class SandboxOrchestrator:
                     session_id=sid_str,
                     runtime=sess.runtime.value if sess.runtime else None,
                     base_image=sess.base_image,
+                    cpu_limit=sess.cpu_limit,
+                    memory_mb=sess.memory_mb,
+                    timeout_sec=sess.timeout_sec,
+                    network_policy=sess.network_policy,
+                    env=sess.env,
+                    labels=sess.labels,
+                    trust_level=(sess.trust_level.value if sess.trust_level else None),
                     expires_at_iso=(sess.expires_at.isoformat() if sess.expires_at else None),
                     workspace_path=ws_path,
                     persona_id=sess.persona_id,
@@ -357,6 +441,13 @@ class SandboxOrchestrator:
             runtime=spec.runtime or self.policy.cfg.default_runtime,
             base_image=spec.base_image,
             expires_at=expires_at,
+            cpu_limit=spec.cpu_limit,
+            memory_mb=spec.memory_mb,
+            timeout_sec=spec.timeout_sec,
+            network_policy=spec.network_policy,
+            env=dict(spec.env or {}),
+            labels=dict(spec.labels or {}),
+            trust_level=spec.trust_level,
             persona_id=spec.persona_id,
             workspace_id=spec.workspace_id,
             workspace_group_id=spec.workspace_group_id,
@@ -372,6 +463,13 @@ class SandboxOrchestrator:
                 session_id=sid,
                 runtime=sess.runtime.value if sess.runtime else None,
                 base_image=sess.base_image,
+                cpu_limit=sess.cpu_limit,
+                memory_mb=sess.memory_mb,
+                timeout_sec=sess.timeout_sec,
+                network_policy=sess.network_policy,
+                env=sess.env,
+                labels=sess.labels,
+                trust_level=(sess.trust_level.value if sess.trust_level else None),
                 expires_at_iso=(sess.expires_at.isoformat() if sess.expires_at else None),
                 workspace_path=ws_path,
                 persona_id=sess.persona_id,
@@ -386,6 +484,13 @@ class SandboxOrchestrator:
             "id": sid,
             "runtime": sess.runtime.value,
             "base_image": sess.base_image,
+            "cpu_limit": sess.cpu_limit,
+            "memory_mb": sess.memory_mb,
+            "timeout_sec": sess.timeout_sec,
+            "network_policy": sess.network_policy,
+            "env": dict(sess.env or {}),
+            "labels": dict(sess.labels or {}),
+            "trust_level": (sess.trust_level.value if sess.trust_level else None),
             "expires_at": (sess.expires_at.isoformat() if sess.expires_at else None),
             "persona_id": sess.persona_id,
             "workspace_id": sess.workspace_id,
@@ -729,7 +834,7 @@ class SandboxOrchestrator:
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
                 continue
 
-    def destroy_session(self, session_id: str) -> bool:
+    def destroy_session(self, session_id: str, *, remove_workspace_tree: bool = True) -> bool:
         sid = str(session_id or "").strip()
         if not sid:
             return False
@@ -784,9 +889,11 @@ class SandboxOrchestrator:
                 owner = "unknown"
             with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
                 self._remove_run_artifacts(rid, owner=owner, decrement_usage=True)
-        if ws_path:
+        if remove_workspace_tree and ws_path:
             with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
-                shutil.rmtree(ws_path, ignore_errors=True)
+                ws_path_obj = Path(str(ws_path))
+                session_root = ws_path_obj.parent if ws_path_obj.name == "workspace" else ws_path_obj
+                shutil.rmtree(session_root, ignore_errors=True)
         return bool(removed or store_removed)
 
     # -----------------
@@ -1091,12 +1198,6 @@ class SandboxOrchestrator:
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
             cap_user = 128 * 1024 * 1024
 
-        # Determine remaining budget
-        try:
-            current_user_bytes = int(self._store.get_user_artifact_bytes(owner))
-        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-            current_user_bytes = 0
-
         selected: dict[str, bytes] = {}
         total_run = 0
         # Deterministic order
@@ -1105,16 +1206,20 @@ class SandboxOrchestrator:
             sz = len(data)
             if total_run + sz > cap_run:
                 break
-            if current_user_bytes + sz > cap_user:
+            try:
+                admitted = bool(self._store.try_reserve_user_artifact_bytes(owner, sz, cap_user))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                admitted = False
+            if not admitted:
                 break
             selected[path] = data
             total_run += sz
-            current_user_bytes += sz
 
         # Persist selected to FS and memory map for backward compatibility
         art_dir = self._artifact_dir(owner, run_id)
         with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
             art_dir.mkdir(parents=True, exist_ok=True)
+        persisted: dict[str, bytes] = {}
         for path, data in selected.items():
             rel = self._safe_rel(path)
             full = art_dir / rel
@@ -1124,11 +1229,13 @@ class SandboxOrchestrator:
                     f.write(data)
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to persist artifact {rel}: {e}")
+                with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+                    self._store.increment_user_artifact_bytes(owner, -len(data))
+                continue
+            persisted[path] = data
 
         with self._lock:
-            self._artifacts[run_id] = selected
-        with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
-            self._store.increment_user_artifact_bytes(owner, int(total_run))
+            self._artifacts[run_id] = persisted
 
     def list_artifacts(self, run_id: str) -> dict[str, int]:
         self._maybe_prune_expired_artifacts()
@@ -1176,6 +1283,23 @@ class SandboxOrchestrator:
             mapping = self._artifacts.get(run_id) or {}
             return mapping.get(path)
 
+    def get_artifact_path(self, run_id: str, path: str) -> Path | None:
+        self._maybe_prune_expired_artifacts()
+        owner = None
+        try:
+            owner = self._store.get_run_owner(run_id)
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+            owner = None
+        art_dir = self._artifact_dir((owner or "unknown"), run_id)
+        rel = self._safe_rel(path)
+        full = art_dir / rel
+        try:
+            if full.exists() and full.is_file():
+                return full
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+            return None
+        return None
+
     # -----------------
     # Workspaces
     # -----------------
@@ -1210,7 +1334,7 @@ class SandboxOrchestrator:
             self._session_roots[session_id] = str(ws)
         return str(ws)
 
-    def get_session_workspace_path(self, session_id: str) -> str | None:
+    def get_session_workspace_path(self, session_id: str, *, allow_cache_on_store_error: bool = True) -> str | None:
         sid = str(session_id or "").strip()
         if not sid:
             return None
@@ -1220,6 +1344,8 @@ class SandboxOrchestrator:
             row = self._store.get_session(sid)
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"store.get_session workspace lookup failed: {e}")
+            if not allow_cache_on_store_error:
+                return None
             with self._lock:
                 ws = self._session_roots.get(sid)
                 return ws

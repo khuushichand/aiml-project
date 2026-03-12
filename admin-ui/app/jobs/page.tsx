@@ -21,7 +21,6 @@ import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
 import {
-  buildSyntheticMonitoringMetricsHistory,
   normalizeMonitoringMetricsPayload,
 } from '@/lib/monitoring-metrics';
 
@@ -112,27 +111,10 @@ type JobRelationship = {
   source: 'parent_ref' | 'child_ref';
 };
 
-const QUEUE_DEPTH_METRIC_PATTERN = /^(queue_depth|jobs_queue_depth)(\{[^}]*\})?\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)$/;
-
 const parseTimestampMs = (value?: string | null): number | null => {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
-};
-
-const parseQueueDepthFromMetricsText = (metricsText: string): number => {
-  if (!metricsText.trim()) return 0;
-  return metricsText
-    .split('\n')
-    .reduce((sum, line) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return sum;
-      const match = trimmed.match(QUEUE_DEPTH_METRIC_PATTERN);
-      if (!match) return sum;
-      const value = Number.parseFloat(match[3]);
-      if (!Number.isFinite(value)) return sum;
-      return sum + Math.max(0, value);
-    }, 0);
 };
 
 const buildQueueThroughputSummary = (
@@ -360,13 +342,12 @@ export default function JobsPage() {
       granularity: '1h',
     };
 
-    const [statsResult, jobsResult, staleResult, slaResult, queueHistoryResult, metricsTextResult] = await Promise.allSettled([
+    const [statsResult, jobsResult, staleResult, slaResult, queueHistoryResult] = await Promise.allSettled([
       api.getJobsStats(statsParams),
       api.getJobs(listParams),
       api.getJobsStale(statsParams),
       api.getJobSlaPolicies(),
       api.getMonitoringMetrics(queueHistoryParams),
-      api.getMetricsText(),
     ]);
 
     const sawNotFound = [statsResult, jobsResult, staleResult].some(
@@ -420,31 +401,6 @@ export default function JobsPage() {
       }));
     }
 
-    if (nextQueueHistory.length === 0 && metricsTextResult.status === 'fulfilled') {
-      const queueDepth = parseQueueDepthFromMetricsText(String(metricsTextResult.value ?? ''));
-      if (queueDepth > 0) {
-        const syntheticHistory = buildSyntheticMonitoringMetricsHistory(
-          {
-            cpu: 0,
-            memory: 0,
-            diskUsage: 0,
-            throughput: 0,
-            activeConnections: 0,
-            queueDepth,
-          },
-          {
-            ...queueHistoryParams,
-            rangeLabel: '24h',
-            expectedPoints: 25,
-          },
-        );
-        nextQueueHistory = syntheticHistory.map((point) => ({
-          timestamp: point.timestamp,
-          label: point.label,
-          depth: point.queueDepth,
-        }));
-      }
-    }
     setQueueDepthHistory(nextQueueHistory);
 
     setSlaPoliciesLoading(false);
@@ -1521,7 +1477,7 @@ export default function JobsPage() {
                         Attachments ({jobAttachments.length})
                       </Label>
                       <div className="rounded-md border">
-                        <Table caption={`Job attachments table with ${selectedJobAttachments.length} rows.`}>
+                        <Table caption={`Job attachments table with ${jobAttachments.length} rows.`}>
                           <TableHeader>
                             <TableRow>
                               <TableHead>Name</TableHead>

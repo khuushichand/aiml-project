@@ -90,7 +90,7 @@ const OUTPUT_BUTTONS: {
 }[] = [
   {
     type: "audio_overview",
-    label: "Audio Overview",
+    label: "Audio Summary",
     description:
       OUTPUT_TYPES.find((config) => config.type === "audio_overview")
         ?.description || "Generate a spoken summary of your sources",
@@ -281,6 +281,8 @@ type ArtifactDiscussDetail = {
   content: string
 }
 
+const RECENT_OUTPUT_TYPES_STORAGE_KEY = "tldw:workspace-playground:recent-output-types:v1"
+const RECENT_OUTPUT_TYPES_COUNT = 3
 const WORKSPACE_DISCUSS_EVENT = "workspace-playground:discuss-artifact"
 const VOICE_PREVIEW_TEXT =
   "This is a quick voice preview from your current audio settings."
@@ -292,6 +294,33 @@ const STUDIO_DEFAULT_RAG_TOP_K = 8
 const STUDIO_DEFAULT_RAG_MIN_SCORE = 0.2
 const STUDIO_DEFAULT_ENABLE_RERANKING = true
 const STUDIO_DEFAULT_MAX_TOKENS = 800
+
+const loadRecentOutputTypes = (): ArtifactType[] => {
+  try {
+    const raw = localStorage.getItem(RECENT_OUTPUT_TYPES_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    const validTypes = new Set(OUTPUT_BUTTONS.map((b) => b.type))
+    return parsed.filter(
+      (item): item is ArtifactType =>
+        typeof item === "string" && validTypes.has(item as ArtifactType)
+    )
+  } catch {
+    return []
+  }
+}
+
+const recordRecentOutputType = (type: ArtifactType): ArtifactType[] => {
+  const current = loadRecentOutputTypes()
+  const updated = [type, ...current.filter((t) => t !== type)].slice(0, 10)
+  try {
+    localStorage.setItem(RECENT_OUTPUT_TYPES_STORAGE_KEY, JSON.stringify(updated))
+  } catch {
+    // Quota exceeded — silent
+  }
+  return updated
+}
 
 const isAbortLikeError = (error: unknown): boolean => {
   const candidate = (error as {
@@ -467,7 +496,13 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
 
   // Store state
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const selectedSourceFolderIds = useWorkspaceStore(
+    (s) => s.selectedSourceFolderIds
+  ) || []
   const getSelectedMediaIds = useWorkspaceStore((s) => s.getSelectedMediaIds)
+  const getEffectiveSelectedMediaIds = useWorkspaceStore(
+    (s) => s.getEffectiveSelectedMediaIds
+  )
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const isGeneratingOutput = useWorkspaceStore((s) => s.isGeneratingOutput)
   const generatingOutputType = useWorkspaceStore((s) => s.generatingOutputType)
@@ -518,6 +553,12 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [selectedFlashcardDeck, setSelectedFlashcardDeck] = useState<"auto" | number>("auto")
   const [activeOutputType, setActiveOutputType] = useState<ArtifactType | null>(
     null
+  )
+  const [recentOutputTypes, setRecentOutputTypes] = useState<ArtifactType[]>(
+    () => loadRecentOutputTypes()
+  )
+  const [moreOutputsExpanded, setMoreOutputsExpanded] = useState(
+    () => loadRecentOutputTypes().length === 0
   )
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
 
@@ -613,11 +654,20 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const hasSelectedSources = selectedSourceIds.length > 0
-  const selectedMediaCount = Math.max(
-    getSelectedMediaIds().length,
-    selectedSourceIds.length
+  const selectedMediaIds = React.useMemo(
+    () =>
+      typeof getEffectiveSelectedMediaIds === "function"
+        ? getEffectiveSelectedMediaIds()
+        : getSelectedMediaIds(),
+    [
+      getEffectiveSelectedMediaIds,
+      getSelectedMediaIds,
+      selectedSourceFolderIds,
+      selectedSourceIds
+    ]
   )
+  const hasSelectedSources = selectedMediaIds.length > 0
+  const selectedMediaCount = selectedMediaIds.length
   const contextualAudioSettingsVisible =
     activeOutputType === "audio_overview" ||
     generatingOutputType === "audio_overview"
@@ -1092,9 +1142,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     type: ArtifactType,
     options: ArtifactGenerationOptions = {}
   ) => {
+    setRecentOutputTypes(recordRecentOutputType(type))
     if (!hasSelectedSources) return
 
-    const mediaIds = getSelectedMediaIds()
+    const mediaIds = selectedMediaIds
     if (mediaIds.length === 0) return
     if (type === "compare_sources" && mediaIds.length < 2) {
       messageApi.warning(
@@ -1587,7 +1638,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             <button
               type="button"
               onClick={onHide}
-              className="hidden rounded p-1.5 text-text-muted transition hover:bg-surface2 hover:text-text lg:block"
+              className="hidden h-9 w-9 items-center justify-center rounded text-text-muted transition hover:bg-surface2 hover:text-text lg:flex"
               aria-label={t("playground:workspace.hideStudio", "Hide studio")}
             >
               <PanelRightClose className="h-4 w-4" />
@@ -1917,73 +1968,136 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             </div>
           </div>
         )}
-        <div className="space-y-4">
-          {OUTPUT_GROUPS.map((group) => (
-            <section key={group.id} aria-label={group.label}>
-              <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                {group.label}
-              </h4>
-              <div className="grid grid-cols-2 gap-3">
-                {group.types.map((type) => {
-                  const button = OUTPUT_BUTTONS.find((entry) => entry.type === type)
-                  if (!button) return null
-                  const { label, icon: Icon, description } = button
-                  const isGenerating =
-                    isGeneratingOutput && generatingOutputType === type
-                  const requiresMultipleSources =
-                    type === "compare_sources" && selectedMediaCount < 2
-                  const isDisabled =
-                    !hasSelectedSources || isGeneratingOutput || requiresMultipleSources
+        {(() => {
+          const recentTypes = recentOutputTypes.slice(0, RECENT_OUTPUT_TYPES_COUNT)
+          const allTypes = OUTPUT_BUTTONS.map((b) => b.type)
+          const remainingTypes = allTypes.filter((t) => !recentTypes.includes(t))
+          const hasRecent = recentTypes.length > 0
 
+          const artifactStatusForType = (type: ArtifactType): "completed" | "failed" | null => {
+            const match = generatedArtifacts.find((a) => a.type === type)
+            if (!match) return null
+            if (match.status === "completed") return "completed"
+            if (match.status === "failed") return "failed"
+            return null
+          }
+
+          const renderOutputButton = (type: ArtifactType) => {
+            const button = OUTPUT_BUTTONS.find((entry) => entry.type === type)
+            if (!button) return null
+            const { label, icon: Icon, description } = button
+            const isGenerating =
+              isGeneratingOutput && generatingOutputType === type
+            const requiresMultipleSources =
+              type === "compare_sources" && selectedMediaCount < 2
+            const isDisabled =
+              !hasSelectedSources || isGeneratingOutput || requiresMultipleSources
+            const artifactStatus = artifactStatusForType(type)
+
+            return (
+              <Tooltip
+                key={type}
+                title={
+                  requiresMultipleSources
+                    ? t(
+                        "playground:studio.compareRequiresMultipleSourcesHint",
+                        "Compare Sources requires at least two selected sources."
+                      )
+                    : !hasSelectedSources
+                    ? t(
+                        "playground:studio.selectSourcesFirst",
+                        "Select sources first"
+                      )
+                    : description
+                }
+              >
+                <button
+                  type="button"
+                  disabled={isDisabled}
+                  onFocus={() => setActiveOutputType(type)}
+                  onMouseEnter={() => setActiveOutputType(type)}
+                  onClick={() => {
+                    setActiveOutputType(type)
+                    if (type === "audio_overview") {
+                      setShowTtsSettings(true)
+                    }
+                    void handleGenerateOutput(type)
+                  }}
+                  className={`relative flex flex-col items-center justify-center rounded-lg border p-3 transition-colors ${
+                    isDisabled
+                      ? "cursor-not-allowed border-border bg-surface2/50 text-text-muted"
+                      : "border-border bg-surface hover:border-primary/50 hover:bg-primary/5"
+                  }`}
+                >
+                  {isGenerating ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                  ) : (
+                    <Icon className="h-5 w-5" />
+                  )}
+                  <span className="mt-1.5 text-xs font-medium">{label}</span>
+                  {artifactStatus === "completed" && (
+                    <CheckCircle className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-success" />
+                  )}
+                  {artifactStatus === "failed" && (
+                    <XCircle className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-error" />
+                  )}
+                </button>
+              </Tooltip>
+            )
+          }
+
+          return (
+            <div className="space-y-4">
+              {hasRecent && (
+                <section aria-label={t("playground:studio.recentOutputs", "Recent")}>
+                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                    {t("playground:studio.recentOutputs", "Recent")}
+                  </h4>
+                  <div className="grid grid-cols-3 gap-3">
+                    {recentTypes.map(renderOutputButton)}
+                  </div>
+                </section>
+              )}
+              {hasRecent && !moreOutputsExpanded && (
+                <button
+                  type="button"
+                  onClick={() => setMoreOutputsExpanded(true)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-2 text-xs font-medium text-text-muted transition hover:border-primary/40 hover:text-text"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  {t("playground:studio.moreOutputs", "More outputs...")}
+                </button>
+              )}
+              {(moreOutputsExpanded || !hasRecent) &&
+                OUTPUT_GROUPS.map((group) => {
+                  const groupTypes = hasRecent
+                    ? group.types.filter((t) => remainingTypes.includes(t))
+                    : group.types
+                  if (groupTypes.length === 0) return null
                   return (
-                    <Tooltip
-                      key={type}
-                      title={
-                        requiresMultipleSources
-                          ? t(
-                              "playground:studio.compareRequiresMultipleSourcesHint",
-                              "Compare Sources requires at least two selected sources."
-                            )
-                          : !hasSelectedSources
-                          ? t(
-                              "playground:studio.selectSourcesFirst",
-                              "Select sources first"
-                            )
-                          : description
-                      }
-                    >
-                      <button
-                        type="button"
-                        disabled={isDisabled}
-                        onFocus={() => setActiveOutputType(type)}
-                        onMouseEnter={() => setActiveOutputType(type)}
-                        onClick={() => {
-                          setActiveOutputType(type)
-                          if (type === "audio_overview") {
-                            setShowTtsSettings(true)
-                          }
-                          void handleGenerateOutput(type)
-                        }}
-                        className={`flex flex-col items-center justify-center rounded-lg border p-3 transition-colors ${
-                          isDisabled
-                            ? "cursor-not-allowed border-border bg-surface2/50 text-text-muted"
-                            : "border-border bg-surface hover:border-primary/50 hover:bg-primary/5"
-                        }`}
-                      >
-                        {isGenerating ? (
-                          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                        ) : (
-                          <Icon className="h-5 w-5" />
-                        )}
-                        <span className="mt-1.5 text-xs font-medium">{label}</span>
-                      </button>
-                    </Tooltip>
+                    <section key={group.id} aria-label={group.label}>
+                      <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                        {group.label}
+                      </h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        {groupTypes.map(renderOutputButton)}
+                      </div>
+                    </section>
                   )
                 })}
-              </div>
-            </section>
-          ))}
-        </div>
+              {hasRecent && moreOutputsExpanded && (
+                <button
+                  type="button"
+                  onClick={() => setMoreOutputsExpanded(false)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-2 text-xs font-medium text-text-muted transition hover:border-primary/40 hover:text-text"
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                  {t("playground:studio.lessOutputs", "Show less")}
+                </button>
+              )}
+            </div>
+          )
+        })()}
         {!hasSelectedSources && (
           <p className="mt-2 text-center text-xs text-text-muted">
             {t(
@@ -1999,7 +2113,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             <p className="mb-2 rounded border border-border bg-surface2/30 px-3 py-2 text-xs text-text-muted">
               {t(
                 "playground:studio.audioSettingsHint",
-                "Select Audio Overview to configure TTS voice and speed."
+                "Select Audio Summary to configure TTS voice and speed."
               )}
             </p>
           )}

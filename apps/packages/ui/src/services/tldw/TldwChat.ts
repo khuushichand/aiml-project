@@ -253,6 +253,11 @@ export interface TldwChatOptions {
   apiProvider?: string
   extraHeaders?: Record<string, unknown>
   extraBody?: Record<string, unknown>
+  thinkingBudgetTokens?: number
+  grammarMode?: "none" | "library" | "inline"
+  grammarId?: string
+  grammarInline?: string
+  grammarOverride?: string
   jsonMode?: boolean
   researchContext?: ChatResearchContext
 }
@@ -343,6 +348,11 @@ export class TldwChatService {
         api_provider: options.apiProvider,
         extra_headers: options.extraHeaders,
         extra_body: options.extraBody,
+        thinking_budget_tokens: options.thinkingBudgetTokens,
+        grammar_mode: options.grammarMode,
+        grammar_id: options.grammarId,
+        grammar_inline: options.grammarInline,
+        grammar_override: options.grammarOverride,
         response_format: options.jsonMode ? { type: "json_object" } : undefined,
         research_context: options.researchContext
       }
@@ -419,6 +429,11 @@ export class TldwChatService {
         api_provider: options.apiProvider,
         extra_headers: options.extraHeaders,
         extra_body: options.extraBody,
+        thinking_budget_tokens: options.thinkingBudgetTokens,
+        grammar_mode: options.grammarMode,
+        grammar_id: options.grammarId,
+        grammar_inline: options.grammarInline,
+        grammar_override: options.grammarOverride,
         response_format: options.jsonMode ? { type: "json_object" } : undefined,
         research_context: options.researchContext
       }

@@ -134,6 +134,9 @@
   "header_notes": {
     "message": "Notes"
   },
+  "header_companion": {
+    "message": "Companion"
+  },
   "header_showShortcuts": {
     "message": "Show shortcuts"
   },
@@ -3055,6 +3058,9 @@
   },
   "header_audiobookStudio": {
     "message": "Audiobook Studio"
+  },
+  "header_chatWorkflows": {
+    "message": "Chat Workflows"
   },
   "header_workflowEditor": {
     "message": "Workflow Editor"

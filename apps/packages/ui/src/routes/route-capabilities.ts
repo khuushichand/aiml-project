@@ -4,6 +4,8 @@ export const GUARDIAN_SETTINGS_PATH = "/settings/guardian"
 export const FAMILY_WIZARD_SETTINGS_PATH = "/settings/family-guardrails"
 export const SKILLS_PATH = "/skills"
 export const PERSONA_DOCK_PATH = "/persona"
+export const COMPANION_PATH = "/companion"
+export const COMPANION_CONVERSATION_PATH = "/companion/conversation"
 
 export const isGuardianSettingsAvailable = (
   capabilities: ServerCapabilities | null | undefined
@@ -21,6 +23,14 @@ export const isPersonaDockAvailable = (
   capabilities: ServerCapabilities | null | undefined
 ): boolean => Boolean(capabilities?.hasPersona)
 
+export const isCompanionAvailable = (
+  capabilities: ServerCapabilities | null | undefined
+): boolean => Boolean(capabilities?.hasPersonalization)
+
+export const isCompanionConversationAvailable = (
+  capabilities: ServerCapabilities | null | undefined
+): boolean => Boolean(capabilities?.hasPersonalization && capabilities?.hasPersona)
+
 export const isRouteEnabledForCapabilities = (
   routePath: string,
   capabilities: ServerCapabilities | null | undefined
@@ -36,6 +46,12 @@ export const isRouteEnabledForCapabilities = (
   }
   if (routePath === PERSONA_DOCK_PATH) {
     return isPersonaDockAvailable(capabilities)
+  }
+  if (routePath === COMPANION_PATH) {
+    return isCompanionAvailable(capabilities)
+  }
+  if (routePath === COMPANION_CONVERSATION_PATH) {
+    return isCompanionConversationAvailable(capabilities)
   }
   return true
 }

@@ -12,6 +12,8 @@ export type ServerChatHistoryItem = ServerChatSummary & {
 
 const SERVER_CHAT_FETCH_LIMIT = 200
 const SERVER_CHAT_FETCH_MAX_PAGES = 50
+const SERVER_CHAT_SEARCH_LIMIT = 50
+export const SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE = 25
 
 type FetchServerChatsPage = (params: {
   limit: number
@@ -91,6 +93,24 @@ export const filterServerChatHistoryItems = (
   })
 }
 
+export const deriveServerChatHistoryViewState = ({
+  previousData,
+  error
+}: {
+  previousData: ServerChatHistoryItem[]
+  error: unknown
+}): {
+  data: ServerChatHistoryItem[]
+  sidebarRefreshState: "recoverable-error"
+  hasUsableData: boolean
+  isShowingStaleData: boolean
+} => ({
+  data: previousData,
+  sidebarRefreshState: "recoverable-error",
+  hasUsableData: previousData.length > 0,
+  isShowingStaleData: previousData.length > 0
+})
+
 export const fetchAllServerChatPages = async (
   fetchPage: FetchServerChatsPage,
   options?: {
@@ -150,7 +170,36 @@ type UseServerChatHistoryOptions = {
   enabled?: boolean
   includeDeleted?: boolean
   deletedOnly?: boolean
+  mode?: "overview" | "search"
+  page?: number
+  limit?: number
+  filterMode?: "all" | "character" | "non_character" | "trash"
 }
+
+type ServerChatHistoryQueryData = {
+  items: ServerChatHistoryItem[]
+  total: number
+}
+
+const getCharacterScopeForFilterMode = (
+  filterMode: NonNullable<UseServerChatHistoryOptions["filterMode"]>
+): "character" | "non_character" | undefined => {
+  if (filterMode === "character") {
+    return "character"
+  }
+  if (filterMode === "non_character") {
+    return "non_character"
+  }
+  return undefined
+}
+
+const supportsServerPagedOverview = (
+  filterMode: NonNullable<UseServerChatHistoryOptions["filterMode"]>
+): boolean =>
+  filterMode === "all" ||
+  filterMode === "trash" ||
+  filterMode === "character" ||
+  filterMode === "non_character"
 
 export const useServerChatHistory = (
   searchQuery: string,
@@ -159,16 +208,109 @@ export const useServerChatHistory = (
   const { isConnected } = useConnectionState()
   const checkConnection = useConnectionStore((state) => state.checkOnce)
   const normalizedQuery = searchQuery.trim().toLowerCase()
-  const isEnabled = isConnected && (options?.enabled ?? true)
+  const mode = options?.mode ?? "overview"
   const includeDeleted = options?.includeDeleted ?? false
   const deletedOnly = options?.deletedOnly ?? false
+  const filterMode = options?.filterMode ?? (deletedOnly ? "trash" : "all")
+  const characterScope = getCharacterScopeForFilterMode(filterMode)
+  const overviewPage = Math.max(1, Math.trunc(options?.page ?? 1))
+  const overviewLimit = Math.max(
+    1,
+    Math.min(
+      SERVER_CHAT_FETCH_LIMIT,
+      Math.trunc(options?.limit ?? SERVER_CHAT_HISTORY_OVERVIEW_PAGE_SIZE)
+    )
+  )
+  const searchPage = Math.max(1, Math.trunc(options?.page ?? 1))
+  const searchLimit = Math.max(
+    1,
+    Math.min(
+      SERVER_CHAT_FETCH_LIMIT,
+      Math.trunc(options?.limit ?? SERVER_CHAT_SEARCH_LIMIT)
+    )
+  )
+  const canUsePagedOverview =
+    mode === "overview" && supportsServerPagedOverview(filterMode)
+  const canUseConversationSearch =
+    mode === "search" && normalizedQuery.length > 0
+  const isServerPagedResult = canUseConversationSearch || canUsePagedOverview
+  const queryStrategy = canUseConversationSearch
+    ? "search-server"
+    : canUsePagedOverview
+      ? "overview-page"
+      : "overview-full"
+  const isEnabled =
+    isConnected &&
+    (options?.enabled ?? true) &&
+    (mode !== "search" || normalizedQuery.length > 0)
 
   const query = useQuery({
-    queryKey: ["serverChatHistory", { includeDeleted, deletedOnly }],
+    queryKey: [
+      "serverChatHistory",
+      {
+        includeDeleted,
+        deletedOnly,
+        mode,
+        q: mode === "search" ? normalizedQuery : "",
+        strategy: queryStrategy,
+        page: isServerPagedResult
+          ? canUseConversationSearch
+            ? searchPage
+            : overviewPage
+          : 1,
+        limit: isServerPagedResult
+          ? canUseConversationSearch
+            ? searchLimit
+            : overviewLimit
+          : null,
+        filterMode
+      }
+    ],
     enabled: isEnabled,
-    queryFn: async ({ signal }): Promise<ServerChatHistoryItem[]> => {
+    queryFn: async ({ signal }): Promise<ServerChatHistoryQueryData> => {
       await tldwClient.initialize().catch(() => null)
       try {
+        if (canUseConversationSearch) {
+          const response = await tldwClient.searchConversationsWithMeta(
+            {
+              query: normalizedQuery,
+              limit: searchLimit,
+              offset: (searchPage - 1) * searchLimit,
+              order_by: "recency",
+              ...(includeDeleted || deletedOnly ? { include_deleted: true } : {}),
+              ...(deletedOnly ? { deleted_only: true } : {}),
+              ...(characterScope ? { character_scope: characterScope } : {})
+            },
+            { signal }
+          )
+
+          return {
+            items: mapServerChatHistoryItems(response.chats),
+            total:
+              typeof response.total === "number" ? response.total : response.chats.length
+          }
+        }
+
+        if (canUsePagedOverview) {
+          const response = await tldwClient.listChatsWithMeta(
+            {
+              limit: overviewLimit,
+              offset: (overviewPage - 1) * overviewLimit,
+              ordering: "-updated_at",
+              include_message_counts: false,
+              ...(characterScope ? { character_scope: characterScope } : {}),
+              ...(includeDeleted ? { include_deleted: true } : {}),
+              ...(deletedOnly ? { deleted_only: true } : {})
+            },
+            { signal }
+          )
+
+          return {
+            items: mapServerChatHistoryItems(response.chats),
+            total: response.total
+          }
+        }
+
         const chats = await fetchAllServerChatPages(
           ({ limit, offset, signal: pageSignal }) =>
             tldwClient.listChatsWithMeta(
@@ -176,6 +318,8 @@ export const useServerChatHistory = (
                 limit,
                 offset,
                 ordering: "-updated_at",
+                include_message_counts: false,
+                ...(characterScope ? { character_scope: characterScope } : {}),
                 ...(includeDeleted ? { include_deleted: true } : {}),
                 ...(deletedOnly ? { deleted_only: true } : {})
               },
@@ -186,12 +330,16 @@ export const useServerChatHistory = (
           }
         )
 
-        return mapServerChatHistoryItems(chats)
+        const items = mapServerChatHistoryItems(chats)
+        return {
+          items,
+          total: items.length
+        }
       } catch (e) {
         if (isRecoverableServerChatHistoryError(e)) {
           // Keep sidebar/chat shell usable while connection state catches up.
           void checkConnection().catch(() => null)
-          return []
+          throw e
         }
         // eslint-disable-next-line no-console
         console.error(
@@ -209,12 +357,63 @@ export const useServerChatHistory = (
   })
 
   const filteredData = useMemo(
-    () => filterServerChatHistoryItems(query.data || [], normalizedQuery),
-    [query.data, normalizedQuery]
+    () =>
+      canUseConversationSearch
+        ? query.data?.items || []
+        : filterServerChatHistoryItems(query.data?.items || [], normalizedQuery),
+    [canUseConversationSearch, query.data, normalizedQuery]
   )
+  const resolvedTotal = useMemo(() => {
+    if (isServerPagedResult) {
+      return query.data?.total ?? filteredData.length
+    }
+    return filteredData.length
+  }, [filteredData.length, isServerPagedResult, query.data])
+
+  const sidebarState = useMemo(() => {
+    if (query.status === "success") {
+      return {
+        data: filteredData,
+        total: resolvedTotal,
+        sidebarRefreshState: "ready" as const,
+        hasUsableData: filteredData.length > 0,
+        isShowingStaleData: false
+      }
+    }
+
+    if (query.status === "error") {
+      if (isRecoverableServerChatHistoryError(query.error)) {
+        return deriveServerChatHistoryViewState({
+          previousData: filteredData,
+          error: query.error
+        })
+      }
+
+      return {
+        data: filteredData,
+        total: resolvedTotal,
+        sidebarRefreshState: "hard-error" as const,
+        hasUsableData: filteredData.length > 0,
+        isShowingStaleData: false
+      }
+    }
+
+    return {
+      data: filteredData,
+      total: resolvedTotal,
+      sidebarRefreshState: "idle" as const,
+      hasUsableData: filteredData.length > 0,
+      isShowingStaleData: false
+    }
+  }, [filteredData, query.error, query.status, resolvedTotal])
 
   return {
     ...query,
-    data: filteredData
+    data: sidebarState.data,
+    total: sidebarState.total,
+    sidebarRefreshState: sidebarState.sidebarRefreshState,
+    hasUsableData: sidebarState.hasUsableData,
+    isShowingStaleData: sidebarState.isShowingStaleData,
+    isServerPagedResult
   }
 }

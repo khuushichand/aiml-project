@@ -9,8 +9,18 @@ export const createServerChatSlice: StoreSlice<
     | "setServerChatTitle"
     | "serverChatCharacterId"
     | "setServerChatCharacterId"
+    | "serverChatAssistantKind"
+    | "setServerChatAssistantKind"
+    | "serverChatAssistantId"
+    | "setServerChatAssistantId"
+    | "serverChatPersonaMemoryMode"
+    | "setServerChatPersonaMemoryMode"
     | "serverChatMetaLoaded"
     | "setServerChatMetaLoaded"
+    | "serverChatLoadState"
+    | "setServerChatLoadState"
+    | "serverChatLoadError"
+    | "setServerChatLoadError"
     | "serverChatState"
     | "setServerChatState"
     | "serverChatVersion"
@@ -33,7 +43,12 @@ export const createServerChatSlice: StoreSlice<
       serverChatVersion: null,
       serverChatTitle: null,
       serverChatCharacterId: null,
+      serverChatAssistantKind: null,
+      serverChatAssistantId: null,
+      serverChatPersonaMemoryMode: null,
       serverChatMetaLoaded: false,
+      serverChatLoadState: id ? "loading" : "idle",
+      serverChatLoadError: null,
       serverChatTopic: null,
       serverChatClusterId: null,
       serverChatSource: null,
@@ -48,9 +63,31 @@ export const createServerChatSlice: StoreSlice<
       serverChatCharacterId:
         serverChatCharacterId != null ? serverChatCharacterId : null
     }),
+  serverChatAssistantKind: null,
+  setServerChatAssistantKind: (serverChatAssistantKind) =>
+    set({
+      serverChatAssistantKind: serverChatAssistantKind ?? null
+    }),
+  serverChatAssistantId: null,
+  setServerChatAssistantId: (serverChatAssistantId) =>
+    set({
+      serverChatAssistantId:
+        serverChatAssistantId != null ? serverChatAssistantId : null
+    }),
+  serverChatPersonaMemoryMode: null,
+  setServerChatPersonaMemoryMode: (serverChatPersonaMemoryMode) =>
+    set({
+      serverChatPersonaMemoryMode: serverChatPersonaMemoryMode ?? null
+    }),
   serverChatMetaLoaded: false,
   setServerChatMetaLoaded: (serverChatMetaLoaded) =>
     set({ serverChatMetaLoaded }),
+  serverChatLoadState: "idle",
+  setServerChatLoadState: (serverChatLoadState) =>
+    set({ serverChatLoadState }),
+  serverChatLoadError: null,
+  setServerChatLoadError: (serverChatLoadError) =>
+    set({ serverChatLoadError: serverChatLoadError != null ? serverChatLoadError : null }),
   serverChatState: null,
   setServerChatState: (state) =>
     set({ serverChatState: state ?? null }),

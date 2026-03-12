@@ -75,6 +75,8 @@ export interface Annotation {
   percentage?: number
   createdAt: Date
   updatedAt: Date
+  /** Server's last updated timestamp for conflict detection */
+  serverUpdatedAt?: string
 }
 
 export type AnnotationSyncStatus = "synced" | "pending" | "error"
@@ -188,6 +190,8 @@ export interface DocumentWorkspaceState {
   searchQuery: string
   searchResults: SearchResult[]
   activeSearchIndex: number
+  searchMatchCase: boolean
+  searchWordBoundary: boolean
 
   // Annotations (local cache)
   annotations: Annotation[]
@@ -238,6 +242,8 @@ export interface DocumentWorkspaceActions {
   setSearchResults: (results: SearchResult[]) => void
   setActiveSearchIndex: (index: number) => void
   clearSearch: () => void
+  setSearchMatchCase: (matchCase: boolean) => void
+  setSearchWordBoundary: (wordBoundary: boolean) => void
 
   // Annotations
   addAnnotation: (annotation: Omit<Annotation, "id" | "createdAt" | "updatedAt">) => void
@@ -286,6 +292,8 @@ export const DEFAULT_DOCUMENT_WORKSPACE_STATE: DocumentWorkspaceState = {
   searchQuery: "",
   searchResults: [],
   activeSearchIndex: 0,
+  searchMatchCase: false,
+  searchWordBoundary: false,
   annotations: [],
   pendingAnnotations: [],
   annotationSyncStatus: "synced",

@@ -42,6 +42,10 @@ async def test_character_chat_flow_sessions_messages_worldbooks():
             chat = r.json()
             chat_id = chat["id"]
             chat_version = chat["version"]
+            assert chat["assistant_kind"] == "character"
+            assert chat["assistant_id"] == str(character_id)
+            assert chat["character_id"] == character_id
+            assert chat["persona_memory_mode"] is None
 
             # 3) Update chat session title (optimistic lock)
             r = await client.put(
@@ -157,6 +161,58 @@ async def test_character_chat_flow_sessions_messages_worldbooks():
 
             r = await client.delete(f"/api/v1/characters/world-books/{wb_id}", headers=headers)
             assert r.status_code == 200
+    finally:
+        try:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            _ = None
+
+
+@pytest.mark.asyncio
+async def test_create_persona_backed_chat_session():
+    tmpdir = tempfile.mkdtemp(prefix="chacha_persona_chat_")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            persona_resp = await client.post(
+                "/api/v1/persona/profiles",
+                headers=headers,
+                json={"name": "Garden Helper"},
+            )
+            assert persona_resp.status_code == 201, persona_resp.text
+            persona_id = persona_resp.json()["id"]
+
+            create_resp = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={
+                    "assistant_kind": "persona",
+                    "assistant_id": persona_id,
+                    "persona_memory_mode": "read_only",
+                    "title": "Persona-backed chat",
+                },
+            )
+            assert create_resp.status_code == 201, create_resp.text
+            body = create_resp.json()
+            assert body["assistant_kind"] == "persona"
+            assert body["assistant_id"] == persona_id
+            assert body["character_id"] is None
+            assert body["persona_memory_mode"] == "read_only"
+
+            detail_resp = await client.get(f"/api/v1/chats/{body['id']}", headers=headers)
+            assert detail_resp.status_code == 200, detail_resp.text
+            detail = detail_resp.json()
+            assert detail["assistant_kind"] == "persona"
+            assert detail["assistant_id"] == persona_id
+            assert detail["character_id"] is None
+            assert detail["persona_memory_mode"] == "read_only"
     finally:
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)

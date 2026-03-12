@@ -1,4 +1,8 @@
 import type { StoreSlice } from "@/store/option/slices/types"
+import {
+  buildQueuedRequest,
+  normalizeQueuedRequests
+} from "@/utils/chat-request-queue"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
 
 export const createCoreSlice: StoreSlice<
@@ -98,6 +102,8 @@ export const createCoreSlice: StoreSlice<
         serverChatTitle: historyId ? null : state.serverChatTitle,
         serverChatCharacterId: historyId ? null : state.serverChatCharacterId,
         serverChatMetaLoaded: historyId ? false : state.serverChatMetaLoaded,
+        serverChatLoadState: historyId ? "idle" : state.serverChatLoadState,
+        serverChatLoadError: historyId ? null : state.serverChatLoadError,
         serverChatTopic: historyId ? null : state.serverChatTopic,
         serverChatClusterId: historyId ? null : state.serverChatClusterId,
         serverChatSource: historyId ? null : state.serverChatSource,
@@ -141,9 +147,16 @@ export const createCoreSlice: StoreSlice<
   queuedMessages: [],
   addQueuedMessage: (payload) =>
     set((state) => ({
-      queuedMessages: [...state.queuedMessages, payload]
+      queuedMessages: [...state.queuedMessages, buildQueuedRequest(payload)]
     })),
-  setQueuedMessages: (queuedMessages) => set({ queuedMessages }),
+  setQueuedMessages: (queuedMessagesOrUpdater) =>
+    set((state) => ({
+      queuedMessages: normalizeQueuedRequests(
+        typeof queuedMessagesOrUpdater === "function"
+          ? queuedMessagesOrUpdater(state.queuedMessages)
+          : queuedMessagesOrUpdater
+      )
+    })),
   clearQueuedMessages: () => set({ queuedMessages: [] }),
   selectedKnowledge: null,
   setSelectedKnowledge: (selectedKnowledge) => set({ selectedKnowledge }),

@@ -190,6 +190,8 @@ export const PlaygroundChat = ({
     temporaryChat,
     serverChatId,
     serverChatCharacterId,
+    serverChatLoadState,
+    serverChatLoadError,
     stopStreamingRequest,
     isEmbedding,
     compareMode,
@@ -340,6 +342,16 @@ export const PlaygroundChat = ({
     },
     [handleAttachResearchRun]
   )
+  const showSelectedServerChatLoadFailure =
+    messages.length === 0 &&
+    Boolean(serverChatId) &&
+    serverChatLoadState === "failed"
+  const selectedServerChatLoadFailureMessage =
+    serverChatLoadError?.trim() ||
+    (t(
+      "playground:selectedServerChatLoadFailure",
+      "Failed to load the selected conversation."
+    ) as string)
   const normalizedSearchQuery =
     typeof searchQuery === "string" ? searchQuery.trim() : ""
   const resolveSearchMatch = React.useCallback(
@@ -943,7 +955,13 @@ export const PlaygroundChat = ({
   return (
     <>
       <div className="relative flex w-full flex-col items-center pt-16 pb-4">
-        {messages.length === 0 && (
+        {showSelectedServerChatLoadFailure ? (
+          <div className="mt-32 w-full px-6">
+            <div className="mx-auto max-w-xl rounded-xl border border-destructive/30 bg-destructive/5 px-5 py-4 text-center text-sm text-text">
+              {selectedServerChatLoadFailureMessage}
+            </div>
+          </div>
+        ) : messages.length === 0 && serverChatLoadState !== "loading" && (
           <div className="mt-32 w-full">
             <PlaygroundEmpty />
           </div>

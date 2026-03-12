@@ -73,12 +73,14 @@ export function TopCommandsChart({ data, isLoading }: TopCommandsChartProps) {
                     border: '1px solid hsl(var(--border))',
                     borderRadius: '8px',
                   }}
-                  formatter={(value: number, name: string) => {
-                    if (name === 'invocations') return [value, 'Invocations'];
-                    return [value, name];
+                  formatter={(value, name) => {
+                    const safeValue = typeof value === 'number' ? value : 0;
+                    const safeName = typeof name === 'string' ? name : 'Invocations';
+                    if (safeName === 'invocations') return [safeValue, 'Invocations'];
+                    return [safeValue, safeName];
                   }}
-                  labelFormatter={(label: string, payload: unknown[]) => {
-                    const item = payload?.[0] as { payload?: { fullName: string } } | undefined;
+                  labelFormatter={(label, payload) => {
+                    const item = payload?.[0] as { payload?: { fullName?: string } } | undefined;
                     return item?.payload?.fullName || label;
                   }}
                 />

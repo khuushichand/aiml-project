@@ -5,7 +5,7 @@ import {
   resolveMonitoringLoadState,
   type MonitoringApiClient,
 } from './load-state-utils';
-import type { AlertHistoryEntry, SystemAlert } from './types';
+import type { SystemAlert } from './types';
 
 const fulfilledTimed = (payload: unknown): PromiseFulfilledResult<{
   payload: unknown;
@@ -41,6 +41,7 @@ describe('load-state-utils', () => {
       getMetrics: vi.fn().mockResolvedValue({ ok: true }),
       getWatchlists: vi.fn().mockResolvedValue({ items: [] }),
       getAlerts: vi.fn().mockResolvedValue({ items: [] }),
+      getAdminAlertHistory: vi.fn().mockResolvedValue({ items: [] }),
       getHealth: vi.fn().mockResolvedValue({ status: 'ok' }),
       getLlmHealth: vi.fn().mockResolvedValue({ status: 'ok' }),
       getRagHealth: vi.fn().mockResolvedValue({ status: 'ok' }),
@@ -76,6 +77,7 @@ describe('load-state-utils', () => {
     expect(result.metricsTextData.status).toBe('fulfilled');
     expect(result.notificationSettingsData.status).toBe('fulfilled');
     expect(result.recentNotificationsData.status).toBe('fulfilled');
+    expect(result.adminAlertHistoryData.status).toBe('fulfilled');
     expect(result.usersData.status).toBe('fulfilled');
 
     expect(measureTimedRequest).toHaveBeenCalledTimes(6);
@@ -84,11 +86,8 @@ describe('load-state-utils', () => {
 
   it('produces merged state for fulfilled monitoring data', () => {
     const previousAlerts = [baseAlert({ id: 'alert-1', assigned_to: 'u2' })];
-    const previousHistory: AlertHistoryEntry[] = [];
-
     const result = resolveMonitoringLoadState({
       previousAlerts,
-      previousAlertHistory: previousHistory,
       metricWarningThreshold: 70,
       metricCriticalThreshold: 90,
       settledResults: {
@@ -103,6 +102,21 @@ describe('load-state-utils', () => {
         alertsData: {
           status: 'fulfilled',
           value: { items: [baseAlert({ id: 'alert-1' }), baseAlert({ id: 'alert-2' })] },
+        },
+        adminAlertHistoryData: {
+          status: 'fulfilled',
+          value: {
+            items: [
+              {
+                id: 11,
+                alert_identity: 'alert:1',
+                action: 'assigned',
+                actor_user_id: 2,
+                details: { assigned_to_user_id: 2 },
+                created_at: '2026-02-27T12:05:00.000Z',
+              },
+            ],
+          },
         },
         usersData: {
           status: 'fulfilled',
@@ -146,7 +160,16 @@ describe('load-state-utils', () => {
     expect(result.watchlists).toEqual([{ id: 'w1', name: 'CPU', status: 'healthy' }]);
     expect(result.alerts?.[0]?.assigned_to).toBe('u2');
     expect(result.alerts).toHaveLength(2);
-    expect(result.alertHistory).not.toBeNull();
+    expect(result.alertHistory).toEqual([
+      {
+        id: '11',
+        alertId: 'alert:1',
+        action: 'assigned',
+        actor: 'User 2',
+        details: 'Assigned to user 2',
+        timestamp: '2026-02-27T12:05:00.000Z',
+      },
+    ]);
     expect(result.assignableUsers).toEqual([{ id: '1', label: 'alice' }]);
     expect(result.systemStatus).toHaveLength(9);
   });
@@ -154,13 +177,13 @@ describe('load-state-utils', () => {
   it('returns null patch values for rejected optional domains', () => {
     const result = resolveMonitoringLoadState({
       previousAlerts: [],
-      previousAlertHistory: [],
       metricWarningThreshold: 70,
       metricCriticalThreshold: 90,
       settledResults: {
         metricsData: rejected(new Error('metrics down')),
         watchlistsData: rejected(new Error('watchlists down')),
         alertsData: rejected(new Error('alerts down')),
+        adminAlertHistoryData: rejected(new Error('history down')),
         usersData: rejected(new Error('users down')),
         healthTimedResult: rejected(new Error('health down')),
         llmHealthTimedResult: rejected(new Error('llm down')),
@@ -190,6 +213,7 @@ describe('load-state-utils', () => {
       metricsData: rejected('metrics'),
       watchlistsData: rejected('watchlists'),
       alertsData: rejected('alerts'),
+      adminAlertHistoryData: rejected('adminAlertHistory'),
       healthTimedResult: rejected('health'),
       llmHealthTimedResult: rejected('llm'),
       ragHealthTimedResult: rejected('rag'),
@@ -206,6 +230,7 @@ describe('load-state-utils', () => {
       'metrics',
       'watchlists',
       'alerts',
+      'adminAlertHistory',
       'health',
       'llmHealth',
       'ragHealth',

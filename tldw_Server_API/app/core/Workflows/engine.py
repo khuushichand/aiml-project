@@ -669,6 +669,13 @@ class WorkflowEngine:
                     # If adapter returned special status
                     status_flag = last_outputs.get("__status__") if isinstance(last_outputs, dict) else None
                     if status_flag in {"waiting_human", "waiting_approval"}:
+                        self._complete_step_attempt_record(
+                            attempt_id=attempt_id,
+                            step_type=step_type,
+                            status=status_flag,
+                        )
+                        with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
+                            self.db.complete_step_run(step_run_id=step_run_id, status=status_flag, outputs=last_outputs)
                         on_timeout = None
                         timeout_cfg = None
                         try:
@@ -1082,6 +1089,14 @@ class WorkflowEngine:
             last = outputs or {}
             context.update({"last": last})
             if last.get("__status__") in {"waiting_human", "waiting_approval"}:
+                wait_status = str(last["__status__"])
+                self._complete_step_attempt_record(
+                    attempt_id=attempt_id,
+                    step_type=stype,
+                    status=wait_status,
+                )
+                with contextlib.suppress(_WF_NONCRITICAL_EXCEPTIONS):
+                    self.db.complete_step_run(step_run_id=step_run_id, status=wait_status, outputs=last)
                 on_timeout = None
                 timeout_cfg = None
                 try:

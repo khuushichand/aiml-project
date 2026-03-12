@@ -22,10 +22,14 @@ import { ActivitySection } from '@/components/dashboard/ActivitySection';
 import { RecentActivityCard } from '@/components/dashboard/RecentActivityCard';
 import { QuickActionsCard } from '@/components/dashboard/QuickActionsCard';
 import {
-  Building2, Clipboard, Settings, Trash2, UserPlus, ShieldAlert
+  Building2, Clipboard, CreditCard, Settings, Trash2, UserPlus, ShieldAlert
 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
+import {
+  fetchDashboardBillingStats,
+  isBillingEnabled,
+} from '@/lib/billing';
 import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, type SecurityHealthData, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
 import {
@@ -217,6 +221,11 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [securityHealth, setSecurityHealth] = useState<SecurityHealthData | null>(null);
   const [securityHealthError, setSecurityHealthError] = useState('');
+  const [billingStats, setBillingStats] = useState<{
+    active_subscriptions: number;
+    past_due_count: number;
+    plan_distribution: Record<string, number>;
+  } | null>(null);
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -225,13 +234,18 @@ export default function DashboardPage() {
       setSecurityHealthError('');
 
       const orgParams = selectedOrg ? { org_id: String(selectedOrg.id) } : undefined;
-      const auditParams = selectedOrg ? { limit: '10', org_id: String(selectedOrg.id) } : { limit: '10' };
-      const usageDailyParams = selectedOrg
-        ? { limit: '200', org_id: String(selectedOrg.id) }
-        : { limit: '200' };
-      const llmUsageSummaryParams = selectedOrg
-        ? { group_by: 'day', org_id: String(selectedOrg.id) }
-        : { group_by: 'day' };
+      const auditParams: Record<string, string> = {
+        limit: '10',
+        ...(selectedOrg ? { org_id: String(selectedOrg.id) } : {}),
+      };
+      const usageDailyParams: Record<string, string> = {
+        limit: '200',
+        ...(selectedOrg ? { org_id: String(selectedOrg.id) } : {}),
+      };
+      const llmUsageSummaryParams: Record<string, string> = {
+        group_by: 'day',
+        ...(selectedOrg ? { org_id: String(selectedOrg.id) } : {}),
+      };
       const activityQuery = getDashboardActivityQuery(activityRange);
 
       // Fetch all dashboard data in parallel
@@ -358,6 +372,14 @@ export default function DashboardPage() {
         statsResponse: statsResult.status === 'fulfilled' ? statsResult.value : null,
       });
       setStats(nextStats);
+
+      if (isBillingEnabled()) {
+        setBillingStats(
+          await fetchDashboardBillingStats(() => api.getSubscriptions())
+        );
+      } else {
+        setBillingStats(null);
+      }
 
       setSystemHealth(buildDashboardSystemHealth({
         healthResult,
@@ -708,6 +730,37 @@ export default function DashboardPage() {
             storagePercentage={storagePercentage}
             operationalKpis={operationalKpis}
           />
+
+          {isBillingEnabled() && billingStats && (
+            <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Active Subscriptions</CardTitle>
+                  <CreditCard className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{billingStats.active_subscriptions}</div>
+                  <p className="text-xs text-muted-foreground">
+                    {Object.entries(billingStats.plan_distribution).map(
+                      ([tier, count]) => `${count} ${tier}`
+                    ).join(', ') || 'No subscriptions'}
+                  </p>
+                </CardContent>
+              </Card>
+              {billingStats.past_due_count > 0 && (
+                <Card className="border-red-200 dark:border-red-800">
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium text-red-600">Past Due</CardTitle>
+                    <CreditCard className="h-4 w-4 text-red-600" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-red-600">{billingStats.past_due_count}</div>
+                    <p className="text-xs text-muted-foreground">subscriptions need attention</p>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
 
           <ActivitySection
             activityChartData={activityChartData}

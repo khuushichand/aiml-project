@@ -72,6 +72,66 @@ def test_interop_add_prompt_via_global_instance(interop_manager):
     assert details["name"] == "Interop Prompt"
 
 
+def test_interop_add_prompt_preserves_legacy_keyword_positionals(interop_manager):
+
+    p_id, p_uuid, msg = interop_add_prompt(
+        "Interop Keyword Prompt",
+        "Interop",
+        "Keyword positional compatibility",
+        None,
+        None,
+        ["legacy_kw"],
+        False,
+    )
+
+    assert p_id is not None
+    assert "added" in msg
+
+    details = interop_fetch_prompt_details(p_uuid)
+    assert details is not None
+    assert "legacy_kw" in details["keywords"]
+
+
+def test_interop_add_prompt_passes_structured_fields_and_keywords(interop_manager):
+
+    prompt_definition = {
+        "schema_version": 1,
+        "format": "structured",
+        "variables": [],
+        "blocks": [
+            {
+                "id": "task",
+                "name": "Task",
+                "role": "user",
+                "content": "Summarize this input.",
+                "enabled": True,
+                "order": 10,
+                "is_template": False,
+            }
+        ],
+    }
+
+    p_id, p_uuid, msg = interop_add_prompt(
+        name="Interop Structured Prompt",
+        author="Interop",
+        details="Structured via global instance",
+        prompt_format="structured",
+        prompt_schema_version=1,
+        prompt_definition=prompt_definition,
+        keywords=["structured_kw"],
+    )
+
+    assert p_id is not None
+    assert "added" in msg
+
+    details = interop_fetch_prompt_details(p_uuid)
+    assert details is not None
+    assert details["prompt_format"] == "structured"
+    assert details["prompt_schema_version"] == 1
+    assert details["prompt_definition"]["blocks"][0]["content"] == "Summarize this input."
+    assert "structured_kw" in details["keywords"]
+
+
 # --- Testing standalone wrapper functions from interop ---
 # These take a db_instance, so we need to provide one.
 # For these, the interop's global instance isn't directly used by the function itself,

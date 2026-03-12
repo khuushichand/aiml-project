@@ -76,6 +76,7 @@ class TTSCapabilities:
     latency_ms: Optional[int] = None  # Average latency in milliseconds
     sample_rate: int = 24000
     default_format: AudioFormat = AudioFormat.MP3
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 # Backward-compatibility for tests expecting VoiceSettings
 @dataclass

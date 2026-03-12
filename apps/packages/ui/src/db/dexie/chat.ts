@@ -494,6 +494,13 @@ export class PageAssistDatabase {
       name: prompt.name ?? prompt.title,
       tags: mergedKeywords ?? prompt.tags,
       keywords: mergedKeywords ?? prompt.keywords ?? prompt.tags,
+      promptFormat: prompt.promptFormat ?? 'legacy',
+      promptSchemaVersion: prompt.promptSchemaVersion ?? null,
+      structuredPromptDefinition: prompt.structuredPromptDefinition ?? null,
+      syncPayloadVersion:
+        typeof prompt.syncPayloadVersion === "number" && Number.isFinite(prompt.syncPayloadVersion)
+          ? prompt.syncPayloadVersion
+          : 1,
       deletedAt: null,
       usageCount: normalizedUsageCount,
       lastUsedAt:
@@ -577,6 +584,21 @@ export class PageAssistDatabase {
       content: updates.content ?? existing.content,
       system_prompt: updates.system_prompt ?? existing.system_prompt,
       user_prompt: updates.user_prompt ?? existing.user_prompt,
+      promptFormat: updates.promptFormat ?? existing.promptFormat ?? 'legacy',
+      promptSchemaVersion:
+        updates.promptSchemaVersion === undefined
+          ? existing.promptSchemaVersion ?? null
+          : updates.promptSchemaVersion ?? null,
+      structuredPromptDefinition:
+        updates.structuredPromptDefinition === undefined
+          ? existing.structuredPromptDefinition ?? null
+          : updates.structuredPromptDefinition ?? null,
+      syncPayloadVersion:
+        typeof updates.syncPayloadVersion === "number" && Number.isFinite(updates.syncPayloadVersion)
+          ? updates.syncPayloadVersion
+          : typeof existing.syncPayloadVersion === "number" && Number.isFinite(existing.syncPayloadVersion)
+            ? existing.syncPayloadVersion
+            : 1,
       tags: mergedKeywords ?? existing.tags,
       keywords: mergedKeywords ?? existing.keywords ?? existing.tags,
       favorite:

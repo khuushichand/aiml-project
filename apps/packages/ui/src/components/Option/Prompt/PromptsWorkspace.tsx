@@ -12,14 +12,14 @@ export const PromptsWorkspace: React.FC = () => {
   )
   const pageShellMaxWidthClassName = chatSidebarCollapsed
     ? "max-w-none"
-    : "max-w-5xl"
+    : "max-w-7xl"
 
   return (
     <PageShell
-      className="space-y-4"
+      className=""
       maxWidthClassName={pageShellMaxWidthClassName}
     >
-      <div className="space-y-1">
+      <div className="space-y-1 mb-4">
         <h1 className="text-lg font-semibold text-text">
           {t("option:header.modePromptsPlayground", "Prompts")}
         </h1>

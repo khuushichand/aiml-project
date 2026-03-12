@@ -3,7 +3,10 @@ import type {
   AudioGenerationSettings,
   GeneratedArtifact,
   WorkspaceBanner,
+  WorkspaceCollection,
   WorkspaceNote,
+  WorkspaceSourceFolder,
+  WorkspaceSourceFolderMembership,
   WorkspaceSource
 } from "@/types/workspace"
 
@@ -21,6 +24,10 @@ export interface WorkspaceBundleSnapshot {
   workspaceCreatedAt: ExportDateValue
   sources: WorkspaceSource[]
   selectedSourceIds: string[]
+  sourceFolders?: WorkspaceSourceFolder[]
+  sourceFolderMemberships?: WorkspaceSourceFolderMembership[]
+  selectedSourceFolderIds?: string[]
+  activeFolderId?: string | null
   generatedArtifacts: GeneratedArtifact[]
   notes: string
   currentNote: WorkspaceNote
@@ -45,6 +52,7 @@ export interface WorkspaceExportBundle {
     name: string
     tag: string
     createdAt: ExportDateValue
+    collectionId?: WorkspaceCollection["id"] | null
     snapshot: WorkspaceBundleSnapshot
     chatSession?: WorkspaceBundleChatSession
   }

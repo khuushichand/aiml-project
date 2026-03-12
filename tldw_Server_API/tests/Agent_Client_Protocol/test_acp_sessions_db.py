@@ -1,0 +1,430 @@
+"""Tests for ACP Sessions SQLite persistence."""
+import json
+import os
+import tempfile
+
+import pytest
+
+from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+
+
+@pytest.fixture
+def db():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "acp_sessions.db")
+        instance = ACPSessionsDB(db_path=path)
+        yield instance
+        instance.close()
+
+
+class TestSessionCRUD:
+    def test_register_and_get_session(self, db):
+        row = db.register_session(
+            session_id="s1",
+            user_id=1,
+            agent_type="claude_code",
+            name="Test Session",
+            cwd="/tmp/work",
+        )
+        assert row is not None
+        assert row["session_id"] == "s1"
+        assert row["user_id"] == 1
+        assert row["agent_type"] == "claude_code"
+        assert row["name"] == "Test Session"
+        assert row["status"] == "active"
+
+        fetched = db.get_session("s1")
+        assert fetched is not None
+        assert fetched["session_id"] == "s1"
+
+    def test_get_session_not_found(self, db):
+        assert db.get_session("nonexistent") is None
+
+    def test_close_session(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.close_session("s1")
+        rec = db.get_session("s1")
+        assert rec["status"] == "closed"
+
+    def test_list_sessions_filters(self, db):
+        db.register_session(session_id="s1", user_id=1, agent_type="claude_code")
+        db.register_session(session_id="s2", user_id=2, agent_type="codex")
+        db.register_session(session_id="s3", user_id=1, agent_type="claude_code")
+        db.close_session("s3")
+
+        # Filter by user
+        sessions, total = db.list_sessions(user_id=1)
+        assert total == 2
+        assert len(sessions) == 2
+
+        # Filter by status
+        sessions, total = db.list_sessions(user_id=1, status="active")
+        assert total == 1
+        assert sessions[0]["session_id"] == "s1"
+
+    def test_register_session_with_tags_and_mcp(self, db):
+        db.register_session(
+            session_id="s1",
+            user_id=1,
+            tags=["workflow", "test"],
+            mcp_servers=[{"name": "fs", "type": "stdio"}],
+        )
+        rec = db.get_session("s1")
+        assert rec["tags"] == ["workflow", "test"]
+        assert rec["mcp_servers"] == [{"name": "fs", "type": "stdio"}]
+
+    def test_update_session_activity(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        original = db.get_session("s1")
+        db.update_activity("s1")
+        updated = db.get_session("s1")
+        # last_activity_at should be updated (or at least not None)
+        assert updated["last_activity_at"] is not None
+
+    def test_set_session_error(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.set_session_status("s1", "error")
+        rec = db.get_session("s1")
+        assert rec["status"] == "error"
+
+    def test_list_sessions_pagination(self, db):
+        for i in range(10):
+            db.register_session(session_id=f"s{i}", user_id=1)
+        sessions, total = db.list_sessions(user_id=1, limit=3, offset=0)
+        assert total == 10
+        assert len(sessions) == 3
+        sessions2, _ = db.list_sessions(user_id=1, limit=3, offset=3)
+        assert len(sessions2) == 3
+        # No overlap
+        ids1 = {s["session_id"] for s in sessions}
+        ids2 = {s["session_id"] for s in sessions2}
+        assert ids1.isdisjoint(ids2)
+
+    def test_delete_session(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        assert db.delete_session("s1") is True
+        assert db.get_session("s1") is None
+        assert db.delete_session("s1") is False  # already deleted
+
+    def test_register_defaults(self, db):
+        """Verify default values for optional fields."""
+        row = db.register_session(session_id="s1", user_id=1)
+        assert row["agent_type"] == "custom"
+        assert row["name"] == ""
+        assert row["cwd"] == ""
+        assert row["tags"] == []
+        assert row["mcp_servers"] == []
+        assert row["message_count"] == 0
+        assert row["prompt_tokens"] == 0
+        assert row["completion_tokens"] == 0
+        assert row["total_tokens"] == 0
+        assert row["bootstrap_ready"] is True
+        assert row["needs_bootstrap"] is False
+        assert row["forked_from"] is None
+        assert row["persona_id"] is None
+        assert row["workspace_id"] is None
+
+    def test_boolean_fields_conversion(self, db):
+        """Ensure integer booleans in SQLite are returned as Python bools."""
+        db.register_session(session_id="s1", user_id=1)
+        rec = db.get_session("s1")
+        assert isinstance(rec["bootstrap_ready"], bool)
+        assert isinstance(rec["needs_bootstrap"], bool)
+
+    def test_list_sessions_filter_by_agent_type(self, db):
+        db.register_session(session_id="s1", user_id=1, agent_type="claude_code")
+        db.register_session(session_id="s2", user_id=1, agent_type="codex")
+        sessions, total = db.list_sessions(agent_type="codex")
+        assert total == 1
+        assert sessions[0]["session_id"] == "s2"
+
+    def test_created_at_is_populated(self, db):
+        row = db.register_session(session_id="s1", user_id=1)
+        assert row["created_at"] is not None
+        assert len(row["created_at"]) > 0  # ISO timestamp string
+
+
+class TestSessionMessages:
+    def test_record_prompt_stores_messages(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        prompt = [{"role": "user", "content": "Hello"}]
+        result = {"content": [{"text": "Hi there"}], "usage": {"input_tokens": 10, "output_tokens": 5}}
+        usage = db.record_prompt("s1", prompt, result)
+        assert usage is not None
+        assert usage["prompt_tokens"] == 10
+        assert usage["completion_tokens"] == 5
+        assert usage["total_tokens"] == 15
+
+        rec = db.get_session("s1")
+        assert rec["message_count"] == 2
+        assert rec["total_tokens"] == 15
+
+    def test_record_prompt_nonexistent_session(self, db):
+        assert db.record_prompt("nope", [], {}) is None
+
+    def test_get_messages(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.record_prompt(
+            "s1",
+            [{"role": "user", "content": "Hello"}],
+            {"content": [{"text": "Hi"}], "usage": {}},
+        )
+        messages = db.get_messages("s1")
+        assert len(messages) == 2
+        assert messages[0]["role"] == "user"
+        assert messages[1]["role"] == "assistant"
+
+    def test_get_messages_with_limit(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        for i in range(5):
+            db.record_prompt(
+                "s1",
+                [{"role": "user", "content": f"msg {i}"}],
+                {"content": [{"text": f"reply {i}"}], "usage": {}},
+            )
+        messages = db.get_messages("s1", limit=4)
+        assert len(messages) == 4
+
+    def test_record_prompt_accumulates_tokens(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.record_prompt("s1", [{"role": "user", "content": "a"}],
+                         {"content": "r1", "usage": {"prompt_tokens": 10, "completion_tokens": 5}})
+        db.record_prompt("s1", [{"role": "user", "content": "b"}],
+                         {"content": "r2", "usage": {"prompt_tokens": 20, "completion_tokens": 10}})
+        rec = db.get_session("s1")
+        assert rec["prompt_tokens"] == 30
+        assert rec["completion_tokens"] == 15
+        assert rec["total_tokens"] == 45
+        assert rec["message_count"] == 4
+
+    def test_record_prompt_handles_missing_usage(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        usage = db.record_prompt("s1", [{"role": "user", "content": "hello"}],
+                                 {"content": "world"})
+        assert usage["prompt_tokens"] == 0
+        assert usage["total_tokens"] == 0
+
+    def test_update_token_usage_directly(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.update_token_usage("s1", prompt_tokens=50, completion_tokens=25)
+        rec = db.get_session("s1")
+        assert rec["prompt_tokens"] == 50
+        assert rec["completion_tokens"] == 25
+        assert rec["total_tokens"] == 75
+        # Second call accumulates
+        db.update_token_usage("s1", prompt_tokens=10, completion_tokens=5)
+        rec = db.get_session("s1")
+        assert rec["prompt_tokens"] == 60
+        assert rec["completion_tokens"] == 30
+        assert rec["total_tokens"] == 90
+
+
+class TestForkSession:
+    def test_fork_copies_messages(self, db):
+        db.register_session(session_id="s1", user_id=1, agent_type="claude_code")
+        db.record_prompt("s1", [{"role": "user", "content": "Hello"}],
+                         {"content": [{"text": "Hi"}], "usage": {}})
+        db.record_prompt("s1", [{"role": "user", "content": "Next"}],
+                         {"content": [{"text": "OK"}], "usage": {}})
+        forked = db.fork_session("s1", "s2", message_index=1, user_id=1)
+        assert forked is not None
+        assert forked["forked_from"] == "s1"
+        assert forked["agent_type"] == "claude_code"
+        assert forked["needs_bootstrap"] is True
+        messages = db.get_messages("s2")
+        assert len(messages) == 2  # messages 0 and 1
+
+    def test_fork_nonexistent_source(self, db):
+        assert db.fork_session("nope", "s2", message_index=0, user_id=1) is None
+
+    def test_fork_wrong_user(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        assert db.fork_session("s1", "s2", message_index=-1, user_id=999) is None
+
+    def test_get_fork_lineage(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.fork_session("s1", "s2", message_index=-1, user_id=1)
+        db.fork_session("s2", "s3", message_index=-1, user_id=1)
+        lineage = db.get_fork_lineage("s3")
+        assert lineage == ["s1", "s2"]
+
+    def test_get_fork_lineage_no_fork(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        assert db.get_fork_lineage("s1") == []
+
+    def test_fork_all_messages(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.record_prompt("s1", [{"role": "user", "content": "a"}],
+                         {"content": "b", "usage": {}})
+        # Copy all messages with a large index
+        forked = db.fork_session("s1", "s2", message_index=999, user_id=1)
+        messages = db.get_messages("s2")
+        assert len(messages) == 2  # all messages copied
+
+
+class TestQuotasAndCleanup:
+    def test_check_session_quota_under_limit(self, db):
+        db.configure_quotas(max_concurrent_per_user=3)
+        db.register_session(session_id="s1", user_id=1)
+        assert db.check_session_quota(1) is None
+
+    def test_check_session_quota_exceeded(self, db):
+        db.configure_quotas(max_concurrent_per_user=1)
+        db.register_session(session_id="s1", user_id=1)
+        error = db.check_session_quota(1)
+        assert error is not None
+        assert error["code"] == "quota_exceeded"
+        assert error["current"] == 1
+        assert error["limit"] == 1
+
+    def test_check_session_quota_ignores_closed(self, db):
+        db.configure_quotas(max_concurrent_per_user=1)
+        db.register_session(session_id="s1", user_id=1)
+        db.close_session("s1")
+        # Closed session shouldn't count
+        assert db.check_session_quota(1) is None
+
+    def test_check_token_quota_under_limit(self, db):
+        db.configure_quotas(max_tokens_per_session=1000)
+        db.register_session(session_id="s1", user_id=1)
+        assert db.check_token_quota("s1") is None
+
+    def test_check_token_quota_exceeded(self, db):
+        db.configure_quotas(max_tokens_per_session=100)
+        db.register_session(session_id="s1", user_id=1)
+        db.update_token_usage("s1", prompt_tokens=80, completion_tokens=30)
+        error = db.check_token_quota("s1")
+        assert error is not None
+        assert error["code"] == "token_quota_exceeded"
+
+    def test_check_token_quota_nonexistent_session(self, db):
+        db.configure_quotas(max_tokens_per_session=100)
+        assert db.check_token_quota("nope") is None
+
+    def test_get_quota_status(self, db):
+        db.configure_quotas(max_concurrent_per_user=5, max_tokens_per_session=1000)
+        db.register_session(session_id="s1", user_id=1)
+        status = db.get_quota_status(1, session_id="s1")
+        assert status["concurrent_sessions"]["current"] == 1
+        assert status["concurrent_sessions"]["limit"] == 5
+        assert "session_tokens" in status
+
+    def test_get_quota_status_without_session(self, db):
+        db.configure_quotas(max_concurrent_per_user=5)
+        db.register_session(session_id="s1", user_id=1)
+        status = db.get_quota_status(1)
+        assert status["concurrent_sessions"]["current"] == 1
+        assert "session_tokens" not in status
+
+    def test_evict_expired_sessions(self, db):
+        db.configure_quotas(session_ttl_seconds=0)  # Immediate expiry
+        db.register_session(session_id="s1", user_id=1)
+        evicted = db.evict_expired_sessions()
+        assert evicted == 1
+        rec = db.get_session("s1")
+        assert rec["status"] == "closed"
+
+    def test_evict_skips_already_closed(self, db):
+        db.configure_quotas(session_ttl_seconds=0)
+        db.register_session(session_id="s1", user_id=1)
+        db.close_session("s1")
+        evicted = db.evict_expired_sessions()
+        assert evicted == 0
+
+    def test_evict_preserves_fresh_sessions(self, db):
+        db.configure_quotas(session_ttl_seconds=86400)  # 24h
+        db.register_session(session_id="s1", user_id=1)
+        evicted = db.evict_expired_sessions()
+        assert evicted == 0
+        rec = db.get_session("s1")
+        assert rec["status"] == "active"
+
+
+class TestCascadeDelete:
+    def test_delete_session_cascades_messages(self, db):
+        db.register_session(session_id="s1", user_id=1)
+        db.record_prompt("s1", [{"role": "user", "content": "Hello"}],
+                         {"content": "Hi", "usage": {}})
+        assert len(db.get_messages("s1")) == 2
+        db.delete_session("s1")
+        # Messages should be gone too (CASCADE)
+        assert db.get_messages("s1") == []
+
+
+class TestAgentRegistry:
+    def test_save_and_get_agent_entry(self, db):
+        entry = db.save_agent_entry({
+            "agent_type": "test_agent",
+            "name": "Test Agent",
+            "command": "test-cmd",
+            "source": "api",
+        })
+        assert entry is not None
+        assert entry["agent_type"] == "test_agent"
+        fetched = db.get_agent_entry("test_agent")
+        assert fetched is not None
+        assert fetched["name"] == "Test Agent"
+
+    def test_delete_agent_entry(self, db):
+        db.save_agent_entry({"agent_type": "tmp", "name": "Tmp", "source": "api"})
+        assert db.delete_agent_entry("tmp") is True
+        assert db.get_agent_entry("tmp") is None
+        assert db.delete_agent_entry("tmp") is False
+
+    def test_list_agent_entries(self, db):
+        db.save_agent_entry({"agent_type": "a1", "name": "A1", "source": "api"})
+        db.save_agent_entry({"agent_type": "a2", "name": "A2", "source": "yaml"})
+        all_entries = db.list_agent_entries()
+        assert len(all_entries) == 2
+        api_entries = db.list_agent_entries(source="api")
+        assert len(api_entries) == 1
+        assert api_entries[0]["agent_type"] == "a1"
+
+    def test_save_agent_upsert(self, db):
+        db.save_agent_entry({"agent_type": "a1", "name": "Original", "source": "api"})
+        db.save_agent_entry({"agent_type": "a1", "name": "Updated", "source": "api"})
+        entry = db.get_agent_entry("a1")
+        assert entry["name"] == "Updated"
+
+
+class TestHealthHistory:
+    def test_record_and_get_health_check(self, db):
+        db.record_health_check("claude_code", "healthy", 0, '{"status": "available"}')
+        history = db.get_health_history("claude_code")
+        assert len(history) == 1
+        assert history[0]["health"] == "healthy"
+        assert history[0]["agent_type"] == "claude_code"
+        assert history[0]["details"] == '{"status": "available"}'
+        assert history[0]["checked_at"] is not None
+
+    def test_health_history_limit(self, db):
+        for i in range(10):
+            db.record_health_check("claude_code", "healthy", 0)
+        history = db.get_health_history("claude_code", limit=3)
+        assert len(history) == 3
+
+    def test_health_history_empty(self, db):
+        assert db.get_health_history("nonexistent") == []
+
+    def test_health_history_ordered_by_checked_at_desc(self, db):
+        db.record_health_check("agent_a", "healthy", 0)
+        db.record_health_check("agent_a", "degraded", 1)
+        db.record_health_check("agent_a", "unavailable", 3)
+        history = db.get_health_history("agent_a")
+        assert len(history) == 3
+        # Most recent first
+        assert history[0]["health"] == "unavailable"
+        assert history[2]["health"] == "healthy"
+
+    def test_health_history_filters_by_agent_type(self, db):
+        db.record_health_check("agent_a", "healthy", 0)
+        db.record_health_check("agent_b", "degraded", 1)
+        history_a = db.get_health_history("agent_a")
+        assert len(history_a) == 1
+        assert history_a[0]["agent_type"] == "agent_a"
+
+    def test_health_history_consecutive_failures_stored(self, db):
+        db.record_health_check("agent_a", "degraded", 2, '{"error": "timeout"}')
+        history = db.get_health_history("agent_a")
+        assert history[0]["consecutive_failures"] == 2
+        assert history[0]["details"] == '{"error": "timeout"}'

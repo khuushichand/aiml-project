@@ -262,6 +262,11 @@ export interface ChatCompletionRequest {
   api_provider?: string
   extra_headers?: Record<string, unknown>
   extra_body?: Record<string, unknown>
+  thinking_budget_tokens?: number
+  grammar_mode?: "none" | "library" | "inline"
+  grammar_id?: string
+  grammar_inline?: string
+  grammar_override?: string
   response_format?: { type: "json_object" | "text" }
   research_context?: ChatResearchContext
 }
@@ -301,6 +306,68 @@ export interface ChatLinkedResearchRunsResponse {
 }
 
 export type ResearchBundleResponse = Record<string, unknown>
+
+export interface PersonaProfileSummary {
+  id: string
+  name?: string | null
+  character_card_id?: number | null
+  origin_character_id?: number | null
+  [key: string]: unknown
+}
+
+export interface PersonaProfile extends PersonaProfileSummary {
+  mode?: string | null
+  system_prompt?: string | null
+  use_persona_state_context_default?: boolean
+}
+
+export interface PersonaExemplar {
+  id: string
+  persona_id: string
+  kind: string
+  content: string
+  tone?: string | null
+  scenario_tags: string[]
+  capability_tags: string[]
+  priority: number
+  enabled: boolean
+  source_type?: string | null
+  source_ref?: string | null
+  notes?: string | null
+  created_at?: string | null
+  last_modified?: string | null
+}
+
+export type PersonaExemplarInput = {
+  kind: string
+  content: string
+  tone?: string | null
+  scenario_tags?: string[]
+  capability_tags?: string[]
+  priority?: number
+  enabled?: boolean
+  source_type?: string | null
+  source_ref?: string | null
+  notes?: string | null
+}
+
+export type PersonaExemplarListOptions = {
+  includeDisabled?: boolean
+  includeDeleted?: boolean
+  includeDeletedPersonas?: boolean
+}
+
+export type PersonaExemplarImportInput = {
+  transcript: string
+  source_ref?: string | null
+  notes?: string | null
+  max_candidates?: number
+}
+
+export type PersonaExemplarReviewInput = {
+  action: "approve" | "reject"
+  notes?: string | null
+}
 
 export type ConversationSharePermission = "view"
 

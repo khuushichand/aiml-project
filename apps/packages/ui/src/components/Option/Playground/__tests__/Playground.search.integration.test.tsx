@@ -65,6 +65,10 @@ const storeOptionState = vi.hoisted(() => ({
   }
 }))
 
+const routerState = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, defaultValue?: string, options?: Record<string, unknown>) => {
@@ -110,6 +114,7 @@ vi.mock("@/hooks/useMessageOption", () => ({
 vi.mock("@/hooks/usePlaygroundSessionPersistence", () => ({
   usePlaygroundSessionPersistence: () => ({
     restoreSession: vi.fn(async () => false),
+    sessionScopeReady: true,
     hasPersistedSession: false,
     persistedHistoryId: null,
     persistedServerChatId: null
@@ -182,6 +187,16 @@ vi.mock("@/hooks/useCharacterGreeting", () => ({
   useCharacterGreeting: () => undefined
 }))
 
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: () => routerState.navigate
+  }
+})
+
 describe("Playground thread search integration", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -235,6 +250,14 @@ describe("Playground thread search integration", () => {
         screen.getByTestId("playground-shortcuts-help-panel")
       ).toBeInTheDocument()
     })
+  })
+
+  it("opens chat workflows from the header action", () => {
+    render(<Playground />)
+
+    fireEvent.click(screen.getByTestId("playground-chat-workflows-trigger"))
+
+    expect(routerState.navigate).toHaveBeenCalledWith("/chat-workflows")
   })
 
   it("shows mobile artifacts sheet context and returns focus to trigger when closing", async () => {

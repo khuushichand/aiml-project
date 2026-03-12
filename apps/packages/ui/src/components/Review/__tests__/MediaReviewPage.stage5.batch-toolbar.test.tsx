@@ -366,6 +366,22 @@ vi.mock("antd", async (importOriginal) => {
   }
 })
 
+vi.mock("@/components/Common/Markdown", () => ({
+  Markdown: ({ message }: { message: string }) => <div data-testid="mock-markdown">{message}</div>
+}))
+
+vi.mock("@/components/Media/diff-worker-client", () => ({
+  computeDiffSync: () => [],
+  shouldUseWorkerDiff: () => false,
+  shouldRequireSampling: () => false,
+  sampleTextForDiff: (t: string) => t,
+  computeDiffWithWorker: async () => [],
+  createDiffWorker: () => null,
+  DIFF_SYNC_LINE_THRESHOLD: 4000,
+  DIFF_HARD_CHAR_THRESHOLD: 300_000,
+  DIFF_SAMPLED_CHAR_BUDGET: 120_000
+}))
+
 describe("MediaReviewPage stage5 batch toolbar", () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -444,6 +460,12 @@ describe("MediaReviewPage stage5 batch toolbar", () => {
     return row as HTMLElement
   }
 
+  const selectItemByCheckbox = (title: string, options?: Record<string, unknown>): void => {
+    const row = getResultRowByTitle(title)
+    const checkbox = within(row).getByRole('checkbox')
+    fireEvent.click(checkbox, options)
+  }
+
   it("shows batch toolbar when selection is non-empty", async () => {
     render(<MediaReviewPage />)
 
@@ -451,7 +473,7 @@ describe("MediaReviewPage stage5 batch toolbar", () => {
       expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle("Alpha paper"))
+    selectItemByCheckbox("Alpha paper")
 
     await waitFor(() => {
       expect(screen.getByTestId("media-multi-batch-toolbar")).toBeInTheDocument()
@@ -465,7 +487,7 @@ describe("MediaReviewPage stage5 batch toolbar", () => {
       expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle("Alpha paper"))
+    selectItemByCheckbox("Alpha paper")
 
     const toolbar = await screen.findByTestId("media-multi-batch-toolbar")
     const moveToTrashButton = screen.getByRole("button", { name: /move to trash/i })
@@ -480,8 +502,8 @@ describe("MediaReviewPage stage5 batch toolbar", () => {
       expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle("Alpha paper"))
-    fireEvent.click(getResultRowByTitle("Beta notes"))
+    selectItemByCheckbox("Alpha paper")
+    selectItemByCheckbox("Beta notes")
 
     await waitFor(() => {
       expect(screen.getByTestId("media-multi-batch-toolbar")).toBeInTheDocument()

@@ -147,6 +147,76 @@ def test_chat_completion_request_requires_conversation_for_tldw_continuation():
     assert "conversation_id is required" in str(exc_info.value)
 
 
+@pytest.mark.unit
+def test_chat_completion_request_accepts_json_schema_response_format():
+    req = ChatCompletionRequest(
+        model="test-m",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Return structured")],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            },
+        },
+    )
+    assert req.response_format is not None
+    assert req.response_format.type == "json_schema"
+    assert req.response_format.json_schema is not None
+    assert req.response_format.json_schema.name == "answer_schema"
+
+
+@pytest.mark.unit
+def test_chat_completion_request_rejects_json_schema_without_schema_object():
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest(
+            model="test-m",
+            messages=[ChatCompletionUserMessageParam(role="user", content="Return structured")],
+            response_format={"type": "json_schema", "json_schema": {"name": "bad"}},
+        )
+
+
+@pytest.mark.unit
+def test_chat_completion_request_accepts_llamacpp_extension_fields():
+    req = ChatCompletionRequest(
+        model="llama.cpp/local-model",
+        messages=[ChatCompletionUserMessageParam(role="user", content="reply in JSON")],
+        grammar_mode="library",
+        grammar_id="grammar_123",
+        grammar_override='root ::= "ok"',
+        thinking_budget_tokens=128,
+    )
+    assert req.grammar_mode == "library"
+    assert req.grammar_id == "grammar_123"
+    assert req.thinking_budget_tokens == 128
+
+
+@pytest.mark.unit
+def test_chat_completion_request_rejects_llamacpp_library_mode_without_grammar_id():
+    with pytest.raises(ValidationError) as exc_info:
+        ChatCompletionRequest(
+            model="llama.cpp/local-model",
+            messages=[ChatCompletionUserMessageParam(role="user", content="x")],
+            grammar_mode="library",
+        )
+    assert "grammar_id is required" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_chat_completion_request_rejects_llamacpp_inline_mode_without_grammar_inline():
+    with pytest.raises(ValidationError) as exc_info:
+        ChatCompletionRequest(
+            model="llama.cpp/local-model",
+            messages=[ChatCompletionUserMessageParam(role="user", content="x")],
+            grammar_mode="inline",
+        )
+    assert "grammar_inline is required" in str(exc_info.value)
+
+
 # --- Tests for FunctionDefinition Parameter Validation ---
 
 @pytest.mark.unit

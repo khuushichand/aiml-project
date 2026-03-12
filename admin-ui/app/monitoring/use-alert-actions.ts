@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { buildAlertHistoryEntry, resolveSnoozedUntil } from '@/lib/monitoring-alerts';
+import { resolveSnoozedUntil } from '@/lib/monitoring-alerts';
 import {
   escalateAlertSeverity,
   markAlertAcknowledged,
@@ -7,12 +7,7 @@ import {
   setAlertAssignment,
   setAlertSnoozeUntil,
 } from './alert-state-utils';
-import type {
-  AlertAssignableUser,
-  AlertHistoryEntry,
-  SnoozeDurationOption,
-  SystemAlert,
-} from './types';
+import type { SnoozeDurationOption, SystemAlert } from './types';
 
 type ConfirmVariant = 'danger' | 'warning' | 'default';
 type ConfirmIcon = 'delete' | 'warning' | 'rotate' | 'remove-user' | 'key';
@@ -32,54 +27,42 @@ type StateSetter<T> = (next: T | ((prev: T) => T)) => void;
 export type AlertActionsApiClient = {
   acknowledgeAlert: (alertId: string) => Promise<unknown>;
   dismissAlert: (alertId: string) => Promise<unknown>;
+  assignAdminAlert: (alertIdentity: string, data: Record<string, unknown>) => Promise<unknown>;
+  snoozeAdminAlert: (alertIdentity: string, data: Record<string, unknown>) => Promise<unknown>;
+  escalateAdminAlert: (alertIdentity: string, data: Record<string, unknown>) => Promise<unknown>;
 };
 
 type UseAlertActionsArgs = {
   apiClient: AlertActionsApiClient;
   confirm: ConfirmFn;
   setAlerts: StateSetter<SystemAlert[]>;
-  setAlertHistory: StateSetter<AlertHistoryEntry[]>;
   setError: (message: string) => void;
   setSuccess: (message: string) => void;
   onReloadRequested: () => void | Promise<void>;
-  assignableUsers: AlertAssignableUser[];
 };
+
+const getAlertIdentity = (alert: SystemAlert): string => alert.alert_identity ?? `alert:${alert.id}`;
 
 export const useAlertActions = ({
   apiClient,
   confirm,
   setAlerts,
-  setAlertHistory,
   setError,
   setSuccess,
   onReloadRequested,
-  assignableUsers,
 }: UseAlertActionsArgs) => {
-  const appendAlertHistory = useCallback((
-    alertId: string,
-    action: AlertHistoryEntry['action'],
-    details: string,
-    actor?: string
-  ) => {
-    setAlertHistory((prev) => [
-      buildAlertHistoryEntry(alertId, action, details, { actor }),
-      ...prev,
-    ]);
-  }, [setAlertHistory]);
-
   const handleAcknowledgeAlert = useCallback(async (alert: SystemAlert) => {
     try {
       setError('');
       await apiClient.acknowledgeAlert(alert.id);
       setAlerts((prev) => markAlertAcknowledged(prev, alert.id, new Date().toISOString()));
-      appendAlertHistory(alert.id, 'acknowledged', 'Alert acknowledged');
       setSuccess('Alert acknowledged');
-      void onReloadRequested();
+      await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
       console.error('Failed to acknowledge alert:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to acknowledge alert');
     }
-  }, [apiClient, appendAlertHistory, onReloadRequested, setAlerts, setError, setSuccess]);
+  }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);
 
   const handleDismissAlert = useCallback(async (alert: SystemAlert) => {
     const confirmed = await confirm({
@@ -94,40 +77,61 @@ export const useAlertActions = ({
     try {
       setError('');
       await apiClient.dismissAlert(alert.id);
-      appendAlertHistory(alert.id, 'dismissed', 'Alert dismissed');
       setAlerts((prev) => removeAlertById(prev, alert.id));
       setSuccess('Alert dismissed');
-      void onReloadRequested();
+      await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
       console.error('Failed to dismiss alert:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to dismiss alert');
     }
-  }, [apiClient, appendAlertHistory, confirm, onReloadRequested, setAlerts, setError, setSuccess]);
+  }, [apiClient, confirm, onReloadRequested, setAlerts, setError, setSuccess]);
 
-  const handleAssignAlert = useCallback((alert: SystemAlert, userId: string) => {
-    setAlerts((prev) => setAlertAssignment(prev, alert.id, userId || undefined));
-    const assignedLabel = userId
-      ? (assignableUsers.find((user) => user.id === userId)?.label ?? userId)
-      : 'Unassigned';
-    appendAlertHistory(alert.id, 'assigned', `Assigned to ${assignedLabel}`);
-    setSuccess(userId ? 'Alert assigned' : 'Alert unassigned');
-  }, [appendAlertHistory, assignableUsers, setAlerts, setSuccess]);
+  const handleAssignAlert = useCallback(async (alert: SystemAlert, userId: string) => {
+    try {
+      setError('');
+      await apiClient.assignAdminAlert(getAlertIdentity(alert), {
+        assigned_to_user_id: userId ? Number(userId) : null,
+      });
+      setAlerts((prev) => setAlertAssignment(prev, alert.id, userId || undefined));
+      setSuccess(userId ? 'Alert assigned' : 'Alert unassigned');
+      await Promise.resolve(onReloadRequested());
+    } catch (err: unknown) {
+      console.error('Failed to assign alert:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Failed to assign alert');
+    }
+  }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);
 
-  const handleSnoozeAlert = useCallback((alert: SystemAlert, duration: SnoozeDurationOption) => {
-    const snoozedUntil = resolveSnoozedUntil(duration);
-    setAlerts((prev) => setAlertSnoozeUntil(prev, alert.id, snoozedUntil));
-    appendAlertHistory(alert.id, 'snoozed', `Snoozed for ${duration}`);
-    setSuccess(`Alert snoozed for ${duration}`);
-  }, [appendAlertHistory, setAlerts, setSuccess]);
+  const handleSnoozeAlert = useCallback(async (alert: SystemAlert, duration: SnoozeDurationOption) => {
+    try {
+      setError('');
+      const snoozedUntil = resolveSnoozedUntil(duration);
+      await apiClient.snoozeAdminAlert(getAlertIdentity(alert), {
+        snoozed_until: snoozedUntil,
+      });
+      setAlerts((prev) => setAlertSnoozeUntil(prev, alert.id, snoozedUntil));
+      setSuccess(`Alert snoozed for ${duration}`);
+      await Promise.resolve(onReloadRequested());
+    } catch (err: unknown) {
+      console.error('Failed to snooze alert:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Failed to snooze alert');
+    }
+  }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);
 
-  const handleEscalateAlert = useCallback((alert: SystemAlert) => {
+  const handleEscalateAlert = useCallback(async (alert: SystemAlert) => {
     if (alert.severity === 'critical') {
       return;
     }
-    setAlerts((prev) => escalateAlertSeverity(prev, alert.id));
-    appendAlertHistory(alert.id, 'escalated', 'Severity escalated to critical');
-    setSuccess('Alert escalated to critical');
-  }, [appendAlertHistory, setAlerts, setSuccess]);
+    try {
+      setError('');
+      await apiClient.escalateAdminAlert(getAlertIdentity(alert), { severity: 'critical' });
+      setAlerts((prev) => escalateAlertSeverity(prev, alert.id));
+      setSuccess('Alert escalated to critical');
+      await Promise.resolve(onReloadRequested());
+    } catch (err: unknown) {
+      console.error('Failed to escalate alert:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Failed to escalate alert');
+    }
+  }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);
 
   return {
     handleAcknowledgeAlert,

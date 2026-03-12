@@ -105,13 +105,16 @@ Tip (CI/Dev): The test suite sets `TTS_AUTO_DOWNLOAD=0` to avoid network during 
 
 ### Qwen3-TTS Setup
 
-Qwen3-TTS is a local multilingual TTS model family with CustomVoice, VoiceDesign, and Base (voice clone) modes.
+Qwen3-TTS is a runtime-aware multilingual TTS provider with `upstream`, `mlx`, and `remote` execution modes.
 Full runbook: `Docs/STT-TTS/QWEN3_TTS_SETUP.md`.
 
 #### Installation
 ```bash
-# Install the Qwen3-TTS Python package and core dependencies
+# Upstream runtime
 pip install qwen-tts torch soundfile
+
+# Apple Silicon MLX runtime
+pip install mlx mlx-audio
 ```
 
 If the package name differs for your environment, install from the upstream repo instead.
@@ -123,6 +126,7 @@ Enable Qwen3-TTS in `tldw_Server_API/Config_Files/tts_providers_config.yaml`:
 providers:
   qwen3_tts:
     enabled: true
+    runtime: "auto"  # auto | upstream | mlx | remote
     model: "auto"  # or an explicit model id
     device: "cuda" # cpu | cuda | mps
     dtype: "float16"
@@ -177,6 +181,7 @@ Notes:
 - `extra_params.x_vector_only_mode=true` allows omitting `reference_text` (quality may degrade).
 - `reference_duration_min` (seconds) can be provided to enforce a minimum reference clip duration.
 - Base models enforce a default 3s minimum reference duration when `reference_duration_min` is omitted.
+- `runtime=mlx` supports preset-speaker CustomVoice only in v1 and rejects Base/VoiceDesign/uploaded custom voices.
 
 #### Tokenizer API Endpoints
 

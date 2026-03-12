@@ -114,6 +114,20 @@ describe("TldwModelsService caching", () => {
     expect(mocks.getModels).toHaveBeenCalledWith({ refreshOpenRouter: true })
   })
 
+  it("reuses cached models during the forced refresh cooldown", async () => {
+    mocks.getModels.mockResolvedValue([
+      { id: "openrouter/model-a", name: "Model A", provider: "openrouter", type: "chat" }
+    ])
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    await service.getModels(true, { refreshOpenRouter: true })
+    await service.getModels(true, { refreshOpenRouter: true })
+
+    expect(mocks.getModels).toHaveBeenCalledTimes(1)
+  })
+
   it("ignores legacy cache entries without schema version and refetches models", async () => {
     mocks.storageGet.mockResolvedValue({
       timestamp: Date.now(),
@@ -162,6 +176,36 @@ describe("TldwModelsService caching", () => {
 
     expect(chatIds).toContain("openai/gpt-4o-mini")
     expect(chatIds).not.toContain("black-forest-labs/flux.1-schnell")
+  })
+
+  it("returns cached chat models without fetching provider metadata again", async () => {
+    mocks.storageGet.mockResolvedValue({
+      version: 2,
+      timestamp: Date.now(),
+      scope: "http://127.0.0.1:8000|single-user|key|none",
+      models: [
+        {
+          id: "openai/gpt-4o-mini",
+          name: "openai/gpt-4o-mini",
+          provider: "openai",
+          type: "chat"
+        },
+        {
+          id: "black-forest-labs/flux.1-schnell",
+          name: "black-forest-labs/flux.1-schnell",
+          provider: "openrouter",
+          type: "image"
+        }
+      ]
+    })
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    const chatModels = await service.getCachedChatModels()
+
+    expect(chatModels.map((model) => model.id)).toEqual(["openai/gpt-4o-mini"])
+    expect(mocks.getModels).not.toHaveBeenCalled()
   })
 
   it("includes image-generation models in image models", async () => {

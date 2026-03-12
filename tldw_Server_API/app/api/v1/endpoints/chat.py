@@ -2791,6 +2791,26 @@ async def create_chat_completion(
                     loop=current_loop,
                 )
 
+            def _resolve_llamacpp_grammar_record(target_provider: str) -> dict[str, Any] | None:
+                """Resolve the saved llama.cpp grammar record for the active provider."""
+                if target_provider != "llama.cpp" or getattr(request_data, "grammar_mode", None) != "library":
+                    return None
+                grammar_id = str(getattr(request_data, "grammar_id", "") or "").strip()
+                if not grammar_id:
+                    raise ChatBadRequestError(
+                        provider=target_provider,
+                        message="grammar_id is required when grammar_mode is 'library'",
+                    )
+                grammar_record = chat_db.get_chat_grammar(grammar_id)
+                if not isinstance(grammar_record, dict):
+                    raise ChatBadRequestError(
+                        provider=target_provider,
+                        message="Saved grammar could not be resolved",
+                    )
+                return grammar_record
+
+            llamacpp_grammar_record = _resolve_llamacpp_grammar_record(target_api_provider)
+
             llm_final_system_message, llm_templated_payload = inject_research_context_into_prompt(
                 final_system_message=final_system_message,
                 templated_llm_payload=templated_llm_payload,
@@ -2805,6 +2825,7 @@ async def create_chat_completion(
                 templated_llm_payload=llm_templated_payload,
                 final_system_message=llm_final_system_message,
                 app_config=app_config_override,
+                grammar_record=llamacpp_grammar_record,
             )
             cleaned_args["request"] = request
 

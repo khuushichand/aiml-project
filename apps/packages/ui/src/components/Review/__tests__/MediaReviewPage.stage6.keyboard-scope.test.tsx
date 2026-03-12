@@ -332,6 +332,22 @@ vi.mock("antd", async (importOriginal) => {
   }
 })
 
+vi.mock("@/components/Common/Markdown", () => ({
+  Markdown: ({ message }: { message: string }) => <div data-testid="mock-markdown">{message}</div>
+}))
+
+vi.mock("@/components/Media/diff-worker-client", () => ({
+  computeDiffSync: () => [],
+  shouldUseWorkerDiff: () => false,
+  shouldRequireSampling: () => false,
+  sampleTextForDiff: (t: string) => t,
+  computeDiffWithWorker: async () => [],
+  createDiffWorker: () => null,
+  DIFF_SYNC_LINE_THRESHOLD: 4000,
+  DIFF_HARD_CHAR_THRESHOLD: 300_000,
+  DIFF_SAMPLED_CHAR_BUDGET: 120_000
+}))
+
 describe("MediaReviewPage stage6 keyboard shortcut scope", () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -383,6 +399,12 @@ describe("MediaReviewPage stage6 keyboard shortcut scope", () => {
     return row as HTMLElement
   }
 
+  const selectItemByCheckbox = (title: string, options?: Record<string, unknown>): void => {
+    const row = getResultRowByTitle(title)
+    const checkbox = within(row).getByRole('checkbox')
+    fireEvent.click(checkbox, options)
+  }
+
   it("does not trigger global j/k navigation when options menu is open", async () => {
     render(<MediaReviewPage />)
 
@@ -401,15 +423,15 @@ describe("MediaReviewPage stage6 keyboard shortcut scope", () => {
     })
   })
 
-  it("does not clear selection on escape when diff modal is focused", async () => {
+  it("does not clear selection when inline comparison is active", async () => {
     render(<MediaReviewPage />)
 
     await waitFor(() => {
       expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
     })
 
-    fireEvent.click(getResultRowByTitle("Item 1"))
-    fireEvent.click(getResultRowByTitle("Item 2"))
+    selectItemByCheckbox("Item 1")
+    selectItemByCheckbox("Item 2")
 
     await waitFor(() => {
       expect(screen.getByText("2 / 30 selected")).toBeInTheDocument()
@@ -419,13 +441,35 @@ describe("MediaReviewPage stage6 keyboard shortcut scope", () => {
     fireEvent.click(screen.getByRole("button", { name: /compare content/i }))
 
     await waitFor(() => {
-      expect(screen.getByRole("dialog", { name: /diff view/i })).toBeInTheDocument()
+      expect(screen.getByTestId("comparison-split")).toBeInTheDocument()
     })
 
-    fireEvent.keyDown(document, { key: "Escape" })
+    // Selection should be preserved while comparing
+    expect(screen.getByText("2 / 30 selected")).toBeInTheDocument()
+  })
+
+  it("does not hijack Space on focused action buttons", async () => {
+    render(<MediaReviewPage />)
 
     await waitFor(() => {
-      expect(screen.getByText("2 / 30 selected")).toBeInTheDocument()
+      expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
+    })
+
+    selectItemByCheckbox("Item 1")
+
+    await waitFor(() => {
+      expect(screen.getByText("1 / 30 selected")).toBeInTheDocument()
+    })
+
+    const clearButton = within(screen.getByTestId("panel-center")).getByRole("button", {
+      name: /^clear$/i
+    })
+    clearButton.focus()
+
+    fireEvent.keyDown(clearButton, { key: " " })
+
+    await waitFor(() => {
+      expect(screen.getByText("1 / 30 selected")).toBeInTheDocument()
     })
   })
 })

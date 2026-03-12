@@ -465,9 +465,6 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
         conversationId: preflight.conversationId,
         imageEventSyncPolicy
       })
-
-      setIsProcessing(false)
-      setStreaming(false)
       return
     }
 
@@ -610,9 +607,6 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       conversationId: modelClient.conversationId,
       imageEventSyncPolicy
     })
-
-    setIsProcessing(false)
-    setStreaming(false)
   } catch (e) {
     cancelStreamingUpdate()
     const assistantContent = buildAssistantErrorContent(fullText, e)
@@ -667,9 +661,9 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     if (!errorSave) {
       throw e
     }
+  } finally {
     setIsProcessing(false)
     setStreaming(false)
-  } finally {
     setAbortController(null)
   }
 }

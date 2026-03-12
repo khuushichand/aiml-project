@@ -12,6 +12,7 @@ export type BackgroundCapabilities = {
 export type BackgroundInitOptions = {
   storage: Storage
   contextMenuId: { webui: string; sidePanel: string }
+  saveToCompanionMenuId: string
   saveToNotesMenuId: string
   narrateSelectionMenuId: string
   transcribeMenuId: { transcribe: string; transcribeAndSummarize: string }
@@ -177,6 +178,7 @@ export const initBackground = async (
   const {
     storage,
     contextMenuId,
+    saveToCompanionMenuId,
     saveToNotesMenuId,
     narrateSelectionMenuId,
     transcribeMenuId,
@@ -279,6 +281,12 @@ export const initBackground = async (
   browser.contextMenus.create({
     id: saveToNotesMenuId,
     title: browser.i18n.getMessage("contextSaveToNotes"),
+    contexts: ["selection"]
+  })
+  browser.contextMenus.create({
+    id: saveToCompanionMenuId,
+    title:
+      browser.i18n.getMessage("contextSaveToCompanion") || "Save to Companion",
     contexts: ["selection"]
   })
 

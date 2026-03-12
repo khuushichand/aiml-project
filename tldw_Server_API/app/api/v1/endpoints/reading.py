@@ -77,6 +77,14 @@ from tldw_Server_API.app.core.feature_flags import (
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as summarize_analyze
+from tldw_Server_API.app.core.Personalization.companion_activity import (
+    record_reading_item_archived,
+    record_reading_item_deleted,
+    record_reading_item_saved,
+    record_reading_note_linked,
+    record_reading_note_unlinked,
+    record_reading_item_updated,
+)
 from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSAuthenticationError,
@@ -506,7 +514,9 @@ async def save_reading_item(
             notes=payload.notes,
             archive_mode=payload.archive_mode,
         )
-        return _to_reading_item(result.item)
+        item = _to_reading_item(result.item)
+        record_reading_item_saved(user_id=current_user.id, item=item)
+        return item
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_save_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_save_failed") from exc
@@ -685,18 +695,27 @@ async def delete_reading_saved_search(
 async def link_note_to_reading_item(
     item_id: int,
     payload: ReadingNoteLinkCreateRequest,
+    current_user: User = Depends(get_request_user),
     notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     collections_db=Depends(get_collections_db_for_user),
 ) -> ReadingNoteLinkResponse:
     _ensure_reading_note_links_enabled()
     _ensure_note_exists_or_404(notes_db, payload.note_id)
     try:
+        item = collections_db.get_content_item(item_id)
         row = collections_db.link_note_to_content_item(item_id=item_id, note_id=payload.note_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found") from None
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_note_link_create_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_note_link_create_failed") from exc
+    record_reading_note_linked(
+        user_id=current_user.id,
+        item_id=item_id,
+        note_id=payload.note_id,
+        item_title=getattr(item, "title", None),
+        link_created_at=getattr(row, "created_at", None),
+    )
     return _to_note_link_response(row)
 
 
@@ -733,11 +752,20 @@ async def list_reading_item_note_links(
 async def unlink_note_from_reading_item(
     item_id: int,
     note_id: str,
+    current_user: User = Depends(get_request_user),
     collections_db=Depends(get_collections_db_for_user),
 ) -> dict[str, bool]:
     _ensure_reading_note_links_enabled()
     try:
-        collections_db.get_content_item(item_id)
+        item = collections_db.get_content_item(item_id)
+        existing_link = next(
+            (
+                row
+                for row in collections_db.list_note_links_for_content_item(item_id)
+                if str(row.note_id) == str(note_id)
+            ),
+            None,
+        )
         ok = collections_db.unlink_note_from_content_item(item_id=item_id, note_id=note_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found") from None
@@ -746,6 +774,13 @@ async def unlink_note_from_reading_item(
         raise HTTPException(status_code=400, detail="reading_note_link_delete_failed") from exc
     if not ok:
         raise HTTPException(status_code=404, detail="reading_note_link_not_found")
+    record_reading_note_unlinked(
+        user_id=current_user.id,
+        item_id=item_id,
+        note_id=note_id,
+        item_title=getattr(item, "title", None),
+        link_created_at=getattr(existing_link, "created_at", None),
+    )
     return {"ok": True}
 
 
@@ -1121,7 +1156,9 @@ async def update_reading_item(
             notes=payload.notes,
             title=payload.title,
         )
-        return _to_reading_item(row)
+        item = _to_reading_item(row)
+        record_reading_item_updated(user_id=current_user.id, item=item)
+        return item
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found") from None
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
@@ -1144,8 +1181,11 @@ async def delete_reading_item(
     try:
         if hard:
             service.delete_item(item_id)
+            record_reading_item_deleted(user_id=current_user.id, item_id=item_id)
             return ReadingDeleteResponse(status="deleted", item_id=item_id, hard=True)
         row = service.update_item(item_id, status="archived")
+        item = _to_reading_item(row)
+        record_reading_item_archived(user_id=current_user.id, item=item)
         return ReadingDeleteResponse(status=row.status or "archived", item_id=item_id, hard=False)
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found") from None

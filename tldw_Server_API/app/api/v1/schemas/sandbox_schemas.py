@@ -4,14 +4,20 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+try:
+    from pydantic import model_validator
+except ImportError:  # pragma: no cover - pydantic v1 fallback
+    from pydantic import root_validator as model_validator  # type: ignore
 
-RuntimeType = Literal["docker", "firecracker", "lima"]
+RuntimeType = Literal["docker", "firecracker", "lima", "vz_linux", "vz_macos", "seatbelt"]
 TrustLevelType = Literal["trusted", "standard", "untrusted"]
 
 
 class SandboxRuntimeInfo(BaseModel):
     name: RuntimeType
     available: bool = Field(description="Whether this runtime is detected/usable on host")
+    reasons: list[str] | None = Field(default=None, description="Preflight reasons when the runtime is unavailable or constrained")
+    supported_trust_levels: list[TrustLevelType] | None = Field(default=None, description="Trust levels supported by this runtime under current host policy")
     default_images: list[str] = Field(default_factory=list)
     max_cpu: float | None = Field(default=None, description="Max CPU (cores) per run")
     max_mem_mb: int | None = Field(default=None, description="Max memory (MB) per run")
@@ -27,7 +33,7 @@ class SandboxRuntimeInfo(BaseModel):
     strict_deny_all_supported: bool | None = Field(default=None, description="Whether strict deny-all network enforcement is supported")
     strict_allowlist_supported: bool | None = Field(default=None, description="Whether strict allowlist network enforcement is supported")
     enforcement_ready: dict[str, bool] | None = Field(default=None, description="Runtime enforcement readiness by network policy mode")
-    host: dict[str, str] | None = Field(default=None, description="Runtime host capability facts for troubleshooting")
+    host: dict[str, str | bool] | None = Field(default=None, description="Runtime host capability facts for troubleshooting")
     store_mode: str | None = Field(default=None, description="Current store backend mode (memory|sqlite|cluster)")
     notes: str | None = None
 
@@ -60,6 +66,13 @@ class SandboxSession(BaseModel):
     id: str
     runtime: RuntimeType
     base_image: str | None = None
+    cpu_limit: float | None = None
+    memory_mb: int | None = None
+    timeout_sec: int | None = None
+    network_policy: Literal["deny_all", "allowlist"] | None = None
+    env: dict[str, str] | None = None
+    labels: dict[str, str] | None = None
+    trust_level: TrustLevelType | None = None
     expires_at: datetime | None = None
     policy_hash: str | None = None
     persona_id: str | None = None
@@ -114,6 +127,14 @@ class SandboxRunCreateRequest(BaseModel):
     workspace_id: str | None = Field(default=None, description="Optional workspace identifier bound to this run")
     workspace_group_id: str | None = Field(default=None, description="Optional workspace-group identifier bound to this run")
     scope_snapshot_id: str | None = Field(default=None, description="Optional scope snapshot identifier bound to this run")
+
+    @model_validator(mode="after")
+    def validate_session_or_base_image(self) -> SandboxRunCreateRequest:
+        has_session = isinstance(self.session_id, str) and bool(self.session_id.strip())
+        has_image = isinstance(self.base_image, str) and bool(self.base_image.strip())
+        if has_session == has_image:
+            raise ValueError("Provide exactly one of session_id or base_image")
+        return self
 
 
 class SandboxRun(BaseModel):
@@ -246,6 +267,57 @@ class SandboxAdminUsageResponse(BaseModel):
     offset: int
     has_more: bool
     items: list[SandboxAdminUsageItem]
+
+
+class SandboxAdminMacOSHostDiagnostics(BaseModel):
+    """Admin-facing host facts for macOS sandbox readiness checks."""
+
+    os: str
+    arch: str
+    apple_silicon: bool
+    macos_version: str | None = None
+    supported: bool
+    reasons: list[str] = Field(default_factory=list)
+
+
+class SandboxAdminMacOSHelperDiagnostics(BaseModel):
+    """Admin-facing helper readiness and optional helper metadata."""
+
+    configured: bool
+    path: str | None = None
+    exists: bool
+    executable: bool
+    ready: bool
+    transport: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class SandboxAdminMacOSTemplateDiagnostics(BaseModel):
+    """Admin-facing template readiness for a single VZ runtime family."""
+
+    configured: bool
+    ready: bool
+    source: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class SandboxAdminMacOSRuntimeDiagnostics(BaseModel):
+    """Admin-facing runtime posture derived from shared runtime preflight checks."""
+
+    available: bool
+    supported_trust_levels: list[TrustLevelType] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    execution_mode: Literal["fake", "real", "none"]
+    remediation: str | None = None
+
+
+class SandboxAdminMacOSDiagnosticsResponse(BaseModel):
+    """Structured admin response for macOS sandbox diagnostics."""
+
+    host: SandboxAdminMacOSHostDiagnostics
+    helper: SandboxAdminMacOSHelperDiagnostics
+    templates: dict[str, SandboxAdminMacOSTemplateDiagnostics] = Field(default_factory=dict)
+    runtimes: dict[str, SandboxAdminMacOSRuntimeDiagnostics] = Field(default_factory=dict)
 
 
 # Snapshot/Clone Schemas

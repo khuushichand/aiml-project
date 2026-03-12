@@ -1,5 +1,4 @@
-import { buildApiUrl } from '@/lib/api-config';
-import { buildAuthHeaders } from '@/lib/http';
+import { buildAuthHeaders, buildProxyUrl } from '@/lib/http';
 
 export type DownloadExportOptions = {
   endpoint: string;
@@ -100,10 +99,11 @@ export const downloadExportFile = async ({
     : undefined;
 
   const query = new URLSearchParams(params).toString();
+  const url = buildProxyUrl(`${endpoint}${query ? `?${query}` : ''}`);
 
   try {
-    const response = await fetch(buildApiUrl(`${endpoint}${query ? `?${query}` : ''}`), {
-      headers: buildAuthHeaders('GET'),
+    const response = await fetch(url, {
+      headers: buildAuthHeaders(),
       credentials: 'include',
       signal: controller?.signal,
     });

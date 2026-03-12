@@ -5,10 +5,269 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
-## [0.1.30] 2026-03-06
+## [0.1.37] 2026-03-07
+
+### Changed
+
+- **Writing Playground UX overhaul** — Editor-dominant layout with collapsible drawers, based on Nielsen heuristic audit:
+  - **Editor-dominant layout (H8 fix):** Removed `PageShell` max-width constraint; editor now fills all available viewport space instead of competing with permanently-visible sidebars
+  - **Drawer-based panels:** Library and Inspector panels converted to collapsible sidebars (pinned on desktop ≥1100px, overlay Drawers on mobile <1100px) via `WritingPlaygroundShell`; toggle buttons in new compact top bar
+  - **Prominent Generate button (H1/H6 fix):** Generate button moved from buried inspector sidebar to always-visible top bar; disabled state shows tooltip explaining why (no session, no model, offline, no chat provider)
+  - **Generation visual feedback (H1 fix):** Pulsing ring animation on editor during generation; live elapsed-time counter in status bar; tok/s display
+  - **Compact top bar:** Session name, model input, Generate button, diagnostics tag, and panel toggles in a single row; replaces removed page title/subtitle
+  - **Status bar:** Token count, generation speed, elapsed time, save status, and Ctrl+Enter shortcut hint
+  - **Decluttered toolbar (H8 fix):** Toolbar reduced from 12+ always-visible buttons to icon-only Undo/Redo + view mode toggle + overflow dropdown (Read Aloud, Pause/Resume, View Chunks, Insert, Search)
+  - **Flexible editor:** Replaced fixed `rows={18}` textarea with `autoSize={{ minRows: 12 }}` and resizable styling; fixed double-scroll caused by nested overflow containers
+  - **Terminology cleanup (H2 fix):** "Basic stopping mode" → "Stop condition"; "Inspect" tab → "Analysis" (both default label and override)
+  - Updated 4 test files (32 assertions) to match new layout structure
+
+## [0.1.36] 2026-03-08
 
 ### Added
 
+- **TTS "Compose & Compare" Redesign** — New A/B comparison workflow for the Speech Playground TTS tab:
+  - **`UnifiedAudioPlayer`** (`components/Common/UnifiedAudioPlayer.tsx`): Single audio player component for all providers — play/pause/seek slider, time display, waveform visualization (via `WaveformCanvas`), download button; accepts `audioUrl`, `audioBlob`, or streaming mode; replaces per-provider player inconsistency
+  - **`RenderStrip`** (`components/Option/Speech/RenderStrip.tsx`): Self-contained generation card with five states (`idle`, `generating`, `ready`, `playing`, `error`); config tags (provider, voice, format, speed) as clickable chips; embeds `UnifiedAudioPlayer` for playback and `TtsJobProgress` for long-running generations; undo notification on remove with 4-second restore window
+  - **`useMultiRenderState`** hook (`hooks/useMultiRenderState.ts`): Manages array of render strips with independent generation lifecycle; actions: `addRender`, `removeRender`, `generateRender`, `generateAll`, `clearAll`, `playAllSequentially`; play-one-at-a-time enforcement (starting one pauses others); object URL lifecycle management (create on generate, revoke on remove/unmount)
+  - **`VoicePickerModal`** (`components/Option/Speech/VoicePickerModal.tsx`): Unified voice selection across all 19 backend TTS providers; search input, recent voices row (last 5 from localStorage), provider-grouped catalog (Local Engines / Cloud Providers) with collapsible sections; inline `[Play]` preview per voice; capability badges (Stream, Clone); selecting a voice returns `{ provider, voice, model }` and auto-selects provider
+  - **Render strips zone** in `SpeechPlaygroundPage.tsx`: Between text editor and action bar — maps `useMultiRenderState` to `RenderStrip` components; "Add Render", "Pick Voice", "Generate All", "Play All", "Clear" controls; per-strip generate, edit (opens voice picker), retry, remove actions
+  - **Action bar extensions** in `TtsStickyActionBar.tsx`: "Add Render" button with separator, "Play All" button (shown when multiple ready strips exist)
+  - **Smart defaults**: Last-used voice config persisted to `localStorage` for render strip defaults; recent voices tracked in voice picker
+  - **Accessibility**: `role="region"` + `aria-label` on all strips and players; `role="option"` + keyboard Enter on voice picker items; `aria-label` on all interactive buttons
+  - 36 new tests: `UnifiedAudioPlayer.test.tsx` (8), `RenderStrip.test.tsx` (11), `useMultiRenderState.test.ts` (10), `VoicePickerModal.test.tsx` (7)
+
+### Fixed
+
+- Sandbox runs no longer remain stuck in `starting` when Docker, Firecracker, or Lima runner startup fails; runner exceptions now persist a terminal `failed` state.
+- `sandbox_runs_started_total` now increments only after a sandbox run scaffold is accepted, so rejected requests are no longer counted as started runs.
+- Sandbox runtime admission now uses shared runtime preflight results across service and policy layers instead of diverging ad hoc availability booleans.
+- Sandbox websocket log streams now stop emitting heartbeats after a run ends, preventing terminal `end` frames from being buried in multi-subscriber stress scenarios.
+- Sandbox snapshot creation now tolerates transient files disappearing during concurrent atomic workspace writes, avoiding archive failures on temporary rename targets.
+- `RunStreamHub` subscriber registration now works in synchronous Python 3.11 contexts where no default main-thread event loop exists.
+
+## [0.1.35] 2026-03-08
+
+### Added
+
+- Chat Workflows web-shell regression coverage:
+  - Added `apps/tldw-frontend/__tests__/pages/chat-workflows-route.test.tsx` to verify the Next.js page shim exists and still lazy-loads `@/routes/option-chat-workflows`.
+  - Tightened `apps/packages/ui/src/routes/__tests__/chat-workflows-route.test.tsx` to keep the `/chat-workflows` workspace navigation metadata aligned with the shared route registry.
+
+### Fixed
+
+- Restored Chat Workflows route exposure in the Next.js web app:
+  - Added `apps/tldw-frontend/pages/chat-workflows.tsx` so `/chat-workflows` resolves instead of falling through to a missing-page state.
+  - Preserved discoverability through existing launcher coverage targeting `/chat-workflows`.
+- Chat UI regression coverage for server-chat reliability:
+  - Added recoverable refresh regression coverage in `useServerChatHistory.test.ts`
+  - Added selected-chat load state and stale-request guard coverage in `useServerChatLoader.test.ts`
+  - Added selected-chat failure rendering coverage in `PlaygroundChat.server-load-state.test.tsx`
+  - Added settings sync no-op coverage in `chat-settings.sync.test.ts`
+  - Added stale-version mutation retry coverage in `tldw-api-client.chat-trash.test.ts` and `tldw-api-client.chat-mutations.test.ts`
+  - Added sidebar reliability and conflict-feedback coverage in `ServerChatList.reliability.test.tsx`
+
+### Fixed
+
+- **Chat UI reliability bug squash**:
+  - Preserved server chat sidebar data on recoverable refresh failures instead of collapsing to an empty state during transient auth/config/rate-limit issues
+  - Added explicit selected server chat load states (`idle`, `loading`, `loaded`, `failed`) so chat switching no longer leaves the conversation pane blank on failed loads
+  - Rendered a dedicated selected-chat failure state in the playground instead of the generic empty-chat shell
+  - Stopped no-op server chat settings sync writes when only sync metadata changed, preventing version churn during chat load
+  - Retried chat delete, restore, and update mutations once after optimistic-lock conflicts by fetching the latest chat version first
+  - Clarified sidebar reliability states with stale-data warnings, unavailable refresh copy, and conflict-specific mutation error messaging for chat actions
+
+## [0.1.34] 2026-03-07
+
+### Added
+
+- **Quick Ingest Wizard Redesign** — Replace 3-tab modal with 5-step progressive wizard:
+  - **Step 1 — Add Content**: Combined file drop zone + multi-line URL paste, auto-detect content type with icons, inline validation (malformed URLs, duplicates, size limits), per-item remove, "Use defaults & process" quick mode for single items
+  - **Step 2 — Configure**: Preset card selector (Quick/Standard/Deep) with per-queue time estimates, content-type-filtered options (audio language/diarization, document OCR, video captions shown only when relevant), storage mode (Server/Local), collapsible advanced options
+  - **Step 3 — Review**: Confirmation checkpoint with per-item operation summary, contextual warnings (large files >50 MB, long estimated time >15 min, large batches >5 items), total time estimate
+  - **Step 4 — Processing**: Per-item live progress dashboard with multi-stage indicators, current stage label + percentage, per-item cancel, overall summary bar (completed/processing/queued + elapsed/remaining), Cancel All and Minimize to Background buttons
+  - **Step 5 — Results**: Grouped results (successes collapsed, errors expanded), error classification badges (Network/Format/Server + Retryable/Permanent), plain-language error descriptions, per-error Retry button, per-success Open/Chat/View actions, Retry All Errors batch button, Ingest More to restart
+  - **Minimize-to-background floating widget**: Portal-rendered fixed-position widget (bottom-right) showing progress percentage, item count, estimated time, expand/restore button; auto-dismisses 10s after completion
+  - **SSE real-time updates** via `useIngestSSE` hook: Connects to `GET /api/v1/media/ingest/jobs/events/stream`, handles `snapshot` and `job` events, maps backend statuses to wizard progress, exponential backoff reconnection (1s→10s)
+  - **`IngestWizardContext`**: React context + `useReducer` managing wizard state (current step, queue items, preset config, processing state, minimized flag) with navigation guards
+  - **`IngestWizardStepper`**: Horizontal breadcrumb stepper with accumulated context labels, click-to-revisit completed steps
+  - **`timeEstimation.ts`**: Client-side heuristic time estimates by media type and preset (audio 10s+2s/MB, video 15s+3s/MB, document 3s+0.5s/MB, web ~8s) with preset multipliers
+  - **`ErrorClassification.ts`**: Pattern-based error categorization with priority ordering and retryable/permanent flags
+  - **`PresetSelector.tsx`**: Rewritten from dropdown to card layout with plain-language descriptions and dynamic time estimates
+  - **Direct modal swap**: `QuickIngestButton.tsx` and `Sidepanel/Chat/form.tsx` now import `QuickIngestWizardModal` (no feature flag)
+  - **`autoProcessQueued` backward compat**: New modal supports auto-skip to processing step when items are pre-queued (used by sidepanel chat form)
+  - 70 new tests: `ErrorClassification.test.ts` (22), `timeEstimation.test.ts` (21), `IngestWizardContext.test.tsx` (13), `IngestWizardStepper.test.tsx` (7), `QuickIngestWizardModal.integration.test.tsx` (7 — full Steps 1→5 flow)
+
+### Fixed
+
+- Fixed temporal dead zone bug in `AddContentStep` where `newItems` array was spread inside its own initialization callback
+- Fixed `ReviewStep` "Start Processing" button not initializing processing state (was only calling `goNext`, now calls `startProcessing()` first)
+- Fixed `ReviewStep` passing `PresetConfig` object instead of preset name string to `estimateTotalSeconds()`
+- Fixed Ant Design `Radio.Group` onChange type mismatch in `ConfigureStep`
+
+## [0.1.33] 2026-03-06
+
+### Added
+
+- Text2SQL security hardening:
+  - Added `sql.read` RBAC permission constant and seeded baseline grants for default `user` and `admin` roles.
+  - Added SQL target ACL claims (`sql.target:*`, `sql.target:media_db`) and removed implicit default target allow.
+  - Enforced connector ACL checks in `POST /api/v1/text2sql/query` with explicit `403 unauthorized_target` on denied targets.
+  - Added RBAC/ACL regression tests in `tldw_Server_API/tests/Security/test_text2sql_rbac_and_acl.py`.
+  - Added baseline seed consistency for `sql.read` in `rbac_seed` paths.
+- API documentation updates for SQL retrieval:
+  - Documented standalone Text2SQL endpoint in `Docs/API-related/API_README.md`.
+  - Documented unified RAG SQL source usage (`sources=["sql"]`, `sql_target_id`) and required SQL ACL claims in `Docs/API-related/RAG_API_Documentation.md`.
+
+## [0.1.32] 2026-03-06
+
+### Added
+
+- **TTS Listen Tab UX Redesign** — Two-zone layout (Workspace + Inspector Panel):
+  - `CharacterProgressBar` component with color-coded thresholds and ARIA progressbar role
+  - `VoicePreviewButton` component for inline voice previews via TTS API
+  - `TtsStickyActionBar` with Play/Stop/Download controls, stream status indicator, and inspector toggle
+  - `TtsProviderStrip` compact config summary strip with clickable tags and preset switcher
+  - `TtsInspectorPanel` with Voice/Output/Advanced tabs, responsive drawer mode on mobile
+  - `TtsVoiceTab`, `TtsOutputTab`, `TtsAdvancedTab` inspector tab components
+  - Provider-conditional field visibility (browser shows voice only, openai shows model+voice, tldw shows full controls)
+  - Multi-voice narration UI in Voice tab with role assignment cards (tldw provider only)
+  - Inline `VoiceCloningManager` rendering in Advanced tab
+  - Keyboard shortcuts: Ctrl/Cmd+Enter (play), Escape (stop), Ctrl/Cmd+. (toggle inspector)
+  - `aria-live="polite"` on provider strip for screen reader announcements
+  - 24 component tests across 6 test files
+- **STT Playground Comparison-First Redesign** — Record once, compare across multiple models:
+  - Rewrote `SttPlaygroundPage` from 736-line single-model tool into three-zone comparison architecture
+  - **Zone 1 — RecordingStrip**: Record/stop with real-time duration timer, animated audio level meter (`role="meter"`), native audio playback, file upload (`accept="audio/*"`), collapsible settings gear toggle
+  - **Zone 2 — ComparisonPanel**: Multi-select model picker, parallel transcription via `Promise.allSettled`, responsive card grid (1/2/3 cols), per-card skeleton loading, editable transcripts, latency + word count metrics, copy-to-clipboard, save to Notes, per-card retry on error
+  - **Zone 3 — HistoryPanel**: Collapsible past recordings with re-compare (loads blob from IndexedDB), markdown export to clipboard, single-delete and confirmed clear-all via Modal
+  - **Dexie/IndexedDB persistence** (`stt-recordings.ts`): Audio blobs stored with 20-recording cap and oldest-eviction, schema version bump in `schema.ts`
+  - **`useAudioRecorder` hook**: MediaRecorder lifecycle, 200ms timer, blob retention, `loadBlob()` for re-compare, cleanup on unmount
+  - **`useComparisonTranscribe` hook**: Parallel multi-model transcription, per-model status (pending/running/done/error), `performance.now()` latency, retry single model, multi-format response extraction
+  - **`InlineSettingsPanel`**: Playground-local overrides for language, task, format, temperature, prompt, segmentation (progressive disclosure); "Reset to defaults" restores global settings
+  - **Keyboard shortcuts**: Space to toggle record (when no text input focused), Cmd/Ctrl+Enter for Transcribe All, shortcut hints on buttons
+  - **Accessibility**: Dynamic `aria-label` on record button with shortcut hint, `aria-live="polite"` on duration timer and transcript textareas, `role="region"` with model-specific labels on result cards, multi-state visual feedback (icon + color + text, not color alone)
+  - 51 tests across 9 test files (Dexie store, both hooks, all 4 components, keyboard shortcuts, page integration)
+
+### Fixed
+
+- Fixed `Manager.first-use.test.tsx` selectors to match updated button labels (`Filters` instead of `Advanced filters`, text queries instead of role queries for onboarding cards)
+
+## [0.1.31] 2026-03-06
+
+### Added
+
+- Docker runner integration test (`test_docker_runner_integration.py`) for full container lifecycle validation (session → upload → run → artifacts → cleanup), skipped without Docker daemon.
+
+### Changed
+
+- Updated misleading docstrings in `DockerRunner`, `SandboxService`, `LinuxLimaEnforcer`, and `MacOSLimaEnforcer` to accurately reflect implemented functionality.
+
+### Fixed
+
+- Fixed `PostgresStore._coerce_created_at()` `AttributeError`: moved method from `SQLiteStore` to `SandboxStore` base class so both SQLite and Postgres backends inherit it. Admin list/count endpoints with date filters on Postgres would crash without this fix.
+- Fixed event loop closure causing cascading "Event loop is closed" test failures in `RunStreamHub._schedule_dispatch()`: now clears stale `self._loop` reference and falls through to the threading.Timer fallback. Added `reset_loop()` method for test fixture cleanup.
+- Fixed config cache leaking between sandbox tests: added `_sandbox_clear_config_cache` and `_sandbox_reset_stream_hub` autouse fixtures to sandbox `conftest.py` so environment variable changes and stale event loop references don't bleed across tests.
+- Added debug logging to 8 silent `except ... pass` handlers in `network_policy.py` (`expand_allowlist_to_targets`, `pin_dns_map`, `apply_egress_rules_atomic`, `delete_rules_by_label`) so iptables/DNS failures are observable instead of silently swallowed.
+
+## [0.1.30] 2026-03-06
+- **Document Workspace UX/UI Audit** — Comprehensive improvements across accessibility, keyboard navigation, mobile responsiveness, and user control, based on Nielsen's 10 Usability Heuristics:
+  - **Accessibility (WCAG)**: `aria-label` on all 5 TextSelectionPopover buttons (Copy, Highlight, Translate, Ask AI, Listen), `group-focus-within:opacity-100` on annotation edit/delete actions for keyboard discoverability, `aria-label` on chat textarea
+  - **Keyboard shortcuts**: Cmd+G (go to page), Cmd+[/] (toggle panels), Cmd+/ (focus chat), Cmd+=/- /0 (zoom in/out/reset), F (fullscreen toggle), Escape to dismiss text selection popover
+  - **Mobile bottom navigation bar**: Fixed 48px bottom nav with Sidebar/Document/Chat icons replacing Ant Design top tabs, proper `role="tablist"` and `aria-selected` semantics
+  - **Mobile text selection bottom sheet**: Touch-friendly slide-up sheet with backdrop, safe area inset padding, drag handle, and text preview replacing floating popover on mobile
+  - **Ask AI prompt templates**: Dropdown submenu with Explain, Summarize, Define terms, and Simplify options replacing single hardcoded prompt
+  - **Drag-and-drop document upload**: `onDragOver`/`onDragLeave`/`onDrop` handlers with visual feedback and client-side file type validation (PDF/EPUB only)
+  - **Recent documents in picker**: Last 5 opened documents shown above search results, persisted in localStorage
+  - **Per-tab reading progress bar**: Thin progress indicator under each document tab driven by page/percentage
+  - **Onboarding feature cards**: 4 dismissible cards (Highlight, Chat, Insights, Quiz) in empty viewer state, localStorage-gated
+  - **Chat clear confirmation**: Popconfirm dialog before clearing chat history
+  - **Sync recovery animation**: Pulse animation on sync indicator for 2 seconds after error-to-synced recovery
+  - **Quiz preference persistence**: Question count, type, and difficulty saved to localStorage across sessions
+  - **Expanded server-required guidance**: Setup instructions in server-offline state
+  - **EPUB chapter title in toolbar**: Shows current chapter name on left side of viewer toolbar
+  - **Tablet drawer decoupling**: Toggle buttons always visible on tablet; drawer state independent from desktop pane state
+  - **Responsive drawer width**: `Math.min(360, window.innerWidth * 0.85)` instead of fixed pixel width
+  - **Text2SQL security hardening**:
+    - Added dedicated `sql.read` RBAC permission constant and seeded baseline grants for default `user`/`admin` roles
+    - Added connector ACL enforcement for `POST /api/v1/text2sql/query` with explicit `403 unauthorized_target` response on denied targets
+    - Added security regression tests for RBAC and ACL behavior (`test_text2sql_rbac_and_acl.py`)
+    - Updated API docs for standalone Text2SQL and unified RAG SQL source usage (`sources=["sql"]`, `sql_target_id`)
+
+### Changed
+
+- Default sidebar tab changed from "toc" to "insights" for better first-impression content
+- Tab label font size increased from 10px to 11px for readability
+- "Fit width" button renamed to "Reset zoom" with `RotateCcw` icon for accuracy
+- Keyboard shortcuts modal updated to list only implemented shortcuts
+
+### Fixed
+
+- **Annotation undo ID preservation**: Undo now restores the original annotation object with its server-synced ID via direct `setState`, instead of calling `addAnnotation()` which generated a new ID causing server/client state divergence and duplicates
+- **Removed Cmd+W shortcut**: Conflicted with browser tab close; removed from both handler and shortcuts modal
+- **Stable DOM selectors**: Fullscreen toggle and go-to-page shortcuts now use `data-testid` attributes instead of fragile CSS class substring matching and Ant Design internal class selectors
+- **Quiz preferences render performance**: Moved `localStorage` read + `JSON.parse` into `useState` initializer to avoid re-parsing on every render
+
+
+### Added
+
+- Watchlists UX redesign — progressive disclosure layout (PR #813):
+  - Restructured watchlists from 8 horizontal tabs to 3 primary tabs (Feeds, Articles, Reports) with inline expandable secondary views (Monitors, Activity, Templates).
+  - Added persistent collapsible health bar replacing the Overview tab, with 30s auto-refresh, health cards, and attention badges.
+  - Added settings drawer (gear icon) replacing the Settings tab.
+  - Added Cmd/Ctrl+K command palette with categorized commands (navigate, create, action) and fuzzy search.
+  - Added keyboard shortcuts: 1/2/3 (tab switch), N (new entity), R (refresh), / (focus search), ? (help panel).
+  - Added rich per-entity empty states with contextual descriptions and CTAs for feeds, monitors, activity, articles, reports, and templates.
+  - Added "Show all views" toggle to restore original 8-tab layout for power users (persisted to localStorage).
+  - Added mobile responsive layout: Select dropdown for tabs at <768px, full-width settings drawer on mobile.
+  - Added run failure "common causes" section in RunDetailDrawer, pattern-matched by failure kind (auth, rate limit, timeout, network, TLS).
+  - Added retry button to failed run notification toasts.
+  - Added deep-link backward compatibility: old URL params (`?tab=sources`, `?tab=items`) map to new equivalents (`?tab=feeds`, `?tab=articles`).
+  - Added 89 new i18n locale keys for all new UI elements.
+
+### Changed
+
+- Renamed watchlist tabs in UI to user-task language: Sources→Feeds, Jobs→Monitors, Runs→Activity, Items→Articles, Outputs→Reports.
+- Updated first-run copy contract test to match "monitor health" terminology (was "run health").
+
+### Fixed
+
+- Extracted `InlineSecondarySection` component outside render function to prevent unnecessary React remounts.
+- Stabilized `useWatchlistsCommands` actions object with `useMemo` to prevent command list recomputation on every render.
+- Removed redundant `useEffect` for `writeSecondaryExpanded` (already persisted in toggle callback).
+- Knowledge QA "Adaptive Progressive" UX redesign (Stages 1 & 2):
+  - New `useLayoutMode` hook with Simple/Research mode toggle, localStorage persistence, and auto-promotion toast after 3+ Q&A turns.
+  - New `CompactToolbar` component: condensed pill bar (Sources, Preset, Web toggle, Settings gear) for Simple mode.
+  - New `InlineRecentSessions` component: horizontal scrollable row of recent search session cards for returning users in Simple mode.
+  - New `KnowledgeReadyState` empty state with "Ask Your Library" heading, collapsible "How it works" guide, suggested prompts, and source/session action buttons.
+  - Added "Open workspace" / "Simplify view" toggle button (bottom-right corner) for manual mode switching.
+  - Added "Scope changed" badge in compact toolbar when search context diverges from last run.
+- Added 50 new tests across 3 new test files:
+  - `useLayoutMode.test.ts` (25 tests): mode defaults, persistence, auto-promotion, dismiss persistence.
+  - `CompactToolbar.test.tsx` (12 tests): source summaries, preset labels, web toggle, callbacks, scope badge.
+  - `InlineRecentSessions.test.tsx` (13 tests): rendering, max-5 limit, click-to-restore, relative time formatting.
+
+### Changed
+
+- Renamed "Knowledge QA" heading to "Ask Your Library" with updated subtitle across empty state and tests.
+- Redesigned web search toggle from ambiguous text to visually distinct pill with globe icon, filled/outline states, and proper `aria-label`/`aria-pressed` attributes.
+- `KnowledgeQALayout` now conditionally renders based on layout mode:
+  - Simple mode: single centered column, `CompactToolbar`, no history sidebar.
+  - Research mode: three-column layout with `HistoryPane`, full `KnowledgeContextBar`, `EvidenceRail`.
+  - Mobile always forces Simple mode layout; promotion toast hidden on mobile.
+- `KnowledgeReadyState` guide section auto-collapses for returning users (via `useEffect` on async history load).
+- Evidence rail auto-open now respects user intent via `useRef` tracking — won't reopen after manual close.
+- Settings panel and evidence rail are now mutually exclusive (opening one closes the other).
+- Refactored `Knowledge/index.tsx` settings page status display from nested ternaries to a `STATUS_COPY` map.
+- Updated golden layout tests for new conditional rendering paths and component structure.
+
+### Fixed
+
+- Fixed blank `/settings/knowledge` page (Critical, H1 violation) — added connection-aware error states.
+- Fixed `contextChangedSinceLastRun` always showing "Scope changed" badge due to broken `normalizeIdentifierSet` comparisons against empty string.
+- Removed dead `normalizeIdentifierSet` function and stale `include_media_ids`/`include_note_ids` from `useMemo` dependency array.
+- Fixed `InlineRecentSessions` crash on invalid timestamp strings (added `NaN` guard in `formatRelativeTime`).
+- Fixed `CompactToolbar` source summary using magic number — extracted `ALL_SOURCES_THRESHOLD` constant.
+- Fixed evidence rail auto-open loop where `useEffect` would immediately reopen rail after user closed it.
 - Voice-streaming interruption + overlap protocol additions:
   - Added additive client `interrupt` and server `interrupted` frame handling for `/api/v1/audio/chat/stream`.
   - Added active turn identifiers (`turn_id`) for interruption acknowledgements.
@@ -219,7 +478,24 @@ and this project adheres to Some kind of Versioning
   - Added/updated regression coverage for MLX path handling, notes frontmatter escaping, and admin auth API key storage behavior.
 
 
-## [0.1.26] 2026-03-01
+## [0.1.26] 2026-03-11
+
+### Consolidated Release Summary (Merged PRs #790-#829)
+
+- Added: Repo2Txt shipped across shared UI, web, and extension surfaces with GitHub and local sources, file-tree filtering, preview/copy/download flows, and better launcher discoverability. (PR #790)
+- Added: Safety and admin surfaces expanded with the Family Guardrails Wizard, per-user moderation phrase lists, and router analytics usage tabs plus aggregate APIs for operators. (PRs #804, #810, #797)
+- Added: Reading and research workflows grew with pinboard-style Collections enhancements, switchable unified RAG profiles, and multi-source quiz generation. (PRs #805, #796, #807)
+- Added: MCP Hub management shipped across AuthNZ storage, API, WebUI, and extension settings for ACP profiles and external server lifecycle management. (PR #806)
+- Added: Workflow capabilities expanded with kanban orchestration primitives, strict structured-output generation, structured QA chat workflows, unified queued-request handling, and connector-backed external file sync orchestration. (PRs #809, #818, #820, #823, #821)
+- Changed: Audio and ingestion experiences were redesigned: the Speech Playground gained richer TTS and STT comparison workflows, while Quick Ingest became a 5-step wizard with live progress, retry/error classification, and minimize-to-background controls. (PRs #816, #827)
+- Changed: Knowledge and watchlists moved to more progressive, task-oriented layouts with clearer defaults, navigation, empty states, and reliability feedback. (PRs #812, #813)
+- Changed: Prompt and writing workflows were reorganized with a fuller prompt workspace, stronger filtering/discoverability, and a restructured Writing Playground inspector. (PRs #817, #815)
+- Changed: Notes management was overhauled around decomposed editor/sidebar panes, progressive disclosure, and clearer save-status handling. (PR #826)
+- Changed: Media compatibility cleanup reduced legacy shim behavior and made deprecation signaling more explicit across ingestion flows. (PR #794)
+- Fixed: Platform reliability hardened across monitoring, benchmark recovery, shim cleanup, and core runtime paths, including sandbox admission/state handling, monitoring range interactions, and broader cleanup bundles that had previously been scattered across draft entries. (PRs #792, #793, #795, #798)
+- Fixed: Chat reliability issues were addressed for tool routing parity, OpenRouter freeze cases, selected-chat failure states, and conflict/retry behavior. (PRs #811, #814)
+- Fixed: ACP and admin surfaces received remediation for control auth, persistence, forks, login/auth proxy paths, privileged actions, and users views. (PRs #825, #829)
+- Fixed: Repo2Txt was hardened for local source selection, GitHub provider permissions, worker recovery, and deterministic compile behavior. (PR #790)
 
 ### Added
 

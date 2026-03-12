@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: frontend-required-${{ github.event.pull_request.head.sha || github.sha }}
+  group: frontend-required-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -108,6 +108,11 @@ jobs:
         if: needs.changes.outputs.admin_ui_changed == 'true'
         working-directory: admin-ui
         run: bun run lint
+
+      - name: Run admin-ui typecheck
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        working-directory: admin-ui
+        run: bun run typecheck
 
       - name: Run admin-ui unit tests
         if: needs.changes.outputs.admin_ui_changed == 'true'

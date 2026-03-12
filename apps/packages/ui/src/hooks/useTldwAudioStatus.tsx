@@ -10,6 +10,7 @@ export type AudioHealthState =
   | "unavailable"
 
 type Options = {
+  enabled?: boolean
   requireVoices?: boolean
 }
 
@@ -46,6 +47,7 @@ const HEALTH_PROBE_RETRY_DELAY_MS = 500
 
 export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   const { capabilities, loading } = useServerCapabilities()
+  const probeEnabled = options.enabled ?? true
   const hasStt = !loading && Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
   const hasTts = !loading && Boolean(capabilities?.hasTts ?? capabilities?.hasAudio)
   const hasVoiceChat =
@@ -67,7 +69,7 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
         path: "/api/v1/audio/health",
         method: "GET"
       })) as AudioHealthResponse,
-    enabled: hasTts,
+    enabled: hasTts && probeEnabled,
     staleTime: TTS_HEALTH_PROBE_INTERVAL_MS,
     refetchInterval: TTS_HEALTH_PROBE_INTERVAL_MS,
     retry: HEALTH_PROBE_RETRY_ATTEMPTS,
@@ -83,7 +85,7 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
         path: "/api/v1/audio/transcriptions/health",
         method: "GET"
       })) as AudioHealthResponse,
-    enabled: hasStt,
+    enabled: hasStt && probeEnabled,
     staleTime: STT_HEALTH_PROBE_INTERVAL_MS,
     refetchInterval: STT_HEALTH_PROBE_INTERVAL_MS,
     retry: HEALTH_PROBE_RETRY_ATTEMPTS,
@@ -95,6 +97,8 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   let ttsHealthState: AudioHealthState = "unknown"
   if (!hasTts) {
     ttsHealthState = loading ? "unknown" : "unavailable"
+  } else if (!probeEnabled) {
+    ttsHealthState = "unknown"
   } else if (ttsHealthQuery.isLoading) {
     ttsHealthState = "unknown"
   } else if (ttsHealthQuery.isError) {
@@ -111,6 +115,8 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   let sttHealthState: AudioHealthState = "unknown"
   if (!hasStt) {
     sttHealthState = loading ? "unknown" : "unavailable"
+  } else if (!probeEnabled) {
+    sttHealthState = "unknown"
   } else if (sttHealthQuery.isLoading) {
     sttHealthState = "unknown"
   } else if (sttHealthQuery.isError) {
@@ -138,7 +144,7 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   const voicesQuery = useQuery<TldwVoice[]>({
     queryKey: ["audio-voices"],
     queryFn: () => fetchTldwVoices(),
-    enabled: hasTts && Boolean(options.requireVoices),
+    enabled: hasTts && probeEnabled && Boolean(options.requireVoices),
     staleTime: 300_000,
     refetchOnWindowFocus: false
   })
@@ -153,13 +159,13 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
     hasTts,
     hasVoiceChat,
     healthState: ttsHealthState,
-    healthLoading: ttsHealthQuery.isLoading,
+    healthLoading: probeEnabled ? ttsHealthQuery.isLoading : false,
     sttHealthState,
-    sttHealthLoading: sttHealthQuery.isLoading,
+    sttHealthLoading: probeEnabled ? sttHealthQuery.isLoading : false,
     ttsHealthState,
-    ttsHealthLoading: ttsHealthQuery.isLoading,
+    ttsHealthLoading: probeEnabled ? ttsHealthQuery.isLoading : false,
     voices,
-    voicesLoading: voicesQuery.isLoading,
+    voicesLoading: probeEnabled ? voicesQuery.isLoading : false,
     voicesAvailable
   }
 }

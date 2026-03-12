@@ -173,6 +173,7 @@ const verifyJwtLocally = async (
 
   const data = new TextEncoder().encode(`${headerSegment}.${payloadSegment}`);
   const signature = base64UrlToUint8Array(signatureSegment);
+  const signatureBuffer = new Uint8Array(signature).buffer;
   const secrets = [secret, secondarySecret].filter((value): value is string => !!value);
   let signatureValid = false;
 
@@ -184,7 +185,7 @@ const verifyJwtLocally = async (
       false,
       ['verify']
     );
-    if (await subtle.verify('HMAC', key, signature, data)) {
+    if (await subtle.verify('HMAC', key, signatureBuffer, data)) {
       signatureValid = true;
       break;
     }

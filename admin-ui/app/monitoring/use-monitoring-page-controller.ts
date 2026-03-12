@@ -173,11 +173,9 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     apiClient: api,
     confirm,
     setAlerts,
-    setAlertHistory,
     setError,
     setSuccess,
     onReloadRequested: loadData,
-    assignableUsers,
   });
 
   const {
@@ -202,6 +200,8 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     handleCreateAlertRule,
     handleDeleteAlertRule,
   } = useAlertRules({
+    apiClient: api,
+    setError,
     setSuccess,
   });
 

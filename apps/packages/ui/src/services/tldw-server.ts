@@ -84,6 +84,73 @@ const CHAT_MODELS_CACHE_TTL_MS = 60_000
 let chatModelsCache: { value: any[]; expiresAt: number } | null = null
 let chatModelsInFlight: Promise<any[]> | null = null
 
+const dedupeChatModelsByModel = (models: any[]) => {
+  const unique: any[] = []
+  const indexByModel = new Map<string, number>()
+  const duplicates: string[] = []
+
+  for (const model of models) {
+    const key = String(model?.model || model?.name || "").trim()
+    if (!key) {
+      unique.push(model)
+      continue
+    }
+    const existingIndex = indexByModel.get(key)
+    if (existingIndex == null) {
+      indexByModel.set(key, unique.length)
+      unique.push(model)
+      continue
+    }
+    duplicates.push(key)
+    const existing = unique[existingIndex] || {}
+    const merged: any = { ...existing }
+    if (!merged.nickname && model?.nickname) merged.nickname = model.nickname
+    if (!merged.name && model?.name) merged.name = model.name
+    if (!merged.provider && model?.provider) merged.provider = model.provider
+    if (!merged.details && model?.details) merged.details = model.details
+    if (!merged.modified_at && model?.modified_at) {
+      merged.modified_at = model.modified_at
+    }
+
+    const existingDetails =
+      merged.details && typeof merged.details === "object"
+        ? merged.details
+        : {}
+    const incomingDetails =
+      model?.details && typeof model.details === "object"
+        ? model.details
+        : {}
+    const mergedDetails: any = { ...incomingDetails, ...existingDetails }
+    const capabilities = new Set<string>()
+    const existingCaps = existingDetails.capabilities
+    const incomingCaps = incomingDetails.capabilities
+    if (Array.isArray(existingCaps)) {
+      existingCaps.forEach((cap) => capabilities.add(String(cap)))
+    }
+    if (Array.isArray(incomingCaps)) {
+      incomingCaps.forEach((cap) => capabilities.add(String(cap)))
+    }
+    if (capabilities.size > 0) {
+      mergedDetails.capabilities = Array.from(capabilities)
+    }
+    if (Object.keys(mergedDetails).length > 0) {
+      merged.details = mergedDetails
+    }
+    unique[existingIndex] = merged
+  }
+
+  if (import.meta.env?.DEV && duplicates.length > 0) {
+    const uniqueDupes = Array.from(new Set(duplicates))
+    console.debug("tldw_server: deduped chat models", {
+      duplicates: uniqueDupes,
+      total: models.length,
+      unique: unique.length
+    })
+  }
+
+  return unique
+}
+
 export const clearChatModelsCache = () => {
   chatModelsCache = null
   chatModelsInFlight = null
@@ -113,15 +180,32 @@ export const getAllModels = async ({ returnEmpty = false }: { returnEmpty?: bool
 export const fetchChatModels = async ({
   returnEmpty = false,
   forceRefresh = false,
-  refreshOpenRouter = false
+  refreshOpenRouter = false,
+  allowNetwork = true
 }: {
   returnEmpty?: boolean
   forceRefresh?: boolean
   refreshOpenRouter?: boolean
+  allowNetwork?: boolean
 } = {}) => {
   const now = Date.now()
   if (!forceRefresh && chatModelsCache && chatModelsCache.expiresAt > now) {
     return chatModelsCache.value
+  }
+  if (!forceRefresh && !allowNetwork) {
+    if (chatModelsCache?.value) {
+      return chatModelsCache.value
+    }
+
+    const cachedChatModels = await tldwModels.getCachedChatModels()
+    const resolved = dedupeChatModelsByModel(cachedChatModels.map(mapTldwModelToUi))
+    if (resolved.length > 0) {
+      chatModelsCache = {
+        value: resolved,
+        expiresAt: Date.now() + CHAT_MODELS_CACHE_TTL_MS
+      }
+    }
+    return resolved
   }
   if (!forceRefresh && chatModelsInFlight) {
     return await chatModelsInFlight
@@ -138,73 +222,6 @@ export const fetchChatModels = async ({
       // Only tldw_server models are exposed as chat models
       const combined = [...tldw]
 
-      const dedupeByModel = (models: any[]) => {
-        const unique: any[] = []
-        const indexByModel = new Map<string, number>()
-        const duplicates: string[] = []
-
-        for (const model of models) {
-          const key = String(model?.model || model?.name || "").trim()
-          if (!key) {
-            unique.push(model)
-            continue
-          }
-          const existingIndex = indexByModel.get(key)
-          if (existingIndex == null) {
-            indexByModel.set(key, unique.length)
-            unique.push(model)
-            continue
-          }
-          duplicates.push(key)
-          const existing = unique[existingIndex] || {}
-          const merged: any = { ...existing }
-          if (!merged.nickname && model?.nickname) merged.nickname = model.nickname
-          if (!merged.name && model?.name) merged.name = model.name
-          if (!merged.provider && model?.provider) merged.provider = model.provider
-          if (!merged.details && model?.details) merged.details = model.details
-          if (!merged.modified_at && model?.modified_at) {
-            merged.modified_at = model.modified_at
-          }
-
-          const existingDetails =
-            merged.details && typeof merged.details === "object"
-              ? merged.details
-              : {}
-          const incomingDetails =
-            model?.details && typeof model.details === "object"
-              ? model.details
-              : {}
-          const mergedDetails: any = { ...incomingDetails, ...existingDetails }
-          const capabilities = new Set<string>()
-          const existingCaps = existingDetails.capabilities
-          const incomingCaps = incomingDetails.capabilities
-          if (Array.isArray(existingCaps)) {
-            existingCaps.forEach((cap) => capabilities.add(String(cap)))
-          }
-          if (Array.isArray(incomingCaps)) {
-            incomingCaps.forEach((cap) => capabilities.add(String(cap)))
-          }
-          if (capabilities.size > 0) {
-            mergedDetails.capabilities = Array.from(capabilities)
-          }
-          if (Object.keys(mergedDetails).length > 0) {
-            merged.details = mergedDetails
-          }
-          unique[existingIndex] = merged
-        }
-
-        if (import.meta.env?.DEV && duplicates.length > 0) {
-          const uniqueDupes = Array.from(new Set(duplicates))
-          console.debug("tldw_server: deduped chat models", {
-            duplicates: uniqueDupes,
-            total: models.length,
-            unique: unique.length
-          })
-        }
-
-        return unique
-      }
-
       if (import.meta.env?.DEV) {
         console.debug("tldw_server: fetchChatModels resolved", {
           tldwCount: tldw.length,
@@ -212,7 +229,7 @@ export const fetchChatModels = async ({
         })
       }
 
-      const resolved = dedupeByModel(combined)
+      const resolved = dedupeChatModelsByModel(combined)
       chatModelsCache = {
         value: resolved,
         expiresAt: Date.now() + CHAT_MODELS_CACHE_TTL_MS

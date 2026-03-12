@@ -62,6 +62,17 @@ For comprehensive documentation, see:
 - [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
 - [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details
 
+#### Text2SQL - `/api/v1/text2sql`
+
+- `POST /api/v1/text2sql/query` - Run guarded read-only SQL retrieval
+  - Request body: `query`, `target_id` (currently `media_db`), optional `max_rows`, `timeout_ms`, `include_sql`
+  - RBAC: requires `sql.read`
+  - ACL: target must pass connector ACL checks via `sql.target:*` or `sql.target:<target_id>` (returns `403` with `unauthorized_target` when denied)
+  - SQL policy: single read-only statement with guardrails and deterministic limit enforcement
+
+Notes:
+- Unified RAG can include SQL retrieval by setting `sources` to include `sql` and optionally `sql_target_id` in `POST /api/v1/rag/search`.
+
 #### Media Ingestion - `/api/v1/media`
 
 - `POST /api/v1/media/add` - ingest and persist media (synchronous)
@@ -109,3 +120,18 @@ Collections Feeds wraps Watchlists sources/jobs to ingest RSS/Atom into Collecti
 - `DELETE /api/v1/collections/feeds/{feed_id}` - delete a feed subscription
 
 See: [Collections Feeds API](Collections_Feeds_API.md)
+
+#### Ingestion Sources - `/api/v1/ingestion-sources`
+
+Ingestion Sources provides source-based sync/import for local directories and archive snapshots into `media` or `notes`.
+
+- `POST /api/v1/ingestion-sources` - create a source
+- `GET /api/v1/ingestion-sources` - list sources
+- `GET /api/v1/ingestion-sources/{source_id}` - get source details and last successful sync summary
+- `PATCH /api/v1/ingestion-sources/{source_id}` - update mutable source settings
+- `POST /api/v1/ingestion-sources/{source_id}/sync` - enqueue a manual sync
+- `POST /api/v1/ingestion-sources/{source_id}/archive` - upload a new ZIP or tar-family snapshot
+- `GET /api/v1/ingestion-sources/{source_id}/items` - inspect tracked source items
+- `POST /api/v1/ingestion-sources/{source_id}/items/{item_id}/reattach` - reattach a detached notes item
+
+See: [Ingestion Sources API](Ingestion_Sources_API.md)

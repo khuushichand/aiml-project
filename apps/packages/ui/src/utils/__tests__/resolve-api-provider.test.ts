@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { tldwModels } from "@/services/tldw"
 import { inferProviderFromModel } from "@/utils/provider-registry"
-import { resolveApiProviderForModel } from "../resolve-api-provider"
+import {
+  resolveApiProviderForModel,
+  resolveExplicitProviderForSelectedModel
+} from "../resolve-api-provider"
 
 vi.mock("@/services/tldw", () => ({
   tldwModels: {
@@ -90,5 +93,37 @@ describe("resolveApiProviderForModel", () => {
         modelId: "custom-random-model-123"
       })
     ).resolves.toBeUndefined()
+  })
+})
+
+describe("resolveExplicitProviderForSelectedModel", () => {
+  it("keeps the explicit provider when there is no selected-model override", () => {
+    expect(
+      resolveExplicitProviderForSelectedModel({
+        currentSelectedModel: "tldw:anthropic/claude-4.5-sonnet",
+        requestedSelectedModel: undefined,
+        explicitProvider: "openrouter"
+      })
+    ).toBe("openrouter")
+  })
+
+  it("keeps the explicit provider when the override matches the current selected model", () => {
+    expect(
+      resolveExplicitProviderForSelectedModel({
+        currentSelectedModel: "tldw:anthropic/claude-4.5-sonnet",
+        requestedSelectedModel: "anthropic/claude-4.5-sonnet",
+        explicitProvider: "openrouter"
+      })
+    ).toBe("openrouter")
+  })
+
+  it("drops the explicit provider when the override switches to a different selected model", () => {
+    expect(
+      resolveExplicitProviderForSelectedModel({
+        currentSelectedModel: "tldw:anthropic/claude-4.5-sonnet",
+        requestedSelectedModel: "tldw:deepseek-chat",
+        explicitProvider: "openrouter"
+      })
+    ).toBeUndefined()
   })
 })

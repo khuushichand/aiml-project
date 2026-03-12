@@ -55,6 +55,7 @@ import {
   SETTINGS_HISTORY_ID_PARAM,
   SETTINGS_SERVER_CHAT_ID_PARAM
 } from "@/utils/settings-return"
+import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
   const artifactsTriggerRef = React.useRef<HTMLButtonElement>(null)
@@ -120,6 +121,13 @@ export const Playground = () => {
   const previousThreadRef = React.useRef<string | null>(null)
   const stableHistoryId =
     historyId && historyId !== "temp" ? historyId : null
+  const setRouteContext = useChatSurfaceCoordinatorStore(
+    (state) => state.setRouteContext
+  )
+
+  React.useEffect(() => {
+    setRouteContext({ routeId: "chat", surface: "webui" })
+  }, [setRouteContext])
 
   const showDropFeedback = React.useCallback(
     (feedback: { type: "info" | "error" | "warning"; message: string }) => {

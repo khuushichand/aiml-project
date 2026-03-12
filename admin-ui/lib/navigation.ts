@@ -6,14 +6,17 @@ import {
   Bug,
   Building2,
   Cpu,
+  CreditCard,
   Database,
   PlugZap,
   FileText,
   Flag,
   Gauge,
+  Grid3X3,
   AlertTriangle,
   MessageSquare,
   Mic,
+  Receipt,
   ScrollText,
   Server,
   Key,
@@ -35,6 +38,7 @@ export type NavigationItem = {
   permission?: string;
   role?: string[];
   keywords?: string[];
+  billingOnly?: boolean;
 };
 
 export type NavigationSection = {
@@ -75,6 +79,9 @@ const navigationItems = {
   voiceCommands: { name: 'Voice Commands', href: '/voice-commands', icon: Mic, role: ['admin', 'super_admin', 'owner'], keywords: ['speech', 'commands'] },
   debug: { name: 'Debug', href: '/debug', icon: Bug, role: ['super_admin', 'owner'], keywords: ['diagnostics'] },
   configuration: { name: 'Configuration', href: '/config', icon: Settings, role: ['admin', 'super_admin', 'owner'], keywords: ['settings', 'system config'] },
+  plans: { name: 'Plans', href: '/plans', icon: CreditCard, role: ['admin', 'super_admin', 'owner'], keywords: ['billing', 'pricing', 'subscription', 'tiers'], billingOnly: true },
+  subscriptions: { name: 'Subscriptions', href: '/subscriptions', icon: Receipt, role: ['admin', 'super_admin', 'owner'], keywords: ['billing', 'payments', 'invoices'], billingOnly: true },
+  featureRegistry: { name: 'Feature Registry', href: '/feature-registry', icon: Grid3X3, role: ['admin', 'super_admin', 'owner'], keywords: ['gating', 'entitlements', 'open core'], billingOnly: true },
 } satisfies Record<string, NavigationItem>;
 
 // Grouped navigation for sidebar sections
@@ -124,6 +131,9 @@ export const navigationSections: NavigationSection[] = [
       navigationItems.resourceGovernor,
       navigationItems.budgets,
       navigationItems.usage,
+      navigationItems.plans,
+      navigationItems.subscriptions,
+      navigationItems.featureRegistry,
       navigationItems.flags,
       navigationItems.dataOps,
     ],
@@ -216,6 +226,12 @@ const resolveDynamicPathLabel = (segments: string[]): string | null => {
   }
   if (root === 'acp-agents' && segments.length === 2) {
     return `Agent ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'plans' && segments.length === 2) {
+    return `Plan ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'subscriptions' && segments.length === 2) {
+    return `Subscription ${decodeURIComponent(idOrSlug)}`;
   }
   return null;
 };

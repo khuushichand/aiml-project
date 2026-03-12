@@ -235,6 +235,65 @@ def get_config_value(
     return parser.get(section, key, fallback=default)
 
 
+_INGESTION_SOURCE_ALLOWED_ROOT_SECTION = "Files"
+_INGESTION_SOURCE_ALLOWED_ROOT_KEY = "ingestion_source_allowed_roots"
+_INGESTION_SOURCE_ALLOWED_ROOT_ENV_KEYS = (
+    "INGESTION_SOURCE_ALLOWED_ROOTS",
+    "TLDW_INGESTION_SOURCE_ALLOWED_ROOTS",
+)
+
+
+def _split_allowed_root_values(raw: Optional[object]) -> list[str]:
+    if raw is None:
+        return []
+    parts: list[str] = []
+    for chunk in str(raw).split(os.pathsep):
+        for entry in chunk.split(","):
+            value = entry.strip()
+            if value:
+                parts.append(value)
+    return parts
+
+
+def _normalize_allowed_root_entry(raw: object) -> Path | None:
+    value = str(raw).strip()
+    if not value:
+        return None
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = (ACTUAL_PROJECT_ROOT / candidate).resolve(strict=False)
+    else:
+        candidate = candidate.resolve(strict=False)
+    return candidate
+
+
+def get_ingestion_source_allowed_roots(*, reload: bool = False) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    config_value = get_config_value(
+        _INGESTION_SOURCE_ALLOWED_ROOT_SECTION,
+        _INGESTION_SOURCE_ALLOWED_ROOT_KEY,
+        default="",
+        reload=reload,
+    )
+    raw_values: list[str] = _split_allowed_root_values(config_value)
+    for env_name in _INGESTION_SOURCE_ALLOWED_ROOT_ENV_KEYS:
+        raw_values.extend(_split_allowed_root_values(os.getenv(env_name)))
+
+    for raw_value in raw_values:
+        normalized = _normalize_allowed_root_entry(raw_value)
+        if normalized is None:
+            continue
+        marker = str(normalized)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        roots.append(normalized)
+
+    return tuple(roots)
+
+
 def get_config_source_metadata() -> dict[str, Any]:
     """Return cached config source metadata for logging/diagnostics."""
     return dict(_CONFIG_SOURCE_METADATA)

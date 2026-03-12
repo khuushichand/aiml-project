@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import contextlib
+import hashlib
 import os
+import shutil
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from typing import Any
 
 from loguru import logger
 
@@ -30,12 +35,18 @@ from .models import (
     RuntimeType,
     Session,
     SessionSpec,
+    TrustLevel,
 )
+from .macos_diagnostics import collect_macos_diagnostics
 from .orchestrator import SandboxOrchestrator, SessionActiveRunsConflict
 from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
+from .runtime_capabilities import RuntimePreflightResult, collect_runtime_preflights
 from .runners.docker_runner import DockerRunner, docker_available
 from .runners.firecracker_runner import FirecrackerRunner, firecracker_available, firecracker_real_enabled
 from .runners.lima_runner import LimaRunner, lima_available
+from .runners.seatbelt_runner import SeatbeltRunner
+from .runners.vz_linux_runner import VZLinuxRunner
+from .runners.vz_macos_runner import VZMacOSRunner
 from .snapshots import SnapshotManager
 from .store import get_store_mode
 from .streams import get_hub
@@ -60,6 +71,66 @@ _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
 )
 
+try:
+    import fcntl  # type: ignore
+    _SANDBOX_SERVICE_HAS_FCNTL = True
+except Exception:
+    _SANDBOX_SERVICE_HAS_FCNTL = False
+
+try:
+    import msvcrt  # type: ignore
+    _SANDBOX_SERVICE_HAS_MSVCRT = True
+except Exception:
+    _SANDBOX_SERVICE_HAS_MSVCRT = False
+
+_SANDBOX_WORKSPACE_FALLBACK_LOCKS: dict[str, threading.Lock] = {}
+_SANDBOX_WORKSPACE_FALLBACK_LOCKS_GUARD = threading.Lock()
+
+
+def _get_sandbox_workspace_thread_lock(lock_path: str) -> threading.Lock:
+    key = str(os.path.abspath(lock_path))
+    with _SANDBOX_WORKSPACE_FALLBACK_LOCKS_GUARD:
+        lock = _SANDBOX_WORKSPACE_FALLBACK_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _SANDBOX_WORKSPACE_FALLBACK_LOCKS[key] = lock
+    return lock
+
+
+def _acquire_workspace_file_lock(lock_path: str) -> tuple[str, Any]:
+    if _SANDBOX_SERVICE_HAS_FCNTL:
+        handle = open(lock_path, "a", encoding="utf-8")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return ("fcntl", handle)
+
+    if _SANDBOX_SERVICE_HAS_MSVCRT:
+        handle = open(lock_path, "a+b")
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return ("msvcrt", handle)
+
+    lock = _get_sandbox_workspace_thread_lock(lock_path)
+    lock.acquire()
+    return ("thread", lock)
+
+
+def _release_workspace_file_lock(lock_handle: tuple[str, Any]) -> None:
+    kind, handle = lock_handle
+    if kind == "fcntl":
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+        return
+
+    if kind == "msvcrt":
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        handle.close()
+        return
+
+    handle.release()
+
 
 class SandboxService:
     """High-level orchestrator facade for sandbox operations.
@@ -82,7 +153,7 @@ class SandboxService:
             storage_path=os.getenv("SANDBOX_SNAPSHOT_PATH")
         )
         self._snapshot_locks_guard = threading.RLock()
-        self._snapshot_locks: dict[str, threading.RLock] = {}
+        self._snapshot_locks: dict[str, threading.Lock] = {}
         self._maintenance_lock = threading.RLock()
         self._maintenance_stop = threading.Event()
         self._maintenance_thread: threading.Thread | None = None
@@ -161,6 +232,7 @@ class SandboxService:
         *,
         runtime: RuntimeType | None,
         network_policy: str | None,
+        runtime_preflight: RuntimePreflightResult | None = None,
     ) -> None:
         if runtime != RuntimeType.lima:
             return
@@ -178,7 +250,7 @@ class SandboxService:
                 requirement=requested_policy,
                 reasons=["strict_allowlist_not_supported"],
             )
-        preflight = LimaRunner().preflight(network_policy=requested_policy)
+        preflight = runtime_preflight or LimaRunner().preflight(network_policy=requested_policy)
         if preflight.available:
             return
         reasons = list(preflight.reasons or [])
@@ -201,6 +273,44 @@ class SandboxService:
         self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
         return LimaRunner().start_run(run_id, spec, workspace_path)
 
+    def _start_vz_linux_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        preflight = VZLinuxRunner().preflight(network_policy=spec.network_policy)
+        if not preflight.available:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.vz_linux, reasons=list(preflight.reasons or []))
+        return VZLinuxRunner().start_run(run_id, spec, workspace_path)
+
+    def _start_vz_macos_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        preflight = VZMacOSRunner().preflight(network_policy=spec.network_policy)
+        if not preflight.available:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.vz_macos, reasons=list(preflight.reasons or []))
+        return VZMacOSRunner().start_run(run_id, spec, workspace_path)
+
+    def _start_seatbelt_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        preflight = SeatbeltRunner().preflight(network_policy=spec.network_policy)
+        if not preflight.available:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.seatbelt, reasons=list(preflight.reasons or []))
+        self.policy._require_trust_level_supported(
+            RuntimeType.seatbelt,
+            spec.trust_level or TrustLevel.standard,
+            runtime_preflights={RuntimeType.seatbelt: preflight},
+        )
+        return SeatbeltRunner().start_run(run_id, spec, workspace_path)
+
     def _effective_claim_lease_seconds(self) -> int:
         try:
             raw = os.getenv("SANDBOX_RUN_CLAIM_LEASE_SEC")
@@ -209,6 +319,42 @@ class SandboxService:
             return max(1, int(raw))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             return 30
+
+    def _collect_runtime_preflights(
+        self,
+        *,
+        network_policy: str | None,
+    ) -> dict[RuntimeType, RuntimePreflightResult]:
+        requested_policy = str(network_policy or self.policy.cfg.network_default or "deny_all").strip().lower()
+        try:
+            return collect_runtime_preflights(network_policy=requested_policy)
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return {
+                RuntimeType.firecracker: RuntimePreflightResult(
+                    runtime=RuntimeType.firecracker,
+                    available=bool(firecracker_available()),
+                ),
+                RuntimeType.lima: RuntimePreflightResult(
+                    runtime=RuntimeType.lima,
+                    available=bool(lima_available()),
+                ),
+                RuntimeType.seatbelt: RuntimePreflightResult(
+                    runtime=RuntimeType.seatbelt,
+                    available=False,
+                    reasons=["seatbelt_unavailable"],
+                    supported_trust_levels=["trusted"],
+                ),
+                RuntimeType.vz_linux: RuntimePreflightResult(
+                    runtime=RuntimeType.vz_linux,
+                    available=False,
+                    reasons=["vz_linux_unavailable"],
+                ),
+                RuntimeType.vz_macos: RuntimePreflightResult(
+                    runtime=RuntimeType.vz_macos,
+                    available=False,
+                    reasons=["vz_macos_unavailable"],
+                ),
+            }
 
     def _effective_max_concurrent_runs(self) -> int:
         try:
@@ -526,6 +672,70 @@ class SandboxService:
             with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                 hb.join(timeout=0.1)
 
+    def _mark_run_failed(
+        self,
+        status: RunStatus,
+        *,
+        reason: str,
+    ) -> None:
+        now = datetime.utcnow()
+        try:
+            status.phase = RunPhase.failed
+            status.message = str(reason)
+            if not status.started_at:
+                status.started_at = now
+            status.finished_at = now
+            status.exit_code = None
+            self._orch.update_run(status.id, status)
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            pass
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            get_hub().publish_event(status.id, "end", {"exit_code": None, "reason": reason})
+
+    def _execute_single_runtime_scaffold(
+        self,
+        *,
+        status: RunStatus,
+        spec: RunSpec,
+        workspace_path: str | None,
+        start_run_fn,
+        policy_failed_reason: str,
+        failed_reason: str,
+        policy_exceptions: tuple[type[BaseException], ...],
+    ) -> RunStatus:
+        try:
+            admitted = self._admit_run_starting(status.id)
+            if admitted is None:
+                existing = self._orch.get_run(status.id)
+                return existing or status
+            if admitted.phase != RunPhase.starting:
+                return admitted
+            self._apply_admitted_status(status, admitted)
+            try:
+                real = self._run_with_claim_lease(
+                    status.id,
+                    lambda: start_run_fn(status.id, spec, workspace_path),
+                )
+            except policy_exceptions:
+                status.phase = RunPhase.failed
+                status.message = policy_failed_reason
+                status.finished_at = datetime.utcnow()
+                self._orch.update_run(status.id, status)
+                return status
+            real.id = status.id
+            status.phase = real.phase
+            status.exit_code = real.exit_code
+            status.started_at = real.started_at
+            status.finished_at = real.finished_at
+            status.message = real.message
+            status.image_digest = real.image_digest
+            status.runtime_version = real.runtime_version
+            self._orch.update_run(status.id, status)
+            return status
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            self._mark_run_failed(status, reason=failed_reason)
+            return status
+
     def feature_discovery(self) -> list[dict]:
         images = [
             "python:3.11-slim",
@@ -584,20 +794,34 @@ class SandboxService:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             execute_enabled = False
-        try:
-            lima_preflight = LimaRunner().preflight(network_policy="deny_all")
-            lima_enforcement_ready = dict(lima_preflight.enforcement_ready or {})
-            # Allowlist enforcement is not implemented for Lima runtime execution.
-            lima_enforcement_ready["allowlist"] = False
-            lima_host = dict(lima_preflight.host or {})
-        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-            lima_enforcement_ready = {"deny_all": False, "allowlist": False}
-            lima_host = {}
+        runtime_preflights = self._collect_runtime_preflights(network_policy="deny_all")
+        docker_preflight = runtime_preflights.get(RuntimeType.docker)
+        firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
+        lima_preflight = runtime_preflights.get(RuntimeType.lima)
+        vz_linux_preflight = runtime_preflights.get(RuntimeType.vz_linux)
+        vz_macos_preflight = runtime_preflights.get(RuntimeType.vz_macos)
+        seatbelt_preflight = runtime_preflights.get(RuntimeType.seatbelt)
+        lima_enforcement_ready = dict((lima_preflight.enforcement_ready if lima_preflight else {}) or {})
+        # Allowlist enforcement is not implemented for Lima runtime execution.
+        lima_enforcement_ready["allowlist"] = False
+        lima_host = dict((lima_preflight.host if lima_preflight else {}) or {})
+
+        def _preflight_fields(preflight: RuntimePreflightResult | None) -> dict[str, object]:
+            enforcement_ready = dict((preflight.enforcement_ready if preflight else {}) or {})
+            return {
+                "available": bool(preflight.available) if preflight is not None else False,
+                "reasons": list((preflight.reasons if preflight else []) or []),
+                "supported_trust_levels": list((preflight.supported_trust_levels if preflight else []) or []),
+                "strict_deny_all_supported": bool(enforcement_ready.get("deny_all")),
+                "strict_allowlist_supported": bool(enforcement_ready.get("allowlist")),
+                "enforcement_ready": enforcement_ready,
+                "host": dict((preflight.host if preflight else {}) or {}),
+            }
 
         return [
             {
                 "name": "docker",
-                "available": bool(docker_available()),
+                "available": bool(docker_preflight.available) if docker_preflight is not None else bool(docker_available()),
                 "default_images": images,
                 "max_cpu": max_cpu,
                 "max_mem_mb": max_mem_mb,
@@ -609,7 +833,14 @@ class SandboxService:
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
                 # Advertise interactive only when real runner execution is enabled and available
-                "interactive_supported": bool(execute_enabled and docker_available()),
+                "interactive_supported": bool(
+                    execute_enabled
+                    and (
+                        bool(docker_preflight.available)
+                        if docker_preflight is not None
+                        else bool(docker_available())
+                    )
+                ),
                 "egress_allowlist_supported": bool(egress_supported),
                 "store_mode": store_mode,
                 "notes": (
@@ -620,7 +851,7 @@ class SandboxService:
             },
             {
                 "name": "firecracker",
-                "available": bool(firecracker_available()),
+                "available": bool(firecracker_preflight.available) if firecracker_preflight is not None else bool(firecracker_available()),
                 "default_images": images,  # firecracker images will differ; placeholder for UX
                 "max_cpu": max_cpu,
                 "max_mem_mb": max_mem_mb,
@@ -657,7 +888,7 @@ class SandboxService:
             },
             {
                 "name": "lima",
-                "available": bool(lima_available()),
+                "available": bool(lima_preflight.available) if lima_preflight is not None else bool(lima_available()),
                 "default_images": ["ubuntu:24.04"],  # Lima uses distro images
                 "max_cpu": max_cpu,
                 "max_mem_mb": max_mem_mb,
@@ -677,7 +908,64 @@ class SandboxService:
                 "store_mode": store_mode,
                 "notes": "Full VM isolation via Lima; recommended for macOS",
             },
+            {
+                "name": "vz_linux",
+                "default_images": ["ubuntu-24.04"],
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "Linux guest VM via Virtualization.framework on Apple silicon hosts",
+                **_preflight_fields(vz_linux_preflight),
+            },
+            {
+                "name": "vz_macos",
+                "default_images": ["macos-15"],
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "macOS guest VM via Virtualization.framework on Apple silicon hosts",
+                **_preflight_fields(vz_macos_preflight),
+            },
+            {
+                "name": "seatbelt",
+                "default_images": ["host-local"],
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "Host-local seatbelt process isolation for trusted macOS workflows with best-effort deny-all networking; not VM-grade isolation",
+                **_preflight_fields(seatbelt_preflight),
+            },
         ]
+
+    def macos_diagnostics(self) -> dict[str, object]:
+        return collect_macos_diagnostics()
 
     def _audit_run_completion(self, *, user_id: str | int | None, run_id: str, status: RunStatus, spec_version: str, session_id: str | None) -> None:
         """Log a completion audit event in a fire-and-forget manner."""
@@ -756,24 +1044,35 @@ class SandboxService:
     def create_session(self, user_id: str | int, spec: SessionSpec, spec_version: str, idem_key: str | None, raw_body: dict) -> Session:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
-        fc_ok = firecracker_available()
-        lima_ok = lima_available()
-        spec = self.policy.apply_to_session(spec, firecracker_available=fc_ok, lima_available=lima_ok)
-        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
+        runtime_preflights = self._collect_runtime_preflights(network_policy="deny_all")
+        firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
+        lima_preflight = runtime_preflights.get(RuntimeType.lima)
+        spec = self.policy.apply_to_session(
+            spec,
+            firecracker_available=bool(firecracker_preflight.available) if firecracker_preflight is not None else bool(firecracker_available()),
+            lima_available=bool(lima_preflight.available) if lima_preflight is not None else bool(lima_available()),
+            runtime_preflights=runtime_preflights,
+        )
+        self._validate_lima_policy(
+            runtime=spec.runtime,
+            network_policy=spec.network_policy,
+            runtime_preflight=lima_preflight,
+        )
         # Validate Firecracker kernel/rootfs when real execution is enabled
         self._validate_firecracker_config(spec)
         # delegate to orchestrator (with idempotency)
         sess = self._orch.create_session(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
         return sess
 
+    def get_session(self, session_id: str) -> Session | None:
+        return self._orch.get_session(session_id)
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        return self._orch.get_session_owner(session_id)
+
     def destroy_session(self, session_id: str) -> bool:
         try:
-            destroyed = bool(self._orch.destroy_session(session_id))
-            if destroyed:
-                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-                    with self._snapshot_lock(session_id):
-                        self._snapshots.cleanup_session_snapshots(session_id)
-            return destroyed
+            return self._destroy_session_serialized(session_id)
         except SessionActiveRunsConflict:
             timeout_sec = 10.0
             try:
@@ -826,12 +1125,7 @@ class SandboxService:
                     )
                 time.sleep(0.05)
 
-            destroyed = bool(self._orch.destroy_session(session_id))
-            if destroyed:
-                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-                    with self._snapshot_lock(session_id):
-                        self._snapshots.cleanup_session_snapshots(session_id)
-            return destroyed
+            return self._destroy_session_serialized(session_id)
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"destroy_session failed: {e}")
             return False
@@ -840,27 +1134,161 @@ class SandboxService:
         results: list[tuple[str, bytes]] = []
         if not files:
             return results
-        for f in files:
+        for index, f in enumerate(files):
             try:
                 p = str(f.get("path", ""))
                 b64 = str(f.get("content_b64", ""))
-                data = base64.b64decode(b64)
+                data = base64.b64decode(b64, validate=True)
                 results.append((p, data))
-            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Failed to parse inline file: {e}")
+            except (binascii.Error, ValueError, TypeError, AttributeError) as e:
+                raise ValueError(f"invalid inline file at index {index}") from e
         return results
 
-    def start_run_scaffold(self, user_id: str | int, spec: RunSpec, spec_version: str, idem_key: str | None, raw_body: dict) -> RunStatus:
+    def _run_field_explicit(self, explicit_fields: set[str] | None, *field_names: str) -> bool:
+        if explicit_fields is None:
+            return True
+        for field_name in field_names:
+            normalized = str(field_name or "").strip()
+            if not normalized:
+                continue
+            if normalized in explicit_fields:
+                return True
+            if "." not in normalized and f"resources.{normalized}" in explicit_fields:
+                return True
+        return False
+
+    def _resolve_session_backed_run_spec(
+        self,
+        spec: RunSpec,
+        *,
+        session: Session,
+        explicit_fields: set[str] | None,
+    ) -> RunSpec:
+        runtime = spec.runtime
+        if not self._run_field_explicit(explicit_fields, "runtime") and session.runtime is not None:
+            runtime = session.runtime
+
+        base_image = spec.base_image
+        if not self._run_field_explicit(explicit_fields, "base_image") and session.base_image:
+            base_image = session.base_image
+
+        env = dict(spec.env or {})
+        if not self._run_field_explicit(explicit_fields, "env"):
+            env = dict(session.env or {})
+
+        timeout_sec = spec.timeout_sec
+        if not self._run_field_explicit(explicit_fields, "timeout_sec") and session.timeout_sec is not None:
+            timeout_sec = int(session.timeout_sec)
+
+        cpu = spec.cpu
+        if not self._run_field_explicit(explicit_fields, "cpu") and session.cpu_limit is not None:
+            cpu = float(session.cpu_limit)
+
+        memory_mb = spec.memory_mb
+        if not self._run_field_explicit(explicit_fields, "memory_mb") and session.memory_mb is not None:
+            memory_mb = int(session.memory_mb)
+
+        network_policy = spec.network_policy
+        if not self._run_field_explicit(explicit_fields, "network_policy") and session.network_policy:
+            network_policy = str(session.network_policy)
+
+        trust_level = spec.trust_level
+        if not self._run_field_explicit(explicit_fields, "trust_level") and session.trust_level is not None:
+            trust_level = session.trust_level
+
+        persona_id = spec.persona_id
+        if not self._run_field_explicit(explicit_fields, "persona_id") and session.persona_id is not None:
+            persona_id = str(session.persona_id)
+
+        workspace_id = spec.workspace_id
+        if not self._run_field_explicit(explicit_fields, "workspace_id") and session.workspace_id is not None:
+            workspace_id = str(session.workspace_id)
+
+        workspace_group_id = spec.workspace_group_id
+        if not self._run_field_explicit(explicit_fields, "workspace_group_id") and session.workspace_group_id is not None:
+            workspace_group_id = str(session.workspace_group_id)
+
+        scope_snapshot_id = spec.scope_snapshot_id
+        if not self._run_field_explicit(explicit_fields, "scope_snapshot_id") and session.scope_snapshot_id is not None:
+            scope_snapshot_id = str(session.scope_snapshot_id)
+
+        return RunSpec(
+            session_id=spec.session_id,
+            runtime=runtime,
+            base_image=base_image,
+            command=list(spec.command),
+            env=env,
+            startup_timeout_sec=spec.startup_timeout_sec,
+            timeout_sec=timeout_sec,
+            cpu=cpu,
+            memory_mb=memory_mb,
+            network_policy=network_policy,
+            files_inline=list(spec.files_inline or []),
+            capture_patterns=list(spec.capture_patterns or []),
+            interactive=spec.interactive,
+            stdin_max_bytes=spec.stdin_max_bytes,
+            stdin_max_frame_bytes=spec.stdin_max_frame_bytes,
+            stdin_bps=spec.stdin_bps,
+            stdin_idle_timeout_sec=spec.stdin_idle_timeout_sec,
+            trust_level=trust_level,
+            port_mappings=list(spec.port_mappings or []),
+            run_as_root=spec.run_as_root,
+            read_only_root=spec.read_only_root,
+            persona_id=persona_id,
+            workspace_id=workspace_id,
+            workspace_group_id=workspace_group_id,
+            scope_snapshot_id=scope_snapshot_id,
+        )
+
+    def start_run_scaffold(
+        self,
+        user_id: str | int,
+        spec: RunSpec,
+        spec_version: str,
+        idem_key: str | None,
+        raw_body: dict,
+        *,
+        explicit_fields: set[str] | None = None,
+    ) -> RunStatus:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
-        # Apply policy then enqueue via orchestrator (idempotency-aware)
-        fc_ok = firecracker_available()
-        lima_ok = lima_available()
-        spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok, lima_available=lima_ok)
-        self._validate_lima_policy(runtime=spec.runtime, network_policy=spec.network_policy)
-        # Validate Firecracker kernel/rootfs when real execution is enabled
-        self._validate_firecracker_config(spec)
-        status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
+
+        def _prepare_spec_for_enqueue(candidate: RunSpec) -> RunSpec:
+            runtime_preflights = self._collect_runtime_preflights(network_policy="deny_all")
+            firecracker_preflight = runtime_preflights.get(RuntimeType.firecracker)
+            lima_preflight = runtime_preflights.get(RuntimeType.lima)
+            candidate = self.policy.apply_to_run(
+                candidate,
+                firecracker_available=bool(firecracker_preflight.available) if firecracker_preflight is not None else bool(firecracker_available()),
+                lima_available=bool(lima_preflight.available) if lima_preflight is not None else bool(lima_available()),
+                runtime_preflights=runtime_preflights,
+            )
+            self._validate_lima_policy(
+                runtime=candidate.runtime,
+                network_policy=candidate.network_policy,
+                runtime_preflight=lima_preflight,
+            )
+            self._validate_firecracker_config(candidate)
+            return candidate
+
+        session_id = str(spec.session_id or "").strip() if getattr(spec, "session_id", None) is not None else ""
+        if session_id:
+            with self._workspace_operation_lock(session_id):
+                session = self._orch.get_session(session_id, allow_cache_on_store_error=False)
+                if session is None:
+                    raise ValueError("session_not_found")
+                spec = self._resolve_session_backed_run_spec(
+                    spec,
+                    session=session,
+                    explicit_fields=explicit_fields,
+                )
+                if not spec.base_image:
+                    raise ValueError("session_base_image_required")
+                spec = _prepare_spec_for_enqueue(spec)
+                status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
+        else:
+            spec = _prepare_spec_for_enqueue(spec)
+            status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
         # Configure stdin caps in hub if interactive is requested (spec 1.1)
         try:
             interactive = bool(spec.interactive) if getattr(spec, "interactive", None) is not None else False
@@ -974,10 +1402,12 @@ class SandboxService:
                             self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Background docker execution failed: {e}")
+                            self._mark_run_failed(status, reason="docker_failed")
                     try:
                         self._submit_background_worker(_worker)
                     except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Background docker submission failed: {e}")
+                        self._mark_run_failed(status, reason="docker_failed")
                 else:
                     dr = DockerRunner()
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
@@ -1020,7 +1450,8 @@ class SandboxService:
                     with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
             except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Docker execution failed; keeping enqueue status. Error: {e}")
+                logger.warning(f"Docker execution failed; marking run failed. Error: {e}")
+                self._mark_run_failed(status, reason="docker_failed")
         elif execute_enabled and spec.runtime == RuntimeType.firecracker:
             try:
                 env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
@@ -1063,10 +1494,12 @@ class SandboxService:
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Firecracker background execution failed: {e}")
+                            self._mark_run_failed(status, reason="firecracker_failed")
                     try:
                         self._submit_background_worker(_worker_fc)
                     except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Firecracker background submission failed: {e}")
+                        self._mark_run_failed(status, reason="firecracker_failed")
                 else:
                     # Foreground
                     fr = FirecrackerRunner()
@@ -1163,10 +1596,12 @@ class SandboxService:
                                 pass
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Lima background execution failed: {e}")
+                            self._mark_run_failed(status, reason="lima_failed")
                     try:
                         self._submit_background_worker(_worker_lima)
                     except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Lima background submission failed: {e}")
+                        self._mark_run_failed(status, reason="lima_failed")
                 else:
                     # Foreground
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
@@ -1220,6 +1655,39 @@ class SandboxService:
                         get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "lima_failed"})
                 except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                     pass
+        elif execute_enabled and spec.runtime == RuntimeType.vz_linux:
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_vz_linux_run_with_execution_preflight,
+                policy_failed_reason="vz_linux_policy_failed",
+                failed_reason="vz_linux_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable,),
+            )
+        elif execute_enabled and spec.runtime == RuntimeType.vz_macos:
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_vz_macos_run_with_execution_preflight,
+                policy_failed_reason="vz_macos_policy_failed",
+                failed_reason="vz_macos_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable,),
+            )
+        elif execute_enabled and spec.runtime == RuntimeType.seatbelt:
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_seatbelt_run_with_execution_preflight,
+                policy_failed_reason="seatbelt_policy_failed",
+                failed_reason="seatbelt_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported),
+            )
         else:
             # Stub artifacts even without execution
             artifacts: dict[str, bytes] = {}
@@ -1271,6 +1739,12 @@ class SandboxService:
                 cancelled = DockerRunner.cancel_run(run_id)
             elif st.runtime == RuntimeType.lima:
                 cancelled = LimaRunner.cancel_run(run_id)
+            elif st.runtime == RuntimeType.seatbelt:
+                cancelled = SeatbeltRunner.cancel_run(run_id)
+            elif st.runtime == RuntimeType.vz_linux:
+                cancelled = VZLinuxRunner.cancel_run(run_id)
+            elif st.runtime == RuntimeType.vz_macos:
+                cancelled = VZMacOSRunner.cancel_run(run_id)
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"cancel_run failed: {e}")
             cancelled = False
@@ -1294,14 +1768,135 @@ class SandboxService:
     # Snapshot Operations
     # -----------------
 
-    def _snapshot_lock(self, session_id: str) -> threading.RLock:
+    def _snapshot_lock(self, session_id: str) -> threading.Lock:
         sid = str(session_id or "")
         with self._snapshot_locks_guard:
             lock = self._snapshot_locks.get(sid)
             if lock is None:
-                lock = threading.RLock()
+                lock = threading.Lock()
                 self._snapshot_locks[sid] = lock
             return lock
+
+    def _workspace_operation_lock_dir(self) -> str:
+        raw_root = ""
+        try:
+            raw_root = str(
+                os.getenv("SANDBOX_ROOT_DIR")
+                or getattr(app_settings, "SANDBOX_ROOT_DIR", "")
+                or ""
+            ).strip()
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            raw_root = ""
+        if raw_root:
+            base_dir = os.path.join(os.path.abspath(raw_root), ".sandbox-workspace-locks")
+        else:
+            base_dir = os.path.join(tempfile.gettempdir(), "tldw-sandbox-workspace-locks")
+        os.makedirs(base_dir, exist_ok=True)
+        return base_dir
+
+    def _workspace_operation_lock_path(self, session_id: str, workspace_root: str | None = None) -> str:
+        sid = str(session_id or "").strip()
+        if sid:
+            lock_key = f"session:{sid}"
+        else:
+            workspace_path = os.path.abspath(str(workspace_root or "")).strip()
+            if not workspace_path:
+                raise ValueError("Session not found or no workspace")
+            lock_key = f"workspace:{workspace_path}"
+        digest = hashlib.sha256(lock_key.encode("utf-8")).hexdigest()
+        return os.path.join(self._workspace_operation_lock_dir(), f"{digest}.lock")
+
+    def _resolve_workspace_operation_root(self, session_id: str, workspace_root: str | None = None) -> str:
+        sid = str(session_id or "").strip()
+        if sid:
+            live_ws = str(
+                self._orch.get_session_workspace_path(
+                    sid,
+                    allow_cache_on_store_error=False,
+                ) or ""
+            ).strip()
+            if not live_ws:
+                raise ValueError("session_not_found")
+            return live_ws
+        ws = str(workspace_root or "").strip()
+        if not ws:
+            raise ValueError("Session not found or no workspace")
+        return ws
+
+    @contextlib.contextmanager
+    def _workspace_operation_lock(self, session_id: str, workspace_root: str | None = None):
+        sid = str(session_id or "").strip()
+        with self._snapshot_lock(sid):
+            lock_path = self._workspace_operation_lock_path(sid, workspace_root)
+            lock_handle = _acquire_workspace_file_lock(lock_path)
+            try:
+                ws = self._resolve_workspace_operation_root(sid, workspace_root)
+                yield ws
+            finally:
+                _release_workspace_file_lock(lock_handle)
+
+    @contextlib.asynccontextmanager
+    async def async_workspace_operation_lock(self, session_id: str, workspace_root: str | None = None):
+        sid = str(session_id or "").strip()
+        thread_lock = self._snapshot_lock(sid)
+        await asyncio.to_thread(thread_lock.acquire)
+        try:
+            lock_path = self._workspace_operation_lock_path(sid, workspace_root)
+            lock_handle = await asyncio.to_thread(_acquire_workspace_file_lock, lock_path)
+            try:
+                ws = await asyncio.to_thread(self._resolve_workspace_operation_root, sid, workspace_root)
+                yield ws
+            finally:
+                await asyncio.to_thread(_release_workspace_file_lock, lock_handle)
+        finally:
+            thread_lock.release()
+
+    def _active_session_run_count(self, session_id: str) -> int:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return 0
+        return (
+            self._orch.count_runs(session_id=sid, phase=RunPhase.queued.value)
+            + self._orch.count_runs(session_id=sid, phase=RunPhase.starting.value)
+            + self._orch.count_runs(session_id=sid, phase=RunPhase.running.value)
+        )
+
+    def _ensure_no_active_session_runs(self, session_id: str) -> None:
+        active_runs = self._active_session_run_count(session_id)
+        if active_runs > 0:
+            raise SessionActiveRunsConflict(
+                session_id=str(session_id),
+                active_runs=active_runs,
+            )
+
+    def _remove_session_workspace_tree(self, workspace_root: str | None) -> None:
+        ws = str(workspace_root or "").strip()
+        if not ws:
+            return
+        ws_path = os.path.abspath(ws)
+        session_root = os.path.dirname(ws_path) if os.path.basename(ws_path) == "workspace" else ws_path
+        shutil.rmtree(session_root, ignore_errors=True)
+
+    def _destroy_session_serialized(self, session_id: str) -> bool:
+        ws = self._orch.get_session_workspace_path(session_id)
+        if not ws:
+            destroyed = bool(self._orch.destroy_session(session_id))
+            if destroyed:
+                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                    with self._snapshot_lock(session_id):
+                        self._snapshots.cleanup_session_snapshots(session_id)
+            return destroyed
+
+        destroyed = False
+        with self._workspace_operation_lock(session_id, ws):
+            destroyed = bool(self._orch.destroy_session(session_id, remove_workspace_tree=False))
+            if destroyed:
+                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                    self._snapshots.cleanup_session_snapshots(session_id)
+        if destroyed:
+            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                self._remove_session_workspace_tree(ws)
+        return destroyed
 
     def create_snapshot(self, session_id: str) -> dict:
         """Create a snapshot of a session's workspace.
@@ -1315,10 +1910,8 @@ class SandboxService:
         Raises:
             ValueError: If session not found or has no workspace.
         """
-        with self._snapshot_lock(session_id):
-            ws = self._orch.get_session_workspace_path(session_id)
-            if not ws:
-                raise ValueError("Session not found or no workspace")
+        with self._workspace_operation_lock(session_id) as ws:
+            self._ensure_no_active_session_runs(session_id)
             result = self._snapshots.create_snapshot(session_id, ws)
             deleted = self._snapshots.enforce_quota(
                 session_id,
@@ -1342,10 +1935,8 @@ class SandboxService:
         Raises:
             ValueError: If session or snapshot not found.
         """
-        with self._snapshot_lock(session_id):
-            ws = self._orch.get_session_workspace_path(session_id)
-            if not ws:
-                raise ValueError("Session not found or no workspace")
+        with self._workspace_operation_lock(session_id) as ws:
+            self._ensure_no_active_session_runs(session_id)
             return self._snapshots.restore_snapshot(session_id, snapshot_id, ws)
 
     def clone_session(self, session_id: str, new_name: str | None = None) -> Session:
@@ -1361,12 +1952,8 @@ class SandboxService:
         Raises:
             ValueError: If source session not found.
         """
-        with self._snapshot_lock(session_id):
-            # Get source session info
-            source_ws = self._orch.get_session_workspace_path(session_id)
-            if not source_ws:
-                raise ValueError("Source session not found or no workspace")
-
+        with self._workspace_operation_lock(session_id) as source_ws:
+            self._ensure_no_active_session_runs(session_id)
             source_owner = self._orch.get_session_owner(session_id)
             if not source_owner:
                 raise ValueError("Source session owner not found")
@@ -1381,6 +1968,13 @@ class SandboxService:
             spec = SessionSpec(
                 runtime=source_sess.runtime,
                 base_image=source_sess.base_image,
+                cpu_limit=source_sess.cpu_limit,
+                memory_mb=source_sess.memory_mb,
+                timeout_sec=source_sess.timeout_sec,
+                network_policy=source_sess.network_policy,
+                env=dict(source_sess.env or {}),
+                labels=dict(source_sess.labels or {}),
+                trust_level=source_sess.trust_level,
                 persona_id=source_sess.persona_id,
                 workspace_id=source_sess.workspace_id,
                 workspace_group_id=source_sess.workspace_group_id,
@@ -1416,7 +2010,7 @@ class SandboxService:
         Returns:
             List of snapshot metadata dictionaries.
         """
-        with self._snapshot_lock(session_id):
+        with self._workspace_operation_lock(session_id):
             return self._snapshots.list_snapshots(session_id)
 
     def delete_snapshot(self, session_id: str, snapshot_id: str) -> bool:
@@ -1429,7 +2023,7 @@ class SandboxService:
         Returns:
             True if deleted successfully.
         """
-        with self._snapshot_lock(session_id):
+        with self._workspace_operation_lock(session_id):
             return self._snapshots.delete_snapshot(session_id, snapshot_id)
 
     def get_snapshot_info(self, session_id: str, snapshot_id: str) -> dict | None:
@@ -1442,5 +2036,5 @@ class SandboxService:
         Returns:
             Snapshot metadata or None if not found.
         """
-        with self._snapshot_lock(session_id):
+        with self._workspace_operation_lock(session_id):
             return self._snapshots.get_snapshot_info(session_id, snapshot_id)

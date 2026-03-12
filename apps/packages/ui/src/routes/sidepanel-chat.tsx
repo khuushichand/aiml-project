@@ -57,6 +57,7 @@ import { useArtifactsStore } from "@/store/artifacts"
 import { ArtifactsPanel } from "@/components/Sidepanel/Chat/ArtifactsPanel"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
+import { restoreQueuedRequests } from "@/utils/chat-request-queue"
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
 import type { ServerChatHistoryItem } from "@/hooks/useServerChatHistory"
 import {
@@ -306,7 +307,12 @@ const MODEL_SETTINGS_KEYS = [
   "slashCommandInjectionMode",
   "apiProvider",
   "extraHeaders",
-  "extraBody"
+  "extraBody",
+  "llamaThinkingBudgetTokens",
+  "llamaGrammarMode",
+  "llamaGrammarId",
+  "llamaGrammarInline",
+  "llamaGrammarOverride"
 ] as const
 
 type ModelSettingsKey = (typeof MODEL_SETTINGS_KEYS)[number]
@@ -747,7 +753,7 @@ const SidepanelChat = () => {
       setServerChatClusterId(snapshot.serverChatClusterId ?? null)
       setServerChatSource(snapshot.serverChatSource ?? null)
       setServerChatExternalRef(snapshot.serverChatExternalRef ?? null)
-      setQueuedMessages(snapshot.queuedMessages ?? [])
+      setQueuedMessages(restoreQueuedRequests(snapshot.queuedMessages ?? []))
       setIsFirstMessage((snapshot.history || []).length === 0)
       setIsLoading(false)
       setIsProcessing(false)

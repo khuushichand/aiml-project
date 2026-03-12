@@ -56,6 +56,9 @@ def _profile_from_dict(prof_dict: dict, db: PersonalizationDB, user_id: str) -> 
         proactive_frequency=str(prof_dict.get("proactive_frequency", "normal")),
         response_style=str(prof_dict.get("response_style", "balanced")),
         preferred_format=str(prof_dict.get("preferred_format", "auto")),
+        companion_reflections_enabled=bool(prof_dict.get("companion_reflections_enabled", 1)),
+        companion_daily_reflections_enabled=bool(prof_dict.get("companion_daily_reflections_enabled", 1)),
+        companion_weekly_reflections_enabled=bool(prof_dict.get("companion_weekly_reflections_enabled", 1)),
         updated_at=updated_at,
     )
 
@@ -138,9 +141,15 @@ async def personalization_preferences(
     if "proactive_types" in fields:
         import json
         fields["proactive_types"] = json.dumps(fields["proactive_types"])
-    # Map bool to int for proactive_enabled
-    if "proactive_enabled" in fields:
-        fields["proactive_enabled"] = int(bool(fields["proactive_enabled"]))
+    # Map bool flags to int for SQLite storage
+    for flag in (
+        "proactive_enabled",
+        "companion_reflections_enabled",
+        "companion_daily_reflections_enabled",
+        "companion_weekly_reflections_enabled",
+    ):
+        if flag in fields:
+            fields[flag] = int(bool(fields[flag]))
 
     prof_dict = db.update_profile(log.user_id, **fields)
     return _profile_from_dict(prof_dict, db, log.user_id)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -17,6 +18,11 @@ REQUIRED_TEAM_ADMIN_RANK = ROLE_HIERARCHY.get("lead", 2)
 PLATFORM_ADMIN_ROLES = {"owner", "super_admin", "admin"}
 
 
+def _enterprise_admin_mode_enabled() -> bool:
+    raw_value = os.getenv("ADMIN_UI_ENTERPRISE_MODE", "")
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def role_rank(role: str | None) -> int:
     if role is None:
         return 0
@@ -25,7 +31,7 @@ def role_rank(role: str | None) -> int:
 
 def is_platform_admin(principal: AuthPrincipal) -> bool:
     if is_single_user_principal(principal):
-        return True
+        return not _enterprise_admin_mode_enabled()
     roles = {str(role).strip().lower() for role in (principal.roles or [])}
     return bool(roles & PLATFORM_ADMIN_ROLES)
 
@@ -46,7 +52,7 @@ async def enforce_admin_user_scope(
     require_hierarchy: bool,
 ) -> None:
     """Enforce shared org/team membership and optional role hierarchy for admin actions."""
-    if is_single_user_principal(principal) or is_platform_admin(principal):
+    if is_platform_admin(principal):
         return
 
     if principal.user_id is None:
@@ -117,7 +123,7 @@ async def enforce_admin_user_scope(
 
 
 async def get_admin_org_ids(principal: AuthPrincipal) -> list[int] | None:
-    if is_single_user_principal(principal) or is_platform_admin(principal):
+    if is_platform_admin(principal):
         return None
     if principal.user_id is None:
         raise HTTPException(
@@ -134,7 +140,7 @@ async def enforce_admin_org_access(
     *,
     require_admin: bool = True,
 ) -> None:
-    if is_single_user_principal(principal) or is_platform_admin(principal):
+    if is_platform_admin(principal):
         return
     if principal.user_id is None:
         raise HTTPException(

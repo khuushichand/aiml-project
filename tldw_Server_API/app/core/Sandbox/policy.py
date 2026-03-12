@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from typing import Mapping
 
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.testing import is_truthy
 
 from .models import RunSpec, RuntimeType, SessionSpec, TrustLevel
+from .runtime_capabilities import RuntimePreflightResult
 
 _POLICY_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -148,24 +150,103 @@ class SandboxPolicy:
             self.requirement = str(requirement)
             self.reasons = list(reasons or [])
 
+    @staticmethod
+    def _runtime_preflight(
+        runtime: RuntimeType,
+        *,
+        firecracker_available: bool,
+        lima_available: bool,
+        runtime_preflights: Mapping[RuntimeType, RuntimePreflightResult] | None = None,
+    ) -> RuntimePreflightResult | None:
+        if runtime_preflights is not None:
+            preflight = runtime_preflights.get(runtime)
+            if preflight is not None:
+                return preflight
+        if runtime == RuntimeType.firecracker:
+            return RuntimePreflightResult(runtime=runtime, available=firecracker_available)
+        if runtime == RuntimeType.lima:
+            return RuntimePreflightResult(runtime=runtime, available=lima_available)
+        return None
+
+    def _require_runtime_available(
+        self,
+        runtime: RuntimeType,
+        *,
+        firecracker_available: bool,
+        lima_available: bool,
+        runtime_preflights: Mapping[RuntimeType, RuntimePreflightResult] | None = None,
+    ) -> None:
+        preflight = self._runtime_preflight(
+            runtime,
+            firecracker_available=firecracker_available,
+            lima_available=lima_available,
+            runtime_preflights=runtime_preflights,
+        )
+        if preflight is None or preflight.available:
+            return
+        raise SandboxPolicy.RuntimeUnavailable(runtime, reasons=list(preflight.reasons or []))
+
+    @staticmethod
+    def _require_trust_level_supported(
+        runtime: RuntimeType,
+        trust: TrustLevel,
+        *,
+        runtime_preflights: Mapping[RuntimeType, RuntimePreflightResult] | None = None,
+    ) -> None:
+        if runtime == RuntimeType.seatbelt and trust == TrustLevel.untrusted:
+            raise SandboxPolicy.PolicyUnsupported(
+                runtime,
+                requirement="untrusted_requires_vm_runtime",
+                reasons=["trust_level_requires_vm_runtime"],
+            )
+
+        if runtime_preflights is None:
+            return
+
+        preflight = runtime_preflights.get(runtime)
+        if preflight is None:
+            return
+
+        supported = {
+            str(level).strip().lower()
+            for level in (preflight.supported_trust_levels or [])
+            if str(level).strip()
+        }
+        if runtime == RuntimeType.seatbelt and trust == TrustLevel.standard and "standard" not in supported:
+            raise SandboxPolicy.PolicyUnsupported(
+                runtime,
+                requirement="standard_not_enabled",
+                reasons=["seatbelt_standard_disabled"],
+            )
+        if supported and trust.value not in supported:
+            raise SandboxPolicy.PolicyUnsupported(
+                runtime,
+                requirement=f"trust_level:{trust.value}",
+                reasons=["trust_level_not_supported"],
+            )
+
     def select_runtime(
         self,
         requested: RuntimeType | None,
         firecracker_available: bool,
         lima_available: bool = False,
+        runtime_preflights: Mapping[RuntimeType, RuntimePreflightResult] | None = None,
     ) -> RuntimeType:
         if requested is not None:
-            if requested == RuntimeType.firecracker and not firecracker_available:
-                # Do not silently fallback; surface unavailability to caller
-                raise SandboxPolicy.RuntimeUnavailable(requested)
-            if requested == RuntimeType.lima and not lima_available:
-                raise SandboxPolicy.RuntimeUnavailable(requested)
+            self._require_runtime_available(
+                requested,
+                firecracker_available=firecracker_available,
+                lima_available=lima_available,
+                runtime_preflights=runtime_preflights,
+            )
             return requested
         # No explicit request: honor default, but still enforce availability
-        if self.cfg.default_runtime == RuntimeType.firecracker and not firecracker_available:
-            raise SandboxPolicy.RuntimeUnavailable(self.cfg.default_runtime)
-        if self.cfg.default_runtime == RuntimeType.lima and not lima_available:
-            raise SandboxPolicy.RuntimeUnavailable(self.cfg.default_runtime)
+        self._require_runtime_available(
+            self.cfg.default_runtime,
+            firecracker_available=firecracker_available,
+            lima_available=lima_available,
+            runtime_preflights=runtime_preflights,
+        )
         return self.cfg.default_runtime
 
     def apply_to_session(
@@ -173,11 +254,22 @@ class SandboxPolicy:
         spec: SessionSpec,
         firecracker_available: bool,
         lima_available: bool = False,
+        runtime_preflights: Mapping[RuntimeType, RuntimePreflightResult] | None = None,
     ) -> SessionSpec:
-        spec.runtime = self.select_runtime(spec.runtime, firecracker_available, lima_available)
+        spec.runtime = self.select_runtime(
+            spec.runtime,
+            firecracker_available,
+            lima_available,
+            runtime_preflights=runtime_preflights,
+        )
 
         # Apply trust-level profile constraints
         trust = spec.trust_level or TrustLevel.standard
+        self._require_trust_level_supported(
+            spec.runtime,
+            trust,
+            runtime_preflights=runtime_preflights,
+        )
         profile = TRUST_PROFILES.get(trust, TRUST_PROFILES[TrustLevel.standard])
 
         if not spec.network_policy:
@@ -220,12 +312,23 @@ class SandboxPolicy:
         spec: RunSpec,
         firecracker_available: bool,
         lima_available: bool = False,
+        runtime_preflights: Mapping[RuntimeType, RuntimePreflightResult] | None = None,
     ) -> RunSpec:
         # Always go through selection to enforce availability on defaults
-        spec.runtime = self.select_runtime(spec.runtime, firecracker_available, lima_available)
+        spec.runtime = self.select_runtime(
+            spec.runtime,
+            firecracker_available,
+            lima_available,
+            runtime_preflights=runtime_preflights,
+        )
 
         # Apply trust-level profile constraints
         trust = spec.trust_level or TrustLevel.standard
+        self._require_trust_level_supported(
+            spec.runtime,
+            trust,
+            runtime_preflights=runtime_preflights,
+        )
         profile = TRUST_PROFILES.get(trust, TRUST_PROFILES[TrustLevel.standard])
 
         if not spec.network_policy:

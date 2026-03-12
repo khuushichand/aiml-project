@@ -4,6 +4,7 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PlaygroundForm } from "../PlaygroundForm"
+import { fetchChatModels } from "@/services/tldw-server"
 
 const onSubmitMock = vi.hoisted(() => vi.fn(async (_payload: unknown) => null))
 const createChatCompletionMock = vi.hoisted(() =>
@@ -52,6 +53,84 @@ const dictationStrategyState = vi.hoisted(() => ({
     clearAutoFallback: vi.fn()
   } as any
 }))
+const playgroundFormMessageOptionState = vi.hoisted(() => ({
+  value: null as any
+}))
+const playgroundFormConnectionState = vi.hoisted(() => ({
+  phase: "connected",
+  isConnected: true
+}))
+
+const createMessageOptionState = () => ({
+  onSubmit: onSubmitMock,
+  messages: [
+    {
+      id: "assistant-1",
+      isBot: true,
+      message: "Lana stands by the rainy neon alley.",
+      moodLabel: "focused"
+    }
+  ],
+  selectedModel: "deepseek-chat",
+  selectedModelIsLoading: false,
+  setSelectedModel: vi.fn(),
+  chatMode: "normal",
+  setChatMode: vi.fn(),
+  compareMode: false,
+  setCompareMode: vi.fn(),
+  compareFeatureEnabled: false,
+  setCompareFeatureEnabled: vi.fn(),
+  compareSelectedModels: [],
+  setCompareSelectedModels: vi.fn(),
+  compareMaxModels: 3,
+  setCompareMaxModels: vi.fn(),
+  speechToTextLanguage: "en-US",
+  stopStreamingRequest: vi.fn(),
+  streaming: false,
+  webSearch: false,
+  setWebSearch: vi.fn(),
+  toolChoice: "auto",
+  setToolChoice: vi.fn(),
+  selectedQuickPrompt: null,
+  textareaRef: { current: null },
+  setSelectedQuickPrompt: vi.fn(),
+  selectedSystemPrompt: null,
+  setSelectedSystemPrompt: vi.fn(),
+  temporaryChat: false,
+  setTemporaryChat: vi.fn(),
+  clearChat: vi.fn(),
+  useOCR: false,
+  setUseOCR: vi.fn(),
+  defaultInternetSearchOn: false,
+  setHistory: vi.fn(),
+  history: [],
+  uploadedFiles: [],
+  fileRetrievalEnabled: false,
+  setFileRetrievalEnabled: vi.fn(),
+  handleFileUpload: vi.fn(),
+  removeUploadedFile: vi.fn(),
+  clearUploadedFiles: vi.fn(),
+  queuedMessages: [],
+  addQueuedMessage: vi.fn(),
+  setQueuedMessages: vi.fn(),
+  clearQueuedMessages: vi.fn(),
+  serverChatId: null,
+  setServerChatId: vi.fn(),
+  serverChatState: "in-progress",
+  setServerChatState: vi.fn(),
+  serverChatSource: null,
+  setServerChatSource: vi.fn(),
+  setServerChatVersion: vi.fn(),
+  replyTarget: null,
+  clearReplyTarget: vi.fn(),
+  ragPinnedResults: [],
+  messageSteeringMode: "default",
+  messageSteeringForceNarrate: false,
+  contextFiles: [],
+  documentContext: [],
+  selectedKnowledge: null,
+  ragMediaIds: []
+})
 
 type SubmitPayload = {
   message?: string
@@ -378,75 +457,7 @@ vi.mock("~/hooks/useDynamicTextareaSize", () => ({
 }))
 
 vi.mock("~/hooks/useMessageOption", () => ({
-  useMessageOption: () => ({
-    onSubmit: onSubmitMock,
-    messages: [
-      {
-        id: "assistant-1",
-        isBot: true,
-        message: "Lana stands by the rainy neon alley.",
-        moodLabel: "focused"
-      }
-    ],
-    selectedModel: "deepseek-chat",
-    selectedModelIsLoading: false,
-    setSelectedModel: vi.fn(),
-    chatMode: "normal",
-    setChatMode: vi.fn(),
-    compareMode: false,
-    setCompareMode: vi.fn(),
-    compareFeatureEnabled: false,
-    setCompareFeatureEnabled: vi.fn(),
-    compareSelectedModels: [],
-    setCompareSelectedModels: vi.fn(),
-    compareMaxModels: 3,
-    setCompareMaxModels: vi.fn(),
-    speechToTextLanguage: "en-US",
-    stopStreamingRequest: vi.fn(),
-    streaming: false,
-    webSearch: false,
-    setWebSearch: vi.fn(),
-    toolChoice: "auto",
-    setToolChoice: vi.fn(),
-    selectedQuickPrompt: null,
-    textareaRef: { current: null },
-    setSelectedQuickPrompt: vi.fn(),
-    selectedSystemPrompt: null,
-    setSelectedSystemPrompt: vi.fn(),
-    temporaryChat: false,
-    setTemporaryChat: vi.fn(),
-    clearChat: vi.fn(),
-    useOCR: false,
-    setUseOCR: vi.fn(),
-    defaultInternetSearchOn: false,
-    setHistory: vi.fn(),
-    history: [],
-    uploadedFiles: [],
-    fileRetrievalEnabled: false,
-    setFileRetrievalEnabled: vi.fn(),
-    handleFileUpload: vi.fn(),
-    removeUploadedFile: vi.fn(),
-    clearUploadedFiles: vi.fn(),
-    queuedMessages: [],
-    addQueuedMessage: vi.fn(),
-    clearQueuedMessages: vi.fn(),
-    serverChatId: null,
-    setServerChatId: vi.fn(),
-    serverChatState: "in-progress",
-    setServerChatState: vi.fn(),
-    serverChatSource: null,
-    setServerChatSource: vi.fn(),
-    setServerChatVersion: vi.fn(),
-    replyTarget: null,
-    clearReplyTarget: vi.fn(),
-    ragPinnedResults: [],
-    messageSteeringMode: "default",
-    messageSteeringForceNarrate: false,
-    contextFiles: [],
-    documentContext: [],
-    selectedKnowledge: null,
-    ragMediaIds: []
-  })
+  useMessageOption: () => playgroundFormMessageOptionState.value
 }))
 
 vi.mock("@/store/option", () => ({
@@ -497,10 +508,7 @@ vi.mock("~/store/webui", () => ({
 }))
 
 vi.mock("@/hooks/useConnectionState", () => ({
-  useConnectionState: () => ({
-    phase: "connected",
-    isConnected: true
-  })
+  useConnectionState: () => playgroundFormConnectionState
 }))
 
 vi.mock("@/types/connection", () => ({
@@ -661,6 +669,7 @@ vi.mock("../ComposerTextarea", () => ({
 vi.mock("../ComposerToolbar", () => ({
   ComposerToolbar: ({
     toolsButton,
+    sendControl,
     speechAvailable,
     speechUsesServer,
     isListening,
@@ -668,6 +677,7 @@ vi.mock("../ComposerToolbar", () => ({
     onDictationToggle
   }: {
     toolsButton?: React.ReactNode
+    sendControl?: React.ReactNode
     speechAvailable?: boolean
     speechUsesServer?: boolean
     isListening?: boolean
@@ -685,6 +695,7 @@ vi.mock("../ComposerToolbar", () => ({
     return (
       <div data-testid="composer-toolbar">
         {toolsButton}
+        {sendControl}
         <button
           type="button"
           data-testid="dictation-button"
@@ -860,7 +871,11 @@ vi.mock("@/hooks/useSimpleForm", () => ({
           event?.preventDefault?.()
           await handler(values)
         },
-      getInputProps: (_field: string) => ({})
+      getInputProps: (field: string) => ({
+        value: values[field] ?? "",
+        onChange: (event: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) =>
+          setFieldValue(field, event.target.value)
+      })
     }
   }
 }))
@@ -1012,6 +1027,10 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
   beforeEach(() => {
     onSubmitMock.mockClear()
     createChatCompletionMock.mockClear()
+    vi.mocked(fetchChatModels).mockClear()
+    playgroundFormMessageOptionState.value = createMessageOptionState()
+    playgroundFormConnectionState.phase = "connected"
+    playgroundFormConnectionState.isConnected = true
     speechRecognitionState.transcript = ""
     speechRecognitionState.isListening = false
     speechRecognitionState.supported = false
@@ -1038,6 +1057,50 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
       recordServerSuccess: vi.fn(),
       clearAutoFallback: vi.fn()
     }
+  })
+
+  it("queues the current draft instead of sending when disconnected", async () => {
+    playgroundFormConnectionState.phase = "disconnected"
+    playgroundFormConnectionState.isConnected = false
+
+    const user = userEvent.setup()
+    render(<PlaygroundForm droppedFiles={[]} />)
+
+    await user.type(
+      screen.getByTestId("composer-textarea"),
+      "Queue this while offline"
+    )
+    await user.click(screen.getByRole("button", { name: "Queue request" }))
+
+    expect(onSubmitMock).not.toHaveBeenCalled()
+    const queuedUpdate =
+      playgroundFormMessageOptionState.value.setQueuedMessages.mock.calls.at(-1)?.[0]
+    expect(queuedUpdate).toBeTypeOf("function")
+    expect(queuedUpdate([])).toEqual([
+      expect.objectContaining({
+        promptText: "Queue this while offline",
+        message: "Queue this while offline"
+      })
+    ])
+  })
+
+  it("does not force a provider refresh on the first successful send", async () => {
+    const user = userEvent.setup()
+    render(<PlaygroundForm droppedFiles={[]} />)
+
+    await user.type(screen.getByTestId("composer-textarea"), "hello")
+    await user.click(screen.getByRole("button", { name: "Send message" }))
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled()
+    })
+
+    expect(vi.mocked(fetchChatModels)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ forceRefresh: true })
+    )
+    expect(vi.mocked(fetchChatModels)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ refreshOpenRouter: true })
+    )
   })
 
   it("supports create -> refine -> accept flow and submits refine metadata", async () => {

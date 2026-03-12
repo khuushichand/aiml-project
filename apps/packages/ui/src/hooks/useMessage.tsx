@@ -1,10 +1,6 @@
 import React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import {
-  fetchChatModels,
-  promptForRag,
-  systemPromptForNonRag
-} from "~/services/tldw-server"
+import { promptForRag, systemPromptForNonRag } from "~/services/tldw-server"
 import { useStoreMessageOption, type Message } from "~/store/option"
 import { useStoreMessage } from "~/store"
 import { getContentFromCurrentTab } from "~/libs/get-html"
@@ -41,6 +37,7 @@ import { getModelNicknameByID } from "@/db/dexie/nickname"
 import { systemPromptFormatter } from "@/utils/system-message"
 import type { Character } from "@/types/character"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
+import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import {
   createBranchMessage,
   createRegenerateLastMessage
@@ -66,19 +63,28 @@ import { updatePageTitle } from "@/utils/update-page-title"
 import { useAntdNotification } from "./useAntdNotification"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { normalizeConversationState } from "@/utils/conversation-state"
-import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import {
+  resolveApiProviderForModel,
+  resolveExplicitProviderForSelectedModel
+} from "@/utils/resolve-api-provider"
 import type { ChatDocuments } from "@/models/ChatTypes"
 import type { UploadedFile } from "@/db/dexie/types"
 import { applyMcpModuleDisclosureFromToolCalls } from "@/utils/mcp-disclosure"
 import {
-  buildAvailableChatModelIds,
-  findUnavailableChatModel,
   normalizeChatModelId
 } from "@/utils/chat-model-availability"
+import { validateSelectedChatModelAvailability } from "@/utils/chat-model-validation"
+import { discardAbortedTurnIfRequested } from "@/hooks/chat/abort-turn-cleanup"
 import {
   collectGreetings,
   isGreetingMessageType
 } from "@/utils/character-greetings"
+import { resolveServerChatAssistantIdentity } from "@/hooks/chat/useServerChatLoader"
+import {
+  characterToAssistantSelection,
+  personaToAssistantSelection
+} from "@/types/assistant-selection"
+import { ensurePersonaServerChat } from "@/hooks/chat/personaServerChat"
 import { useChatLoopState } from "@/services/chat-loop/hooks"
 import { subscribeChatLoopEvents } from "@/services/chat-loop/bridge"
 import { extractChatLoopEvent } from "@/services/chat-loop/stream"
@@ -103,6 +109,7 @@ export const useMessage = () => {
     embeddingController,
     setEmbeddingController
   } = usePageAssist()
+  const discardCurrentTurnOnAbortRef = React.useRef(false)
 
   // Messages now come from Zustand store (single source of truth)
   const messages = useStoreMessageOption((state) => state.messages)
@@ -146,6 +153,7 @@ export const useMessage = () => {
   )
   const [maxWebsiteContext] = useStorage("maxWebsiteContext", 4028)
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
+  const [selectedAssistant, setSelectedAssistant] = useSelectedAssistant(null)
 
   const {
     history,
@@ -179,6 +187,12 @@ export const useMessage = () => {
     setServerChatTitle,
     serverChatCharacterId,
     setServerChatCharacterId,
+    serverChatAssistantKind,
+    setServerChatAssistantKind,
+    serverChatAssistantId,
+    setServerChatAssistantId,
+    serverChatPersonaMemoryMode,
+    setServerChatPersonaMemoryMode,
     serverChatMetaLoaded,
     setServerChatMetaLoaded,
     serverChatState,
@@ -220,99 +234,42 @@ export const useMessage = () => {
         return false
       }
 
-      const describeUnavailableModel = (models: any[]): {
-        unavailableModel: string | null
-        emptyCatalog: boolean
-      } => {
-        const availableIds = buildAvailableChatModelIds(models as any[])
-        if (availableIds.size === 0) {
-          return { unavailableModel: normalizedSelectedModel, emptyCatalog: true }
-        }
-        return {
-          unavailableModel: findUnavailableChatModel(
-            [normalizedSelectedModel],
-            availableIds
-          ),
-          emptyCatalog: false
-        }
-      }
-
       try {
-        const resolvedProvider = (
-          await resolveApiProviderForModel({
-            modelId: normalizedSelectedModel,
-            explicitProvider: currentChatModelSettings.apiProvider
-          })
+        const validation = await validateSelectedChatModelAvailability(
+          normalizedSelectedModel
         )
-          .trim()
-          .toLowerCase()
-        const shouldForceOpenRouterRefresh = resolvedProvider === "openrouter"
 
-        const initialModels = shouldForceOpenRouterRefresh
-          ? await fetchChatModels({
-              returnEmpty: true,
-              forceRefresh: true,
-              refreshOpenRouter: true
-            })
-          : await fetchChatModels({ returnEmpty: true })
-        let latestModels = initialModels
-
-        let { unavailableModel, emptyCatalog } =
-          describeUnavailableModel(latestModels)
-
-        if (unavailableModel && !emptyCatalog && !shouldForceOpenRouterRefresh) {
-          latestModels = await fetchChatModels({
-            returnEmpty: true,
-            forceRefresh: true,
-            refreshOpenRouter: false
-          })
-          ;({ unavailableModel, emptyCatalog } =
-            describeUnavailableModel(latestModels))
-        }
-
-        if (!unavailableModel) {
+        if (validation.status === "valid") {
           return true
         }
 
-        if (emptyCatalog) {
-          notification.error({
-            message: t("error"),
-            description: t(
-              "playground:composer.validationModelCatalogUnavailableInline",
-              "Unable to verify model availability because no models are currently loaded. Refresh models and try again."
-            )
-          })
-          return false
-        }
-
-        const fallbackModel =
-          latestModels[0]?.model ?? latestModels[0]?.name ?? null
-        if (typeof fallbackModel === "string" && fallbackModel.trim().length > 0) {
-          setSelectedModel(fallbackModel.trim())
-        } else {
-          setSelectedModel(null)
-        }
-        notification.error({
-          message: t("error"),
-          description: t(
-            "playground:composer.validationModelUnavailableInline",
-            "Selected model is not available on this server. Refresh models or choose a different model."
-          )
+        notification.warning({
+          message: t("warning", "Warning"),
+          description:
+            validation.reason === "catalog-empty"
+              ? t(
+                  "playground:composer.validationModelCatalogUnavailableInline",
+                  "Unable to verify model availability from the cached catalog. Continuing without refreshing; refresh models if this request fails."
+                )
+              : t(
+                  "playground:composer.validationModelUnavailableInline",
+                  "Selected model may be stale or unavailable. Continuing without refreshing; refresh models or choose a different model if this request fails."
+                )
         })
-        return false
+        return true
       } catch (error) {
         console.error("Failed to validate selected model availability:", error)
-        notification.error({
-          message: t("error"),
+        notification.warning({
+          message: t("warning", "Warning"),
           description: t(
             "playground:composer.validationModelCatalogUnavailableInline",
-            "Unable to verify model availability because no models are currently loaded. Refresh models and try again."
+            "Unable to verify model availability from the cached catalog. Continuing without refreshing; refresh models if this request fails."
           )
         })
-        return false
+        return true
       }
     },
-    [currentChatModelSettings.apiProvider, notification, setSelectedModel, t]
+    [notification, t]
   )
 
   const resetServerChatState = () => {
@@ -320,6 +277,9 @@ export const useMessage = () => {
     setServerChatVersion(null)
     setServerChatTitle(null)
     setServerChatCharacterId(null)
+    setServerChatAssistantKind(null)
+    setServerChatAssistantId(null)
+    setServerChatPersonaMemoryMode(null)
     setServerChatMetaLoaded(false)
     setServerChatTopic(null)
     setServerChatClusterId(null)
@@ -333,10 +293,19 @@ export const useMessage = () => {
       try {
         await tldwClient.initialize().catch(() => null)
         const chat = await tldwClient.getChat(serverChatId)
-        setServerChatTitle(String((chat as any)?.title || ""))
-        setServerChatCharacterId(
-          (chat as any)?.character_id ?? (chat as any)?.characterId ?? null
+        const {
+          assistantKind,
+          assistantId,
+          characterId,
+          personaMemoryMode
+        } = resolveServerChatAssistantIdentity(
+          (chat as Record<string, unknown> | null) ?? null
         )
+        setServerChatTitle(String((chat as any)?.title || ""))
+        setServerChatCharacterId(characterId)
+        setServerChatAssistantKind(assistantKind)
+        setServerChatAssistantId(assistantId)
+        setServerChatPersonaMemoryMode(personaMemoryMode)
         setServerChatState(
           (chat as any)?.state ??
             (chat as any)?.conversation_state ??
@@ -347,6 +316,37 @@ export const useMessage = () => {
         setServerChatClusterId((chat as any)?.cluster_id ?? null)
         setServerChatSource((chat as any)?.source ?? null)
         setServerChatExternalRef((chat as any)?.external_ref ?? null)
+        if (assistantKind === "persona" && assistantId) {
+          const profile = await tldwClient
+            .getPersonaProfile(assistantId)
+            .catch(() => null)
+          await setSelectedAssistant(
+            personaToAssistantSelection(
+              (profile as Record<string, unknown> | null) ?? {
+                id: assistantId,
+                name:
+                  (chat as any)?.assistant_name ??
+                  (chat as any)?.title ??
+                  "Persona"
+              }
+            )
+          )
+        } else if (assistantKind === "character" && assistantId) {
+          const character = await tldwClient
+            .getCharacter(assistantId)
+            .catch(() => null)
+          await setSelectedAssistant(
+            characterToAssistantSelection(
+              (character as Record<string, unknown> | null) ?? {
+                id: assistantId,
+                name:
+                  (chat as any)?.assistant_name ??
+                  (chat as any)?.title ??
+                  "Assistant"
+              }
+            )
+          )
+        }
         setServerChatMetaLoaded(true)
       } catch {
         // ignore metadata hydration failures
@@ -356,9 +356,13 @@ export const useMessage = () => {
   }, [
     serverChatId,
     serverChatMetaLoaded,
+    setSelectedAssistant,
+    setServerChatAssistantId,
+    setServerChatAssistantKind,
     setServerChatCharacterId,
     setServerChatClusterId,
     setServerChatExternalRef,
+    setServerChatPersonaMemoryMode,
     setServerChatMetaLoaded,
     setServerChatSource,
     setServerChatState,
@@ -368,10 +372,10 @@ export const useMessage = () => {
   ])
 
   React.useEffect(() => {
-    // Reset server chat when character changes
+    // Reset server chat when assistant identity changes
     setServerChatId(null)
     resetServerChatState()
-  }, [selectedCharacter?.id])
+  }, [selectedAssistant?.id, selectedAssistant?.kind])
 
   // Local embedding store removed; rely on tldw_server RAG
 
@@ -384,7 +388,7 @@ export const useMessage = () => {
     setIsLoading(false)
     setIsProcessing(false)
     setStreaming(false)
-    updatePageTitle() 
+    updatePageTitle()
     currentChatModelSettings.reset()
     setServerChatId(null)
     resetServerChatState()
@@ -771,6 +775,22 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        setIsEmbedding(false)
+        return
+      }
+
       console.error(e)
       const assistantContent = buildAssistantErrorContent(fullText, e)
       setMessages((prev) =>
@@ -807,6 +827,7 @@ export const useMessage = () => {
       setStreaming(false)
       setIsEmbedding(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
       setEmbeddingController(null)
     }
@@ -1079,6 +1100,22 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        setIsEmbedding(false)
+        return
+      }
+
       const assistantContent = buildAssistantErrorContent(fullText, e)
       setMessages((prev) =>
         prev.map((msg) =>
@@ -1114,6 +1151,7 @@ export const useMessage = () => {
       setStreaming(false)
       setIsEmbedding(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
       setEmbeddingController(null)
     }
@@ -1482,9 +1520,14 @@ export const useMessage = () => {
       let timetaken = 0
       let apiReasoning = false
 
+      const explicitProvider = resolveExplicitProviderForSelectedModel({
+        currentSelectedModel: selectedModel,
+        requestedSelectedModel: model,
+        explicitProvider: currentChatModelSettings.apiProvider
+      })
       const resolvedApiProvider = await resolveApiProviderForModel({
         modelId: model,
-        explicitProvider: currentChatModelSettings.apiProvider
+        explicitProvider
       })
 
       const normalizedModel = model.replace(/^tldw:/, "").trim()
@@ -1738,6 +1781,21 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
       const assistantContent = buildAssistantErrorContent(fullText, e)
       if (generateMessageId) {
         setMessages((prev) =>
@@ -1775,6 +1833,7 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
     }
   }
@@ -2035,6 +2094,21 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } catch (e) {
+      if (
+        discardAbortedTurnIfRequested({
+          discardRequested: discardCurrentTurnOnAbortRef.current,
+          error: e,
+          previousMessages: messages,
+          previousHistory: history,
+          setMessages,
+          setHistory
+        })
+      ) {
+        setIsProcessing(false)
+        setStreaming(false)
+        return
+      }
+
       const assistantContent = buildAssistantErrorContent(fullText, e)
       setMessages((prev) =>
         prev.map((msg) =>
@@ -2070,6 +2144,7 @@ export const useMessage = () => {
       setIsProcessing(false)
       setStreaming(false)
     } finally {
+      discardCurrentTurnOnAbortRef.current = false
       setAbortController(null)
     }
   }
@@ -2086,6 +2161,7 @@ export const useMessage = () => {
     docs,
     uploadedFiles,
     imageBackendOverride,
+    requestOverrides,
     serverChatIdOverride
   }: {
     message: string
@@ -2099,6 +2175,14 @@ export const useMessage = () => {
     docs?: ChatDocuments
     uploadedFiles?: UploadedFile[]
     imageBackendOverride?: string
+    requestOverrides?: {
+      selectedModel?: string | null
+      selectedSystemPrompt?: string | null
+      toolChoice?: "auto" | "none" | "required"
+      useOCR?: boolean
+      webSearch?: boolean
+      chatMode?: "normal" | "rag" | "vision"
+    }
     serverChatIdOverride?: string | null
   }) => {
     resetChatLoopState()
@@ -2107,12 +2191,44 @@ export const useMessage = () => {
         ? imageBackendOverride.trim()
         : ""
     const hasExplicitImageBackend = trimmedImageBackendOverride.length > 0
+    const resolvedSelectedModel =
+      typeof requestOverrides?.selectedModel === "string" &&
+      requestOverrides.selectedModel.trim().length > 0
+        ? requestOverrides.selectedModel.trim()
+        : selectedModel || ""
+    const resolvedSelectedSystemPrompt =
+      requestOverrides && Object.prototype.hasOwnProperty.call(
+        requestOverrides,
+        "selectedSystemPrompt"
+      )
+        ? (requestOverrides.selectedSystemPrompt ?? "")
+        : selectedSystemPrompt ?? ""
+    const resolvedToolChoice =
+      requestOverrides?.toolChoice === "auto" ||
+      requestOverrides?.toolChoice === "required" ||
+      requestOverrides?.toolChoice === "none"
+        ? requestOverrides.toolChoice
+        : toolChoice
+    const resolvedUseOCR =
+      typeof requestOverrides?.useOCR === "boolean"
+        ? requestOverrides.useOCR
+        : useOCR
+    const resolvedWebSearch =
+      typeof requestOverrides?.webSearch === "boolean"
+        ? requestOverrides.webSearch
+        : webSearch
+    const resolvedChatMode =
+      requestOverrides?.chatMode === "normal" ||
+      requestOverrides?.chatMode === "rag" ||
+      requestOverrides?.chatMode === "vision"
+        ? requestOverrides.chatMode
+        : chatMode
     if (!hasExplicitImageBackend) {
-      if (!validateBeforeSubmit(selectedModel || "", t, notification)) {
+      if (!validateBeforeSubmit(resolvedSelectedModel, t, notification)) {
         return
       }
       const modelAvailable = await ensureSelectedChatModelIsAvailable(
-        selectedModel || ""
+        resolvedSelectedModel
       )
       if (!modelAvailable) {
         return
@@ -2121,8 +2237,8 @@ export const useMessage = () => {
 
     const model =
       (hasExplicitImageBackend
-        ? trimmedImageBackendOverride || selectedModel
-        : selectedModel
+        ? trimmedImageBackendOverride || resolvedSelectedModel
+        : resolvedSelectedModel
       ).trim() || "image-generation"
     let signal: AbortSignal
     if (!controller) {
@@ -2137,7 +2253,7 @@ export const useMessage = () => {
       Boolean(replyTarget) &&
       !isRegenerate &&
       !messageType &&
-      chatMode === "normal" &&
+      resolvedChatMode === "normal" &&
       !selectedCharacter?.id
     const replyOverrides = replyActive
       ? (() => {
@@ -2169,8 +2285,8 @@ export const useMessage = () => {
           signal,
           {
             selectedModel: model,
-            useOCR,
-            selectedSystemPrompt: selectedSystemPrompt ?? "",
+            useOCR: resolvedUseOCR,
+            selectedSystemPrompt: resolvedSelectedSystemPrompt,
             currentChatModelSettings,
             setMessages,
             saveMessageOnSuccess,
@@ -2184,7 +2300,7 @@ export const useMessage = () => {
               id: string,
               options?: { preserveServerChatId?: boolean }
             ) => void,
-            webSearch,
+            webSearch: resolvedWebSearch,
             setIsSearchingInternet,
             uploadedFiles: hasExplicitImageBackend ? [] : uploadedFiles,
             imageBackendOverride: hasExplicitImageBackend
@@ -2207,9 +2323,9 @@ export const useMessage = () => {
           uploadedFiles,
           {
             selectedModel: model,
-            useOCR,
+            useOCR: resolvedUseOCR,
             currentChatModelSettings,
-            toolChoice,
+            toolChoice: resolvedToolChoice,
             setMessages,
             saveMessageOnSuccess,
             saveMessageOnError,
@@ -2238,9 +2354,9 @@ export const useMessage = () => {
           signal,
           {
             selectedModel: model,
-            useOCR,
-            selectedSystemPrompt: selectedSystemPrompt ?? "",
-            toolChoice,
+            useOCR: resolvedUseOCR,
+            selectedSystemPrompt: resolvedSelectedSystemPrompt,
+            toolChoice: resolvedToolChoice,
             setMessages,
             saveMessageOnSuccess,
             saveMessageOnError,
@@ -2269,7 +2385,7 @@ export const useMessage = () => {
           regenerateFromMessage
         )
       } else {
-        if (chatMode === "normal") {
+        if (resolvedChatMode === "normal") {
           if (selectedCharacter?.id) {
             await characterChatMode(
               message,
@@ -2282,6 +2398,78 @@ export const useMessage = () => {
               regenerateFromMessage,
               serverChatIdOverride
             )
+          } else if (selectedAssistant?.kind === "persona") {
+            const personaServerChat = await ensurePersonaServerChat({
+              assistant: selectedAssistant,
+              serverChatIdOverride,
+              serverChatId,
+              serverChatTitle,
+              serverChatAssistantKind,
+              serverChatAssistantId,
+              serverChatPersonaMemoryMode,
+              serverChatState,
+              serverChatTopic,
+              serverChatClusterId,
+              serverChatSource,
+              serverChatExternalRef,
+              historyId,
+              temporaryChat,
+              createChat: (payload) => tldwClient.createChat(payload),
+              ensureServerChatHistoryId: async () => historyId,
+              invalidateServerChatHistory,
+              setServerChatId,
+              setServerChatTitle,
+              setServerChatCharacterId,
+              setServerChatAssistantKind,
+              setServerChatAssistantId,
+              setServerChatPersonaMemoryMode,
+              setServerChatMetaLoaded,
+              setServerChatState,
+              setServerChatVersion,
+              setServerChatTopic,
+              setServerChatClusterId,
+              setServerChatSource,
+              setServerChatExternalRef
+            })
+            await normalChatMode(
+              message,
+              image,
+              isRegenerate,
+              chatHistory || messages,
+              memory || history,
+              signal,
+              {
+                selectedModel: model,
+                useOCR: resolvedUseOCR,
+                selectedSystemPrompt: resolvedSelectedSystemPrompt,
+                currentChatModelSettings,
+                setMessages,
+                saveMessageOnSuccess,
+                saveMessageOnError,
+                setHistory,
+                setIsProcessing,
+                setStreaming,
+                setAbortController,
+                historyId: personaServerChat.historyId,
+                setHistoryId: setHistoryId as (
+                  id: string,
+                  options?: { preserveServerChatId?: boolean }
+                ) => void,
+                serverChatId: personaServerChat.chatId,
+                assistantIdentity: {
+                  name: selectedAssistant.name,
+                  avatarUrl:
+                    typeof selectedAssistant.avatar_url === "string"
+                      ? selectedAssistant.avatar_url
+                      : undefined
+                },
+                webSearch: resolvedWebSearch,
+                setIsSearchingInternet,
+                uploadedFiles,
+                regenerateFromMessage,
+                ...replyOverrides
+              }
+            )
           } else {
             await normalChatMode(
               message,
@@ -2292,8 +2480,8 @@ export const useMessage = () => {
               signal,
               {
                 selectedModel: model,
-                useOCR,
-                selectedSystemPrompt: selectedSystemPrompt ?? "",
+                useOCR: resolvedUseOCR,
+                selectedSystemPrompt: resolvedSelectedSystemPrompt,
                 currentChatModelSettings,
                 setMessages,
                 saveMessageOnSuccess,
@@ -2307,14 +2495,14 @@ export const useMessage = () => {
                   id: string,
                   options?: { preserveServerChatId?: boolean }
                 ) => void,
-                webSearch,
+                webSearch: resolvedWebSearch,
                 setIsSearchingInternet,
                 regenerateFromMessage,
                 ...replyOverrides
               }
             )
           }
-        } else if (chatMode === "vision") {
+        } else if (resolvedChatMode === "vision") {
           await visionChatMode(
             message,
             image,
@@ -2347,7 +2535,18 @@ export const useMessage = () => {
     }
   }
 
-  const stopStreamingRequest = () => {
+  const stopStreamingRequest = (options?: unknown) => {
+    const discardTurn =
+      typeof options === "object" &&
+      options !== null &&
+      "discardTurn" in options &&
+      options.discardTurn === true
+    if (
+      discardTurn &&
+      (isEmbedding || abortController || embeddingController)
+    ) {
+      discardCurrentTurnOnAbortRef.current = true
+    }
     if (isEmbedding) {
       if (embeddingController) {
         embeddingController.abort()
@@ -2379,7 +2578,7 @@ export const useMessage = () => {
       await updateMessageByIndex(historyId, index, message)
       await deleteChatForEdit(historyId, index)
       // Server-backed edit and cleanup
-      if (selectedCharacter?.id && serverChatId) {
+      if (serverChatId && (selectedCharacter?.id || serverChatAssistantKind === "persona")) {
         if (currentHumanMessage?.serverMessageId) {
           try {
             const srv = await tldwClient.getMessage(currentHumanMessage.serverMessageId)
@@ -2436,7 +2635,7 @@ export const useMessage = () => {
       setHistory(updatedHistory)
       await updateMessageByIndex(historyId, index, message)
       // Server-backed: update assistant server message too
-      if (selectedCharacter?.id && currentAssistant?.serverMessageId) {
+      if (serverChatId && (selectedCharacter?.id || serverChatAssistantKind === "persona") && currentAssistant?.serverMessageId) {
         try {
           const srv = await tldwClient.getMessage(currentAssistant.serverMessageId)
           const ver = srv?.version

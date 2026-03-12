@@ -22,6 +22,8 @@ type NavigateOptions = {
   state?: unknown
 }
 
+type RouteParams = Record<string, string | undefined>
+
 type BlockerHookArg = boolean | ((...args: unknown[]) => boolean)
 
 type ShimBlocker = {
@@ -39,6 +41,8 @@ const runNavigationTransition = (update: () => void) => {
 }
 
 const noop = () => {}
+
+export const UNSAFE_DataRouterContext = React.createContext<unknown | null>(null)
 
 export const Link = React.forwardRef<HTMLAnchorElement, LinkProps>(
   function Link({ to, href, ...rest }, ref) {
@@ -124,6 +128,20 @@ export const useLocation = () => {
     }),
     [pathname, router.asPath, search, hash]
   )
+}
+
+export const useParams = <
+  TParams extends Record<string, string | undefined> = Record<string, string | undefined>
+>() => {
+  const router = useRouter()
+
+  return React.useMemo(() => {
+    const params: Record<string, string | undefined> = {}
+    for (const [key, value] of Object.entries(router.query || {})) {
+      params[key] = Array.isArray(value) ? value[0] : value
+    }
+    return params as Readonly<TParams>
+  }, [router.query])
 }
 
 export const useSearchParams = (): [

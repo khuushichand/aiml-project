@@ -1,5 +1,5 @@
 import React from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 vi.mock("@tanstack/react-query", () => {
@@ -139,63 +139,70 @@ vi.mock("@/services/writing-playground", () => ({
 
 import { WritingPlayground } from "../index"
 
+/** Helper: open the inspector sidebar so tab elements are in the DOM. */
+function renderWithInspectorOpen() {
+  render(<WritingPlayground />)
+  const toggleBtn = screen.getByRole("button", { name: "Toggle settings" })
+  fireEvent.click(toggleBtn)
+}
+
 describe("WritingPlayground inspector tabs", () => {
   it("switches inspector tabs with semantic tab roles", () => {
-    render(<WritingPlayground />)
+    renderWithInspectorOpen()
 
     const tablist = screen.getByRole("tablist", {
       name: "Writing inspector tabs"
     })
     expect(tablist).toBeInTheDocument()
 
-    const generationTab = screen.getByRole("tab", { name: "Generation" })
-    const planningTab = screen.getByRole("tab", { name: "Planning" })
+    const samplingTab = screen.getByRole("tab", { name: "Sampling" })
+    const contextTab = screen.getByRole("tab", { name: "Context" })
 
-    expect(generationTab).toHaveAttribute("aria-selected", "true")
-    expect(planningTab).toHaveAttribute("aria-selected", "false")
+    expect(samplingTab).toHaveAttribute("aria-selected", "true")
+    expect(contextTab).toHaveAttribute("aria-selected", "false")
 
-    fireEvent.click(planningTab)
+    fireEvent.click(contextTab)
 
-    expect(planningTab).toHaveAttribute("aria-selected", "true")
-    expect(generationTab).toHaveAttribute("aria-selected", "false")
+    expect(contextTab).toHaveAttribute("aria-selected", "true")
+    expect(samplingTab).toHaveAttribute("aria-selected", "false")
   })
 
   it("supports keyboard arrow navigation between tabs", () => {
-    render(<WritingPlayground />)
+    renderWithInspectorOpen()
 
-    const generationTab = screen.getByRole("tab", { name: "Generation" })
-    const planningTab = screen.getByRole("tab", { name: "Planning" })
+    const samplingTab = screen.getByRole("tab", { name: "Sampling" })
+    const contextTab = screen.getByRole("tab", { name: "Context" })
 
-    generationTab.focus()
-    fireEvent.keyDown(generationTab, { key: "ArrowRight" })
+    samplingTab.focus()
+    fireEvent.keyDown(samplingTab, { key: "ArrowRight" })
 
-    expect(planningTab).toHaveAttribute("aria-selected", "true")
-    expect(generationTab).toHaveAttribute("aria-selected", "false")
-    expect(planningTab).toHaveFocus()
+    expect(contextTab).toHaveAttribute("aria-selected", "true")
+    expect(samplingTab).toHaveAttribute("aria-selected", "false")
+    expect(contextTab).toHaveFocus()
   })
 
   it("supports Home/End and wraparound focus traversal", () => {
-    render(<WritingPlayground />)
+    renderWithInspectorOpen()
 
-    const generationTab = screen.getByRole("tab", { name: "Generation" })
-    const diagnosticsTab = screen.getByRole("tab", { name: "Diagnostics" })
+    const samplingTab = screen.getByRole("tab", { name: "Sampling" })
+    const analysisTab = screen.getByRole("tab", { name: "Analysis" })
 
-    generationTab.focus()
-    fireEvent.keyDown(generationTab, { key: "ArrowLeft" })
-    expect(diagnosticsTab).toHaveAttribute("aria-selected", "true")
-    expect(diagnosticsTab).toHaveFocus()
+    samplingTab.focus()
+    fireEvent.keyDown(samplingTab, { key: "ArrowLeft" })
+    expect(analysisTab).toHaveAttribute("aria-selected", "true")
+    expect(analysisTab).toHaveFocus()
 
-    fireEvent.keyDown(diagnosticsTab, { key: "Home" })
-    expect(generationTab).toHaveAttribute("aria-selected", "true")
-    expect(generationTab).toHaveFocus()
+    fireEvent.keyDown(analysisTab, { key: "Home" })
+    expect(samplingTab).toHaveAttribute("aria-selected", "true")
+    expect(samplingTab).toHaveFocus()
 
-    fireEvent.keyDown(generationTab, { key: "End" })
-    expect(diagnosticsTab).toHaveAttribute("aria-selected", "true")
-    expect(diagnosticsTab).toHaveFocus()
+    fireEvent.keyDown(samplingTab, { key: "End" })
+    expect(analysisTab).toHaveAttribute("aria-selected", "true")
+    expect(analysisTab).toHaveFocus()
   })
 
-  it("shows template/theme management actions in Planning, not Generation", () => {
-    render(<WritingPlayground />)
+  it("shows template/theme management actions in Setup tab", () => {
+    renderWithInspectorOpen()
 
     expect(
       screen.queryByRole("button", { name: "Manage templates" })
@@ -204,7 +211,7 @@ describe("WritingPlayground inspector tabs", () => {
       screen.queryByRole("button", { name: "Manage themes" })
     ).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("tab", { name: "Planning" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Setup" }))
 
     expect(
       screen.getByRole("button", { name: "Manage templates" })
@@ -214,13 +221,62 @@ describe("WritingPlayground inspector tabs", () => {
     ).toBeInTheDocument()
   })
 
-  it("renders non-placeholder diagnostics content", () => {
-    render(<WritingPlayground />)
-
-    fireEvent.click(screen.getByRole("tab", { name: "Diagnostics" }))
+  it("renders essentials strip inside the inspector panel", () => {
+    renderWithInspectorOpen()
 
     expect(
-      screen.queryByText("Diagnostics tools will be moved here.")
-    ).not.toBeInTheDocument()
+      screen.getByTestId("writing-essentials-strip")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId("writing-playground-settings-card")
+    ).toBeInTheDocument()
+  })
+
+  it("renders model input and generate button in the top bar", () => {
+    render(<WritingPlayground />)
+
+    expect(
+      screen.getByTestId("writing-topbar-model")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId("writing-topbar-generate")
+    ).toBeInTheDocument()
+  })
+
+  it("disables generate button when no session is selected", () => {
+    render(<WritingPlayground />)
+
+    expect(screen.getByTestId("writing-topbar-generate")).toBeDisabled()
+  })
+
+  it("disables essentials settings controls when no session is selected", () => {
+    renderWithInspectorOpen()
+
+    const spinbuttons = screen.getAllByRole("spinbutton")
+    expect(spinbuttons.length).toBeGreaterThan(0)
+    for (const input of spinbuttons) {
+      expect(input).toBeDisabled()
+    }
+  })
+
+  it("has four tabs: Sampling, Context, Setup, Analysis", () => {
+    renderWithInspectorOpen()
+
+    expect(screen.getByRole("tab", { name: "Sampling" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Context" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Setup" })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: "Analysis" })).toBeInTheDocument()
+  })
+
+  it("renders an Analysis panel title that matches the tab label", () => {
+    renderWithInspectorOpen()
+
+    fireEvent.click(screen.getByRole("tab", { name: "Analysis" }))
+
+    expect(
+      within(screen.getByTestId("writing-playground-diagnostics-card")).getByText(
+        "Analysis"
+      )
+    ).toBeInTheDocument()
   })
 })

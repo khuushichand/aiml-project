@@ -27,7 +27,7 @@ def _make_principal() -> AuthPrincipal:
     )
 
 
-def _build_app() -> FastAPI:
+def _build_app(stub: _StubModerationService) -> FastAPI:
     app = FastAPI()
     app.include_router(moderation_mod.router, prefix="/api/v1")
 
@@ -94,8 +94,9 @@ def test_get_user_override_returns_rules_payload():
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["enabled"] is True
-    assert body["rules"][0]["action"] == "block"
+    assert body["exists"] is True
+    assert body["override"]["enabled"] is True
+    assert body["override"]["rules"][0]["action"] == "block"
 
 
 @pytest.mark.unit
@@ -225,12 +226,12 @@ def test_put_user_override_returns_400_for_legacy_dangerous_error_message():
 
 
 @pytest.mark.unit
-def test_get_user_override_missing_returns_404():
+def test_get_user_override_missing_returns_empty_payload():
     stub = _StubModerationService()
     app = _build_app(stub)
 
     with TestClient(app) as client:
         resp = client.get("/api/v1/moderation/users/missing")
 
-    assert resp.status_code == 404
-    assert resp.json().get("detail") == "Override not found"
+    assert resp.status_code == 200
+    assert resp.json() == {"exists": False, "override": {}}

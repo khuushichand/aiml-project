@@ -22,6 +22,10 @@ const ERROR_LOG_MAX_ENTRIES = 200
 const BACKEND_UNREACHABLE_EVENT_THROTTLE_MS = 5_000
 const STREAM_RUNTIME_PING_TIMEOUT_MS = 400
 const STREAM_RUNTIME_HEALTH_TTL_MS = 30_000
+const STREAM_QUEUE_DRAIN_BATCH_LIMIT = 32
+const STREAM_QUEUE_DRAIN_SLICE_MS = 12
+const ABSOLUTE_URL_BLOCK_ERROR =
+  "Direct stream fallback is allowed only for allowlisted absolute URLs."
 const BACKEND_UNREACHABLE_PATTERN =
   /(networkerror|failed to fetch|network error|load failed|err_connection|could not establish connection|receiving end does not exist)/i
 const errorLogHistory = new Map<string, number>()
@@ -761,6 +765,16 @@ const parseStreamError = async (resp: Response): Promise<string> => {
   return resp.statusText
 }
 
+const yieldToBrowser = async (): Promise<void> => {
+  if (typeof requestAnimationFrame === "function") {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+    return
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+}
+
 /**
  * Direct fetch streaming implementation - used as fallback when extension messaging is unavailable or times out
  */
@@ -956,10 +970,8 @@ export async function* bgStream<
 >(
   { path, method = 'POST' as UpperLower<M>, headers = {}, body, streamIdleTimeoutMs, abortSignal }: BgStreamInit<P, M>
 ): AsyncGenerator<string> {
-  const hasHttpStatusInMessage = (value: unknown): boolean => {
-    const message = value instanceof Error ? value.message : String(value || "")
-    return /\bhttp\s+\d{3}\b/i.test(message)
-  }
+  const hasHttpStatus = (value: unknown): boolean =>
+    extractHttpStatus(value) !== null
 
   const canUseRuntimePortTransport = async (): Promise<boolean> => {
     const hasRuntimePort = Boolean(browser?.runtime?.connect && browser?.runtime?.id)
@@ -1078,11 +1090,25 @@ export async function* bgStream<
   }
 
   try {
+    let drainedSinceYield = 0
+    let sliceStartedAt = Date.now()
     while (!done || queue.length > 0) {
       if (queue.length > 0) {
         yield queue.shift() as string
+        drainedSinceYield += 1
+        const sliceElapsedMs = Date.now() - sliceStartedAt
+        if (
+          drainedSinceYield >= STREAM_QUEUE_DRAIN_BATCH_LIMIT ||
+          sliceElapsedMs >= STREAM_QUEUE_DRAIN_SLICE_MS
+        ) {
+          await yieldToBrowser()
+          drainedSinceYield = 0
+          sliceStartedAt = Date.now()
+        }
       } else {
         await new Promise((r) => setTimeout(r, 10))
+        drainedSinceYield = 0
+        sliceStartedAt = Date.now()
       }
     }
     // If connection timed out before receiving any data, fall back to direct fetch
@@ -1094,7 +1120,7 @@ export async function* bgStream<
       !firstDataReceived &&
       !abortSignal?.aborted &&
       Boolean(error) &&
-      (isExtensionTransportFailure(error) || !hasHttpStatusInMessage(error))
+      (isExtensionTransportFailure(error) || !hasHttpStatus(error))
     if (shouldFallbackAfterEarlyError) {
       yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
       return
@@ -1103,7 +1129,7 @@ export async function* bgStream<
       firstDataReceived &&
       !abortSignal?.aborted &&
       Boolean(error) &&
-      (isExtensionTransportFailure(error) || !hasHttpStatusInMessage(error))
+      (isExtensionTransportFailure(error) || !hasHttpStatus(error))
     if (shouldGracefullyEndAfterPartialStreamError) {
       // We already delivered data to the caller; avoid replaying non-idempotent
       // streamed requests after transport loss and let caller finalize partial output.

@@ -1,5 +1,4 @@
-import { buildApiUrl } from './api-config';
-import { getApiKey, getJWTToken, logout } from './auth';
+import { getApiKey, logout } from './auth';
 
 export class ApiError extends Error {
   status: number;
@@ -15,34 +14,17 @@ export class ApiError extends Error {
 
 type ResponseType = 'json' | 'text' | 'blob';
 
-const getCsrfToken = (): string | null => {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie.match(
-    new RegExp('(?:^|; )csrf_token=([^;]*)')
-  );
-  return match ? decodeURIComponent(match[1]) : null;
+export const buildProxyUrl = (endpoint: string): string => {
+  if (!endpoint) return '/api/proxy';
+  return `/api/proxy${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
 };
 
-export const buildAuthHeaders = (method: string = 'GET'): Record<string, string> => {
+export const buildAuthHeaders = (): Record<string, string> => {
   const headers: Record<string, string> = {};
-
-  const token = getJWTToken();
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
 
   const apiKey = getApiKey();
   if (apiKey) {
     headers['X-API-KEY'] = apiKey;
-  }
-
-  const methodUpper = method.toUpperCase();
-  const needsCsrf = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(methodUpper) && !apiKey;
-  if (needsCsrf) {
-    const csrf = getCsrfToken();
-    if (csrf) {
-      headers['X-CSRF-Token'] = csrf;
-    }
   }
 
   return headers;
@@ -60,7 +42,7 @@ const toApiErrorMessage = (detail: unknown): string => {
 };
 
 const buildRequestHeaders = (method: string, overrides?: HeadersInit): Headers => {
-  const headers = new Headers(buildAuthHeaders(method));
+  const headers = new Headers(buildAuthHeaders());
   if (overrides) {
     const overrideHeaders = new Headers(overrides);
     overrideHeaders.forEach((value, key) => {
@@ -82,7 +64,7 @@ const requestRaw = async <T>(
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(buildApiUrl(endpoint), {
+  const response = await fetch(buildProxyUrl(endpoint), {
     ...options,
     headers,
     credentials: 'include',
