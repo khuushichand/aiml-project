@@ -34,12 +34,52 @@ const PROJECT_ENV: Record<RealBackendProjectName, RealBackendProjectEnv> = {
   },
 };
 
+type ProjectEnvOverrides = Record<string, string | undefined>;
+
 export const isRealBackendProjectName = (value: string): value is RealBackendProjectName =>
   REAL_BACKEND_PROJECTS.includes(value as RealBackendProjectName);
 
-export const getProjectEnv = (projectName: string): RealBackendProjectEnv => {
+const normalizeLoopbackUrl = (url: string): string => url.replace('localhost', '127.0.0.1');
+
+const getProjectApiOverride = (
+  projectName: RealBackendProjectName,
+  env: ProjectEnvOverrides,
+): string | undefined => {
+  if (projectName === 'chromium-real-jwt') {
+    return env.TLDW_ADMIN_E2E_JWT_API_URL;
+  }
+
+  return env.TLDW_ADMIN_E2E_SINGLE_USER_API_URL;
+};
+
+export const shouldManageBackend = (
+  projectName: RealBackendProjectName,
+  env: ProjectEnvOverrides = process.env,
+): boolean => {
+  if (env.TLDW_ADMIN_E2E_AUTOSTART_BACKEND === 'false') {
+    return false;
+  }
+
+  return !getProjectApiOverride(projectName, env);
+};
+
+export const getProjectEnv = (
+  projectName: string,
+  env: ProjectEnvOverrides = process.env,
+): RealBackendProjectEnv => {
   if (!isRealBackendProjectName(projectName)) {
     throw new Error(`Unsupported real-backend project: ${projectName}`);
   }
-  return PROJECT_ENV[projectName];
+
+  const baseProjectEnv = PROJECT_ENV[projectName];
+  const apiBaseUrl = getProjectApiOverride(projectName, env);
+
+  if (!apiBaseUrl) {
+    return baseProjectEnv;
+  }
+
+  return {
+    ...baseProjectEnv,
+    apiBaseUrl: normalizeLoopbackUrl(apiBaseUrl),
+  };
 };

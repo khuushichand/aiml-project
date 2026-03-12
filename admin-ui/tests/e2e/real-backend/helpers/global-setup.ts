@@ -1,4 +1,4 @@
-import { getProjectEnv, REAL_BACKEND_PROJECTS } from './project-env';
+import { getProjectEnv, REAL_BACKEND_PROJECTS, shouldManageBackend } from './project-env';
 import { startManagedBackend, stopManagedBackend, waitForManagedBackend } from './backend-lifecycle';
 
 type JwtSeedResponse = {
@@ -208,6 +208,9 @@ export default async function globalSetup(): Promise<void> {
 
   for (const projectName of REAL_BACKEND_PROJECTS) {
     const project = getProjectEnv(projectName);
+    if (!shouldManageBackend(projectName)) {
+      continue;
+    }
     await stopManagedBackend(project).catch(() => undefined);
     await startManagedBackend(project);
   }

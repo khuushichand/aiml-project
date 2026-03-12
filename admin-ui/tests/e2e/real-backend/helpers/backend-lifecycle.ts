@@ -73,6 +73,9 @@ export const buildBackendEnv = (
   JOBS_DB_PATH:
     process.env.JOBS_DB_PATH
     || `${tempRoot}/${project.serverLabel}-jobs.db`,
+  MONITORING_ALERTS_DB:
+    process.env.MONITORING_ALERTS_DB
+    || `${tempRoot}/${project.serverLabel}-monitoring-alerts.db`,
   TLDW_DB_BACKUP_PATH:
     process.env.TLDW_DB_BACKUP_PATH
     || `${tempRoot}/${project.serverLabel}-backups`,

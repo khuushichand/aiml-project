@@ -1,4 +1,4 @@
-import { getProjectEnv, REAL_BACKEND_PROJECTS } from './project-env';
+import { getProjectEnv, REAL_BACKEND_PROJECTS, shouldManageBackend } from './project-env';
 import { stopManagedBackend } from './backend-lifecycle';
 
 const shouldManageBackends = (): boolean =>
@@ -10,6 +10,9 @@ export default async function globalTeardown(): Promise<void> {
   }
 
   for (const projectName of REAL_BACKEND_PROJECTS) {
+    if (!shouldManageBackend(projectName)) {
+      continue;
+    }
     await stopManagedBackend(getProjectEnv(projectName)).catch(() => undefined);
   }
 }

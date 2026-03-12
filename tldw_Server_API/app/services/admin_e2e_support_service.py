@@ -19,20 +19,34 @@ from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeam
 from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_single_user_instance
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert, TopicMonitoringDB
 from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
 
 _ADMIN_USERNAME = "admin"
 _ADMIN_EMAIL = "admin@example.local"
+_OWNER_USERNAME = "owner"
+_OWNER_EMAIL = "owner@example.local"
+_SUPER_ADMIN_USERNAME = "superadmin"
+_SUPER_ADMIN_EMAIL = "superadmin@example.local"
 _NON_ADMIN_USERNAME = "member"
 _NON_ADMIN_EMAIL = "member@example.local"
 _REQUESTER_USERNAME = "requester"
 _REQUESTER_EMAIL = "requester@example.local"
 _ORG_NAME = "Admin E2E"
 _ORG_SLUG = "admin-e2e"
-_SEEDED_ALERT_ID = "alert-cpu-high"
+_SEEDED_ALERT_MESSAGE = "CPU high"
 
 _SEEDED_PRINCIPALS: dict[str, dict[str, Any]] = {}
+
+
+def _seed_fixtures_payload(*, alerts: list[dict[str, Any]] | None = None) -> dict[str, list[dict[str, Any]]]:
+    """Return stable cross-feature fixtures shared by admin e2e scenarios."""
+    return {
+        "alerts": alerts or [],
+        "organizations": [],
+    }
 
 
 async def _get_backup_schedules_repo():
@@ -43,6 +57,17 @@ async def _get_backup_schedules_repo():
     pool = await get_db_pool()
     repo = AuthnzBackupSchedulesRepo(pool)
     await repo.ensure_schema()
+    return repo
+
+
+async def _get_admin_monitoring_repo():
+    from tldw_Server_API.app.core.AuthNZ.repos.admin_monitoring_repo import (
+        AuthnzAdminMonitoringRepo,
+    )
+
+    pool = await get_db_pool()
+    repo = AuthnzAdminMonitoringRepo(pool)
+    await repo.ensure_schema_ready_once()
     return repo
 
 
@@ -60,6 +85,77 @@ async def _soft_delete_all_backup_schedules() -> int:
     return deleted
 
 
+async def _clear_admin_monitoring_state() -> dict[str, int]:
+    repo = await _get_admin_monitoring_repo()
+    rules = await repo.list_rules()
+    deleted_rules = 0
+    for rule in rules:
+        if await repo.delete_rule(int(rule["id"])):
+            deleted_rules += 1
+
+    pool = await get_db_pool()
+    async with pool.transaction() as conn:
+        if getattr(repo.db_pool, "pool", None):
+            deleted_state_result = await conn.execute("DELETE FROM admin_alert_state")
+            deleted_events_result = await conn.execute("DELETE FROM admin_alert_events")
+            deleted_state = int(str(deleted_state_result).split()[-1])
+            deleted_events = int(str(deleted_events_result).split()[-1])
+        else:
+            deleted_state_cursor = await conn.execute("DELETE FROM admin_alert_state")
+            deleted_events_cursor = await conn.execute("DELETE FROM admin_alert_events")
+            deleted_state = int(getattr(deleted_state_cursor, "rowcount", 0) or 0)
+            deleted_events = int(getattr(deleted_events_cursor, "rowcount", 0) or 0)
+
+    return {
+        "deleted_rules": deleted_rules,
+        "deleted_states": deleted_state,
+        "deleted_events": deleted_events,
+    }
+
+
+def _get_monitoring_alerts_db_path() -> Path:
+    raw_path = str(os.getenv("MONITORING_ALERTS_DB") or "Databases/monitoring_alerts.db").strip()
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    return Path.cwd() / path
+
+
+def _clear_monitoring_alert_rows() -> int:
+    db_path = _get_monitoring_alerts_db_path()
+    if not db_path.exists():
+        return 0
+    with sqlite3.connect(db_path) as conn:
+        deleted = conn.execute("DELETE FROM topic_alerts").rowcount or 0
+        conn.execute("DELETE FROM sqlite_sequence WHERE name = 'topic_alerts'")
+        conn.commit()
+        return int(deleted)
+
+
+def _seed_monitoring_alert_store() -> dict[str, Any]:
+    monitoring_db = TopicMonitoringDB(db_path=str(_get_monitoring_alerts_db_path()))
+    alert_id = monitoring_db.insert_alert(
+        TopicAlert(
+            user_id=None,
+            scope_type="global",
+            scope_id=None,
+            source="system",
+            watchlist_id="watch-cpu",
+            rule_id="rule-cpu-high",
+            rule_category="system",
+            rule_severity="warning",
+            pattern=_SEEDED_ALERT_MESSAGE,
+            text_snippet=_SEEDED_ALERT_MESSAGE,
+            metadata={"seeded_by": "admin_e2e_support"},
+        )
+    )
+    return {
+        "alert_id": str(alert_id),
+        "alert_identity": f"alert:{alert_id}",
+        "message": _SEEDED_ALERT_MESSAGE,
+    }
+
+
 def _clear_backup_artifacts() -> int:
     backup_root = str(os.getenv("TLDW_DB_BACKUP_PATH") or "").strip()
     if not backup_root:
@@ -75,10 +171,16 @@ async def reset_admin_e2e_state() -> dict[str, Any]:
     """Clear transient seed state and delete admin-e2e backup schedule artifacts."""
     _SEEDED_PRINCIPALS.clear()
     deleted_schedules = await _soft_delete_all_backup_schedules()
+    monitoring_reset = await _clear_admin_monitoring_state()
+    deleted_monitoring_alerts = _clear_monitoring_alert_rows()
     deleted_backup_dirs = _clear_backup_artifacts()
     logger.debug(
-        "Admin e2e reset completed: deleted_schedules={} deleted_backup_dirs={}",
+        "Admin e2e reset completed: deleted_schedules={} deleted_rules={} deleted_states={} deleted_events={} deleted_monitoring_alerts={} deleted_backup_dirs={}",
         deleted_schedules,
+        monitoring_reset["deleted_rules"],
+        monitoring_reset["deleted_states"],
+        monitoring_reset["deleted_events"],
+        deleted_monitoring_alerts,
         deleted_backup_dirs,
     )
     return {"ok": True}
@@ -356,45 +458,86 @@ def _seed_dsr_subject_store_data(*, user_id: int) -> None:
 async def seed_admin_e2e_scenario(scenario: str) -> dict[str, Any]:
     """Create deterministic users and fixtures for admin-ui real-backend browser tests."""
     settings = get_settings()
+    _clear_monitoring_alert_rows()
+    seeded_alert = _seed_monitoring_alert_store()
     if settings.AUTH_MODE != "multi_user":
+        if scenario == "single_user_admin":
+            single_user = get_single_user_instance()
+            api_key = str(settings.SINGLE_USER_API_KEY or "").strip()
+            if not api_key:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="admin_e2e_single_user_key_missing",
+                )
+            return {
+                "scenario": scenario,
+                "users": {
+                    "admin": {
+                        "id": int(single_user.id_int or settings.SINGLE_USER_FIXED_ID),
+                        "username": str(single_user.username),
+                        "email": str(single_user.email or ""),
+                        "key": api_key,
+                    },
+                },
+                "fixtures": _seed_fixtures_payload(alerts=[seeded_alert]),
+            }
         return {
             "scenario": scenario,
             "users": {},
-            "fixtures": {
-                "alerts": [{"alert_id": _SEEDED_ALERT_ID}],
-                "organizations": [],
-            },
+            "fixtures": _seed_fixtures_payload(alerts=[seeded_alert]),
         }
 
     pool = await get_db_pool()
     users_repo = AuthnzUsersRepo(db_pool=pool)
     orgs_repo = AuthnzOrgsTeamsRepo(db_pool=pool)
 
+    admin_password = _fixture_secret("TLDW_ADMIN_E2E_ADMIN_PASSWORD", ("Admin", "Pass", "123", "!"))
+    owner_password = _fixture_secret("TLDW_ADMIN_E2E_OWNER_PASSWORD", ("Admin", "Pass", "123", "!"))
+    super_admin_password = _fixture_secret("TLDW_ADMIN_E2E_SUPER_ADMIN_PASSWORD", ("Admin", "Pass", "123", "!"))
+    member_password = _fixture_secret("TLDW_ADMIN_E2E_MEMBER_PASSWORD", ("Member", "Pass", "123", "!"))
+    requester_password = _fixture_secret("TLDW_ADMIN_E2E_REQUESTER_PASSWORD", ("Requester", "Pass", "123", "!"))
+
     admin_user = await _ensure_user(
         users_repo=users_repo,
         username=_ADMIN_USERNAME,
         email=_ADMIN_EMAIL,
-        password=_fixture_secret("TLDW_ADMIN_E2E_ADMIN_PASSWORD", ("Admin", "Pass", "123", "!")),
+        password=admin_password,
         role="admin",
+    )
+    owner_user = await _ensure_user(
+        users_repo=users_repo,
+        username=_OWNER_USERNAME,
+        email=_OWNER_EMAIL,
+        password=owner_password,
+        role="owner",
+    )
+    super_admin_user = await _ensure_user(
+        users_repo=users_repo,
+        username=_SUPER_ADMIN_USERNAME,
+        email=_SUPER_ADMIN_EMAIL,
+        password=super_admin_password,
+        role="super_admin",
     )
     member_user = await _ensure_user(
         users_repo=users_repo,
         username=_NON_ADMIN_USERNAME,
         email=_NON_ADMIN_EMAIL,
-        password=_fixture_secret("TLDW_ADMIN_E2E_MEMBER_PASSWORD", ("Member", "Pass", "123", "!")),
+        password=member_password,
         role="user",
     )
     requester_user = await _ensure_user(
         users_repo=users_repo,
         username=_REQUESTER_USERNAME,
         email=_REQUESTER_EMAIL,
-        password=_fixture_secret("TLDW_ADMIN_E2E_REQUESTER_PASSWORD", ("Requester", "Pass", "123", "!")),
+        password=requester_password,
         role="user",
     )
 
     org = await _ensure_org(orgs_repo=orgs_repo, owner_user_id=int(admin_user["id"]))
     org_id = int(org["id"])
     await orgs_repo.add_org_member(org_id=org_id, user_id=int(admin_user["id"]), role="admin")
+    await orgs_repo.add_org_member(org_id=org_id, user_id=int(owner_user["id"]), role="owner")
+    await orgs_repo.add_org_member(org_id=org_id, user_id=int(super_admin_user["id"]), role="admin")
     await orgs_repo.add_org_member(org_id=org_id, user_id=int(member_user["id"]), role="member")
     await orgs_repo.add_org_member(org_id=org_id, user_id=int(requester_user["id"]), role="member")
 
@@ -405,6 +548,16 @@ async def seed_admin_e2e_scenario(scenario: str) -> dict[str, Any]:
         "user_id": int(admin_user["id"]),
         "username": str(admin_user["username"]),
         "role": str(admin_user.get("role") or "admin"),
+    }
+    _SEEDED_PRINCIPALS["jwt_owner"] = {
+        "user_id": int(owner_user["id"]),
+        "username": str(owner_user["username"]),
+        "role": str(owner_user.get("role") or "owner"),
+    }
+    _SEEDED_PRINCIPALS["jwt_super_admin"] = {
+        "user_id": int(super_admin_user["id"]),
+        "username": str(super_admin_user["username"]),
+        "role": str(super_admin_user.get("role") or "super_admin"),
     }
     _SEEDED_PRINCIPALS["jwt_non_admin"] = {
         "user_id": int(member_user["id"]),
@@ -421,6 +574,18 @@ async def seed_admin_e2e_scenario(scenario: str) -> dict[str, Any]:
                 "email": str(admin_user["email"]),
                 "key": "jwt_admin",
             },
+            "owner": {
+                "id": int(owner_user["id"]),
+                "username": str(owner_user["username"]),
+                "email": str(owner_user["email"]),
+                "key": "jwt_owner",
+            },
+            "super_admin": {
+                "id": int(super_admin_user["id"]),
+                "username": str(super_admin_user["username"]),
+                "email": str(super_admin_user["email"]),
+                "key": "jwt_super_admin",
+            },
             "non_admin": {
                 "id": int(member_user["id"]),
                 "username": str(member_user["username"]),
@@ -435,7 +600,7 @@ async def seed_admin_e2e_scenario(scenario: str) -> dict[str, Any]:
             },
         },
         "fixtures": {
-            "alerts": [{"alert_id": _SEEDED_ALERT_ID}],
+            **_seed_fixtures_payload(alerts=[seeded_alert]),
             "organizations": [
                 {
                     "id": org_id,

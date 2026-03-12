@@ -9,7 +9,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "test:smoke": "playwright test",
-    "test:real-backend": "playwright test tests/e2e/real-backend",
+    "test:real-backend": "playwright test tests/e2e/real-backend --workers=1",
     "test:a11y": "vitest run app/__tests__/dashboard.a11y.test.tsx app/users/__tests__/page.test.tsx app/monitoring/__tests__/page.test.tsx app/audit/__tests__/page.test.tsx app/data-ops/__tests__/page.a11y.test.tsx app/__tests__/dark-mode-contrast.test.ts app/__tests__/icon-button-audit.test.ts",
     "lint": "BROWSERSLIST_IGNORE_OLD_DATA=1 BASELINE_BROWSER_MAPPING_IGNORE_OLD_DATA=1 eslint ."
   },

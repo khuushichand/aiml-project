@@ -49,6 +49,7 @@ async def client_without_e2e_support(tmp_path, monkeypatch):
 async def e2e_client(tmp_path, monkeypatch):
     db_path = tmp_path / 'authnz_with_e2e.db'
     jobs_db_path = tmp_path / 'jobs_with_e2e.db'
+    monitoring_db_path = tmp_path / 'monitoring_with_e2e.db'
     backup_root = tmp_path / 'backups'
     user_db_base_dir = tmp_path / 'user_dbs'
     monkeypatch.setenv('AUTH_MODE', 'multi_user')
@@ -61,6 +62,39 @@ async def e2e_client(tmp_path, monkeypatch):
     monkeypatch.setenv('ENABLE_ADMIN_E2E_TEST_MODE', 'true')
     monkeypatch.setenv('TLDW_DB_BACKUP_PATH', str(backup_root))
     monkeypatch.setenv('USER_DB_BASE_DIR', str(user_db_base_dir))
+    monkeypatch.setenv('MONITORING_ALERTS_DB', str(monitoring_db_path))
+
+    await _reset_auth_runtime()
+
+    import tldw_Server_API.app.main as app_main
+
+    app = importlib.reload(app_main).app
+    with TestClient(app) as client:
+        yield client
+
+    await _reset_auth_runtime()
+
+
+@pytest_asyncio.fixture
+async def single_user_e2e_client(tmp_path, monkeypatch):
+    db_path = tmp_path / 'authnz_single_user_e2e.db'
+    jobs_db_path = tmp_path / 'jobs_single_user_e2e.db'
+    monitoring_db_path = tmp_path / 'monitoring_single_user_e2e.db'
+    backup_root = tmp_path / 'backups'
+    user_db_base_dir = tmp_path / 'user_dbs'
+    monkeypatch.setenv('AUTH_MODE', 'single_user')
+    monkeypatch.setenv('DATABASE_URL', f'sqlite:///{db_path}')
+    monkeypatch.setenv('JOBS_DB_PATH', str(jobs_db_path))
+    monkeypatch.setenv('JWT_SECRET_KEY', 'playwright-test-secret-1234567890')
+    monkeypatch.setenv('JWT_ALGORITHM', 'HS256')
+    monkeypatch.setenv('DEFER_HEAVY_STARTUP', 'true')
+    monkeypatch.setenv('TEST_MODE', 'true')
+    monkeypatch.setenv('ENABLE_ADMIN_E2E_TEST_MODE', 'true')
+    monkeypatch.setenv('TLDW_DB_BACKUP_PATH', str(backup_root))
+    monkeypatch.setenv('USER_DB_BASE_DIR', str(user_db_base_dir))
+    monkeypatch.setenv('MONITORING_ALERTS_DB', str(monitoring_db_path))
+    monkeypatch.setenv('SINGLE_USER_API_KEY', 'single-user-admin-key')
+    monkeypatch.setenv('SINGLE_USER_TEST_API_KEY', 'single-user-admin-key')
 
     await _reset_auth_runtime()
 
@@ -88,6 +122,41 @@ def test_admin_e2e_seed_returns_stable_fixture_ids(e2e_client):
     assert payload['users']['admin']['id']
     assert payload['users']['admin']['key']
     assert payload['fixtures']['alerts'][0]['alert_id']
+    assert payload['fixtures']['alerts'][0]['alert_identity'].startswith('alert:')
+    assert payload['fixtures']['alerts'][0]['message'] == 'CPU high'
+
+
+def test_admin_e2e_seed_returns_debug_role_principals(e2e_client):
+    response = e2e_client.post(
+        '/api/v1/test-support/admin-e2e/seed',
+        json={'scenario': 'jwt_admin'},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['users']['owner']['key'] == 'jwt_owner'
+    assert payload['users']['super_admin']['key'] == 'jwt_super_admin'
+
+
+def test_admin_e2e_seed_returns_single_user_login_key(single_user_e2e_client):
+    response = single_user_e2e_client.post(
+        '/api/v1/test-support/admin-e2e/seed',
+        json={'scenario': 'single_user_admin'},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['users']['admin']['username'] == 'single_user'
+    assert payload['users']['admin']['key'] == 'single-user-admin-key'
+    assert payload['fixtures']['alerts'][0]['alert_id']
+
+
+def test_single_user_api_key_can_read_users_me(single_user_e2e_client):
+    response = single_user_e2e_client.get(
+        '/api/v1/users/me',
+        headers={'X-API-KEY': 'single-user-admin-key'},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['username'] == 'single_user'
 
 
 def test_admin_e2e_bootstrap_jwt_session_returns_cookie_payload(e2e_client):
@@ -173,6 +242,59 @@ def test_admin_e2e_reset_clears_backup_schedules(e2e_client):
     listed_after = e2e_client.get('/api/v1/admin/backup-schedules', headers=headers)
     assert listed_after.status_code == 200, listed_after.text
     assert listed_after.json()['total'] == 0
+
+
+def test_admin_e2e_reset_clears_monitoring_authority_state(e2e_client):
+    seed = e2e_client.post(
+        '/api/v1/test-support/admin-e2e/seed',
+        json={'scenario': 'jwt_admin'},
+    ).json()
+    bootstrap = e2e_client.post(
+        '/api/v1/test-support/admin-e2e/bootstrap-jwt-session',
+        json={'principal_key': seed['users']['admin']['key']},
+    ).json()
+    access_token = next(
+        cookie['value']
+        for cookie in bootstrap['cookies']
+        if cookie['name'] == 'access_token'
+    )
+    headers = {'Authorization': f'Bearer {access_token}'}
+
+    created_rule = e2e_client.post(
+        '/api/v1/admin/monitoring/alert-rules',
+        headers=headers,
+        json={
+            'metric': 'cpu',
+            'operator': '>',
+            'threshold': 91,
+            'duration_minutes': 15,
+            'severity': 'critical',
+            'enabled': True,
+        },
+    )
+    assert created_rule.status_code == 200, created_rule.text
+
+    assign = e2e_client.post(
+        f"/api/v1/admin/monitoring/alerts/{seed['fixtures']['alerts'][0]['alert_identity']}/assign",
+        headers=headers,
+        json={'assigned_to_user_id': seed['users']['admin']['id']},
+    )
+    assert assign.status_code == 200, assign.text
+
+    history_before = e2e_client.get('/api/v1/admin/monitoring/alerts/history?limit=20', headers=headers)
+    assert history_before.status_code == 200, history_before.text
+    assert history_before.json()['items']
+
+    reset = e2e_client.post('/api/v1/test-support/admin-e2e/reset')
+    assert reset.status_code == 200, reset.text
+
+    rules_after = e2e_client.get('/api/v1/admin/monitoring/alert-rules', headers=headers)
+    assert rules_after.status_code == 200, rules_after.text
+    assert rules_after.json()['items'] == []
+
+    history_after = e2e_client.get('/api/v1/admin/monitoring/alerts/history?limit=20', headers=headers)
+    assert history_after.status_code == 200, history_after.text
+    assert history_after.json()['items'] == []
 
 
 def test_admin_e2e_run_due_backup_schedules_processes_scheduled_run(e2e_client):

@@ -61,6 +61,8 @@ class AdminE2EAlertFixture(BaseModel):
     """Stable alert identity fixture for monitoring overlay tests."""
 
     alert_id: str
+    alert_identity: str | None = None
+    message: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

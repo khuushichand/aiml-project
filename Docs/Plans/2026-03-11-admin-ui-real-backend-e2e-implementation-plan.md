@@ -15,8 +15,8 @@
 - [x] Task 3: Make Login And Session Bootstrap Real In Both Auth Modes
 - [x] Task 4: Add DSR Real-Backend E2E Coverage
 - [x] Task 5: Add Backup Scheduling Real-Backend E2E Coverage
-- [ ] Task 6: Add Monitoring Authority And Debug RBAC Real-Backend E2E Coverage
-- [ ] Task 7: Wire The Real-Backend Lane Into CI And Project Scripts
+- [x] Task 6: Add Monitoring Authority And Debug RBAC Real-Backend E2E Coverage
+- [x] Task 7: Wire The Real-Backend Lane Into CI And Project Scripts
 
 ---
 
@@ -591,7 +591,7 @@ Keep the first version bounded to the real-backend admin lane only, not the olde
 Run:
 
 - `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_admin_e2e_support_api.py -q`
-- `cd admin-ui && bunx playwright test tests/e2e/real-backend --project=chromium-real-jwt --project=chromium-real-single-user --reporter=line`
+- `cd admin-ui && bun run test:real-backend -- --project=chromium-real-jwt --project=chromium-real-single-user --reporter=line`
 - `cd admin-ui && bun run lint`
 - `cd admin-ui && bun run typecheck`
 - `cd admin-ui && bun run build`

@@ -293,18 +293,18 @@ export async function loginWithApiKey(apiKey: string): Promise<boolean> {
       return false;
     }
 
-    if (!await waitForSessionMarker()) {
-      return false;
-    }
+    storeUser(payload.user);
 
-    const user = await waitForAuthenticatedUser();
-    if (!user) {
+    if (!await waitForSessionMarker()) {
+      clearStoredUser();
       return false;
     }
 
     clearJwtStorage();
     clearApiKeyStorage();
     emitAuthChange();
+
+    void waitForAuthenticatedUser().catch(() => null);
     return true;
   } catch (error) {
     console.error('API key validation failed:', error);

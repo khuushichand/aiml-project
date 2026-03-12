@@ -352,7 +352,11 @@ export const normalizeMonitoringAlert = (value: unknown): SystemAlert | null => 
     ? new Date(dismissedAtRaw).toISOString()
     : undefined;
   const acknowledgedBy = coerceString(obj.acknowledged_by) || undefined;
-  const assignedTo = coerceString(obj.assigned_to ?? obj.assigned_to_user_id) || undefined;
+  const assignedTo =
+    coerceString(obj.assigned_to)
+    || (toFiniteNumber(obj.assigned_to_user_id) !== null
+      ? String(toFiniteNumber(obj.assigned_to_user_id))
+      : undefined);
   const snoozedUntilRaw = coerceString(obj.snoozed_until);
   const snoozedUntil = snoozedUntilRaw && !Number.isNaN(Date.parse(snoozedUntilRaw))
     ? new Date(snoozedUntilRaw).toISOString()

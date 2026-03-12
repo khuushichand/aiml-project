@@ -30,9 +30,18 @@ export class LoginPage {
         .catch(() => null);
       await this.page.getByRole('button', { name: buttonName }).click();
       const response = await responsePromise;
-      if (response && response.status() !== 404 && response.status() < 500) {
+      if (response?.ok()) {
         await this.waitForPostAuthRedirect();
         return;
+      }
+      if (response && response.status() !== 404 && response.status() < 500) {
+        const detail = (await response.text().catch(() => '')).trim();
+        const backendUrl = response.headers()['x-tldw-backend-url'];
+        throw new Error(
+          `Authentication form ${endpoint} failed with status ${response.status()}`
+          + `${backendUrl ? ` via ${backendUrl}` : ''}`
+          + `${detail ? `: ${detail}` : ''}`,
+        );
       }
       await this.page.goto(retryUrl);
       await this.page.waitForTimeout(1_000);

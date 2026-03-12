@@ -2,11 +2,28 @@ import { type Page } from '@playwright/test';
 
 import { type RealBackendProjectEnv } from './project-env';
 
-type SeedScenario = 'jwt_admin' | 'dsr_jwt_admin';
-type SeedAlias = 'admin' | 'non_admin';
+export type SeedScenario = 'jwt_admin' | 'dsr_jwt_admin' | 'single_user_admin';
+export type SeedAlias = 'admin' | 'owner' | 'super_admin' | 'non_admin';
+
+type SeededUser = {
+  id: number;
+  key: string;
+  username: string;
+  email: string;
+};
+
+type SeededAlertFixture = {
+  alert_id: string;
+  alert_identity?: string;
+  message?: string;
+};
 
 export type SeedResponse = {
-  users: Record<SeedAlias | 'requester', { key: string; username: string; email: string }>;
+  users: Record<SeedAlias | 'requester', SeededUser>;
+  fixtures: {
+    alerts: SeededAlertFixture[];
+    organizations?: Array<{ id: number; name: string; slug: string }>;
+  };
 };
 
 const postJson = async <T>(
@@ -40,6 +57,12 @@ export class SeededSession {
     if (alias === 'admin') {
       return process.env.TLDW_ADMIN_E2E_ADMIN_PASSWORD || 'AdminPass123!';
     }
+    if (alias === 'owner') {
+      return process.env.TLDW_ADMIN_E2E_OWNER_PASSWORD || 'AdminPass123!';
+    }
+    if (alias === 'super_admin') {
+      return process.env.TLDW_ADMIN_E2E_SUPER_ADMIN_PASSWORD || 'AdminPass123!';
+    }
     return process.env.TLDW_ADMIN_E2E_MEMBER_PASSWORD || 'MemberPass123!';
   }
 
@@ -47,7 +70,6 @@ export class SeededSession {
     await this.page.waitForURL(/\/login(?:\?|$)/, { timeout: 5_000 }).catch(() => null);
 
     let lastCurrentUserStatus = 0;
-    let lastWarmFailure = 'not_attempted';
 
     for (let attempt = 0; attempt < 60; attempt += 1) {
       const currentUser = await this.page.evaluate(async () => {
@@ -75,38 +97,14 @@ export class SeededSession {
       lastCurrentUserStatus = currentUser.status;
 
       if (currentUser.ok && currentUser.body && typeof currentUser.body.id === 'number') {
-        const warmed = await this.page.evaluate(async ({ userId }) => {
-          const endpoints = [
-            `/api/proxy/admin/users/${userId}/effective-permissions`,
-            '/api/proxy/admin/orgs',
-          ];
-          for (const endpoint of endpoints) {
-            const response = await fetch(endpoint, { credentials: 'include' }).catch(() => null);
-            if (!response || !response.ok) {
-              return {
-                ok: false,
-                failedEndpoint: endpoint,
-                status: response?.status ?? 0,
-              };
-            }
-          }
-          return {
-            ok: true,
-            failedEndpoint: null,
-            status: 200,
-          };
-        }, { userId: currentUser.body.id });
-        if (warmed.ok) {
-          return;
-        }
-        lastWarmFailure = `${warmed.failedEndpoint ?? 'unknown'}:${warmed.status}`;
+        return;
       }
 
       await this.page.waitForTimeout(250);
     }
 
     throw new Error(
-      `Seeded session did not reach an authenticated browser state (last /users/me status=${lastCurrentUserStatus}, last warm failure=${lastWarmFailure})`,
+      `Seeded session did not reach an authenticated browser state (last /users/me status=${lastCurrentUserStatus})`,
     );
   }
 

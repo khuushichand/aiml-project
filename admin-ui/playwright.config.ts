@@ -24,24 +24,32 @@ const realBackendUiServers = shouldAutoStart
       {
         command: `bunx next dev -p ${realJwtProject.uiPort} --hostname 127.0.0.1`,
         url: realJwtProject.uiBaseUrl,
-        reuseExistingServer: true,
+        // These auth-mode-specific UI servers must boot with the exact backend URL
+        // and auth env for the current project; reusing a stale process leaks config.
+        reuseExistingServer: false,
         timeout: 120_000,
         env: {
           ...baseUiEnv,
           AUTH_MODE: 'multi_user',
           NEXT_PUBLIC_API_URL: realJwtProject.apiBaseUrl,
+          TLDW_ADMIN_E2E_REAL_BACKEND: 'true',
+          TEST_MODE: 'true',
         },
       },
       {
         command: `bunx next dev -p ${realSingleUserProject.uiPort} --hostname 127.0.0.1`,
         url: realSingleUserProject.uiBaseUrl,
-        reuseExistingServer: true,
+        // These auth-mode-specific UI servers must boot with the exact backend URL
+        // and auth env for the current project; reusing a stale process leaks config.
+        reuseExistingServer: false,
         timeout: 120_000,
         env: {
           ...baseUiEnv,
           AUTH_MODE: 'single_user',
           NEXT_PUBLIC_API_URL: realSingleUserProject.apiBaseUrl,
           SINGLE_USER_API_KEY: process.env.SINGLE_USER_API_KEY || 'single-user-admin-key',
+          TLDW_ADMIN_E2E_REAL_BACKEND: 'true',
+          TEST_MODE: 'true',
         },
       },
     ]
