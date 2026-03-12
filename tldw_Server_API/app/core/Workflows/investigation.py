@@ -173,9 +173,7 @@ def _build_primary_failure(
         }
     else:
         status = str(getattr(run, "status", "") or "").strip().lower()
-        run_error = getattr(run, "error", None)
-        run_reason = getattr(run, "status_reason", None)
-        if status != "failed" and not run_error and not run_reason:
+        if status != "failed":
             return None
         envelope = build_failure_envelope(run.error or run.status_reason, step_type=step_type)
         failure = {

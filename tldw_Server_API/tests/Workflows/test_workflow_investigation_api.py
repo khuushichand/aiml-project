@@ -284,6 +284,76 @@ def _seed_succeeded_run(db: WorkflowsDatabase) -> str:
     return run_id
 
 
+def _seed_cancelled_run(db: WorkflowsDatabase) -> str:
+    run_id = f"run-investigation-cancelled-{uuid4().hex[:8]}"
+    step_run_id = f"{run_id}:s1:1"
+    db.create_run(
+        run_id=run_id,
+        tenant_id="default",
+        user_id="1",
+        inputs={"target": "hook"},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot={
+            "name": "investigation-cancelled",
+            "version": 1,
+            "steps": [
+                {"id": "s1", "name": "Render output", "type": "prompt", "config": {"template": "ok"}},
+            ],
+        },
+    )
+    db.update_run_status(
+        run_id,
+        status="cancelled",
+        status_reason="cancelled_by_user",
+        started_at="2026-03-11T10:00:00",
+        ended_at="2026-03-11T10:00:02",
+    )
+    db.create_step_run(
+        step_run_id=step_run_id,
+        tenant_id="default",
+        run_id=run_id,
+        step_id="s1",
+        name="Render output",
+        step_type="prompt",
+        status="running",
+        inputs={"config": {"template": "ok"}},
+    )
+    attempt_id = db.create_step_attempt(
+        tenant_id="default",
+        run_id=run_id,
+        step_run_id=step_run_id,
+        step_id="s1",
+        attempt_number=1,
+        metadata={"step_type": "prompt"},
+    )
+    db.complete_step_attempt(
+        attempt_id=attempt_id,
+        status="succeeded",
+        metadata={"step_type": "prompt"},
+    )
+    db.complete_step_run(
+        step_run_id=step_run_id,
+        status="succeeded",
+        outputs={"text": "ok"},
+    )
+    db.append_event(
+        "default",
+        run_id,
+        "step_completed",
+        {"step_id": "s1"},
+        step_run_id=step_run_id,
+    )
+    db.append_event(
+        "default",
+        run_id,
+        "run_cancelled",
+        {"reason": "cancelled_by_user"},
+        step_run_id=step_run_id,
+    )
+    return run_id
+
+
 def test_investigation_endpoint_returns_primary_failure(client_with_investigation_db: tuple[TestClient, WorkflowsDatabase, dict]):
     client, db, _state = client_with_investigation_db
     run_id = _seed_failed_run(db)
@@ -307,6 +377,21 @@ def test_investigation_endpoint_omits_failure_for_successful_run(client_with_inv
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["status"] == "succeeded"
+    assert data["failed_step"] is None
+    assert data["primary_failure"] is None
+    assert data["attempts"] == []
+    assert data["recommended_actions"] == []
+
+
+def test_investigation_endpoint_omits_failure_for_cancelled_run(client_with_investigation_db: tuple[TestClient, WorkflowsDatabase, dict]):
+    client, db, _state = client_with_investigation_db
+    run_id = _seed_cancelled_run(db)
+
+    resp = client.get(f"/api/v1/workflows/runs/{run_id}/investigation")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "cancelled"
     assert data["failed_step"] is None
     assert data["primary_failure"] is None
     assert data["attempts"] == []
