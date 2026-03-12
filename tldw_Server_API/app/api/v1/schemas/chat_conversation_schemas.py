@@ -3,9 +3,24 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable")
+
+
+class ConversationScopeParams(BaseModel):
+    """Scope parameters for filtering conversations by global or workspace scope."""
+
+    scope_type: Literal["global", "workspace"] = "global"
+    workspace_id: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_workspace_scope(self) -> "ConversationScopeParams":
+        if self.scope_type == "workspace" and not self.workspace_id:
+            raise ValueError("workspace_id is required when scope_type='workspace'")
+        if self.scope_type == "global":
+            self.workspace_id = None
+        return self
 
 
 class ConversationListItem(BaseModel):

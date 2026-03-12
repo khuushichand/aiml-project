@@ -1148,6 +1148,7 @@ elif _MINIMAL_TEST_APP:
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
+    from tldw_Server_API.app.api.v1.endpoints.workspaces import router as workspaces_router
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
     from tldw_Server_API.app.api.v1.endpoints.chat import (
         conversations_alias_router,
