@@ -56,7 +56,9 @@ export interface ModelInfo {
 export class TldwModelsService {
   private cachedModels: ModelInfo[] | null = null
   private lastFetchTime: number = 0
+  private lastForcedFetchTime: number = 0
   private readonly CACHE_DURATION = 15 * 60 * 1000 // 15 minutes
+  private readonly FORCE_REFRESH_COOLDOWN = 30 * 1000
   private readonly CACHE_KEY = "tldwModelsCache"
   private readonly CACHE_SCHEMA_VERSION = 2
   private storage = createSafeStorage({ area: "local" })
@@ -145,6 +147,7 @@ export class TldwModelsService {
     if (this.cacheScopeKey && this.cacheScopeKey !== scopeKey) {
       this.cachedModels = null
       this.lastFetchTime = 0
+      this.lastForcedFetchTime = 0
     }
     this.cacheScopeKey = scopeKey
 
@@ -152,6 +155,13 @@ export class TldwModelsService {
     
     // Return cached models if available and not expired
     if (!forceRefresh && this.cachedModels && (now - this.lastFetchTime) < this.CACHE_DURATION) {
+      return this.cachedModels
+    }
+    if (
+      forceRefresh &&
+      this.cachedModels &&
+      (now - this.lastForcedFetchTime) < this.FORCE_REFRESH_COOLDOWN
+    ) {
       return this.cachedModels
     }
     if (this.inFlightFetch) {
@@ -171,6 +181,9 @@ export class TldwModelsService {
       // Transform tldw models to our format
       this.cachedModels = models.map(model => this.transformModel(model))
       this.lastFetchTime = Date.now()
+      if (forceRefresh) {
+        this.lastForcedFetchTime = this.lastFetchTime
+      }
       await this.persistCache()
       
       return this.cachedModels
@@ -355,6 +368,7 @@ export class TldwModelsService {
   async clearCache(): Promise<void> {
     this.cachedModels = null
     this.lastFetchTime = 0
+    this.lastForcedFetchTime = 0
     this.inFlightFetch = null
     this.cacheScopeKey = null
     await this.persistCache()

@@ -114,6 +114,20 @@ describe("TldwModelsService caching", () => {
     expect(mocks.getModels).toHaveBeenCalledWith({ refreshOpenRouter: true })
   })
 
+  it("reuses cached models during the forced refresh cooldown", async () => {
+    mocks.getModels.mockResolvedValue([
+      { id: "openrouter/model-a", name: "Model A", provider: "openrouter", type: "chat" }
+    ])
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    await service.getModels(true, { refreshOpenRouter: true })
+    await service.getModels(true, { refreshOpenRouter: true })
+
+    expect(mocks.getModels).toHaveBeenCalledTimes(1)
+  })
+
   it("ignores legacy cache entries without schema version and refetches models", async () => {
     mocks.storageGet.mockResolvedValue({
       timestamp: Date.now(),
