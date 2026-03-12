@@ -496,7 +496,13 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
 
   // Store state
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const selectedSourceFolderIds = useWorkspaceStore(
+    (s) => s.selectedSourceFolderIds
+  ) || []
   const getSelectedMediaIds = useWorkspaceStore((s) => s.getSelectedMediaIds)
+  const getEffectiveSelectedMediaIds = useWorkspaceStore(
+    (s) => s.getEffectiveSelectedMediaIds
+  )
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const isGeneratingOutput = useWorkspaceStore((s) => s.isGeneratingOutput)
   const generatingOutputType = useWorkspaceStore((s) => s.generatingOutputType)
@@ -648,11 +654,20 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const hasSelectedSources = selectedSourceIds.length > 0
-  const selectedMediaCount = Math.max(
-    getSelectedMediaIds().length,
-    selectedSourceIds.length
+  const selectedMediaIds = React.useMemo(
+    () =>
+      typeof getEffectiveSelectedMediaIds === "function"
+        ? getEffectiveSelectedMediaIds()
+        : getSelectedMediaIds(),
+    [
+      getEffectiveSelectedMediaIds,
+      getSelectedMediaIds,
+      selectedSourceFolderIds,
+      selectedSourceIds
+    ]
   )
+  const hasSelectedSources = selectedMediaIds.length > 0
+  const selectedMediaCount = selectedMediaIds.length
   const contextualAudioSettingsVisible =
     activeOutputType === "audio_overview" ||
     generatingOutputType === "audio_overview"
@@ -1130,7 +1145,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     setRecentOutputTypes(recordRecentOutputType(type))
     if (!hasSelectedSources) return
 
-    const mediaIds = getSelectedMediaIds()
+    const mediaIds = selectedMediaIds
     if (mediaIds.length === 0) return
     if (type === "compare_sources" && mediaIds.length < 2) {
       messageApi.warning(

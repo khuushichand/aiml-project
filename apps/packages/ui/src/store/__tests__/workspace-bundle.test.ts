@@ -136,6 +136,44 @@ describe("workspace bundle zip compatibility", () => {
     )
   })
 
+  it("round-trips source folder organization through zip export/import", async () => {
+    const bundle = createBundleFixture()
+    bundle.workspace.snapshot.sourceFolders = [
+      {
+        id: "folder-1",
+        workspaceId: "workspace-1",
+        name: "Evidence",
+        parentFolderId: null,
+        createdAt: new Date("2026-02-18T09:35:00.000Z"),
+        updatedAt: new Date("2026-02-18T09:35:00.000Z")
+      }
+    ]
+    bundle.workspace.snapshot.sourceFolderMemberships = [
+      {
+        folderId: "folder-1",
+        sourceId: "source-1"
+      }
+    ]
+    bundle.workspace.snapshot.selectedSourceFolderIds = ["folder-1"]
+    bundle.workspace.snapshot.activeFolderId = "folder-1"
+
+    const zipBlob = await createWorkspaceExportZipBlob(bundle)
+    const file = new File([zipBlob], "alpha.workspace.zip", {
+      type: WORKSPACE_EXPORT_BUNDLE_ZIP_MIME
+    })
+
+    const parsed = await parseWorkspaceImportFile(file)
+
+    expect(parsed.workspace.snapshot.sourceFolders).toEqual(
+      toSerializableBundle(bundle).workspace.snapshot.sourceFolders
+    )
+    expect(parsed.workspace.snapshot.sourceFolderMemberships).toEqual(
+      toSerializableBundle(bundle).workspace.snapshot.sourceFolderMemberships
+    )
+    expect(parsed.workspace.snapshot.selectedSourceFolderIds).toEqual(["folder-1"])
+    expect(parsed.workspace.snapshot.activeFolderId).toBe("folder-1")
+  })
+
   it("imports legacy JSON workspace bundles", async () => {
     const bundle = createBundleFixture()
     const file = new File([JSON.stringify(bundle)], "alpha.workspace.json", {
