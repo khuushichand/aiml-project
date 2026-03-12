@@ -41,6 +41,14 @@ export type GovernanceAuditRemediation = {
   note?: string | null
 }
 
+export type GovernanceAuditInlineAction = {
+  kind: "deactivate_external_server"
+  label: string
+  object_id: string
+  confirm_title?: string | null
+  confirm_description?: string | null
+}
+
 export const FINDING_TYPE_ORDER: McpHubGovernanceAuditFindingType[] = [
   "assignment_validation_blocker",
   "workspace_source_readiness_warning",
@@ -262,6 +270,28 @@ export const buildAuditRemediationSteps = (
       "Review the current configuration and any related object.",
       "Re-run the audit after updating the configuration."
     ]
+  }
+}
+
+export const buildAuditInlineAction = (
+  item: McpHubGovernanceAuditFinding
+): GovernanceAuditInlineAction | null => {
+  const objectId = _safeString(item.object_id)
+  const objectLabel = _safeString(item.object_label) || objectId
+  if (
+    item.finding_type !== "external_server_configuration_issue" ||
+    item.object_kind !== "external_server" ||
+    !objectId
+  ) {
+    return null
+  }
+  return {
+    kind: "deactivate_external_server",
+    label: "Deactivate server",
+    object_id: objectId,
+    confirm_title: `Deactivate ${objectLabel}?`,
+    confirm_description:
+      "This will disable the managed external server without changing secrets or bindings."
   }
 }
 

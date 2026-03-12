@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Alert, Button, Card, Empty, List, Space, Tag, Typography } from "antd"
 
 import {
   listGovernanceAuditFindings,
+  updateExternalServer,
   type McpHubGovernanceAuditFinding,
   type McpHubGovernanceAuditNavigateTarget
 } from "@/services/tldw/mcp-hub"
@@ -10,6 +11,7 @@ import { copyToClipboard } from "@/utils/clipboard"
 import { downloadBlob } from "@/utils/download-blob"
 import {
   buildAuditCounts,
+  buildAuditInlineAction,
   buildAuditJsonExport,
   buildAuditMarkdownReport,
   buildAuditRemediationSteps,
@@ -47,33 +49,25 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
     type: "success" | "error"
     message: string
   } | null>(null)
+  const [pendingActionObjectId, setPendingActionObjectId] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      setLoading(true)
-      setErrorMessage(null)
-      try {
-        const result = await listGovernanceAuditFindings()
-        if (!cancelled) {
-          setAllItems(Array.isArray(result?.items) ? result.items : [])
-        }
-      } catch {
-        if (!cancelled) {
-          setAllItems([])
-          setErrorMessage("Failed to load governance audit findings.")
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
-      }
-    }
-    void load()
-    return () => {
-      cancelled = true
+  const loadAuditFindings = useCallback(async () => {
+    setLoading(true)
+    setErrorMessage(null)
+    try {
+      const result = await listGovernanceAuditFindings()
+      setAllItems(Array.isArray(result?.items) ? result.items : [])
+    } catch {
+      setAllItems([])
+      setErrorMessage("Failed to load governance audit findings.")
+    } finally {
+      setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    void loadAuditFindings()
+  }, [loadAuditFindings])
 
   const availableFindingTypes = useMemo(
     () => dedupeAuditValues(allItems.map((item) => String(item.finding_type || ""))),
@@ -199,6 +193,31 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
             ? "Failed to download JSON export."
             : "Failed to download Markdown export."
       })
+    }
+  }
+
+  const _runInlineAction = async (finding: McpHubGovernanceAuditFinding) => {
+    const action = buildAuditInlineAction(finding)
+    if (!action) {
+      return
+    }
+    const confirmLines = [action.confirm_title, action.confirm_description].filter(
+      (value): value is string => Boolean(value && value.trim())
+    )
+    if (confirmLines.length > 0 && !window.confirm(confirmLines.join("\n\n"))) {
+      return
+    }
+    setPendingActionObjectId(action.object_id)
+    try {
+      if (action.kind === "deactivate_external_server") {
+        await updateExternalServer(action.object_id, { enabled: false })
+        setActionStatus({ type: "success", message: "Server deactivated." })
+      }
+      await loadAuditFindings()
+    } catch {
+      setActionStatus({ type: "error", message: "Failed to deactivate server." })
+    } finally {
+      setPendingActionObjectId(null)
     }
   }
 
@@ -414,15 +433,31 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
               dataSource={items}
               renderItem={(finding) => (
                 <List.Item
-                  actions={[
-                    <Button
-                      key="open"
-                      size="small"
-                      onClick={() => onOpen?.(finding.navigate_to)}
-                    >
-                      Open
-                    </Button>
-                  ]}
+                  actions={(() => {
+                    const actions = [
+                      <Button
+                        key="open"
+                        size="small"
+                        onClick={() => onOpen?.(finding.navigate_to)}
+                      >
+                        Open
+                      </Button>
+                    ]
+                    const inlineAction = buildAuditInlineAction(finding)
+                    if (inlineAction) {
+                      actions.push(
+                        <Button
+                          key={inlineAction.kind}
+                          size="small"
+                          loading={pendingActionObjectId === inlineAction.object_id}
+                          onClick={() => void _runInlineAction(finding)}
+                        >
+                          {inlineAction.label}
+                        </Button>
+                      )
+                    }
+                    return actions
+                  })()}
                 >
                   <Space orientation="vertical" size={4} style={{ width: "100%" }}>
                     <Space wrap>

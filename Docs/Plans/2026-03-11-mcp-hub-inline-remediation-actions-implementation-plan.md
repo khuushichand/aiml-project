@@ -1,7 +1,7 @@
 # MCP Hub Inline Remediation Actions Implementation Plan
 
 Date: 2026-03-11
-Status: Not Started
+Status: Implemented
 
 Linked design:
 - `Docs/Plans/2026-03-11-mcp-hub-inline-remediation-actions-design.md`
@@ -15,11 +15,11 @@ Add the first safe inline remediation action to the MCP Hub `Audit` tab:
 
 ## Task List
 
-- Task 1: Not Started
-- Task 2: Not Started
-- Task 3: Not Started
-- Task 4: Not Started
-- Task 5: Not Started
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
 
 ## Task 1: Add Red Tests For Action Eligibility And Row Rendering
 
@@ -36,7 +36,7 @@ before implementation.
 - `apps/packages/ui/src/components/Option/MCPHub/__tests__/governanceAuditHelpers.test.ts`
 - `apps/packages/ui/src/components/Option/MCPHub/__tests__/GovernanceAuditTab.test.tsx`
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 2: Add A Pure Inline-Action Helper
 
@@ -55,7 +55,7 @@ inline actions.
 - `apps/packages/ui/src/components/Option/MCPHub/governanceAuditHelpers.ts`
 - helper tests alongside existing audit helper tests
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 3: Wire The Audit Tab To Existing Managed-Server Mutation
 
@@ -73,7 +73,7 @@ external-server update call.
 - `apps/packages/ui/src/components/Option/MCPHub/GovernanceAuditTab.tsx`
 - `apps/packages/ui/src/services/tldw/mcp-hub.ts` only if a helper export is needed
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 4: Run Focused And Broader UI Verification
 
@@ -87,7 +87,7 @@ external-server update call.
 - `bunx vitest run src/components/Option/MCPHub/__tests__/GovernanceAuditTab.test.tsx src/components/Option/MCPHub/__tests__/governanceAuditHelpers.test.ts`
 - `bunx vitest run src/components/Option/MCPHub/__tests__`
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 5: Mark Docs Implemented And Commit
 
@@ -103,4 +103,4 @@ green.
 - `Docs/Plans/2026-03-11-mcp-hub-inline-remediation-actions-design.md`
 - `Docs/Plans/2026-03-11-mcp-hub-inline-remediation-actions-implementation-plan.md`
 
-**Status**: Not Started
+**Status**: Complete

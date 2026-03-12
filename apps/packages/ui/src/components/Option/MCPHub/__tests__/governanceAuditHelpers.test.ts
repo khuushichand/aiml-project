@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { buildAuditRemediationSteps } from "../governanceAuditHelpers"
+import { buildAuditInlineAction, buildAuditRemediationSteps } from "../governanceAuditHelpers"
 import type { McpHubGovernanceAuditFinding } from "@/services/tldw/mcp-hub"
 
 const makeFinding = (
@@ -85,5 +85,44 @@ describe("buildAuditRemediationSteps", () => {
       "Review the current configuration and any related object.",
       "Re-run the audit after updating the configuration."
     ])
+  })
+})
+
+describe("buildAuditInlineAction", () => {
+  it("returns a deterministic deactivate action for eligible external server findings", () => {
+    const result = buildAuditInlineAction(
+      makeFinding({
+        finding_type: "external_server_configuration_issue",
+        object_kind: "external_server",
+        object_id: "docs-managed",
+        object_label: "Docs Managed",
+        message: "required_slot_secret_missing",
+        navigate_to: {
+          tab: "credentials",
+          object_kind: "external_server",
+          object_id: "docs-managed"
+        }
+      })
+    )
+
+    expect(result).toEqual({
+      kind: "deactivate_external_server",
+      label: "Deactivate server",
+      object_id: "docs-managed",
+      confirm_title: "Deactivate Docs Managed?",
+      confirm_description:
+        "This will disable the managed external server without changing secrets or bindings."
+    })
+  })
+
+  it("returns null for non-eligible findings", () => {
+    const result = buildAuditInlineAction(
+      makeFinding({
+        finding_type: "assignment_validation_blocker",
+        object_kind: "policy_assignment"
+      })
+    )
+
+    expect(result).toBeNull()
   })
 })

@@ -1,7 +1,7 @@
 # MCP Hub Inline Remediation Actions Design
 
 Date: 2026-03-11
-Status: Approved for planning
+Status: Implemented
 
 ## Goal
 

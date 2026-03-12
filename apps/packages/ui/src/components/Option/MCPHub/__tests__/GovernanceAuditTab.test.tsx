@@ -5,12 +5,14 @@ import userEvent from "@testing-library/user-event"
 
 const mocks = vi.hoisted(() => ({
   listGovernanceAuditFindings: vi.fn(),
+  updateExternalServer: vi.fn(),
   copyToClipboard: vi.fn(),
   downloadBlob: vi.fn()
 }))
 
 vi.mock("@/services/tldw/mcp-hub", () => ({
-  listGovernanceAuditFindings: (...args: unknown[]) => mocks.listGovernanceAuditFindings(...args)
+  listGovernanceAuditFindings: (...args: unknown[]) => mocks.listGovernanceAuditFindings(...args),
+  updateExternalServer: (...args: unknown[]) => mocks.updateExternalServer(...args)
 }))
 
 vi.mock("@/utils/clipboard", () => ({
@@ -25,9 +27,22 @@ import { GovernanceAuditTab } from "../GovernanceAuditTab"
 
 describe("GovernanceAuditTab", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
     mocks.copyToClipboard.mockResolvedValue(undefined)
     mocks.downloadBlob.mockImplementation(() => undefined)
+    mocks.updateExternalServer.mockResolvedValue({
+      id: "docs-managed",
+      name: "Docs Managed",
+      transport: "websocket",
+      server_source: "managed",
+      owner_scope_type: "global",
+      owner_scope_id: null,
+      enabled: false,
+      runtime_executable: false,
+      auth_template_present: true,
+      auth_template_valid: false,
+      auth_template_blocked_reason: "required_slot_secret_missing"
+    })
     mocks.listGovernanceAuditFindings.mockResolvedValue({
       items: [
         {
@@ -112,6 +127,113 @@ describe("GovernanceAuditTab", () => {
         warning: 2
       }
     })
+  })
+
+  it("shows and executes the inline deactivate action for eligible external server findings", async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    mocks.listGovernanceAuditFindings
+      .mockResolvedValueOnce({
+        items: [
+          {
+            finding_type: "external_server_configuration_issue",
+            severity: "error",
+            scope_type: "global",
+            scope_id: null,
+            object_kind: "external_server",
+            object_id: "docs-managed",
+            object_label: "Docs Managed",
+            message: "required_slot_secret_missing",
+            details: {
+              runtime_executable: false,
+              auth_template_present: true,
+              auth_template_valid: false
+            },
+            navigate_to: {
+              tab: "credentials",
+              object_kind: "external_server",
+              object_id: "docs-managed"
+            }
+          }
+        ],
+        total: 1,
+        counts: {
+          error: 1,
+          warning: 0
+        }
+      })
+      .mockResolvedValueOnce({
+        items: [],
+        total: 0,
+        counts: {
+          error: 0,
+          warning: 0
+        }
+      })
+
+    render(<GovernanceAuditTab />)
+
+    expect(await screen.findByText("Docs Managed")).toBeTruthy()
+    const findingRow = screen.getByText("Docs Managed").closest(".ant-list-item")
+    expect(findingRow).toBeTruthy()
+    expect(within(findingRow as HTMLElement).getByRole("button", { name: "Deactivate server" })).toBeTruthy()
+
+    await user.click(within(findingRow as HTMLElement).getByRole("button", { name: "Deactivate server" }))
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Deactivate Docs Managed?\n\nThis will disable the managed external server without changing secrets or bindings."
+    )
+    await waitFor(() => {
+      expect(mocks.updateExternalServer).toHaveBeenCalledWith("docs-managed", { enabled: false })
+    })
+    await waitFor(() => {
+      expect(mocks.listGovernanceAuditFindings).toHaveBeenCalledTimes(2)
+    })
+    expect(await screen.findByText("Server deactivated.")).toBeTruthy()
+    confirmSpy.mockRestore()
+  })
+
+  it("shows inline action failure feedback without hiding the finding", async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    mocks.updateExternalServer.mockRejectedValueOnce(new Error("mutation failed"))
+    mocks.listGovernanceAuditFindings.mockResolvedValueOnce({
+      items: [
+        {
+          finding_type: "external_server_configuration_issue",
+          severity: "error",
+          scope_type: "global",
+          scope_id: null,
+          object_kind: "external_server",
+          object_id: "docs-managed",
+          object_label: "Docs Managed",
+          message: "required_slot_secret_missing",
+          details: {},
+          navigate_to: {
+            tab: "credentials",
+            object_kind: "external_server",
+            object_id: "docs-managed"
+          }
+        }
+      ],
+      total: 1,
+      counts: {
+        error: 1,
+        warning: 0
+      }
+    })
+
+    render(<GovernanceAuditTab />)
+
+    expect(await screen.findByText("Docs Managed")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Deactivate server" }))
+
+    await waitFor(() => {
+      expect(mocks.updateExternalServer).toHaveBeenCalledWith("docs-managed", { enabled: false })
+    })
+    expect(await screen.findByText("Failed to deactivate server.")).toBeTruthy()
+    expect(screen.getByText("Docs Managed")).toBeTruthy()
+    confirmSpy.mockRestore()
   })
 
   it("groups findings, shows related-object summaries, and filters by related object focus", async () => {
