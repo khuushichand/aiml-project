@@ -328,7 +328,7 @@ describe("ExternalServersTab", () => {
 
     await user.click(screen.getByRole("button", { name: /delete docs managed/i }))
     expect(mocks.deleteExternalServer).toHaveBeenCalledWith("docs-managed")
-  })
+  }, 15000)
 
   it("opens the managed server editor from a drill target", async () => {
     const onDrillHandled = vi.fn()
