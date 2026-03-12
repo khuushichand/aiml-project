@@ -1,6 +1,7 @@
 import React from "react"
 import { PlaygroundForm } from "./PlaygroundForm"
 import { PlaygroundChat } from "./PlaygroundChat"
+import { ChatErrorBoundary } from "@/components/Common/Playground/ChatErrorBoundary"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { usePlaygroundSessionPersistence } from "@/hooks/usePlaygroundSessionPersistence"
 import { shouldRestorePersistedPlaygroundSession } from "@/hooks/playground-session-restore"
@@ -89,6 +90,7 @@ export const Playground = () => {
   >("idle")
   const [threadSearchOpen, setThreadSearchOpen] = React.useState(false)
   const [threadSearchQuery, setThreadSearchQuery] = React.useState("")
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = React.useState("")
   const [threadSearchActiveIndex, setThreadSearchActiveIndex] = React.useState(0)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = React.useState(false)
   const [dropFeedback, setDropFeedback] = React.useState<
@@ -109,6 +111,12 @@ export const Playground = () => {
   React.useEffect(() => {
     setRouteContext({ routeId: "chat", surface: "webui" })
   }, [setRouteContext])
+
+  // Debounce search query to avoid running collectThreadSearchMatches on every keystroke
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchQuery(threadSearchQuery), 200)
+    return () => clearTimeout(timer)
+  }, [threadSearchQuery])
 
   const showDropFeedback = React.useCallback(
     (feedback: { type: "info" | "error" | "warning"; message: string }) => {
@@ -445,8 +453,8 @@ export const Playground = () => {
 
   const pendingTimelineActionRef = React.useRef<TimelineActionDetail | null>(null)
   const threadSearchMatches = React.useMemo(
-    () => collectThreadSearchMatches(messages, threadSearchQuery),
-    [messages, threadSearchQuery]
+    () => collectThreadSearchMatches(messages, debouncedSearchQuery),
+    [messages, debouncedSearchQuery]
   )
   const threadSearchMatchSet = React.useMemo(
     () => new Set(threadSearchMatches),
@@ -1178,11 +1186,14 @@ export const Playground = () => {
             aria-label={t("playground:aria.chatTranscript", "Chat messages")}
             className="custom-scrollbar flex-1 min-h-0 w-full overflow-x-hidden overflow-y-auto px-4">
             <div className="mx-auto w-full max-w-[64rem] pb-6">
-              <PlaygroundChat
-                searchQuery={threadSearchQuery.trim()}
-                matchedMessageIndices={threadSearchMatchSet}
-                activeSearchMessageIndex={threadSearchActiveMessageIndex}
-              />
+              <ChatErrorBoundary>
+                <PlaygroundChat
+                  searchQuery={threadSearchQuery.trim()}
+                  matchedMessageIndices={threadSearchMatchSet}
+                  activeSearchMessageIndex={threadSearchActiveMessageIndex}
+                  scrollParentRef={containerRef}
+                />
+              </ChatErrorBoundary>
             </div>
           </div>
           <div

@@ -154,7 +154,7 @@ type Props = {
   currentMessageIndex: number
   totalMessages: number
   onRegenerate: () => void
-  onEditFormSubmit: (value: string, isSend: boolean) => void
+  onEditFormSubmit: (index: number, value: string, isUser: boolean, isSend?: boolean) => void
   isProcessing: boolean
   webSearch?: {}
   isSearchingInternet?: boolean
@@ -175,7 +175,7 @@ type Props = {
   ) => void
   documents?: ChatDocuments
   actionInfo?: string | null
-  onNewBranch?: () => void
+  onNewBranch?: (index: number) => void
   temporaryChat?: boolean
   onStopStreaming?: () => void
   serverChatId?: string | null
@@ -188,8 +188,8 @@ type Props = {
   createdAt?: number | string
   variants?: MessageVariant[]
   activeVariantIndex?: number
-  onSwipePrev?: () => void
-  onSwipeNext?: () => void
+  onSwipePrev?: (messageId: string) => void
+  onSwipeNext?: (messageId: string) => void
   // Compare/multi-model metadata (optional)
   compareSelectable?: boolean
   compareSelected?: boolean
@@ -204,7 +204,7 @@ type Props = {
   discoSkillComment?: DiscoSkillComment | null
   historyId?: string
   conversationInstanceId: string
-  onDeleteMessage?: () => void
+  onDeleteMessage?: (index: number) => void
   suppressDeleteSuccessToast?: boolean
   onSaveToWorkspaceNotes?: (payload: {
     message: string
@@ -213,7 +213,7 @@ type Props = {
     messageId?: string
     createdAt?: number | string
   }) => void
-  onTogglePinned?: () => void
+  onTogglePinned?: (index: number) => void
   pinned?: boolean
   characterIdentity?: Character | null
   characterIdentityEnabled?: boolean
@@ -255,7 +255,7 @@ type Props = {
   }) => void
 }
 
-export const PlaygroundMessage = (props: Props) => {
+export const PlaygroundMessage = React.memo(function PlaygroundMessage(props: Props) {
   const articleRef = useRef<HTMLElement | null>(null)
   const [isBtnPressed, setIsBtnPressed] = React.useState(false)
   const [editMode, setEditMode] = React.useState(false)
@@ -333,6 +333,26 @@ export const PlaygroundMessage = (props: Props) => {
 
   const isLastMessage: boolean =
     props.currentMessageIndex === props.totalMessages - 1
+
+  // Internal adapters: bind index/messageId so sub-components receive arg-free callbacks
+  const internalEditFormSubmit = React.useCallback(
+    (value: string, isSend: boolean) => {
+      props.onEditFormSubmit(props.currentMessageIndex, value, !props.isBot, isSend)
+    },
+    [props.onEditFormSubmit, props.currentMessageIndex, props.isBot]
+  )
+  const internalTogglePinned = React.useCallback(() => {
+    props.onTogglePinned?.(props.currentMessageIndex)
+  }, [props.onTogglePinned, props.currentMessageIndex])
+  const internalNewBranch = React.useCallback(() => {
+    props.onNewBranch?.(props.currentMessageIndex)
+  }, [props.onNewBranch, props.currentMessageIndex])
+  const internalSwipePrev = React.useCallback(() => {
+    props.onSwipePrev?.(props.messageId ?? "")
+  }, [props.onSwipePrev, props.messageId])
+  const internalSwipeNext = React.useCallback(() => {
+    props.onSwipeNext?.(props.messageId ?? "")
+  }, [props.onSwipeNext, props.messageId])
 
   // Track streaming completion for aria-live announcement
   const wasStreamingRef = useRef(false)
@@ -667,23 +687,23 @@ export const PlaygroundMessage = (props: Props) => {
       if (!action) return
 
       if (action === "variant_prev") {
-        if (!canSwipePrev || !props.onSwipePrev) return
+        if (!canSwipePrev || !internalSwipePrev) return
         event.preventDefault()
-        props.onSwipePrev()
+        internalSwipePrev()
         articleRef.current?.focus()
         return
       }
       if (action === "variant_next") {
-        if (!canSwipeNext || !props.onSwipeNext) return
+        if (!canSwipeNext || !internalSwipeNext) return
         event.preventDefault()
-        props.onSwipeNext()
+        internalSwipeNext()
         articleRef.current?.focus()
         return
       }
       if (action === "new_branch") {
-        if (!props.onNewBranch) return
+        if (!internalNewBranch) return
         event.preventDefault()
-        props.onNewBranch()
+        internalNewBranch()
         articleRef.current?.focus()
         return
       }
@@ -698,10 +718,10 @@ export const PlaygroundMessage = (props: Props) => {
       canSwipeNext,
       canSwipePrev,
       props.isBot,
-      props.onNewBranch,
+      internalNewBranch,
       props.onRegenerate,
-      props.onSwipeNext,
-      props.onSwipePrev
+      internalSwipeNext,
+      internalSwipePrev
     ]
   )
   const resolvedRole = props.role ?? (props.isBot ? "assistant" : "user")
@@ -1196,7 +1216,7 @@ export const PlaygroundMessage = (props: Props) => {
       okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          await props.onDeleteMessage?.()
+          await props.onDeleteMessage?.(props.currentMessageIndex)
           if (!props.suppressDeleteSuccessToast) {
             message.success(t("common:deleted", "Deleted"))
           }
@@ -1208,7 +1228,7 @@ export const PlaygroundMessage = (props: Props) => {
         }
       }
     })
-  }, [props.onDeleteMessage, props.suppressDeleteSuccessToast, t])
+  }, [props.onDeleteMessage, props.currentMessageIndex, props.suppressDeleteSuccessToast, t])
   const handleOpenModelSettings = React.useCallback(() => {
     if (typeof window === "undefined") return
     window.dispatchEvent(new CustomEvent("tldw:open-model-settings"))
@@ -1702,6 +1722,7 @@ export const PlaygroundMessage = (props: Props) => {
     return (
       <PlaygroundUserMessageBubble
         {...props}
+        onEditFormSubmit={internalEditFormSubmit}
         role={resolvedRole}
         onDelete={props.onDeleteMessage ? handleDelete : undefined}
       />
@@ -2365,7 +2386,7 @@ export const PlaygroundMessage = (props: Props) => {
             ) : (
               <EditMessageForm
                 value={props.message}
-                onSumbit={props.onEditFormSubmit}
+                onSumbit={internalEditFormSubmit}
                 onClose={() => setEditMode(false)}
                 isBot={props.isBot}
               />
@@ -2451,8 +2472,8 @@ export const PlaygroundMessage = (props: Props) => {
               variantCount={variantCount}
               canSwipePrev={canSwipePrev}
               canSwipeNext={canSwipeNext}
-              onSwipePrev={props.onSwipePrev}
-              onSwipeNext={props.onSwipeNext}
+              onSwipePrev={internalSwipePrev}
+              onSwipeNext={internalSwipeNext}
               overflowChipVisibility={overflowChipVisibility}
               actionRowVisibility={actionRowVisibility}
               isTtsEnabled={props.isTTSEnabled}
@@ -2477,7 +2498,7 @@ export const PlaygroundMessage = (props: Props) => {
               isLastMessage={isLastMessage}
               hideEditAndRegenerate={props.hideEditAndRegenerate}
               onRegenerate={props.onRegenerate}
-              onNewBranch={props.onNewBranch}
+              onNewBranch={internalNewBranch}
               temporaryChat={props.temporaryChat}
               hideContinue={props.hideContinue}
               onContinue={props.onContinue}
@@ -2503,7 +2524,7 @@ export const PlaygroundMessage = (props: Props) => {
               onDelete={props.onDeleteMessage ? handleDelete : undefined}
               canPin={Boolean(props.serverMessageId)}
               isPinned={Boolean(props.pinned)}
-              onTogglePinned={props.onTogglePinned}
+              onTogglePinned={internalTogglePinned}
               onQuickMessageAction={
                 props.isBot ? handleQuickMessageAction : undefined
               }
@@ -2693,4 +2714,4 @@ export const PlaygroundMessage = (props: Props) => {
       )}
     </article>
   )
-}
+})
