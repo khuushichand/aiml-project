@@ -216,3 +216,164 @@ def test_conversation_alias_rejects_incompatible_character_scope_and_character_i
 
     assert resp.status_code == 400
     assert "character_scope" in resp.json()["detail"]
+
+
+def test_conversation_alias_uses_paged_db_search(tmp_path, monkeypatch):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    observed: dict[str, object] = {}
+    now = datetime.now(timezone.utc)
+
+    def fail_full_search(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("full search helper should not be used by the conversations endpoint")
+
+    def fake_page_search(
+        query: str | None,
+        *,
+        client_id: str | None = None,
+        character_id: int | None = None,
+        character_scope: str | None = None,
+        state: str | None = None,
+        topic_label: str | None = None,
+        topic_prefix: bool = False,
+        cluster_id: str | None = None,
+        keywords: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_field: str = "last_modified",
+        order_by: str = "recency",
+        limit: int = 50,
+        offset: int = 0,
+        as_of: datetime | None = None,
+        **kwargs,
+    ):
+        observed.update(
+            {
+                "query": query,
+                "client_id": client_id,
+                "character_id": character_id,
+                "character_scope": character_scope,
+                "order_by": order_by,
+                "limit": limit,
+                "offset": offset,
+                "as_of": as_of,
+                "date_field": date_field,
+            }
+        )
+        return (
+            [
+                {
+                    "id": "plain-conv",
+                    "assistant_kind": "persona",
+                    "assistant_id": "plain-helper",
+                    "persona_memory_mode": "read_only",
+                    "character_id": None,
+                    "title": "Quota review",
+                    "state": "in-progress",
+                    "topic_label": None,
+                    "bm25_norm": 0.42,
+                    "last_modified": now.isoformat(),
+                    "created_at": now.isoformat(),
+                    "version": 3,
+                    "cluster_id": None,
+                    "source": None,
+                    "external_ref": None,
+                }
+            ],
+            7,
+            0.91,
+        )
+
+    monkeypatch.setattr(db, "search_conversations", fail_full_search)
+    monkeypatch.setattr(db, "search_conversations_page", fake_page_search, raising=False)
+
+    resp = app.get(
+        "/api/v1/chats/conversations",
+        params={
+            "query": "Quota",
+            "character_scope": "non_character",
+            "order_by": "hybrid",
+            "limit": 1,
+            "offset": 1,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["pagination"]["total"] == 7
+    assert payload["pagination"]["limit"] == 1
+    assert payload["pagination"]["offset"] == 1
+    assert [item["id"] for item in payload["items"]] == ["plain-conv"]
+    assert payload["items"][0]["bm25_norm"] == pytest.approx(0.42, rel=1e-6)
+    assert observed["query"] == "Quota"
+    assert observed["client_id"] == "user-1"
+    assert observed["character_scope"] == "non_character"
+    assert observed["order_by"] == "hybrid"
+    assert observed["limit"] == 1
+    assert observed["offset"] == 1
+    assert observed["date_field"] == "last_modified"
+    assert isinstance(observed["as_of"], datetime)
+
+
+def test_conversation_alias_related_lookups_only_use_page_rows(tmp_path, monkeypatch):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    now = datetime.now(timezone.utc)
+    requested_ids: dict[str, list[str]] = {}
+
+    def fail_full_search(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("full search helper should not be used by the conversations endpoint")
+
+    def fake_page_search(*args, **kwargs):  # noqa: ANN002, ANN003
+        return (
+            [
+                {
+                    "id": "page-only",
+                    "assistant_kind": "persona",
+                    "assistant_id": "page-helper",
+                    "persona_memory_mode": "read_only",
+                    "character_id": None,
+                    "title": "Quota review",
+                    "state": "in-progress",
+                    "topic_label": "quota",
+                    "bm25_norm": 1.0,
+                    "last_modified": now.isoformat(),
+                    "created_at": now.isoformat(),
+                    "version": 1,
+                    "cluster_id": None,
+                    "source": None,
+                    "external_ref": None,
+                }
+            ],
+            12,
+            1.0,
+        )
+
+    def capture_keywords(conversation_ids: list[str]):
+        requested_ids["keywords"] = list(conversation_ids)
+        return {"page-only": [{"keyword": "quota"}]}
+
+    def capture_message_counts(conversation_ids: list[str], include_deleted: bool = False):
+        requested_ids["message_counts"] = list(conversation_ids)
+        return {"page-only": 4}
+
+    monkeypatch.setattr(db, "search_conversations", fail_full_search)
+    monkeypatch.setattr(db, "search_conversations_page", fake_page_search, raising=False)
+    monkeypatch.setattr(db, "get_keywords_for_conversations", capture_keywords)
+    monkeypatch.setattr(db, "count_messages_for_conversations", capture_message_counts)
+
+    resp = app.get(
+        "/api/v1/chats/conversations",
+        params={"query": "Quota", "limit": 1, "offset": 0},
+    )
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["items"][0]["keywords"] == ["quota"]
+    assert payload["items"][0]["message_count"] == 4
+    assert requested_ids["keywords"] == ["page-only"]
+    assert requested_ids["message_counts"] == ["page-only"]

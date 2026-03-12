@@ -4072,21 +4072,6 @@ def _parse_iso_datetime(value: str, field_name: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _normalize_weights(w_bm25: float, w_recency: float) -> tuple[float, float]:
-    total = (w_bm25 or 0.0) + (w_recency or 0.0)
-    if total <= 0:
-        return 0.65, 0.35
-    return (w_bm25 / total), (w_recency / total)
-
-
-def _calculate_recency(dt_value: datetime | None, half_life_days: float) -> float:
-    if dt_value is None or half_life_days <= 0:
-        return 0.0
-    now = datetime.now(timezone.utc)
-    age_days = max(0.0, (now - dt_value).total_seconds() / 86400.0)
-    return math.exp(-age_days / half_life_days)
-
-
 def _conversation_assistant_identity_fields(conversation: dict[str, Any]) -> dict[str, Any]:
     character_id = conversation.get("character_id")
     assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
@@ -4518,7 +4503,8 @@ async def list_chat_conversations(
                 detail="character_scope=non_character cannot be combined with character_id",
             )
 
-        rows = db.search_conversations(
+        search_as_of = datetime.now(timezone.utc)
+        page_rows, total, _max_bm25 = db.search_conversations_page(
             query,
             client_id=str(current_user.id),
             character_id=character_id,
@@ -4531,60 +4517,14 @@ async def list_chat_conversations(
             start_date=start_iso,
             end_date=end_iso,
             date_field=date_field,
+            order_by=order_by,
+            limit=limit,
+            offset=offset,
+            as_of=search_as_of,
+            half_life_days=RECENCY_HALF_LIFE_DAYS,
+            bm25_weight=CHAT_BM25_WEIGHT,
+            recency_weight=CHAT_RECENCY_WEIGHT,
         )
-
-        max_bm25 = max((row.get("bm25_raw") or 0.0) for row in rows) if rows else 0.0
-        w_bm25, w_recency = _normalize_weights(CHAT_BM25_WEIGHT, CHAT_RECENCY_WEIGHT)
-
-        for row in rows:
-            bm25_raw = row.get("bm25_raw") or 0.0
-            bm25_norm = min((bm25_raw / max_bm25), 1.0) if max_bm25 else 0.0
-            dt = _coerce_datetime(row.get("last_modified")) or _coerce_datetime(row.get("created_at"))
-            recency = _calculate_recency(dt, RECENCY_HALF_LIFE_DAYS)
-            row["_bm25_norm"] = bm25_norm
-            row["_recency"] = recency
-            row["_hybrid"] = (w_bm25 * bm25_norm) + (w_recency * recency)
-            row["_sort_dt"] = dt or datetime.fromtimestamp(0, tz=timezone.utc)
-            label = row.get("topic_label")
-            row["_topic_sort"] = str(label).strip().lower() if label else None
-
-        if order_by == "bm25":
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("_bm25_norm") or 0.0),
-                    -(r.get("_sort_dt").timestamp()),
-                    r.get("id") or "",
-                )
-            )
-        elif order_by == "hybrid":
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("_hybrid") or 0.0),
-                    -(r.get("_sort_dt").timestamp()),
-                    r.get("id") or "",
-                )
-            )
-        elif order_by == "topic":
-            rows.sort(
-                key=lambda r: (
-                    r.get("_topic_sort") is None,
-                    r.get("_topic_sort") or "",
-                    -(r.get("_bm25_norm") or 0.0),
-                    -(r.get("_recency") or 0.0),
-                    r.get("id") or "",
-                )
-            )
-        else:
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("_recency") or 0.0),
-                    -(r.get("_sort_dt").timestamp()),
-                    r.get("id") or "",
-                )
-            )
-
-        total = len(rows)
-        page_rows = rows[offset: offset + limit]
         conv_ids = [row.get("id") for row in page_rows if row.get("id")]
         keyword_map = db.get_keywords_for_conversations(conv_ids) if conv_ids else {}
         message_counts = db.count_messages_for_conversations(conv_ids) if conv_ids else {}
@@ -4596,7 +4536,7 @@ async def list_chat_conversations(
             message_count = message_counts.get(conv_id, 0)
             assistant_fields = _conversation_assistant_identity_fields(row)
 
-            bm25_norm = row.get("_bm25_norm") if order_by in {"bm25", "hybrid"} else None
+            bm25_norm = row.get("bm25_norm") if order_by in {"bm25", "hybrid"} else None
             items.append(
                 ConversationListItem(
                     id=conv_id,
