@@ -283,6 +283,7 @@ export const useServerChatHistory = (
               limit: overviewLimit,
               offset: (overviewPage - 1) * overviewLimit,
               ordering: "-updated_at",
+              include_message_counts: false,
               ...(characterScope ? { character_scope: characterScope } : {}),
               ...(includeDeleted ? { include_deleted: true } : {}),
               ...(deletedOnly ? { deleted_only: true } : {})
@@ -303,6 +304,7 @@ export const useServerChatHistory = (
                 limit,
                 offset,
                 ordering: "-updated_at",
+                include_message_counts: false,
                 ...(characterScope ? { character_scope: characterScope } : {}),
                 ...(includeDeleted ? { include_deleted: true } : {}),
                 ...(deletedOnly ? { deleted_only: true } : {})

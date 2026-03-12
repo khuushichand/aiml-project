@@ -249,7 +249,8 @@ describe("useServerChatHistory", () => {
       expect.objectContaining({
         limit: 25,
         offset: 25,
-        ordering: "-updated_at"
+        ordering: "-updated_at",
+        include_message_counts: false
       }),
       expect.anything()
     )
@@ -287,6 +288,7 @@ describe("useServerChatHistory", () => {
         limit: 25,
         offset: 0,
         ordering: "-updated_at",
+        include_message_counts: false,
         character_scope: "character"
       }),
       expect.anything()
@@ -355,7 +357,8 @@ describe("useServerChatHistory", () => {
     expect(listChatsWithMetaMock).toHaveBeenCalledWith(
       expect.objectContaining({
         deleted_only: true,
-        ordering: "-updated_at"
+        ordering: "-updated_at",
+        include_message_counts: false
       }),
       expect.anything()
     )

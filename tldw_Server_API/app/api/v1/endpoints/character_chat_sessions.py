@@ -4075,6 +4075,10 @@ async def list_chat_sessions(
         False,
         description="Include per-chat settings payload for each returned chat.",
     ),
+    include_message_counts: bool = Query(
+        True,
+        description="Include message counts for each returned chat.",
+    ),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -4148,30 +4152,34 @@ async def list_chat_sessions(
 
         # Note: pagination was already applied at DB level, no need to slice again
 
-        message_counts: dict[str, int] = {}
-        countable_conversation_ids = [
-            str(conv["id"])
-            for conv in user_conversations
-            if conv.get("id") and not conv.get("deleted")
-        ]
-        if countable_conversation_ids:
-            try:
-                message_counts = db.count_messages_for_conversations(countable_conversation_ids)
-            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-                message_counts = {}
+        if include_message_counts:
+            message_counts: dict[str, int] = {}
+            countable_conversation_ids = [
+                str(conv["id"])
+                for conv in user_conversations
+                if conv.get("id") and not conv.get("deleted")
+            ]
+            if countable_conversation_ids:
+                try:
+                    message_counts = db.count_messages_for_conversations(countable_conversation_ids)
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                    message_counts = {}
 
-        for conv in user_conversations:
-            if conv.get("deleted"):
-                conv["message_count"] = 0
-                continue
+            for conv in user_conversations:
+                if conv.get("deleted"):
+                    conv["message_count"] = 0
+                    continue
 
-            conv_id = conv.get("id")
-            if conv_id in message_counts:
-                conv["message_count"] = message_counts.get(conv_id, 0)
-                continue
+                conv_id = conv.get("id")
+                if conv_id in message_counts:
+                    conv["message_count"] = message_counts.get(conv_id, 0)
+                    continue
 
-            messages = db.get_messages_for_conversation(conv["id"], limit=1000)
-            conv["message_count"] = len(messages) if messages else 0
+                messages = db.get_messages_for_conversation(conv["id"], limit=1000)
+                conv["message_count"] = len(messages) if messages else 0
+        else:
+            for conv in user_conversations:
+                conv["message_count"] = None
 
         chats: list[ChatSessionResponse] = []
         for conv in user_conversations:

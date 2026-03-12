@@ -435,7 +435,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 35  # Schema v35 includes restart-safe persona session persistence
+    _CURRENT_SCHEMA_VERSION = 36  # Schema v36 adds lean chat overview list indexes
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -3046,6 +3046,22 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 35;
 """
+    _MIGRATION_SQL_V35_TO_V36 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 36 - Conversation list indexes (2026-03-11)
+───────────────────────────────────────────────────────────────*/
+CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified
+  ON conversations(client_id, deleted, last_modified DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified
+  ON conversations(client_id, character_id, deleted, last_modified DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at
+  ON conversations(client_id, deleted, created_at DESC);
+
+UPDATE db_schema_version
+   SET version = 36
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 36;
+"""
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4721,6 +4737,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V34->V35: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V35 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v35_to_v36(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V35 to V36 (conversation list indexes)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V35 to V36 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V35_TO_V36)
+            final_version = self._get_db_version(conn)
+            if final_version != 36:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V35->V36 failed version check. Expected 36, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V36 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V35->V36 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V35->V36 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V35->V36: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V36 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -4917,6 +4953,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         conn.execute(
                             "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)"
                         )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified "
+                            "ON conversations(client_id, deleted, last_modified DESC)"
+                        )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified "
+                            "ON conversations(client_id, character_id, deleted, last_modified DESC)"
+                        )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at "
+                            "ON conversations(client_id, deleted, created_at DESC)"
+                        )
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_writing_sessions_last_modified ON writing_sessions(last_modified)")
@@ -5043,6 +5091,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 35 and current_db_version == 34:
                         self._migrate_from_v34_to_v35(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 36 and current_db_version == 35:
+                        self._migrate_from_v35_to_v36(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -5054,6 +5105,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_topic_label ON conversations(topic_label)")
                     conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified "
+                        "ON conversations(client_id, deleted, last_modified DESC)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified "
+                        "ON conversations(client_id, character_id, deleted, last_modified DESC)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at "
+                        "ON conversations(client_id, deleted, created_at DESC)"
                     )
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
@@ -5355,6 +5418,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v33_to_v34(conn)
                             elif fallback_version == 34:
                                 self._migrate_from_v34_to_v35(conn)
+                            elif fallback_version == 35:
+                                self._migrate_from_v35_to_v36(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5435,6 +5500,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 35 and current_db_version == 34:
                     self._migrate_from_v34_to_v35(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 36 and current_db_version == 35:
+                    self._migrate_from_v35_to_v36(conn)
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
@@ -5782,6 +5850,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 35:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V34_TO_V35, conn, expected_version=35)
                 current_version = 35
+            if current_version < 36:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36, conn, expected_version=36)
+                current_version = 36
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -5838,6 +5909,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     self.backend.execute(
                         "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified "
+                        "ON conversations(client_id, deleted, last_modified DESC)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified "
+                        "ON conversations(client_id, character_id, deleted, last_modified DESC)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at "
+                        "ON conversations(client_id, deleted, created_at DESC)",
                         connection=conn,
                     )
                     self.backend.execute(

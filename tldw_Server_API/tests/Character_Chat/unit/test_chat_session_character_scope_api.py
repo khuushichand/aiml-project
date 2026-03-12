@@ -122,3 +122,44 @@ def test_list_chat_sessions_uses_batched_message_counts_and_filters_character_sc
     assert body["total"] == 1
     assert single_calls == []
     assert batched_calls == [["character-chat"]]
+
+
+def test_list_chat_sessions_can_skip_message_counts_for_lean_overview(
+    tmp_path,
+    monkeypatch,
+):
+    db = CharactersRAGDB(db_path=str(tmp_path / "chacha.db"), client_id="user-1")
+    app = _build_app(db)
+
+    _seed_chat(
+        db,
+        conversation_id="plain-chat",
+        title="Plain chat",
+        character_id=None,
+    )
+
+    single_calls: list[str] = []
+    batch_calls: list[list[str]] = []
+
+    def track_single(conversation_id: str, include_deleted: bool = False) -> int:
+        single_calls.append(conversation_id)
+        return 0
+
+    def track_batch(conversation_ids: list[str], include_deleted: bool = False) -> dict[str, int]:
+        batch_calls.append(list(conversation_ids))
+        return {}
+
+    monkeypatch.setattr(db, "count_messages_for_conversation", track_single)
+    monkeypatch.setattr(db, "count_messages_for_conversations", track_batch)
+
+    response = app.get(
+        "/api/v1/chats/",
+        params={"include_message_counts": False},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [item["id"] for item in body["chats"]] == ["plain-chat"]
+    assert body["chats"][0]["message_count"] is None
+    assert single_calls == []
+    assert batch_calls == []
