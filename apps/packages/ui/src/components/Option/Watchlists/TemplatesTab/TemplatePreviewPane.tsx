@@ -3,8 +3,15 @@ import { Alert, Button, Radio, Select, Spin } from "antd"
 import DOMPurify from "dompurify"
 import { marked } from "marked"
 import { useTranslation } from "react-i18next"
-import { previewWatchlistTemplate } from "@/services/watchlists"
+import {
+  flowCheckWatchlistTemplateSections,
+  previewWatchlistTemplate,
+  type TemplateComposerFlowCheckMode,
+  type TemplateComposerFlowIssue,
+  type TemplateComposerFlowSection
+} from "@/services/watchlists"
 import { trackWatchlistsPreventionTelemetry } from "@/utils/watchlists-prevention-telemetry"
+import { FlowCheckDiffPanel } from "./FlowCheckDiffPanel"
 
 interface TemplatePreviewPaneProps {
   content: string
@@ -122,6 +129,58 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
       if (abortRef.current) abortRef.current.abort()
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
+  }, [])
+
+  const runFlowCheck = useCallback(async () => {
+    if (!selectedRunId) {
+      return
+    }
+
+    setFlowLoading(true)
+    setFlowError(null)
+
+    try {
+      const result = await flowCheckWatchlistTemplateSections({
+        run_id: selectedRunId,
+        mode: flowMode,
+        sections: Array.isArray(sections) ? sections : []
+      })
+
+      setFlowIssues(Array.isArray(result.issues) ? result.issues : [])
+      setFlowDiff(String(result.diff || ""))
+      setFlowSections(Array.isArray(result.sections) ? result.sections : [])
+
+      if (result.mode === "auto_apply" && Array.isArray(result.sections) && result.sections.length > 0) {
+        onApplyFlowSections?.(result.sections)
+      }
+    } catch (err: any) {
+      setFlowError(String(err?.message || "Flow-check failed"))
+      setFlowIssues([])
+      setFlowDiff("")
+      setFlowSections([])
+    } finally {
+      setFlowLoading(false)
+    }
+  }, [flowMode, onApplyFlowSections, sections, selectedRunId])
+
+  const acceptFlowDiff = useCallback(
+    (_chunkId?: string) => {
+      if (flowSections.length > 0) {
+        onApplyFlowSections?.(flowSections)
+      }
+      setFlowDiff("")
+      setFlowIssues([])
+      setFlowSections([])
+      setFlowError(null)
+    },
+    [flowSections, onApplyFlowSections]
+  )
+
+  const rejectFlowDiff = useCallback((_chunkId?: string) => {
+    setFlowDiff("")
+    setFlowIssues([])
+    setFlowSections([])
+    setFlowError(null)
   }, [])
 
   const livePreviewHtml = React.useMemo(() => {

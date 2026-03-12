@@ -219,6 +219,7 @@ from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
@@ -4072,21 +4073,6 @@ def _parse_iso_datetime(value: str, field_name: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _normalize_weights(w_bm25: float, w_recency: float) -> tuple[float, float]:
-    total = (w_bm25 or 0.0) + (w_recency or 0.0)
-    if total <= 0:
-        return 0.65, 0.35
-    return (w_bm25 / total), (w_recency / total)
-
-
-def _calculate_recency(dt_value: datetime | None, half_life_days: float) -> float:
-    if dt_value is None or half_life_days <= 0:
-        return 0.0
-    now = datetime.now(timezone.utc)
-    age_days = max(0.0, (now - dt_value).total_seconds() / 86400.0)
-    return math.exp(-age_days / half_life_days)
-
-
 def _conversation_assistant_identity_fields(conversation: dict[str, Any]) -> dict[str, Any]:
     character_id = conversation.get("character_id")
     assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
@@ -4456,6 +4442,68 @@ async def save_chat_knowledge(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snippet") from exc
 
 
+def _derive_conversation_search_observability(
+    *,
+    query: str | None,
+    include_deleted: bool,
+    deleted_only: bool,
+    order_by: str,
+) -> dict[str, Any]:
+    query_present = bool((query or "").strip())
+    if deleted_only:
+        deleted_scope = "deleted_only"
+    elif include_deleted:
+        deleted_scope = "include_deleted"
+    else:
+        deleted_scope = "active"
+
+    if not query_present:
+        query_strategy = "none"
+    elif include_deleted or deleted_only:
+        query_strategy = "deleted_text"
+    else:
+        query_strategy = "fts"
+
+    return {
+        "query_present": query_present,
+        "query_strategy": query_strategy,
+        "deleted_scope": deleted_scope,
+        "order_by": order_by,
+    }
+
+
+def _record_conversation_search_observability(
+    *,
+    outcome: str,
+    duration_seconds: float,
+    observability: dict[str, Any],
+) -> None:
+    try:
+        metrics = get_metrics_registry()
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Conversation search metrics unavailable: {}", exc)
+        return
+
+    labels = {
+        "query_strategy": str(observability["query_strategy"]),
+        "order_by": str(observability["order_by"]),
+        "deleted_scope": str(observability["deleted_scope"]),
+        "outcome": outcome,
+    }
+    try:
+        metrics.increment("chat_conversation_search_requests_total", labels=labels)
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Conversation search request metric failed: {}", exc)
+    try:
+        metrics.observe(
+            "chat_conversation_search_duration_seconds",
+            max(0.0, float(duration_seconds)),
+            labels=labels,
+        )
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Conversation search duration metric failed: {}", exc)
+
+
 @router.get(
     "/conversations",
     response_model=ConversationListResponse,
@@ -4484,6 +4532,12 @@ async def list_chat_conversations(
     keywords: list[str] | None = Query(None, description="Keyword filters (repeatable)"),
     cluster_id: str | None = Query(None, description="Cluster ID filter"),
     character_id: int | None = Query(None, description="Character ID filter"),
+    character_scope: Literal["all", "character", "non_character"] = Query(
+        "all",
+        description="Filter conversations by whether they are character-backed or not",
+    ),
+    include_deleted: bool = Query(False, description="Include soft-deleted conversations in results"),
+    deleted_only: bool = Query(False, description="Return only soft-deleted conversations"),
     start_date: str | None = Query(None, description="ISO-8601 start date"),
     end_date: str | None = Query(None, description="ISO-8601 end date"),
     date_field: Literal["last_modified", "created_at"] = Query("last_modified", description="Date field for filtering"),
@@ -4495,6 +4549,16 @@ async def list_chat_conversations(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
+    started_at = time.perf_counter()
+    include_deleted_effective = include_deleted or deleted_only
+    observability = _derive_conversation_search_observability(
+        query=query,
+        include_deleted=include_deleted_effective,
+        deleted_only=deleted_only,
+        order_by=order_by,
+    )
+    db_ms = 0.0
+    enrichment_ms = 0.0
     try:
         topic_filter = topic_label.strip() if topic_label else None
         topic_prefix = False
@@ -4510,10 +4574,21 @@ async def list_chat_conversations(
         start_iso = _parse_iso_datetime(start_date, "start_date").isoformat() if start_date else None
         end_iso = _parse_iso_datetime(end_date, "end_date").isoformat() if end_date else None
 
-        rows = db.search_conversations(
+        if character_id is not None and character_scope == "non_character":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="character_scope=non_character cannot be combined with character_id",
+            )
+
+        search_as_of = datetime.now(timezone.utc)
+        db_started_at = time.perf_counter()
+        page_rows, total, _max_bm25 = db.search_conversations_page(
             query,
             client_id=str(current_user.id),
+            include_deleted=include_deleted_effective,
+            deleted_only=deleted_only,
             character_id=character_id,
+            character_scope=character_scope,
             state=state,
             topic_label=topic_filter,
             topic_prefix=topic_prefix,
@@ -4522,62 +4597,18 @@ async def list_chat_conversations(
             start_date=start_iso,
             end_date=end_iso,
             date_field=date_field,
+            order_by=order_by,
+            limit=limit,
+            offset=offset,
+            as_of=search_as_of,
+            half_life_days=RECENCY_HALF_LIFE_DAYS,
+            bm25_weight=CHAT_BM25_WEIGHT,
+            recency_weight=CHAT_RECENCY_WEIGHT,
             scope_type=scope_type,
             workspace_id=workspace_id,
         )
-
-        max_bm25 = max((row.get("bm25_raw") or 0.0) for row in rows) if rows else 0.0
-        w_bm25, w_recency = _normalize_weights(CHAT_BM25_WEIGHT, CHAT_RECENCY_WEIGHT)
-
-        for row in rows:
-            bm25_raw = row.get("bm25_raw") or 0.0
-            bm25_norm = min((bm25_raw / max_bm25), 1.0) if max_bm25 else 0.0
-            dt = _coerce_datetime(row.get("last_modified")) or _coerce_datetime(row.get("created_at"))
-            recency = _calculate_recency(dt, RECENCY_HALF_LIFE_DAYS)
-            row["_bm25_norm"] = bm25_norm
-            row["_recency"] = recency
-            row["_hybrid"] = (w_bm25 * bm25_norm) + (w_recency * recency)
-            row["_sort_dt"] = dt or datetime.fromtimestamp(0, tz=timezone.utc)
-            label = row.get("topic_label")
-            row["_topic_sort"] = str(label).strip().lower() if label else None
-
-        if order_by == "bm25":
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("_bm25_norm") or 0.0),
-                    -(r.get("_sort_dt").timestamp()),
-                    r.get("id") or "",
-                )
-            )
-        elif order_by == "hybrid":
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("_hybrid") or 0.0),
-                    -(r.get("_sort_dt").timestamp()),
-                    r.get("id") or "",
-                )
-            )
-        elif order_by == "topic":
-            rows.sort(
-                key=lambda r: (
-                    r.get("_topic_sort") is None,
-                    r.get("_topic_sort") or "",
-                    -(r.get("_bm25_norm") or 0.0),
-                    -(r.get("_recency") or 0.0),
-                    r.get("id") or "",
-                )
-            )
-        else:
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("_recency") or 0.0),
-                    -(r.get("_sort_dt").timestamp()),
-                    r.get("id") or "",
-                )
-            )
-
-        total = len(rows)
-        page_rows = rows[offset: offset + limit]
+        db_ms = (time.perf_counter() - db_started_at) * 1000.0
+        enrichment_started_at = time.perf_counter()
         conv_ids = [row.get("id") for row in page_rows if row.get("id")]
         keyword_map = db.get_keywords_for_conversations(conv_ids) if conv_ids else {}
         message_counts = db.count_messages_for_conversations(conv_ids) if conv_ids else {}
@@ -4589,7 +4620,7 @@ async def list_chat_conversations(
             message_count = message_counts.get(conv_id, 0)
             assistant_fields = _conversation_assistant_identity_fields(row)
 
-            bm25_norm = row.get("_bm25_norm") if order_by in {"bm25", "hybrid"} else None
+            bm25_norm = row.get("bm25_norm") if order_by in {"bm25", "hybrid"} else None
             items.append(
                 ConversationListItem(
                     id=conv_id,
@@ -4608,6 +4639,7 @@ async def list_chat_conversations(
                     version=row.get("version") or 1,
                 )
             )
+        enrichment_ms = (time.perf_counter() - enrichment_started_at) * 1000.0
 
         pagination = ConversationListPagination(
             limit=limit,
@@ -4615,13 +4647,69 @@ async def list_chat_conversations(
             total=total,
             has_more=(offset + limit) < total,
         )
+        total_seconds = time.perf_counter() - started_at
+        _record_conversation_search_observability(
+            outcome="success",
+            duration_seconds=total_seconds,
+            observability=observability,
+        )
+        logger.debug(
+            "Conversation search completed: {}",
+            {
+                "query_present": observability["query_present"],
+                "query_strategy": observability["query_strategy"],
+                "deleted_scope": observability["deleted_scope"],
+                "character_scope": character_scope,
+                "date_field": date_field,
+                "limit": limit,
+                "offset": offset,
+                "total": total,
+                "returned": len(items),
+                "has_more": pagination.has_more,
+                "db_ms": round(db_ms, 3),
+                "enrichment_ms": round(enrichment_ms, 3),
+                "total_ms": round(total_seconds * 1000.0, 3),
+            },
+        )
         return ConversationListResponse(items=items, pagination=pagination)
     except InputError as exc:
+        _record_conversation_search_observability(
+            outcome="validation",
+            duration_seconds=time.perf_counter() - started_at,
+            observability=observability,
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except HTTPException:
+        _record_conversation_search_observability(
+            outcome="validation",
+            duration_seconds=time.perf_counter() - started_at,
+            observability=observability,
+        )
         raise
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Conversation list failed: {exc}", exc_info=True)
+        total_seconds = time.perf_counter() - started_at
+        _record_conversation_search_observability(
+            outcome="server_error",
+            duration_seconds=total_seconds,
+            observability=observability,
+        )
+        logger.error(
+            "Conversation list failed: {} shape={}",
+            exc,
+            {
+                "query_present": observability["query_present"],
+                "query_strategy": observability["query_strategy"],
+                "deleted_scope": observability["deleted_scope"],
+                "character_scope": character_scope,
+                "date_field": date_field,
+                "limit": limit,
+                "offset": offset,
+                "db_ms": round(db_ms, 3),
+                "enrichment_ms": round(enrichment_ms, 3),
+                "total_ms": round(total_seconds * 1000.0, 3),
+            },
+            exc_info=True,
+        )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list conversations") from exc
 
 

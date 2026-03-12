@@ -54,6 +54,9 @@ const translationMock = vi.hoisted(() => ({
   }
 }))
 
+const mockMessageHandle = (): ReturnType<typeof message.error> =>
+  undefined as unknown as ReturnType<typeof message.error>
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: translationMock.t
@@ -276,7 +279,7 @@ describe("JobFormModal live summary", () => {
   it("shows localized remediation for structured watchlists validation errors", async () => {
     const messageErrorSpy = vi
       .spyOn(message, "error")
-      .mockImplementation(() => () => undefined)
+      .mockImplementation(() => mockMessageHandle())
     servicesMock.createWatchlistJob.mockRejectedValueOnce(
       Object.assign(new Error("Request failed"), {
         status: 422,
@@ -331,7 +334,7 @@ describe("JobFormModal live summary", () => {
   it("shows mapped remediation copy for non-validation save failures", async () => {
     const messageErrorSpy = vi
       .spyOn(message, "error")
-      .mockImplementation(() => () => undefined)
+      .mockImplementation(() => mockMessageHandle())
 
     servicesMock.createWatchlistJob.mockRejectedValueOnce(
       Object.assign(new Error("upstream unavailable"), {
@@ -504,7 +507,7 @@ describe("JobFormModal live summary", () => {
   it("blocks audio sample tests when advanced background URI is invalid", async () => {
     const messageErrorSpy = vi
       .spyOn(message, "error")
-      .mockImplementation(() => () => undefined)
+      .mockImplementation(() => mockMessageHandle())
 
     render(<JobFormModal open onClose={vi.fn()} onSuccess={vi.fn()} />)
 
@@ -535,7 +538,7 @@ describe("JobFormModal live summary", () => {
   it("guides basic mode through scope and schedule before review step", async () => {
     const messageErrorSpy = vi
       .spyOn(message, "error")
-      .mockImplementation(() => () => undefined)
+      .mockImplementation(() => mockMessageHandle())
 
     render(<JobFormModal open onClose={vi.fn()} onSuccess={vi.fn()} />)
 
@@ -573,7 +576,7 @@ describe("JobFormModal live summary", () => {
   it("blocks submit with actionable guidance when schedule is too frequent", async () => {
     const messageErrorSpy = vi
       .spyOn(message, "error")
-      .mockImplementation(() => () => undefined)
+      .mockImplementation(() => mockMessageHandle())
 
     render(<JobFormModal open onClose={vi.fn()} onSuccess={vi.fn()} />)
 
@@ -610,7 +613,7 @@ describe("JobFormModal live summary", () => {
   it("blocks submit when editing with invalid email recipients", async () => {
     const messageErrorSpy = vi
       .spyOn(message, "error")
-      .mockImplementation(() => () => undefined)
+      .mockImplementation(() => mockMessageHandle())
 
     render(
       <JobFormModal
@@ -776,7 +779,7 @@ describe("JobFormModal live summary", () => {
   it("blocks save when advanced audio voice map JSON is invalid", async () => {
     const messageErrorSpy = vi
       .spyOn(message, "error")
-      .mockImplementation(() => () => undefined)
+      .mockImplementation(() => mockMessageHandle())
 
     render(<JobFormModal open onClose={vi.fn()} onSuccess={vi.fn()} />)
 
@@ -813,7 +816,7 @@ describe("JobFormModal live summary", () => {
   it("blocks save when advanced audio background URI is invalid", async () => {
     const messageErrorSpy = vi
       .spyOn(message, "error")
-      .mockImplementation(() => () => undefined)
+      .mockImplementation(() => mockMessageHandle())
 
     render(<JobFormModal open onClose={vi.fn()} onSuccess={vi.fn()} />)
 
@@ -849,7 +852,7 @@ describe("JobFormModal live summary", () => {
   it("preserves advanced settings when switching back to basic mode", async () => {
     const messageInfoSpy = vi
       .spyOn(message, "info")
-      .mockImplementation(() => () => undefined)
+      .mockImplementation(() => mockMessageHandle())
 
     render(<JobFormModal open onClose={vi.fn()} onSuccess={vi.fn()} />)
 

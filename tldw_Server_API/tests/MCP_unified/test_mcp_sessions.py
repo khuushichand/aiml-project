@@ -26,3 +26,65 @@ async def test_mcp_session_binding_enforced():
     with pytest.raises(HTTPException) as exc:
         await server.handle_http_request(req, user_id="user-2", metadata={"session_id": "sess-1"})
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_mcp_websocket_session_context_binding_enforced():
+    server = MCPServer()
+
+    session = await server._get_or_create_session(
+        "ws-sess-1",
+        user_id="user-1",
+        workspace_id="workspace-one",
+        cwd="src/app",
+    )
+
+    assert session.workspace_id == "workspace-one"
+    assert session.cwd == "src/app"
+
+    rebound = await server._get_or_create_session(
+        "ws-sess-1",
+        user_id="user-1",
+        workspace_id="workspace-one",
+        cwd="src/app",
+    )
+    assert rebound is session
+
+    with pytest.raises(PermissionError):
+        await server._get_or_create_session(
+            "ws-sess-1",
+            user_id="user-1",
+            workspace_id="workspace-two",
+            cwd="src/app",
+        )
+
+    with pytest.raises(PermissionError):
+        await server._get_or_create_session(
+            "ws-sess-1",
+            user_id="user-1",
+            workspace_id="workspace-one",
+            cwd="src/other",
+        )
+
+
+@pytest.mark.asyncio
+async def test_mcp_websocket_session_can_bind_workspace_context_after_creation():
+    server = MCPServer()
+
+    session = await server._get_or_create_session("ws-sess-2", user_id="user-1")
+
+    assert session.workspace_id is None
+    assert session.cwd is None
+
+    rebound = await server._get_or_create_session(
+        "ws-sess-2",
+        user_id="user-1",
+        workspace_id="workspace-one",
+        cwd="src/app",
+    )
+
+    assert rebound.workspace_id == "workspace-one"
+    assert rebound.cwd == "src/app"
+
+    with pytest.raises(PermissionError):
+        await server._get_or_create_session("ws-sess-2", user_id="user-1")

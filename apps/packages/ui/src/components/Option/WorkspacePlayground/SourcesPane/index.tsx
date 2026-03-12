@@ -433,16 +433,20 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     messageApi.open({
       type: "warning",
       duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
-      content: t("playground:sources.batchRemoved", "{{count}} sources removed", {
-        count: removedSourceEntries.length
-      }),
-      btn: (
-        <Button
-          size="small"
-          onClick={() => undoWorkspaceAction(undoHandle.id)}
-        >
-          {t("common:undo", "Undo")}
-        </Button>
+      content: (
+        <div className="flex items-center gap-2">
+          <span>
+            {t("playground:sources.batchRemoved", "{{count}} sources removed", {
+              count: removedSourceEntries.length
+            })}
+          </span>
+          <Button
+            size="small"
+            onClick={() => undoWorkspaceAction(undoHandle.id)}
+          >
+            {t("common:undo", "Undo")}
+          </Button>
+        </div>
       )
     })
   }, [

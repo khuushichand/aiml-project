@@ -73,6 +73,7 @@ describe("ACP sessions store", () => {
       workspace_group_id: "group-1",
       scope_snapshot_id: "scope-1",
       forked_from: "root-session",
+      fork_lineage: ["root-session"],
       messages: [],
       cwd: "/workspace/repo",
     })

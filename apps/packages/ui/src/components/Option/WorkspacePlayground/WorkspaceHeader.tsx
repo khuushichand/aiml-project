@@ -169,7 +169,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     Record<WorkspaceRolloutControlKey, number>
   >({
     research_studio_provenance_v1: 100,
-    research_studio_status_guardrails_v1: 100
+    research_studio_status_guardrails_v1: 100,
+    watchlists_ia_reduced_nav_v1: 100
   })
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = React.useState("")
   const [workspaceCollectionDraft, setWorkspaceCollectionDraft] = React.useState("")
@@ -716,13 +717,20 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
               .research_studio_status_guardrails_v1
           ),
           100
+        ),
+        watchlists_ia_reduced_nav_v1: normalizeRolloutPercentage(
+          window.localStorage.getItem(
+            FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS.watchlists_ia_reduced_nav_v1
+          ),
+          100
         )
       })
     } catch {
       setRolloutSubjectId("")
       setRolloutPercentages({
         research_studio_provenance_v1: 100,
-        research_studio_status_guardrails_v1: 100
+        research_studio_status_guardrails_v1: 100,
+        watchlists_ia_reduced_nav_v1: 100
       })
     }
   }, [])
@@ -844,7 +852,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     const resetValue = 100
     setRolloutPercentages({
       research_studio_provenance_v1: resetValue,
-      research_studio_status_guardrails_v1: resetValue
+      research_studio_status_guardrails_v1: resetValue,
+      watchlists_ia_reduced_nav_v1: resetValue
     })
     if (typeof window === "undefined") return
 

@@ -430,7 +430,12 @@ describe('ViewMediaPage stage 13 error handling', () => {
     let stalePollCallback: (() => void) | null = null
     let applyStaleRefetch = false
     vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler) => {
-      stalePollCallback = typeof handler === 'function' ? handler : null
+      stalePollCallback =
+        typeof handler === 'function'
+          ? () => {
+              handler()
+            }
+          : null
       return 1 as unknown as ReturnType<typeof window.setInterval>
     })
 
@@ -512,7 +517,12 @@ describe('ViewMediaPage stage 13 error handling', () => {
     let stalePollCallback: (() => void) | null = null
     let applyStaleRefetch = false
     vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler) => {
-      stalePollCallback = typeof handler === 'function' ? handler : null
+      stalePollCallback =
+        typeof handler === 'function'
+          ? () => {
+              handler()
+            }
+          : null
       return 1 as unknown as ReturnType<typeof window.setInterval>
     })
 

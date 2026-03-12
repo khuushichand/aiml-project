@@ -89,7 +89,7 @@ export const isPersonaAssistantSelection = (
 }
 
 export const characterToAssistantSelection = <
-  T extends Record<string, unknown> = Character & Record<string, unknown>
+  T extends object = Character
 >(
   character: T | null | undefined
 ): AssistantSelection | null => {
@@ -101,7 +101,7 @@ export const characterToAssistantSelection = <
 }
 
 export const personaToAssistantSelection = <
-  T extends Record<string, unknown> = Record<string, unknown>
+  T extends object = Record<string, unknown>
 >(
   persona: T | null | undefined
 ): AssistantSelection | null => {

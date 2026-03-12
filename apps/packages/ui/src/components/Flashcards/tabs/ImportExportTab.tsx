@@ -185,7 +185,7 @@ const normalizeGeneratedCards = (value: unknown): GeneratedCardDraft[] => {
                 .map((tag) => tag.trim())
                 .filter((tag) => tag.length > 0)
             : []
-      return {
+      const draft: GeneratedCardDraft = {
         id: `generated-${index}-${front.slice(0, 16)}`,
         front,
         back,
@@ -194,6 +194,7 @@ const normalizeGeneratedCards = (value: unknown): GeneratedCardDraft[] => {
         notes: typeof item.notes === "string" ? item.notes : null,
         extra: typeof item.extra === "string" ? item.extra : null
       }
+      return draft
     })
     .filter((item): item is GeneratedCardDraft => item !== null)
 }
@@ -210,11 +211,12 @@ const normalizeImportErrors = (value: unknown): FlashcardsImportError[] => {
       }
       const line = typeof row.line === "number" ? row.line : null
       const index = typeof row.index === "number" ? row.index : null
-      return {
+      const importError: FlashcardsImportError = {
         error: rawError,
         line,
         index
       }
+      return importError
     })
     .filter((item): item is FlashcardsImportError => item !== null)
 }

@@ -8,7 +8,13 @@ from pydantic import BaseModel, Field
 ScopeType = Literal["global", "org", "team", "user"]
 ProfileMode = Literal["preset", "custom"]
 AssignmentTargetType = Literal["default", "group", "persona"]
-PolicyProvenanceSourceKind = Literal["profile", "assignment_inline", "assignment_override"]
+PolicyProvenanceSourceKind = Literal[
+    "profile",
+    "profile_path_scope_object",
+    "assignment_path_scope_object",
+    "assignment_inline",
+    "assignment_override",
+]
 PolicyProvenanceEffect = Literal["merged", "replaced"]
 ApprovalMode = Literal[
     "allow_silently",
@@ -21,6 +27,12 @@ ApprovalDecision = Literal["approved", "denied"]
 ApprovalDuration = Literal["once", "session", "conversation"]
 ToolRiskClass = Literal["low", "medium", "high", "unclassified"]
 ToolMetadataSource = Literal["explicit", "heuristic", "fallback"]
+PathScopeMode = Literal["none", "workspace_root", "cwd_descendants"]
+PathScopeEnforcement = Literal["approval_required_when_unenforceable"]
+WorkspaceSourceMode = Literal["inline", "named"]
+WorkspaceTrustSource = Literal["user_local", "shared_registry"]
+ExternalAuthTemplateTargetType = Literal["header", "env"]
+CredentialSlotPrivilegeClass = Literal["read", "write", "admin"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -61,6 +73,7 @@ class PermissionProfileCreateRequest(BaseModel):
     owner_scope_type: ScopeType = Field(default="global")
     owner_scope_id: int | None = None
     mode: ProfileMode = "custom"
+    path_scope_object_id: int | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
 
@@ -71,6 +84,7 @@ class PermissionProfileUpdateRequest(BaseModel):
     owner_scope_type: ScopeType | None = None
     owner_scope_id: int | None = None
     mode: ProfileMode | None = None
+    path_scope_object_id: int | None = None
     policy_document: dict[str, Any] | None = None
     is_active: bool | None = None
 
@@ -82,7 +96,40 @@ class PermissionProfileResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     mode: ProfileMode
+    path_scope_object_id: int | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class PathScopeObjectCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=512)
+    owner_scope_type: ScopeType = Field(default="global")
+    owner_scope_id: int | None = None
+    path_scope_document: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = True
+
+
+class PathScopeObjectUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=512)
+    owner_scope_type: ScopeType | None = None
+    owner_scope_id: int | None = None
+    path_scope_document: dict[str, Any] | None = None
+    is_active: bool | None = None
+
+
+class PathScopeObjectResponse(BaseModel):
+    id: int
+    name: str
+    description: str | None = None
+    owner_scope_type: ScopeType
+    owner_scope_id: int | None = None
+    path_scope_document: dict[str, Any] = Field(default_factory=dict)
     is_active: bool
     created_by: int | None = None
     updated_by: int | None = None
@@ -96,6 +143,9 @@ class PolicyAssignmentCreateRequest(BaseModel):
     owner_scope_type: ScopeType = Field(default="global")
     owner_scope_id: int | None = None
     profile_id: int | None = None
+    path_scope_object_id: int | None = None
+    workspace_source_mode: WorkspaceSourceMode | None = None
+    workspace_set_object_id: int | None = None
     inline_policy_document: dict[str, Any] = Field(default_factory=dict)
     approval_policy_id: int | None = None
     is_active: bool = True
@@ -107,6 +157,9 @@ class PolicyAssignmentUpdateRequest(BaseModel):
     owner_scope_type: ScopeType | None = None
     owner_scope_id: int | None = None
     profile_id: int | None = None
+    path_scope_object_id: int | None = None
+    workspace_source_mode: WorkspaceSourceMode | None = None
+    workspace_set_object_id: int | None = None
     inline_policy_document: dict[str, Any] | None = None
     approval_policy_id: int | None = None
     is_active: bool | None = None
@@ -119,6 +172,9 @@ class PolicyAssignmentResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     profile_id: int | None = None
+    path_scope_object_id: int | None = None
+    workspace_source_mode: WorkspaceSourceMode | None = None
+    workspace_set_object_id: int | None = None
     inline_policy_document: dict[str, Any] = Field(default_factory=dict)
     approval_policy_id: int | None = None
     is_active: bool
@@ -130,6 +186,133 @@ class PolicyAssignmentResponse(BaseModel):
     updated_by: int | None = None
     created_at: datetime | str | None = None
     updated_at: datetime | str | None = None
+
+
+class PolicyAssignmentWorkspaceCreateRequest(BaseModel):
+    workspace_id: str = Field(..., min_length=1, max_length=255)
+
+
+class PolicyAssignmentWorkspaceResponse(BaseModel):
+    assignment_id: int
+    workspace_id: str
+    created_by: int | None = None
+    created_at: datetime | str | None = None
+
+
+class WorkspaceSetObjectCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=512)
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    is_active: bool = True
+
+
+class WorkspaceSetObjectUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=512)
+    owner_scope_type: ScopeType | None = None
+    owner_scope_id: int | None = None
+    is_active: bool | None = None
+
+
+class WorkspaceSetObjectResponse(BaseModel):
+    id: int
+    name: str
+    description: str | None = None
+    owner_scope_type: ScopeType
+    owner_scope_id: int | None = None
+    is_active: bool
+    readiness_summary: WorkspaceSourceReadinessSummaryResponse | None = None
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class WorkspaceSetObjectMemberCreateRequest(BaseModel):
+    workspace_id: str = Field(..., min_length=1, max_length=255)
+
+
+class WorkspaceSetObjectMemberResponse(BaseModel):
+    workspace_set_object_id: int
+    workspace_id: str
+    created_by: int | None = None
+    created_at: datetime | str | None = None
+
+
+class SharedWorkspaceCreateRequest(BaseModel):
+    workspace_id: str = Field(..., min_length=1, max_length=255)
+    display_name: str = Field(..., min_length=1, max_length=200)
+    absolute_root: str = Field(..., min_length=1, max_length=1024)
+    owner_scope_type: ScopeType = Field(default="team")
+    owner_scope_id: int | None = None
+    is_active: bool = True
+
+
+class SharedWorkspaceUpdateRequest(BaseModel):
+    workspace_id: str | None = Field(default=None, min_length=1, max_length=255)
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    absolute_root: str | None = Field(default=None, min_length=1, max_length=1024)
+    owner_scope_type: ScopeType | None = None
+    owner_scope_id: int | None = None
+    is_active: bool | None = None
+
+
+class SharedWorkspaceResponse(BaseModel):
+    id: int
+    workspace_id: str
+    display_name: str
+    absolute_root: str
+    owner_scope_type: Literal["global", "org", "team"]
+    owner_scope_id: int | None = None
+    is_active: bool
+    readiness_summary: WorkspaceSourceReadinessSummaryResponse | None = None
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class WorkspaceSourceReadinessSummaryResponse(BaseModel):
+    is_multi_root_ready: bool = True
+    warning_codes: list[str] = Field(default_factory=list)
+    warning_message: str | None = None
+    conflicting_workspace_ids: list[str] = Field(default_factory=list)
+    conflicting_workspace_roots: list[str] = Field(default_factory=list)
+    unresolved_workspace_ids: list[str] = Field(default_factory=list)
+
+
+class GovernanceAuditNavigateTargetResponse(BaseModel):
+    tab: str
+    object_kind: str
+    object_id: str
+
+
+class GovernanceAuditFindingResponse(BaseModel):
+    finding_type: str
+    severity: str
+    scope_type: ScopeType
+    scope_id: int | None = None
+    object_kind: str
+    object_id: str
+    object_label: str
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    navigate_to: GovernanceAuditNavigateTargetResponse
+    related_object_kind: str | None = None
+    related_object_id: str | None = None
+    related_object_label: str | None = None
+
+
+class GovernanceAuditCountsResponse(BaseModel):
+    error: int = 0
+    warning: int = 0
+
+
+class GovernanceAuditFindingListResponse(BaseModel):
+    items: list[GovernanceAuditFindingResponse] = Field(default_factory=list)
+    total: int = 0
+    counts: GovernanceAuditCountsResponse = Field(default_factory=GovernanceAuditCountsResponse)
 
 
 class PolicyOverrideUpsertRequest(BaseModel):
@@ -215,6 +398,7 @@ class EffectivePolicySourceResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     profile_id: int | None = None
+    path_scope_object_id: int | None = None
 
 
 class EffectivePolicyProvenanceResponse(BaseModel):
@@ -235,6 +419,14 @@ class EffectivePolicyResponse(BaseModel):
     approval_policy_id: int | None = None
     approval_mode: ApprovalMode | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
+    selected_assignment_id: int | None = None
+    selected_workspace_source_mode: WorkspaceSourceMode | None = None
+    selected_workspace_set_object_id: int | None = None
+    selected_workspace_set_object_name: str | None = None
+    selected_workspace_trust_source: WorkspaceTrustSource | None = None
+    selected_workspace_scope_type: ScopeType | None = None
+    selected_workspace_scope_id: int | None = None
+    selected_assignment_workspace_ids: list[str] = Field(default_factory=list)
     sources: list[EffectivePolicySourceResponse] = Field(default_factory=list)
     provenance: list[EffectivePolicyProvenanceResponse] = Field(default_factory=list)
 
@@ -255,6 +447,7 @@ class ToolRegistryEntryResponse(BaseModel):
     uses_credentials: bool = False
     supports_arguments_preview: bool = False
     path_boundable: bool = False
+    path_argument_hints: list[str] = Field(default_factory=list)
     metadata_source: ToolMetadataSource
     metadata_warnings: list[str] = Field(default_factory=list)
 
@@ -291,6 +484,63 @@ class ExternalServerUpdateRequest(BaseModel):
     enabled: bool | None = None
 
 
+class ExternalServerCredentialSlotCreateRequest(BaseModel):
+    slot_name: str = Field(..., min_length=1, max_length=128)
+    display_name: str = Field(..., min_length=1, max_length=200)
+    secret_kind: str = Field(..., min_length=1, max_length=64)
+    privilege_class: CredentialSlotPrivilegeClass
+    is_required: bool = True
+
+
+class ExternalServerCredentialSlotUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    secret_kind: str | None = Field(default=None, min_length=1, max_length=64)
+    privilege_class: CredentialSlotPrivilegeClass | None = None
+    is_required: bool | None = None
+
+
+class ExternalServerCredentialSlotResponse(BaseModel):
+    server_id: str
+    slot_name: str
+    display_name: str
+    secret_kind: str
+    privilege_class: CredentialSlotPrivilegeClass
+    is_required: bool
+    secret_configured: bool = False
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class ExternalServerAuthTemplateMappingRequest(BaseModel):
+    slot_name: str = Field(..., min_length=1, max_length=128)
+    target_type: ExternalAuthTemplateTargetType
+    target_name: str = Field(..., min_length=1, max_length=256)
+    prefix: str = Field(default="", max_length=512)
+    suffix: str = Field(default="", max_length=512)
+    required: bool = True
+
+
+class ExternalServerAuthTemplateMappingResponse(BaseModel):
+    slot_name: str
+    target_type: ExternalAuthTemplateTargetType
+    target_name: str
+    prefix: str = ""
+    suffix: str = ""
+    required: bool = True
+
+
+class ExternalServerAuthTemplateUpdateRequest(BaseModel):
+    mode: Literal["template"] = "template"
+    mappings: list[ExternalServerAuthTemplateMappingRequest] = Field(default_factory=list)
+
+
+class ExternalServerAuthTemplateResponse(BaseModel):
+    mode: Literal["template"] = "template"
+    mappings: list[ExternalServerAuthTemplateMappingResponse] = Field(default_factory=list)
+
+
 class ExternalServerResponse(BaseModel):
     id: str
     name: str
@@ -301,6 +551,15 @@ class ExternalServerResponse(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     secret_configured: bool
     key_hint: str | None = None
+    server_source: str = "managed"
+    legacy_source_ref: str | None = None
+    superseded_by_server_id: str | None = None
+    binding_count: int = 0
+    runtime_executable: bool = True
+    auth_template_present: bool = False
+    auth_template_valid: bool = False
+    auth_template_blocked_reason: str | None = None
+    credential_slots: list[ExternalServerCredentialSlotResponse] = Field(default_factory=list)
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None
@@ -316,6 +575,64 @@ class ExternalSecretSetResponse(BaseModel):
     secret_configured: bool
     key_hint: str | None = None
     updated_at: datetime | str | None = None
+
+
+class ExternalServerSlotSecretSetResponse(BaseModel):
+    server_id: str
+    slot_name: str
+    secret_configured: bool
+    key_hint: str | None = None
+    updated_at: datetime | str | None = None
+
+
+class CredentialBindingResponse(BaseModel):
+    id: int
+    binding_target_type: str
+    binding_target_id: str
+    external_server_id: str
+    slot_name: str | None = None
+    credential_ref: str
+    binding_mode: str
+    usage_rules: dict[str, Any] = Field(default_factory=dict)
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class AssignmentCredentialBindingUpsertRequest(BaseModel):
+    binding_mode: str = Field(default="grant", pattern="^(grant|disable)$")
+
+
+class EffectiveExternalAccessSlotResponse(BaseModel):
+    slot_name: str
+    display_name: str | None = None
+    granted_by: str | None = None
+    disabled_by_assignment: bool = False
+    secret_available: bool = False
+    runtime_usable: bool = False
+    blocked_reason: str | None = None
+
+
+class EffectiveExternalAccessEntryResponse(BaseModel):
+    server_id: str
+    server_name: str | None = None
+    granted_by: str | None = None
+    disabled_by_assignment: bool = False
+    server_source: str = "managed"
+    superseded_by_server_id: str | None = None
+    secret_available: bool = False
+    runtime_executable: bool = False
+    blocked_reason: str | None = None
+    requested_slots: list[str] = Field(default_factory=list)
+    bound_slots: list[str] = Field(default_factory=list)
+    missing_bound_slots: list[str] = Field(default_factory=list)
+    missing_secret_slots: list[str] = Field(default_factory=list)
+    slots: list[EffectiveExternalAccessSlotResponse] = Field(default_factory=list)
+
+
+class EffectiveExternalAccessResponse(BaseModel):
+    servers: list[EffectiveExternalAccessEntryResponse] = Field(default_factory=list)
 
 
 class MCPHubDeleteResponse(BaseModel):

@@ -215,8 +215,18 @@ describe("ConversationTab generation override controls", () => {
     const onStateChange = vi.fn()
     const onVersionChange = vi.fn()
 
-    vi.mocked(tldwClient.updateChat).mockResolvedValueOnce({ version: 8 })
-    vi.mocked(tldwClient.updateChat).mockResolvedValueOnce({ version: 9 })
+    vi.mocked(tldwClient.updateChat).mockResolvedValueOnce({
+      id: "chat-1",
+      title: "Conversation",
+      created_at: "2026-03-12T00:00:00.000Z",
+      version: 8
+    })
+    vi.mocked(tldwClient.updateChat).mockResolvedValueOnce({
+      id: "chat-1",
+      title: "Conversation",
+      created_at: "2026-03-12T00:00:00.000Z",
+      version: 9
+    })
 
     renderConversationTab({ onStateChange, onVersionChange })
 

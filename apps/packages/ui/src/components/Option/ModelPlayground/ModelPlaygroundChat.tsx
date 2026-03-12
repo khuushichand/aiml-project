@@ -226,10 +226,10 @@ export const ModelPlaygroundChat: React.FC = () => {
               isProcessing={isProcessing}
               isSearchingInternet={false}
               sources={msg.sources}
-              onEditFormSubmit={(value, isSend) => {
-                editMessage(block.index, value, !msg.isBot, isSend)
+              onEditFormSubmit={(idx, value, isUser, isSend) => {
+                editMessage(idx, value, isUser, isSend)
               }}
-              onDeleteMessage={() => deleteMessage(block.index)}
+              onDeleteMessage={(idx) => deleteMessage(idx)}
               isTTSEnabled={ttsEnabled}
               generationInfo={msg?.generationInfo}
               toolCalls={msg?.toolCalls}
@@ -277,10 +277,10 @@ export const ModelPlaygroundChat: React.FC = () => {
               isProcessing={isProcessing}
               isSearchingInternet={false}
               sources={userMessage.sources}
-              onEditFormSubmit={(value, isSend) => {
-                editMessage(block.userIndex, value, !userMessage.isBot, isSend)
+              onEditFormSubmit={(idx, value, isUser, isSend) => {
+                editMessage(idx, value, isUser, isSend)
               }}
-              onDeleteMessage={() => deleteMessage(block.userIndex)}
+              onDeleteMessage={(idx) => deleteMessage(idx)}
               isTTSEnabled={ttsEnabled}
               generationInfo={userMessage?.generationInfo}
               toolCalls={userMessage?.toolCalls}
@@ -332,10 +332,10 @@ export const ModelPlaygroundChat: React.FC = () => {
                       isProcessing={isProcessing}
                       isSearchingInternet={false}
                       sources={replyMsg.sources}
-                      onEditFormSubmit={(value, isSend) => {
-                        editMessage(index, value, !replyMsg.isBot, isSend)
+                      onEditFormSubmit={(idx, value, isUser, isSend) => {
+                        editMessage(idx, value, isUser, isSend)
                       }}
-                      onDeleteMessage={() => deleteMessage(index)}
+                      onDeleteMessage={(idx) => deleteMessage(idx)}
                       isTTSEnabled={ttsEnabled}
                       generationInfo={replyMsg?.generationInfo}
                       toolCalls={replyMsg?.toolCalls}

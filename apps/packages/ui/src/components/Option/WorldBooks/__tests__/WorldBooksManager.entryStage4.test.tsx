@@ -210,7 +210,7 @@ describe("WorldBooksManager entry drawer stage-4 bulk add workflow", () => {
     let inFlight = 0
     let maxInFlight = 0
 
-    tldwClientMock.addWorldBookEntry.mockImplementation(async (_worldBookId: number, entry: any) => {
+    tldwClientMock.addWorldBookEntry.mockImplementation((async (_worldBookId: number, entry: any) => {
       inFlight += 1
       maxInFlight = Math.max(maxInFlight, inFlight)
       await new Promise((resolve) => setTimeout(resolve, 80))
@@ -219,7 +219,7 @@ describe("WorldBooksManager entry drawer stage-4 bulk add workflow", () => {
         throw new Error("Simulated failure")
       }
       return {}
-    })
+    }) as any)
 
     render(<WorldBooksManager />)
 

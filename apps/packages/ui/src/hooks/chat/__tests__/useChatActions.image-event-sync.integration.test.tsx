@@ -24,10 +24,11 @@ const {
 } = vi.hoisted(() => ({
   addChatMessageMock: vi.fn(),
   streamCharacterChatCompletionMock: vi.fn(),
-  persistCharacterCompletionMock: vi.fn(async () => ({ assistant_message_id: "assistant-server-1" })),
+  persistCharacterCompletionMock: vi.fn(async () => ({
+    assistant_message_id: "assistant-server-1",
+    version: 1
+  })),
   createChatMock: vi.fn(),
-  streamCharacterChatCompletionMock: vi.fn(),
-  persistCharacterCompletionMock: vi.fn(),
   normalChatModeMock: vi.fn(),
   updateMessageMediaMock: vi.fn(async (_messageId: string, _payload: any) => null),
   chatSettingsState: {

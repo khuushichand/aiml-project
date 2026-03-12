@@ -4065,6 +4065,10 @@ async def character_chat_completion(
             summary="List user's chat sessions", tags=["Chat Sessions"])
 async def list_chat_sessions(
     character_id: Optional[int] = Query(None, description="Filter by character ID"),
+    character_scope: Literal["all", "character", "non_character"] = Query(
+        "all",
+        description="Filter chats by whether they are character-backed or not",
+    ),
     limit: int = Query(50, ge=1, le=200, description="Number of items to return"),
     offset: int = Query(0, ge=0, description="Number of items to skip"),
     include_deleted: bool = Query(False, description="Include soft-deleted chats"),
@@ -4075,6 +4079,10 @@ async def list_chat_sessions(
     ),
     scope_type: Optional[Literal["global", "workspace"]] = Query(None, description="Scope filter: 'global' or 'workspace'"),
     workspace_id: Optional[str] = Query(None, description="Workspace ID (required when scope_type='workspace')"),
+    include_message_counts: bool = Query(
+        True,
+        description="Include message counts for each returned chat.",
+    ),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -4094,7 +4102,13 @@ async def list_chat_sessions(
     try:
         user_id_str = str(current_user.id)
         include_deleted_effective = include_deleted or deleted_only
-        if character_id:
+        if character_id is not None and character_scope == "non_character":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="character_scope=non_character cannot be combined with character_id",
+            )
+
+        if character_id is not None:
             # Get conversations for specific character scoped to current user
             conversations = db.get_conversations_for_user_and_character(
                 user_id_str,
@@ -4133,12 +4147,16 @@ async def list_chat_sessions(
                 deleted_only=deleted_only,
                 scope_type=scope_type,
                 workspace_id=workspace_id,
+                character_scope=character_scope,
             )
             try:
                 total_count = db.count_conversations_for_user(
                     user_id_str,
                     include_deleted=include_deleted_effective,
                     deleted_only=deleted_only,
+                    character_scope=character_scope,
+                    scope_type=scope_type,
+                    workspace_id=workspace_id,
                 )
                 if scope_type:
                     total_count = len(conversations)
@@ -4153,17 +4171,34 @@ async def list_chat_sessions(
 
         # Note: pagination was already applied at DB level, no need to slice again
 
-        # Add message counts using efficient counter
-        for conv in user_conversations:
-            try:
-                # Deleted chats don't need message counts for listing performance.
+        if include_message_counts:
+            message_counts: dict[str, int] = {}
+            countable_conversation_ids = [
+                str(conv["id"])
+                for conv in user_conversations
+                if conv.get("id") and not conv.get("deleted")
+            ]
+            if countable_conversation_ids:
+                try:
+                    message_counts = db.count_messages_for_conversations(countable_conversation_ids)
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                    message_counts = {}
+
+            for conv in user_conversations:
                 if conv.get("deleted"):
-                    conv['message_count'] = 0
-                else:
-                    conv['message_count'] = db.count_messages_for_conversation(conv['id'])
-            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-                messages = db.get_messages_for_conversation(conv['id'], limit=1000)
-                conv['message_count'] = len(messages) if messages else 0
+                    conv["message_count"] = 0
+                    continue
+
+                conv_id = conv.get("id")
+                if conv_id in message_counts:
+                    conv["message_count"] = message_counts.get(conv_id, 0)
+                    continue
+
+                messages = db.get_messages_for_conversation(conv["id"], limit=1000)
+                conv["message_count"] = len(messages) if messages else 0
+        else:
+            for conv in user_conversations:
+                conv["message_count"] = None
 
         chats: list[ChatSessionResponse] = []
         for conv in user_conversations:
@@ -4185,6 +4220,8 @@ async def list_chat_sessions(
             offset=offset
         )
 
+    except HTTPException:
+        raise
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error listing chat sessions: {e}", exc_info=True)
         raise HTTPException(

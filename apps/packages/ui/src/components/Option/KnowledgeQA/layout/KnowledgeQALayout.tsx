@@ -264,18 +264,9 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   includeMediaIds={Array.isArray(settings.include_media_ids) ? settings.include_media_ids : []}
                   onIncludeMediaIdsChange={(ids) => updateSetting("include_media_ids", ids)}
                   includeNoteIds={
-                    Array.isArray(settings.include_note_ids)
-                      ? settings.include_note_ids.map((value) =>
-                          typeof value === "string" ? value : String(value)
-                        )
-                      : []
+                    Array.isArray(settings.include_note_ids) ? settings.include_note_ids : []
                   }
-                  onIncludeNoteIdsChange={(ids) =>
-                    updateSetting(
-                      "include_note_ids",
-                      ids as unknown as typeof settings.include_note_ids
-                    )
-                  }
+                  onIncludeNoteIdsChange={(ids) => updateSetting("include_note_ids", ids)}
                   webEnabled={settings.enable_web_fallback}
                   onToggleWeb={() =>
                     updateSetting("enable_web_fallback", !settings.enable_web_fallback)

@@ -50,7 +50,7 @@ sudo apt-get install -y \
 brew install ffmpeg espeak git
 
 # For MLX support (Apple Silicon)
-pip install mlx parakeet-mlx
+pip install mlx parakeet-mlx mlx-audio
 ```
 
 #### Windows
@@ -90,7 +90,7 @@ pip install transformers accelerate
 pip install faster-whisper openai-whisper
 
 # For Apple Silicon (MLX)
-pip install mlx parakeet-mlx  # For Parakeet transcription on M1/M2/M3
+pip install mlx parakeet-mlx mlx-audio  # Parakeet transcription + Qwen3-TTS on M1/M2/M3
 ```
 
 ## Configuration
@@ -236,6 +236,15 @@ providers:
     min_reference_duration: 3.0
     max_reference_duration: 30.0
 
+  qwen3_tts:
+    enabled: true
+    runtime: auto              # auto | upstream | mlx | remote
+    model: auto
+    model_path: null
+    mlx_model: mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16
+    device: mps
+    tokenizer_model: Qwen/Qwen3-TTS-Tokenizer-12Hz
+
 > Keep the `voice_mappings.generic.*.index_tts` entries set to `clone_required` so upstream services remember to include voice reference audio with every request.
 
 # Fallback configuration
@@ -264,6 +273,75 @@ performance:
   stream_chunk_size: 4096
   cache_enabled: false
   cache_ttl: 3600
+```
+
+### Qwen3-TTS Runtime Notes
+
+- `runtime=auto` prefers `mlx` on Apple Silicon and `upstream` elsewhere.
+- `runtime=mlx` supports preset-speaker synthesis in v1 and rejects uploaded `custom:<voice_id>` voices, `Base`, and `VoiceDesign`.
+- `runtime=mlx` accepts `stream=true`, but streams buffered fallback chunks after local generation completes.
+- `runtime=remote` reuses the standard provider `base_url` and `api_key` fields.
+- `runtime=remote` advertises only conservative capabilities unless `capability_override` is set.
+- Hosted Qwen backends receive Qwen-specific fields in `extra_body`, including `ref_audio_b64`, `ref_text`, `voice_clone_prompt`, `x_vector_only_mode`, and `description`.
+
+Remote example:
+
+```yaml
+providers:
+  qwen3_tts:
+    enabled: true
+    runtime: remote
+    base_url: http://127.0.0.1:8001/v1/audio/speech
+    api_key: ${QWEN_REMOTE_API_KEY}
+    capability_override:
+      supports_streaming: true
+      supports_voice_cloning: true
+      supports_emotion_control: false
+      supported_modes: [custom_voice_preset, voice_clone]
+      supported_voices: [Cherry, Ethan]
+      supports_uploaded_custom_voices: false
+```
+
+### Apple Silicon Smoke Check
+
+1. Install dependencies:
+   ```bash
+   source .venv/bin/activate
+   pip install mlx mlx-audio
+   ```
+2. Configure the provider:
+   ```yaml
+   providers:
+     qwen3_tts:
+       enabled: true
+       runtime: "mlx"
+       model: "auto"
+       device: "mps"
+   ```
+3. Start the API:
+   ```bash
+   source .venv/bin/activate
+   python -m uvicorn tldw_Server_API.app.main:app --reload
+   ```
+4. Send a preset-speaker request:
+   ```bash
+   curl -X POST http://127.0.0.1:8000/api/v1/audio/speech \
+     -H "Content-Type: application/json" \
+     -d '{"model":"qwen3_tts","input":"hello from Apple Silicon","voice":"Vivian","response_format":"wav","stream":false}'
+   ```
+5. Verify behavior:
+   - preset-speaker requests return audio
+   - `stream=true` returns buffered chunks instead of failing validation
+   - `custom:<voice_id>` requests fail validation
+   - `Base` and `VoiceDesign` requests fail validation on `runtime=mlx`
+   - `/api/v1/audio/health` includes runtime metadata such as `qwen3_tts:mlx`
+6. Run the gated MLX integration smoke test:
+   ```bash
+   source .venv/bin/activate
+   TLDW_RUN_QWEN3_MLX_INTEGRATION=1 \
+   QWEN3_MLX_MODEL=mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16 \
+   python -m pytest tldw_Server_API/tests/TTS_NEW/integration/test_qwen3_mlx_runtime_integration.py -v
+   ```
 
 ## Manual GPU Smoke Test (IndexTTS2)
 

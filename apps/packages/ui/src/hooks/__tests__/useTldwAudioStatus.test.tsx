@@ -94,6 +94,21 @@ describe("useTldwAudioStatus", () => {
     )
   })
 
+  it("does not probe audio health until the surface is explicitly enabled", async () => {
+    const { result } = renderHook(() => useTldwAudioStatus({ enabled: false }), {
+      wrapper: buildWrapper()
+    })
+
+    await waitFor(() => {
+      expect(result.current.sttHealthLoading).toBe(false)
+      expect(result.current.ttsHealthLoading).toBe(false)
+    })
+
+    expect(result.current.sttHealthState).toBe("unknown")
+    expect(result.current.ttsHealthState).toBe("unknown")
+    expect(state.apiSend).not.toHaveBeenCalled()
+  })
+
   it("treats missing STT health endpoint as unknown instead of unhealthy", async () => {
     state.capabilities = {
       hasAudio: true,

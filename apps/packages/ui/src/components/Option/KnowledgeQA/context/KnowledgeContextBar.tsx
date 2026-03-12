@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { RagPresetName } from "@/services/rag/unified-rag"
+import type { RagPresetName, RagSource } from "@/services/rag/unified-rag"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { cn } from "@/libs/utils"
 import {
@@ -17,12 +17,12 @@ import {
 type KnowledgeContextBarProps = {
   preset: RagPresetName
   onPresetChange: (preset: RagPresetName) => void
-  sources: string[]
-  onSourcesChange: (sources: string[]) => void
+  sources: RagSource[]
+  onSourcesChange: (sources: RagSource[]) => void
   includeMediaIds: number[]
   onIncludeMediaIdsChange: (ids: number[]) => void
-  includeNoteIds: string[]
-  onIncludeNoteIdsChange: (ids: string[]) => void
+  includeNoteIds: number[]
+  onIncludeNoteIdsChange: (ids: number[]) => void
   webEnabled: boolean
   onToggleWeb: () => void
   contextChangedSinceLastRun: boolean
@@ -75,7 +75,7 @@ const PRESET_DETAILS: Record<PresetKey, PresetDetails> = {
   },
 }
 
-const SOURCE_LABELS: Record<string, string> = {
+const SOURCE_LABELS: Record<RagSource, string> = {
   media_db: "Docs & Media",
   notes: "Notes",
   characters: "Characters",
@@ -93,7 +93,7 @@ const SOURCE_OPTIONS = [
 
 const MAX_VISIBLE_GRANULAR_RESULTS = 80
 
-function summarizeSources(sources: string[]): string {
+function summarizeSources(sources: RagSource[]): string {
   if (!Array.isArray(sources) || sources.length === 0) {
     return "None selected"
   }
@@ -106,7 +106,7 @@ function summarizeSources(sources: string[]): string {
   return `${sources.length} selected`
 }
 
-function summarizeSpecificSources(mediaIds: number[], noteIds: string[]): string {
+function summarizeSpecificSources(mediaIds: number[], noteIds: number[]): string {
   if (mediaIds.length === 0 && noteIds.length === 0) {
     return "All items"
   }
@@ -188,16 +188,16 @@ function normalizeMediaOptions(payload: unknown): GranularSourceOption<number>[]
   return normalized.sort((left, right) => left.label.localeCompare(right.label))
 }
 
-function normalizeNoteOptions(payload: unknown): GranularSourceOption<string>[] {
-  const seen = new Set<string>()
-  const normalized: GranularSourceOption<string>[] = []
+function normalizeNoteOptions(payload: unknown): GranularSourceOption<number>[] {
+  const seen = new Set<number>()
+  const normalized: GranularSourceOption<number>[] = []
 
   for (const item of extractResponseItems(payload)) {
     const record = asRecord(item)
     if (!record) continue
 
-    const id = asString(record.id ?? record.note_id)
-    if (!id || seen.has(id)) continue
+    const id = asNumber(record.id ?? record.note_id)
+    if (id === null || id <= 0 || seen.has(id)) continue
 
     const contentPreview = asString(record.content)?.slice(0, 80)
     const label = asString(record.title) ?? asString(record.name) ?? contentPreview ?? `Note ${id}`
@@ -233,7 +233,7 @@ export function KnowledgeContextBar({
   const [granularError, setGranularError] = useState<string | null>(null)
   const [granularLoaded, setGranularLoaded] = useState(false)
   const [mediaOptions, setMediaOptions] = useState<GranularSourceOption<number>[]>([])
-  const [noteOptions, setNoteOptions] = useState<GranularSourceOption<string>[]>([])
+  const [noteOptions, setNoteOptions] = useState<GranularSourceOption<number>[]>([])
 
   const sourceMenuRef = useRef<HTMLDivElement | null>(null)
   const granularMenuRef = useRef<HTMLDivElement | null>(null)
@@ -243,9 +243,11 @@ export function KnowledgeContextBar({
       Array.from(
         new Set(
           sources
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean)
+            .filter(
+              (value): value is RagSource =>
+                typeof value === "string" &&
+                SOURCE_OPTIONS.some((option) => option.key === value)
+            )
         )
       ),
     [sources]
@@ -269,9 +271,9 @@ export function KnowledgeContextBar({
       Array.from(
         new Set(
           includeNoteIds
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean)
+            .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+            .map((value) => Math.round(value))
+            .filter((value) => value > 0)
         )
       ),
     [includeNoteIds]
@@ -356,7 +358,7 @@ export function KnowledgeContextBar({
     void loadGranularOptions()
   }, [granularMenuOpen, granularLoaded, granularLoading, loadGranularOptions])
 
-  const toggleSource = (sourceKey: string) => {
+  const toggleSource = (sourceKey: RagSource) => {
     const exists = normalizedSources.includes(sourceKey)
     const nextSources = exists
       ? normalizedSources.filter((value) => value !== sourceKey)
@@ -371,10 +373,10 @@ export function KnowledgeContextBar({
     onIncludeMediaIdsChange(next)
   }
 
-  const toggleNoteId = (id: string) => {
+  const toggleNoteId = (id: number) => {
     const next = selectedNoteSet.has(id)
       ? normalizedNoteIds.filter((value) => value !== id)
-      : [...normalizedNoteIds, id].sort((left, right) => left.localeCompare(right))
+      : [...normalizedNoteIds, id].sort((left, right) => left - right)
     onIncludeNoteIdsChange(next)
   }
 
@@ -591,7 +593,7 @@ export function KnowledgeContextBar({
                             const selected =
                               granularTab === "media"
                                 ? selectedMediaSet.has(option.id as number)
-                                : selectedNoteSet.has(option.id as string)
+                                : selectedNoteSet.has(option.id as number)
 
                             return (
                               <li key={`${granularTab}-${option.id}`}>
@@ -608,7 +610,7 @@ export function KnowledgeContextBar({
                                       if (granularTab === "media") {
                                         toggleMediaId(option.id as number)
                                       } else {
-                                        toggleNoteId(option.id as string)
+                                        toggleNoteId(option.id as number)
                                       }
                                     }}
                                     className="mt-0.5 rounded border-border"

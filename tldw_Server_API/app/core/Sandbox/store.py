@@ -170,6 +170,9 @@ class SandboxStore:
     def get_session_owner(self, session_id: str) -> str | None:
         raise NotImplementedError
 
+    def list_workspace_paths_for_user_workspace(self, *, user_id: str, workspace_id: str) -> list[str]:
+        raise NotImplementedError
+
     def delete_session(self, session_id: str) -> bool:
         raise NotImplementedError
 
@@ -589,6 +592,29 @@ class InMemoryStore(SandboxStore):
                 return None
             owner = row.get("user_id")
             return str(owner) if owner is not None else None
+
+    def list_workspace_paths_for_user_workspace(self, *, user_id: str, workspace_id: str) -> list[str]:
+        owner_key = self._user_key(user_id)
+        workspace_key = str(workspace_id or "").strip()
+        if not owner_key or not workspace_key:
+            return []
+        now = datetime.now(timezone.utc)
+        paths: list[str] = []
+        with self._lock:
+            for row in self._sessions.values():
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("user_id") or "") != owner_key:
+                    continue
+                if str(row.get("workspace_id") or "") != workspace_key:
+                    continue
+                expires_at = _parse_optional_iso_datetime(row.get("expires_at"))
+                if expires_at is not None and expires_at <= now:
+                    continue
+                workspace_path = str(row.get("workspace_path") or "").strip()
+                if workspace_path:
+                    paths.append(workspace_path)
+        return paths
 
     def delete_session(self, session_id: str) -> bool:
         with self._lock:
@@ -1594,6 +1620,28 @@ class SQLiteStore(SandboxStore):
             return None
         owner = row.get("user_id")
         return str(owner) if owner is not None else None
+
+    def list_workspace_paths_for_user_workspace(self, *, user_id: str, workspace_id: str) -> list[str]:
+        owner_key = self._user_key(user_id)
+        workspace_key = str(workspace_id or "").strip()
+        if not owner_key or not workspace_key:
+            return []
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._conn() as con:
+            cur = con.execute(
+                (
+                    "SELECT workspace_path FROM sandbox_sessions "
+                    "WHERE user_id=? AND workspace_id=? AND workspace_path IS NOT NULL "
+                    "AND TRIM(workspace_path) != '' "
+                    "AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)"
+                ),
+                (owner_key, workspace_key, now_iso),
+            )
+            return [
+                str(row["workspace_path"]).strip()
+                for row in cur.fetchall()
+                if str(row["workspace_path"] or "").strip()
+            ]
 
     def delete_session(self, session_id: str) -> bool:
         with self._lock, self._conn() as con:
@@ -2719,6 +2767,29 @@ class PostgresStore(SandboxStore):
             return None
         owner = row.get("user_id")
         return str(owner) if owner is not None else None
+
+    def list_workspace_paths_for_user_workspace(self, *, user_id: str, workspace_id: str) -> list[str]:
+        owner_key = self._user_key(user_id)
+        workspace_key = str(workspace_id or "").strip()
+        if not owner_key or not workspace_key:
+            return []
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._conn() as con, con.cursor() as cur:
+            cur.execute(
+                (
+                    "SELECT workspace_path FROM sandbox_sessions "
+                    "WHERE user_id=%s AND workspace_id=%s AND workspace_path IS NOT NULL "
+                    "AND BTRIM(workspace_path) <> '' "
+                    "AND (expires_at IS NULL OR expires_at = '' OR expires_at::timestamptz > %s::timestamptz)"
+                ),
+                (owner_key, workspace_key, now_iso),
+            )
+            rows = cur.fetchall() or []
+            return [
+                str(row.get("workspace_path")).strip()
+                for row in rows
+                if str((row or {}).get("workspace_path") or "").strip()
+            ]
 
     def delete_session(self, session_id: str) -> bool:
         with self._lock, self._conn() as con, con.cursor() as cur:

@@ -23,27 +23,39 @@ interface SourceFormModalProps {
   existingTags: string[]
 }
 
+const toText = (value: unknown, fallback = ""): string =>
+  typeof value === "string" && value.trim().length > 0 ? value : fallback
+
 const resolveTestSourceErrorHint = (
   rawMessage: string,
-  t: (key: string, defaultValue?: string) => string
+  t: (...args: any[]) => unknown
 ): string => {
   const normalized = rawMessage.toLowerCase()
 
   if (normalized.includes("forum_sources_disabled")) {
-    return t(
-      "watchlists:sources.form.testSourceErrorHintForumDisabled",
+    return toText(
+      t(
+        "watchlists:sources.form.testSourceErrorHintForumDisabled",
+        "Forum feeds are not enabled yet. Switch type to RSS Feed or Website."
+      ),
       "Forum feeds are not enabled yet. Switch type to RSS Feed or Website."
     )
   }
   if (normalized.includes("invalid_youtube_rss_url")) {
-    return t(
-      "watchlists:sources.form.testSourceErrorHintYoutube",
+    return toText(
+      t(
+        "watchlists:sources.form.testSourceErrorHintYoutube",
+        "Use a canonical YouTube feed URL (channel_id or playlist_id) and retry."
+      ),
       "Use a canonical YouTube feed URL (channel_id or playlist_id) and retry."
     )
   }
   if (normalized.includes("source_not_found")) {
-    return t(
-      "watchlists:sources.form.testSourceErrorHintNotFound",
+    return toText(
+      t(
+        "watchlists:sources.form.testSourceErrorHintNotFound",
+        "This saved feed no longer exists. Refresh feeds and open it again."
+      ),
       "This saved feed no longer exists. Refresh feeds and open it again."
     )
   }
@@ -52,13 +64,19 @@ const resolveTestSourceErrorHint = (
     normalized.includes("network") ||
     normalized.includes("timeout")
   ) {
-    return t(
-      "watchlists:sources.form.testSourceErrorHintNetwork",
+    return toText(
+      t(
+        "watchlists:sources.form.testSourceErrorHintNetwork",
+        "Check server connectivity, then run Test Feed again."
+      ),
       "Check server connectivity, then run Test Feed again."
     )
   }
-  return t(
-    "watchlists:sources.form.testSourceErrorHintGeneric",
+  return toText(
+    t(
+      "watchlists:sources.form.testSourceErrorHintGeneric",
+      "Review URL and feed type, then retry. If this persists, check server logs."
+    ),
     "Review URL and feed type, then retry. If this persists, check server logs."
   )
 }

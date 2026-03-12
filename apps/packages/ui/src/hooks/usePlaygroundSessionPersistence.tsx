@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { usePlaygroundSessionStore } from "@/store/playground-session"
 import { useStoreMessageOption } from "@/store/option"
 import { shallow } from "zustand/shallow"
@@ -10,6 +10,9 @@ import {
   getPromptById
 } from "@/db/dexie/helpers"
 import { useStoreChatModelSettings } from "@/store/model"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { buildChatSurfaceScopeKeyFromConfig } from "@/services/chat-surface-scope"
+import { useConnectionState } from "@/hooks/useConnectionState"
 
 const DEBOUNCE_MS = 1000
 
@@ -23,12 +26,15 @@ const DEBOUNCE_MS = 1000
 export function usePlaygroundSessionPersistence() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isRestoringRef = useRef(false)
+  const { serverUrl, lastConfigUpdatedAt } = useConnectionState()
 
   // Session store
   const sessionStore = usePlaygroundSessionStore()
   const saveSession = usePlaygroundSessionStore((s) => s.saveSession)
   const clearSession = usePlaygroundSessionStore((s) => s.clearSession)
   const isSessionValid = usePlaygroundSessionStore((s) => s.isSessionValid)
+  const [currentScopeKey, setCurrentScopeKey] = useState<string | null>(null)
+  const [sessionScopeReady, setSessionScopeReady] = useState(false)
 
   // Main message option store
   const {
@@ -96,6 +102,29 @@ export function usePlaygroundSessionPersistence() {
 
   const { setSystemPrompt } = useStoreChatModelSettings()
 
+  const resolveCurrentScopeKey = useCallback(async (): Promise<string> => {
+    const config = await tldwClient.getConfig().catch(() => null)
+    return buildChatSurfaceScopeKeyFromConfig(config)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setSessionScopeReady(false)
+
+    const syncScope = async () => {
+      const nextScopeKey = await resolveCurrentScopeKey()
+      if (cancelled) return
+      setCurrentScopeKey(nextScopeKey)
+      setSessionScopeReady(true)
+    }
+
+    void syncScope()
+
+    return () => {
+      cancelled = true
+    }
+  }, [lastConfigUpdatedAt, resolveCurrentScopeKey, serverUrl])
+
   const buildPersistableSessionSnapshot = useCallback(() => {
     // Don't save while a restore is replaying into the stores.
     if (isRestoringRef.current) return null
@@ -154,9 +183,14 @@ export function usePlaygroundSessionPersistence() {
 
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = null
-      saveSession(snapshot)
+      void resolveCurrentScopeKey().then((scopeKey) => {
+        saveSession({
+          ...snapshot,
+          scopeKey
+        })
+      })
     }, DEBOUNCE_MS)
-  }, [buildPersistableSessionSnapshot, saveSession])
+  }, [buildPersistableSessionSnapshot, resolveCurrentScopeKey, saveSession])
 
   const flushPendingSessionSave = useCallback(() => {
     if (saveTimerRef.current) {
@@ -165,8 +199,13 @@ export function usePlaygroundSessionPersistence() {
     }
     const snapshot = latestSessionSnapshotRef.current
     if (!snapshot) return
-    saveSession(snapshot)
-  }, [saveSession])
+    void resolveCurrentScopeKey().then((scopeKey) => {
+      saveSession({
+        ...snapshot,
+        scopeKey
+      })
+    })
+  }, [resolveCurrentScopeKey, saveSession])
 
   const flushPendingSessionSaveRef = useRef(flushPendingSessionSave)
 
@@ -194,7 +233,8 @@ export function usePlaygroundSessionPersistence() {
 
   // Restore session from persisted state
   const restoreSession = useCallback(async (): Promise<boolean> => {
-    if (!isSessionValid()) {
+    const scopeKey = await resolveCurrentScopeKey()
+    if (!isSessionValid(scopeKey)) {
       clearSession()
       return false
     }
@@ -268,6 +308,7 @@ export function usePlaygroundSessionPersistence() {
     isSessionValid,
     sessionStore,
     clearSession,
+    resolveCurrentScopeKey,
     setHistoryId,
     setServerChatId,
     setHistory,
@@ -298,8 +339,16 @@ export function usePlaygroundSessionPersistence() {
   return {
     restoreSession,
     clearPersistedSession,
-    hasPersistedSession: isSessionValid(),
-    persistedHistoryId: sessionStore.historyId ?? null,
-    persistedServerChatId: sessionStore.serverChatId ?? null
+    sessionScopeReady,
+    hasPersistedSession:
+      sessionScopeReady && isSessionValid(currentScopeKey),
+    persistedHistoryId:
+      sessionScopeReady && isSessionValid(currentScopeKey)
+        ? sessionStore.historyId ?? null
+        : null,
+    persistedServerChatId:
+      sessionScopeReady && isSessionValid(currentScopeKey)
+        ? sessionStore.serverChatId ?? null
+        : null
   }
 }

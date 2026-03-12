@@ -319,7 +319,12 @@ describe("DictionariesManager validation stage-1 discoverability", () => {
           message: "Pattern conflicts with another rule."
         }
       ],
-      warnings: []
+      warnings: [],
+      entry_stats: {
+        total: 1,
+        literal: 1,
+        regex: 0
+      }
     })
 
     render(<DictionariesManager />)
@@ -342,7 +347,6 @@ describe("DictionariesManager validation stage-1 discoverability", () => {
   it("renders a diff preview for changed text after running preview", async () => {
     const user = userEvent.setup()
     tldwClientMock.processDictionary.mockResolvedValueOnce({
-      original_text: "Dr. Smith has high BP",
       processed_text: "Doctor Smith has high blood pressure",
       replacements: 2,
       iterations: 1,

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ConnectionPhase } from "@/types/connection"
 import { ChatPane } from "../ChatPane"
@@ -181,8 +182,8 @@ vi.mock("@/components/Common/FeatureEmptyState", () => ({
     title,
     examples
   }: {
-    title: string
-    examples?: unknown[]
+    title: ReactNode
+    examples?: ReactNode[]
   }) => (
     <div>
       <div>{title}</div>

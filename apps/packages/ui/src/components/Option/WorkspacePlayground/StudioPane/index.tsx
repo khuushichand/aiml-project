@@ -269,6 +269,13 @@ type QuizQuestionDraft = {
   explanation?: string
 }
 
+type ParsedQuizQuestion = {
+  question: string
+  options: string[]
+  answer: string
+  explanation: string
+}
+
 type MarkdownTableData = {
   headers: string[]
   rows: string[][]
@@ -3914,7 +3921,7 @@ function getArtifactQuizQuestions(artifact: GeneratedArtifact): QuizQuestionDraf
   const questionsFromData = isRecord(artifact.data) &&
     Array.isArray(artifact.data.questions)
       ? artifact.data.questions
-          .map((entry) => {
+          .map((entry): ParsedQuizQuestion | null => {
             if (!isRecord(entry)) return null
             const question = String(
               entry.question || entry.question_text || ""
@@ -3931,7 +3938,7 @@ function getArtifactQuizQuestions(artifact: GeneratedArtifact): QuizQuestionDraf
             if (!question) return null
             return { question, options, answer, explanation }
           })
-          .filter((entry): entry is QuizQuestionDraft => entry !== null)
+          .filter((entry): entry is ParsedQuizQuestion => entry !== null)
       : []
 
   if (questionsFromData.length > 0) {

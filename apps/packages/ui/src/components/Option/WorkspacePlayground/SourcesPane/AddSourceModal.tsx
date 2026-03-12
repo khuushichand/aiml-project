@@ -423,7 +423,7 @@ const UploadTab: React.FC<{
     showUploadList: false,
     beforeUpload: (file) => {
       const validation = validateSourceUploadFile(file, uploadSizeLimitBytes)
-      if (!validation.valid) {
+      if (validation.valid === false) {
         const extension = file.name.split(".").pop()?.toLowerCase()
         const friendlyValidationError =
           validation.code === "file_too_large"

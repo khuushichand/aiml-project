@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ConnectionPhase } from "@/types/connection"
+import type { Message as StoreMessage } from "@/store/option/types"
 import { ChatPane } from "../ChatPane"
 import { WORKSPACE_SOURCE_DRAG_TYPE } from "../drag-source"
 
@@ -76,14 +77,7 @@ const deriveSelectedMediaIds = () =>
     .filter((mediaId): mediaId is number => Number.isFinite(mediaId))
 
 const messageOptionState = {
-  messages: [] as Array<{
-    id: string
-    isBot: boolean
-    name: string
-    message: string
-    sources: any[]
-    generationInfo?: any
-  }>,
+  messages: [] as StoreMessage[],
   setMessages: mockSetMessages,
   history: [] as Array<{ role: "user" | "assistant" | "system"; content: string }>,
   setHistory: mockSetHistory,
@@ -182,14 +176,18 @@ vi.mock("@/components/Common/Playground/Message", () => ({
     sources,
     onSwipePrev,
     onSwipeNext,
-    onNewBranch
+    onNewBranch,
+    currentMessageIndex,
+    messageId
   }: {
     message: string
     onSourceClick?: (source: any) => void
     sources?: any[]
-    onSwipePrev?: () => void
-    onSwipeNext?: () => void
-    onNewBranch?: () => void
+    onSwipePrev?: (messageId: string) => void
+    onSwipeNext?: (messageId: string) => void
+    onNewBranch?: (messageIndex: number) => void
+    currentMessageIndex?: number
+    messageId?: string
   }) => (
     <div data-testid="playground-message">
       <div>{message}</div>
@@ -205,7 +203,9 @@ vi.mock("@/components/Common/Playground/Message", () => ({
       {onSwipePrev && (
         <button
           type="button"
-          onClick={onSwipePrev}
+          onClick={() => {
+            if (messageId) onSwipePrev(messageId)
+          }}
           aria-label="Variant previous"
         >
           Variant previous
@@ -214,7 +214,9 @@ vi.mock("@/components/Common/Playground/Message", () => ({
       {onSwipeNext && (
         <button
           type="button"
-          onClick={onSwipeNext}
+          onClick={() => {
+            if (messageId) onSwipeNext(messageId)
+          }}
           aria-label="Variant next"
         >
           Variant next
@@ -223,7 +225,11 @@ vi.mock("@/components/Common/Playground/Message", () => ({
       {onNewBranch && (
         <button
           type="button"
-          onClick={onNewBranch}
+          onClick={() => {
+            if (typeof currentMessageIndex === "number") {
+              onNewBranch(currentMessageIndex)
+            }
+          }}
           aria-label="Create branch"
         >
           Create branch

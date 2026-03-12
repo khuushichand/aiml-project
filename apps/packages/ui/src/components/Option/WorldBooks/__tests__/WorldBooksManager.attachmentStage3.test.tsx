@@ -166,7 +166,7 @@ describe("WorldBooksManager attachment stage-3 metadata controls", () => {
     }
 
     tldwClientMock.attachWorldBookToCharacter.mockImplementation(
-      async (characterId: number, worldBookId: number, options?: { enabled?: boolean; priority?: number }) => {
+      (async (characterId: number, worldBookId: number, options?: { enabled?: boolean; priority?: number }) => {
         const row = currentAttachmentsByBook[worldBookId] || []
         currentAttachmentsByBook[worldBookId] = row.map((item) =>
           item.id === characterId
@@ -181,9 +181,9 @@ describe("WorldBooksManager attachment stage-3 metadata controls", () => {
                     ? options.priority
                     : item.attachment_priority
               }
-            : item
+                : item
         )
-      }
+      }) as any
     )
 
     useQueryClientMock.mockReturnValue({

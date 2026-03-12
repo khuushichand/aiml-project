@@ -147,7 +147,7 @@ const createSocraticDialogueDraft = (): ChatWorkflowTemplateDraft => ({
 })
 
 const cloneTemplateToDraft = (
-  template: Pick<ChatWorkflowTemplate, "title" | "description" | "version" | "steps">
+  template: Pick<ChatWorkflowTemplateDraft, "title" | "description" | "version" | "steps">
 ): ChatWorkflowTemplateDraft => ({
   title: template.title,
   description: template.description || "",

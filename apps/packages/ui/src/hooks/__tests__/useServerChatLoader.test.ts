@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { Message } from "@/store/option"
 import type { ServerChatMessage } from "@/services/tldw/TldwApiClient"
 import {
+  applyAssistantPresentationToMessages,
   fetchAllServerChatMessages,
   mapServerChatMessagesToPlaygroundMessages,
+  reportDeferredAssistantPresentationError,
   resolveServerChatAssistantIdentity,
   shouldCommitServerChatLoadResult,
   shouldPreserveLocalMessagesForServerLoad,
@@ -349,5 +351,77 @@ describe("mapServerChatMessagesToPlaygroundMessages", () => {
       "flux-test-backend"
     )
     expect(mapped[0].generationInfo?.image_generation?.sync?.status).toBe("synced")
+  })
+})
+
+describe("applyAssistantPresentationToMessages", () => {
+  it("updates placeholder assistant labels after deferred enrichment", () => {
+    const result = applyAssistantPresentationToMessages({
+      messages: [
+        createMessage({
+          isBot: true,
+          role: "assistant",
+          name: "Assistant",
+          modelName: "Assistant",
+          modelImage: undefined
+        }),
+        createMessage({
+          isBot: true,
+          role: "assistant",
+          name: "Narrator",
+          modelName: "Narrator",
+          modelImage: "existing-image"
+        }),
+        createMessage({
+          isBot: false,
+          role: "user",
+          name: "You"
+        })
+      ],
+      assistantName: "Archivist",
+      assistantAvatarUrl: "avatar.png"
+    })
+
+    expect(result[0]).toMatchObject({
+      name: "Archivist",
+      modelName: "Archivist",
+      modelImage: "avatar.png"
+    })
+    expect(result[1]).toMatchObject({
+      name: "Narrator",
+      modelName: "Narrator",
+      modelImage: "existing-image"
+    })
+    expect(result[2]).toMatchObject({
+      name: "You"
+    })
+  })
+})
+
+describe("reportDeferredAssistantPresentationError", () => {
+  it("logs deferred assistant hydration failures with contextual metadata", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const failure = new Error("character lookup failed")
+
+    reportDeferredAssistantPresentationError({
+      stage: "character-profile",
+      assistantKind: "character",
+      assistantId: "42",
+      characterId: 42,
+      error: failure
+    })
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[useServerChatLoader] Deferred assistant presentation failed",
+      expect.objectContaining({
+        stage: "character-profile",
+        assistantKind: "character",
+        assistantId: "42",
+        characterId: 42,
+        error: failure
+      })
+    )
+
+    warnSpy.mockRestore()
   })
 })

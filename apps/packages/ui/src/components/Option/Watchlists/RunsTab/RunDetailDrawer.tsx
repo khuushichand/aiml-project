@@ -558,7 +558,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     }
 
     return t("watchlists:runs.detail.duration.hours", "{{count}} hours", {
-      count: (durationMs / 3600000).toFixed(1)
+      count: Number((durationMs / 3600000).toFixed(1))
     })
   }
 

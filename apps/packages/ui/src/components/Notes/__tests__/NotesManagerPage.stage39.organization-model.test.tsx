@@ -322,7 +322,8 @@ describe("NotesManagerPage stage 39 organization model", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
     const applyFiltersButton = await screen.findByRole("button", { name: "Apply filters" })
-    const pickerDialog = applyFiltersButton.closest(".ant-modal") || document.body
+    const pickerDialog =
+      (applyFiltersButton.closest(".ant-modal") as HTMLElement | null) ?? document.body
     fireEvent.click(within(pickerDialog).getByText(/^research\b/i))
     fireEvent.click(screen.getByRole("button", { name: "Apply filters" }))
     await waitFor(() => {

@@ -301,11 +301,11 @@ export const DocumentChat: React.FC = () => {
                     onRegenerate={regenerateLastMessage}
                     isProcessing={isProcessing}
                     sources={message.sources}
-                    onEditFormSubmit={(value, isSend) => {
-                      editMessage(index, value, !message.isBot, isSend)
+                    onEditFormSubmit={(idx, value, isUser, isSend) => {
+                      editMessage(idx, value, isUser, isSend)
                     }}
-                    onDeleteMessage={() => {
-                      deleteMessage(index)
+                    onDeleteMessage={(idx) => {
+                      deleteMessage(idx)
                     }}
                     isTTSEnabled={ttsEnabled}
                     generationInfo={message?.generationInfo}
