@@ -1,7 +1,7 @@
 # MCP Hub Audit Export And Correlation Summary Implementation Plan
 
 Date: 2026-03-11
-Status: Ready
+Status: Implemented
 
 Linked design:
 - `Docs/Plans/2026-03-11-mcp-hub-audit-export-correlation-design.md`
@@ -14,11 +14,11 @@ view only.
 
 ## Task List
 
-- Task 1: Not Started
-- Task 2: Not Started
-- Task 3: Not Started
-- Task 4: Not Started
-- Task 5: Not Started
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
 
 ## Task 1: Add Red Tests For Export And Correlation Behavior
 
@@ -36,7 +36,7 @@ UI tests first.
 **Tests**:
 - `apps/packages/ui/src/components/Option/MCPHub/__tests__/GovernanceAuditTab.test.tsx`
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 2: Add Pure Audit Helper Utilities
 
@@ -55,7 +55,7 @@ payload/report generation.
 - `apps/packages/ui/src/components/Option/MCPHub/policyHelpers.ts`
 - or a small adjacent audit helper file if cleaner
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 3: Extend GovernanceAuditTab With Summary Strip And Export Actions
 
@@ -72,7 +72,7 @@ payload/report generation.
 **Files**:
 - `apps/packages/ui/src/components/Option/MCPHub/GovernanceAuditTab.tsx`
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 4: Run Focused And Broader UI Verification
 
@@ -87,7 +87,7 @@ stays green.
 - `bunx vitest run src/components/Option/MCPHub/__tests__/GovernanceAuditTab.test.tsx`
 - `bunx vitest run src/components/Option/MCPHub/__tests__`
 
-**Status**: Not Started
+**Status**: Complete
 
 ## Task 5: Mark Docs Implemented And Commit
 
@@ -102,4 +102,4 @@ stays green.
 - `Docs/Plans/2026-03-11-mcp-hub-audit-export-correlation-design.md`
 - `Docs/Plans/2026-03-11-mcp-hub-audit-export-correlation-implementation-plan.md`
 
-**Status**: Not Started
+**Status**: Complete

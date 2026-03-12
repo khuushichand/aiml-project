@@ -4,9 +4,23 @@ import { Alert, Button, Card, Empty, List, Space, Tag, Typography } from "antd"
 import {
   listGovernanceAuditFindings,
   type McpHubGovernanceAuditFinding,
-  type McpHubGovernanceAuditFindingType,
   type McpHubGovernanceAuditNavigateTarget
 } from "@/services/tldw/mcp-hub"
+import { copyToClipboard } from "@/utils/clipboard"
+import { downloadBlob } from "@/utils/download-blob"
+import {
+  buildAuditCounts,
+  buildAuditJsonExport,
+  buildAuditMarkdownReport,
+  dedupeAuditValues,
+  FINDING_TYPE_LABELS,
+  FINDING_TYPE_ORDER,
+  groupAuditFindings,
+  OBJECT_KIND_LABELS,
+  summarizeRelatedObjects,
+  type GovernanceAuditFilterState,
+  type GovernanceAuditRelatedObjectFocus
+} from "./governanceAuditHelpers"
 
 type GovernanceAuditTabProps = {
   onOpen?: (target: McpHubGovernanceAuditNavigateTarget) => void
@@ -15,44 +29,23 @@ type GovernanceAuditTabProps = {
 const severityColor = (severity: "error" | "warning"): "red" | "gold" =>
   severity === "error" ? "red" : "gold"
 
-const FINDING_TYPE_ORDER: McpHubGovernanceAuditFindingType[] = [
-  "assignment_validation_blocker",
-  "workspace_source_readiness_warning",
-  "shared_workspace_overlap_warning",
-  "external_server_configuration_issue",
-  "external_binding_issue"
-]
-
-const FINDING_TYPE_LABELS: Record<McpHubGovernanceAuditFindingType, string> = {
-  assignment_validation_blocker: "Assignment blockers",
-  workspace_source_readiness_warning: "Multi-root readiness",
-  shared_workspace_overlap_warning: "Shared workspace overlap",
-  external_server_configuration_issue: "External config",
-  external_binding_issue: "External binding issues"
-}
-
-const OBJECT_KIND_LABELS: Record<string, string> = {
-  policy_assignment: "Policy assignments",
-  workspace_set_object: "Workspace sets",
-  shared_workspace: "Shared workspaces",
-  external_server: "External servers",
-  permission_profile: "Permission profiles"
-}
-
-const _dedupe = (values: string[]) =>
-  Array.from(new Set(values.filter((value) => value.trim().length > 0))).sort((a, b) =>
-    a.localeCompare(b)
-  )
-
 export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
   const [allItems, setAllItems] = useState<McpHubGovernanceAuditFinding[]>([])
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [severityFilter, setSeverityFilter] = useState<"all" | "error" | "warning">("all")
-  const [findingTypeFilter, setFindingTypeFilter] = useState<"all" | McpHubGovernanceAuditFindingType>("all")
+  const [findingTypeFilter, setFindingTypeFilter] = useState<
+    "all" | McpHubGovernanceAuditFinding["finding_type"]
+  >("all")
   const [objectKindFilter, setObjectKindFilter] = useState<"all" | string>("all")
   const [scopeTypeFilter, setScopeTypeFilter] = useState<"all" | string>("all")
   const [hasRelatedObjectOnly, setHasRelatedObjectOnly] = useState(false)
+  const [relatedObjectFocus, setRelatedObjectFocus] =
+    useState<GovernanceAuditRelatedObjectFocus | null>(null)
+  const [actionStatus, setActionStatus] = useState<{
+    type: "success" | "error"
+    message: string
+  } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -82,19 +75,30 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
   }, [])
 
   const availableFindingTypes = useMemo(
-    () => _dedupe(allItems.map((item) => String(item.finding_type || ""))),
+    () => dedupeAuditValues(allItems.map((item) => String(item.finding_type || ""))),
     [allItems]
   )
   const availableObjectKinds = useMemo(
-    () => _dedupe(allItems.map((item) => String(item.object_kind || ""))),
+    () => dedupeAuditValues(allItems.map((item) => String(item.object_kind || ""))),
     [allItems]
   )
   const availableScopeTypes = useMemo(
-    () => _dedupe(allItems.map((item) => String(item.scope_type || ""))),
+    () => dedupeAuditValues(allItems.map((item) => String(item.scope_type || ""))),
     [allItems]
   )
 
-  const filteredItems = useMemo(() => {
+  const filterState = useMemo<GovernanceAuditFilterState>(
+    () => ({
+      severity: severityFilter,
+      finding_type: findingTypeFilter,
+      object_kind: objectKindFilter,
+      scope_type: scopeTypeFilter,
+      has_related_object_only: hasRelatedObjectOnly
+    }),
+    [severityFilter, findingTypeFilter, objectKindFilter, scopeTypeFilter, hasRelatedObjectOnly]
+  )
+
+  const baseFilteredItems = useMemo(() => {
     return allItems.filter((item) => {
       if (severityFilter !== "all" && item.severity !== severityFilter) {
         return false
@@ -125,36 +129,77 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
     hasRelatedObjectOnly
   ])
 
-  const filteredCounts = useMemo(
-    () => ({
-      error: filteredItems.filter((item) => item.severity === "error").length,
-      warning: filteredItems.filter((item) => item.severity === "warning").length
-    }),
-    [filteredItems]
+  const relatedSummaries = useMemo(
+    () => summarizeRelatedObjects(baseFilteredItems),
+    [baseFilteredItems]
   )
 
-  const groupedItems = useMemo(() => {
-    const groups = new Map<McpHubGovernanceAuditFindingType, McpHubGovernanceAuditFinding[]>()
-    for (const findingType of FINDING_TYPE_ORDER) {
-      groups.set(findingType, [])
-    }
-    for (const item of filteredItems) {
-      const bucket = groups.get(item.finding_type)
-      if (bucket) {
-        bucket.push(item)
-      }
-    }
-    for (const [findingType, items] of groups.entries()) {
-      items.sort((left, right) => {
-        if (left.severity !== right.severity) {
-          return left.severity === "error" ? -1 : 1
-        }
-        return String(left.object_label || "").localeCompare(String(right.object_label || ""))
+  const focusedItems = useMemo(() => {
+    if (!relatedObjectFocus) return baseFilteredItems
+    return baseFilteredItems.filter(
+      (item) =>
+        String(item.related_object_kind || "").trim() === relatedObjectFocus.kind &&
+        String(item.related_object_id || "").trim() === relatedObjectFocus.id
+    )
+  }, [baseFilteredItems, relatedObjectFocus])
+
+  const filteredCounts = useMemo(() => buildAuditCounts(focusedItems), [focusedItems])
+  const groupedItems = useMemo(() => groupAuditFindings(focusedItems), [focusedItems])
+
+  const _buildMarkdownReport = () =>
+    buildAuditMarkdownReport({
+      generated_at: new Date().toISOString(),
+      items: focusedItems,
+      filters: filterState,
+      counts: filteredCounts,
+      related_object_focus: relatedObjectFocus,
+      related_summaries: relatedSummaries
+    })
+
+  const _copyAuditReport = async () => {
+    try {
+      await copyToClipboard({
+        text: _buildMarkdownReport(),
+        formatted: false
       })
-      groups.set(findingType, items)
+      setActionStatus({ type: "success", message: "Audit report copied." })
+    } catch {
+      setActionStatus({ type: "error", message: "Failed to copy audit report." })
     }
-    return groups
-  }, [filteredItems])
+  }
+
+  const _downloadAuditExport = async (format: "json" | "markdown") => {
+    try {
+      if (format === "json") {
+        const payload = buildAuditJsonExport({
+          generated_at: new Date().toISOString(),
+          items: focusedItems,
+          filters: filterState,
+          counts: filteredCounts,
+          related_object_focus: relatedObjectFocus
+        })
+        downloadBlob(
+          new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
+          "mcp-hub-audit.json"
+        )
+        setActionStatus({ type: "success", message: "JSON export downloaded." })
+        return
+      }
+      downloadBlob(
+        new Blob([_buildMarkdownReport()], { type: "text/markdown" }),
+        "mcp-hub-audit.md"
+      )
+      setActionStatus({ type: "success", message: "Markdown export downloaded." })
+    } catch {
+      setActionStatus({
+        type: "error",
+        message:
+          format === "json"
+            ? "Failed to download JSON export."
+            : "Failed to download Markdown export."
+      })
+    }
+  }
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
@@ -164,12 +209,32 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
         boundary.
       </Typography.Text>
       {errorMessage ? <Alert type="error" title={errorMessage} showIcon /> : null}
+      {actionStatus ? (
+        <Alert
+          type={actionStatus.type}
+          title={actionStatus.message}
+          showIcon
+          closable
+          onClose={() => setActionStatus(null)}
+        />
+      ) : null}
 
-      <Card>
+      <Card loading={loading}>
         <Space wrap align="start">
-          <Tag>{`${filteredItems.length} findings`}</Tag>
+          <Tag>{`${filteredCounts.total} findings`}</Tag>
           <Tag color="red">{`${filteredCounts.error} errors`}</Tag>
           <Tag color="gold">{`${filteredCounts.warning} warnings`}</Tag>
+        </Space>
+        <Space wrap style={{ marginTop: 12 }}>
+          <Button size="small" onClick={() => void _copyAuditReport()}>
+            Copy report
+          </Button>
+          <Button size="small" onClick={() => void _downloadAuditExport("json")}>
+            Download JSON
+          </Button>
+          <Button size="small" onClick={() => void _downloadAuditExport("markdown")}>
+            Download Markdown
+          </Button>
         </Space>
         <Space wrap style={{ marginTop: 12 }}>
           <Typography.Text type="secondary">Severity</Typography.Text>
@@ -279,25 +344,73 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
         </Space>
       </Card>
 
-      {filteredItems.length === 0 ? (
+      {relatedSummaries.length > 0 ? (
+        <Card>
+          <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+            <Typography.Text type="secondary">
+              Top related objects in current filtered findings
+            </Typography.Text>
+            <Space wrap>
+              {relatedSummaries.map((summary) => {
+                const isActive =
+                  relatedObjectFocus?.kind === summary.kind &&
+                  relatedObjectFocus?.id === summary.id
+                const label = `${summary.label} · ${summary.kind} · ${summary.count} finding${
+                  summary.count === 1 ? "" : "s"
+                }`
+                return (
+                  <Button
+                    key={summary.key}
+                    size="small"
+                    type={isActive ? "primary" : "default"}
+                    onClick={() =>
+                      setRelatedObjectFocus({
+                        kind: summary.kind,
+                        id: summary.id,
+                        label: summary.label
+                      })
+                    }
+                    aria-label={label}
+                  >
+                    {label}
+                  </Button>
+                )
+              })}
+            </Space>
+            {relatedObjectFocus ? (
+              <Space wrap>
+                <Tag>{`Related object: ${relatedObjectFocus.label}`}</Tag>
+                <Button
+                  size="small"
+                  onClick={() => setRelatedObjectFocus(null)}
+                  aria-label="Clear related object focus"
+                >
+                  Clear related object focus
+                </Button>
+              </Space>
+            ) : null}
+          </Space>
+        </Card>
+      ) : null}
+
+      {focusedItems.length === 0 ? (
         <Card>
           <Empty description="No governance findings" />
         </Card>
       ) : null}
 
-      {FINDING_TYPE_ORDER.map((findingType) => {
-        const groupItems = groupedItems.get(findingType) || []
-        if (groupItems.length === 0) {
+      {groupedItems.map(({ finding_type: findingType, items }) => {
+        if (items.length === 0) {
           return null
         }
         return (
           <Card
             key={findingType}
-            title={`${FINDING_TYPE_LABELS[findingType]} (${groupItems.length})`}
+            title={`${FINDING_TYPE_LABELS[findingType]} (${items.length})`}
             data-testid={`audit-group-${findingType}`}
           >
             <List
-              dataSource={groupItems}
+              dataSource={items}
               renderItem={(finding) => (
                 <List.Item
                   actions={[
