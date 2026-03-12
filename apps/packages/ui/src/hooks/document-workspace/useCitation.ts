@@ -1,10 +1,11 @@
 import { useCallback, useMemo } from "react"
 import { useDocumentMetadata } from "./useDocumentMetadata"
+import { referenceToBibTeX } from "@/components/DocumentWorkspace/utils/bibtexExport"
 
 /**
  * Citation format options
  */
-export type CitationFormat = "mla" | "apa" | "chicago" | "harvard" | "ieee"
+export type CitationFormat = "mla" | "apa" | "chicago" | "harvard" | "ieee" | "bibtex"
 
 /**
  * Citation format display information
@@ -32,6 +33,10 @@ export const CITATION_FORMAT_INFO: Record<
   ieee: {
     label: "IEEE",
     description: "Institute of Electrical and Electronics Engineers"
+  },
+  bibtex: {
+    label: "BibTeX",
+    description: "BibTeX format for LaTeX documents"
   }
 }
 
@@ -296,6 +301,38 @@ export function formatIEEE(metadata: CitationMetadata): string {
 }
 
 /**
+ * Format citation in BibTeX style.
+ * Delegates to the shared referenceToBibTeX utility.
+ */
+export function formatBibTeX(metadata: CitationMetadata): string {
+  const date = formatDate(metadata.date)
+  const year = date.year !== "n.d." ? date.year : undefined
+
+  // Build base entry via shared utility
+  const base = referenceToBibTeX(
+    {
+      title: metadata.title,
+      authors: metadata.authors,
+      year,
+      venue: metadata.publisher,
+      doi: metadata.doi,
+      url: metadata.url,
+    },
+    0
+  )
+
+  // Append extra fields the shared utility doesn't handle (volume, issue)
+  if (!metadata.volume && !metadata.issue) return base
+
+  const closingBrace = base.lastIndexOf("}")
+  const extra: string[] = []
+  if (metadata.volume) extra.push(`  volume = {${metadata.volume}},`)
+  if (metadata.issue) extra.push(`  number = {${metadata.issue}},`)
+
+  return base.slice(0, closingBrace) + extra.join("\n") + "\n}"
+}
+
+/**
  * Generate citation in the specified format
  */
 export function generateCitation(
@@ -313,6 +350,8 @@ export function generateCitation(
       return formatHarvard(metadata)
     case "ieee":
       return formatIEEE(metadata)
+    case "bibtex":
+      return formatBibTeX(metadata)
   }
 }
 
@@ -360,7 +399,8 @@ export function useCitation(documentId: number | null) {
         apa: placeholder,
         chicago: placeholder,
         harvard: placeholder,
-        ieee: placeholder
+        ieee: placeholder,
+        bibtex: placeholder
       }
     }
 
@@ -369,7 +409,8 @@ export function useCitation(documentId: number | null) {
       apa: formatAPA(citationMetadata),
       chicago: formatChicago(citationMetadata),
       harvard: formatHarvard(citationMetadata),
-      ieee: formatIEEE(citationMetadata)
+      ieee: formatIEEE(citationMetadata),
+      bibtex: formatBibTeX(citationMetadata)
     }
   }, [citationMetadata])
 

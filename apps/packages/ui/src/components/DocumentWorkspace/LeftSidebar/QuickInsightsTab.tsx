@@ -2,14 +2,8 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 import { Button, Empty, Skeleton, Collapse, Segmented } from "antd"
 import {
-  Target,
-  HelpCircle,
   Lightbulb,
-  Wrench,
-  Star,
   AlertTriangle,
-  ArrowRight,
-  FileText,
   RefreshCw,
   Sparkles,
 } from "lucide-react"
@@ -18,11 +12,11 @@ import {
   useDocumentInsights,
   useGenerateInsightsMutation,
   INSIGHT_CATEGORY_INFO,
-  type InsightCategory,
   type InsightItem,
 } from "@/hooks/document-workspace"
 import { useConnectionStore } from "@/store/connection"
 import type { InsightDetailLevel } from "../types"
+import { CATEGORY_ICONS } from "../config"
 
 /**
  * Detail level configuration - maps to max_content_length parameter
@@ -43,20 +37,6 @@ const DETAIL_LEVEL_CONFIG: Record<InsightDetailLevel, { label: string; maxLength
     maxLength: 5000,
     description: "Comprehensive analysis"
   }
-}
-
-/**
- * Icon mapping for each insight category.
- */
-const CATEGORY_ICONS: Record<InsightCategory, React.ReactNode> = {
-  research_gap: <Target className="h-4 w-4" />,
-  research_question: <HelpCircle className="h-4 w-4" />,
-  motivation: <Lightbulb className="h-4 w-4" />,
-  methods: <Wrench className="h-4 w-4" />,
-  key_findings: <Star className="h-4 w-4" />,
-  limitations: <AlertTriangle className="h-4 w-4" />,
-  future_work: <ArrowRight className="h-4 w-4" />,
-  summary: <FileText className="h-4 w-4" />,
 }
 
 /**
