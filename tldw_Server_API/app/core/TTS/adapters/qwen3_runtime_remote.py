@@ -87,6 +87,18 @@ class RemoteQwenRuntime:
         name = exc.__class__.__name__.lower()
         return "timeout" in name
 
+    def _parse_retry_after(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
     async def _handle_http_status_error(self, exc: Exception) -> None:
         response = getattr(exc, "response", None)
         status_code = getattr(response, "status_code", None)
@@ -104,10 +116,12 @@ class RemoteQwenRuntime:
         if status_code == 401:
             raise auth_error(self.provider_key, "Invalid API key")
         if status_code == 429:
-            retry_after = headers.get("retry-after") if isinstance(headers, dict) else None
+            retry_after = None
+            if hasattr(headers, "get"):
+                retry_after = self._parse_retry_after(headers.get("retry-after"))
             raise rate_limit_error(
                 self.provider_key,
-                retry_after=int(retry_after) if retry_after else None,
+                retry_after=retry_after,
             )
         if status_code == 400:
             raise TTSProviderError(
@@ -120,6 +134,24 @@ class RemoteQwenRuntime:
             provider=self.provider_key,
             error_code=str(status_code),
         )
+
+    async def _raise_remote_error(self, exc: Exception) -> None:
+        if self._is_http_status_error(exc):
+            await self._handle_http_status_error(exc)
+        if isinstance(exc, (CoreNetworkError, RetryExhaustedError)) or self._is_httpx_exception(exc):
+            if self._is_timeout_error(exc):
+                raise timeout_error(
+                    self.provider_key,
+                    timeout_seconds=int(self.config.get("timeout") or 60),
+                ) from exc
+            raise network_error(self.provider_key, exc) from exc
+        if not isinstance(exc, TTSError):
+            raise TTSProviderError(
+                "Unexpected error in remote Qwen runtime",
+                provider=self.provider_key,
+                details={"error": str(exc), "error_type": type(exc).__name__},
+            ) from exc
+        raise exc
 
     async def initialize(self) -> bool:
         if not self.base_url:
@@ -222,19 +254,22 @@ class RemoteQwenRuntime:
         headers: dict[str, str],
         payload: dict[str, Any],
     ) -> AsyncGenerator[bytes, None]:
-        response = await apost(
-            url=self.base_url,
-            client=self.client,
-            headers=headers,
-            json=payload,
-        )
-        response.raise_for_status()
+        response = None
         try:
+            response = await apost(
+                url=self.base_url,
+                client=self.client,
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
             async for chunk in response.aiter_bytes(chunk_size=1024):
                 if chunk:
                     yield chunk
+        except Exception as exc:
+            await self._raise_remote_error(exc)
         finally:
-            if hasattr(response, "aclose"):
+            if response is not None and hasattr(response, "aclose"):
                 await response.aclose()  # type: ignore[func-returns-value]
 
     async def _generate_complete(self, headers: dict[str, str], payload: dict[str, Any]) -> bytes:
@@ -272,16 +307,4 @@ class RemoteQwenRuntime:
                 metadata={"runtime": self.runtime_name},
             )
         except Exception as exc:
-            if self._is_http_status_error(exc):
-                await self._handle_http_status_error(exc)
-            if isinstance(exc, (CoreNetworkError, RetryExhaustedError)) or self._is_httpx_exception(exc):
-                if self._is_timeout_error(exc):
-                    raise timeout_error(self.provider_key, timeout_seconds=int(self.config.get("timeout") or 60)) from exc
-                raise network_error(self.provider_key, exc) from exc
-            if not isinstance(exc, TTSError):
-                raise TTSProviderError(
-                    "Unexpected error in remote Qwen runtime",
-                    provider=self.provider_key,
-                    details={"error": str(exc), "error_type": type(exc).__name__},
-                ) from exc
-            raise
+            await self._raise_remote_error(exc)
