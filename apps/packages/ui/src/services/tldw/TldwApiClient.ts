@@ -7219,6 +7219,99 @@ export class TldwApiClient {
     ])
     return await bgRequest<any>({ path: base, method: "GET" })
   }
+
+  // --- Workspace sub-resource methods ---
+
+  async getWorkspace(workspaceId: string): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}`, method: "GET" })
+  }
+
+  async getWorkspaceSources(workspaceId: string): Promise<any[]> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}/sources`, method: "GET" })
+  }
+
+  async addWorkspaceSource(workspaceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/sources`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async updateWorkspaceSource(workspaceId: string, sourceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/sources/${sourceId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async deleteWorkspaceSource(workspaceId: string, sourceId: string): Promise<void> {
+    await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/sources/${sourceId}`,
+      method: "DELETE",
+    })
+  }
+
+  async getWorkspaceArtifacts(workspaceId: string): Promise<any[]> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}/artifacts`, method: "GET" })
+  }
+
+  async addWorkspaceArtifact(workspaceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/artifacts`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async updateWorkspaceArtifact(workspaceId: string, artifactId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/artifacts/${artifactId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async deleteWorkspaceArtifact(workspaceId: string, artifactId: string): Promise<void> {
+    await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/artifacts/${artifactId}`,
+      method: "DELETE",
+    })
+  }
+
+  async getWorkspaceNotes(workspaceId: string): Promise<any[]> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}/notes`, method: "GET" })
+  }
+
+  async addWorkspaceNote(workspaceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/notes`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async updateWorkspaceNote(workspaceId: string, noteId: number, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/notes/${noteId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async deleteWorkspaceNote(workspaceId: string, noteId: number): Promise<void> {
+    await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/notes/${noteId}`,
+      method: "DELETE",
+    })
+  }
 }
 
 // Singleton instance
