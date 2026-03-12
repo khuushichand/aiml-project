@@ -168,3 +168,45 @@ def test_search_conversations_page_returns_total_separately_from_page_rows(tmp_p
     assert total == 3
     assert len(rows) == 1
     assert rows[0]["id"] == "conv-1"
+
+
+def test_search_conversations_page_deleted_filters(tmp_path) -> None:
+    db = CharactersRAGDB(db_path=str(tmp_path / "conversation_search_page.sqlite"), client_id="user-1")
+
+    live_id = _create_persona_conversation(db, "live-conv", title="Quota cleanup live")
+    deleted_id = _create_persona_conversation(db, "deleted-conv", title="Quota cleanup deleted")
+
+    deleted_row = db.get_conversation_by_id(deleted_id)
+    assert deleted_row is not None
+    assert db.soft_delete_conversation(deleted_id, expected_version=deleted_row["version"]) is True
+
+    live_rows, live_total, _ = db.search_conversations_page(
+        "Quota",
+        client_id="user-1",
+        order_by="recency",
+        limit=10,
+        offset=0,
+    )
+    include_deleted_rows, include_deleted_total, _ = db.search_conversations_page(
+        "Quota",
+        client_id="user-1",
+        order_by="recency",
+        limit=10,
+        offset=0,
+        include_deleted=True,
+    )
+    deleted_only_rows, deleted_only_total, _ = db.search_conversations_page(
+        "Quota",
+        client_id="user-1",
+        order_by="recency",
+        limit=10,
+        offset=0,
+        deleted_only=True,
+    )
+
+    assert [row["id"] for row in live_rows] == [live_id]
+    assert live_total == 1
+    assert {row["id"] for row in include_deleted_rows} == {live_id, deleted_id}
+    assert include_deleted_total == 2
+    assert [row["id"] for row in deleted_only_rows] == [deleted_id]
+    assert deleted_only_total == 1

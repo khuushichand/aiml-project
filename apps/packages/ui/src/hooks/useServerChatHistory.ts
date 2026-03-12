@@ -224,17 +224,12 @@ export const useServerChatHistory = (
   const canUsePagedOverview =
     mode === "overview" && supportsServerPagedOverview(filterMode)
   const canUseConversationSearch =
-    mode === "search" &&
-    normalizedQuery.length > 0 &&
-    !includeDeleted &&
-    !deletedOnly
+    mode === "search" && normalizedQuery.length > 0
   const queryStrategy = canUseConversationSearch
     ? "search-server"
-    : mode === "search"
-      ? "search-client"
-      : canUsePagedOverview
-        ? "overview-page"
-        : "overview-full"
+    : canUsePagedOverview
+      ? "overview-page"
+      : "overview-full"
   const isEnabled =
     isConnected &&
     (options?.enabled ?? true) &&
@@ -265,6 +260,8 @@ export const useServerChatHistory = (
               limit: SERVER_CHAT_SEARCH_LIMIT,
               offset: 0,
               order_by: "recency",
+              ...(includeDeleted || deletedOnly ? { include_deleted: true } : {}),
+              ...(deletedOnly ? { deleted_only: true } : {}),
               ...(characterScope ? { character_scope: characterScope } : {})
             },
             { signal }

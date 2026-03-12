@@ -377,3 +377,65 @@ def test_conversation_alias_related_lookups_only_use_page_rows(tmp_path, monkeyp
     assert payload["items"][0]["message_count"] == 4
     assert requested_ids["keywords"] == ["page-only"]
     assert requested_ids["message_counts"] == ["page-only"]
+
+
+def test_conversation_alias_passes_deleted_filters_to_paged_search(tmp_path, monkeypatch):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    observed: dict[str, object] = {}
+    now = datetime.now(timezone.utc)
+
+    def fake_page_search(
+        query: str | None,
+        *,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+        **kwargs,
+    ):
+        observed.update(
+            {
+                "query": query,
+                "include_deleted": include_deleted,
+                "deleted_only": deleted_only,
+            }
+        )
+        return (
+            [
+                {
+                    "id": "deleted-conv",
+                    "assistant_kind": "persona",
+                    "assistant_id": "trash-helper",
+                    "persona_memory_mode": "read_only",
+                    "character_id": None,
+                    "title": "Quota cleanup",
+                    "state": "resolved",
+                    "topic_label": "trash",
+                    "bm25_norm": 1.0,
+                    "last_modified": now.isoformat(),
+                    "created_at": now.isoformat(),
+                    "version": 2,
+                    "cluster_id": None,
+                    "source": None,
+                    "external_ref": None,
+                }
+            ],
+            1,
+            1.0,
+        )
+
+    monkeypatch.setattr(db, "search_conversations_page", fake_page_search, raising=False)
+
+    resp = app.get(
+        "/api/v1/chats/conversations",
+        params={"query": "Quota", "deleted_only": "true"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert [item["id"] for item in resp.json()["items"]] == ["deleted-conv"]
+    assert observed == {
+        "query": "Quota",
+        "include_deleted": True,
+        "deleted_only": True,
+    }

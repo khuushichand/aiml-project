@@ -11606,6 +11606,22 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return f"{column} IS NOT NULL"
         return f"{column} IS NULL"
 
+    def _conversation_deleted_scope_clause(
+        self,
+        *,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
+        column: str = "deleted",
+        true_literal: str = "1",
+        false_literal: str = "0",
+    ) -> str | None:
+        """Return the SQL clause for a conversation deleted-state filter."""
+        if deleted_only:
+            return f"{column} = {true_literal}"
+        if include_deleted:
+            return None
+        return f"{column} = {false_literal}"
+
     @staticmethod
     def _normalize_nullable_text(value: Any) -> str | None:
         """Normalize optional text fields; returns None for empty/whitespace."""
@@ -12815,6 +12831,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         alias: str,
         client_filter: str | None,
+        include_deleted: bool,
+        deleted_only: bool,
         character_id: int | None,
         character_scope: str | None,
         state: str | None,
@@ -12827,11 +12845,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         date_expr: str,
         keyword_table: str,
         keyword_deleted_literal: str,
+        deleted_true_literal: str,
+        deleted_false_literal: str,
     ) -> tuple[list[str], list[Any]]:
         """Build shared conversation-search filter clauses and parameters."""
         normalized_character_scope = self._normalize_conversation_character_scope(character_scope)
         filters: list[str] = []
         params: list[Any] = []
+
+        deleted_clause = self._conversation_deleted_scope_clause(
+            include_deleted=include_deleted,
+            deleted_only=deleted_only,
+            column=f"{alias}.deleted",
+            true_literal=deleted_true_literal,
+            false_literal=deleted_false_literal,
+        )
+        if deleted_clause:
+            filters.append(deleted_clause)
 
         if character_id is not None:
             filters.append(f"{alias}.character_id = ?")
@@ -12881,11 +12911,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         return filters, params
 
+    def _conversation_deleted_text_search_clause(
+        self,
+        *,
+        alias: str,
+        query: str,
+    ) -> tuple[str, list[str]]:
+        """Build a deleted-state text-search clause that matches the old sidebar fallback."""
+        normalized_query = query.strip().lower()
+        like_pattern = f"%{normalized_query}%"
+        clause = (
+            f"(LOWER(COALESCE({alias}.title, '')) LIKE ? "
+            f"OR LOWER(COALESCE({alias}.topic_label, '')) LIKE ? "
+            f"OR LOWER(COALESCE({alias}.state, '')) LIKE ?)"
+        )
+        return clause, [like_pattern, like_pattern, like_pattern]
+
     def search_conversations(
         self,
         query: str | None,
         *,
         client_id: str | None = None,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
         character_id: int | None = None,
         character_scope: str | None = None,
         state: str | None = None,
@@ -12911,25 +12959,36 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise InputError("date_field must be 'last_modified' or 'created_at'")  # noqa: TRY003
 
         keyword_table = self._map_table_for_backend("keywords")
+        use_deleted_text_search = safe_query is not None and (include_deleted or deleted_only)
 
         if self.backend_type == BackendType.POSTGRESQL:
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
-            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE c.deleted = FALSE"
+            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE TRUE"
             params: list[Any] = []
             if safe_query:
-                tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
-                if not tsquery:
-                    return []
-                base_query = (
-                    "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS bm25_raw "
-                    "FROM conversations c "
-                    "WHERE c.deleted = FALSE AND c.conversations_fts_tsv @@ to_tsquery('english', ?)"
-                )
-                params.extend([tsquery, tsquery])
+                if use_deleted_text_search:
+                    text_clause, text_params = self._conversation_deleted_text_search_clause(
+                        alias="c",
+                        query=safe_query,
+                    )
+                    base_query += f" AND {text_clause}"
+                    params.extend(text_params)
+                else:
+                    tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
+                    if not tsquery:
+                        return []
+                    base_query = (
+                        "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS bm25_raw "
+                        "FROM conversations c "
+                        "WHERE c.conversations_fts_tsv @@ to_tsquery('english', ?)"
+                    )
+                    params.extend([tsquery, tsquery])
 
             filters, filter_params = self._build_conversation_search_filters(
                 alias="c",
                 client_filter=client_filter,
+                include_deleted=include_deleted or deleted_only,
+                deleted_only=deleted_only,
                 character_id=character_id,
                 character_scope=character_scope,
                 state=state,
@@ -12942,6 +13001,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 date_expr=date_expr,
                 keyword_table=keyword_table,
                 keyword_deleted_literal="FALSE",
+                deleted_true_literal="TRUE",
+                deleted_false_literal="FALSE",
             )
             params.extend(filter_params)
 
@@ -12960,19 +13021,30 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         filters: list[str] = []
 
         if safe_query:
-            filters.append("conversations_fts MATCH ?")
-            params.append(safe_query)
-            base_query = (
-                "SELECT c.*, (bm25(conversations_fts) * -1) AS bm25_raw "
-                "FROM conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid "
-                "WHERE c.deleted = 0"
-            )
+            if use_deleted_text_search:
+                text_clause, text_params = self._conversation_deleted_text_search_clause(
+                    alias="c",
+                    query=safe_query,
+                )
+                filters.append(text_clause)
+                params.extend(text_params)
+                base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE 1 = 1"
+            else:
+                filters.append("conversations_fts MATCH ?")
+                params.append(safe_query)
+                base_query = (
+                    "SELECT c.*, (bm25(conversations_fts) * -1) AS bm25_raw "
+                    "FROM conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid "
+                    "WHERE 1 = 1"
+                )
         else:
-            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE c.deleted = 0"
+            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE 1 = 1"
 
         extra_filters, extra_params = self._build_conversation_search_filters(
             alias="c",
             client_filter=client_filter,
+            include_deleted=include_deleted or deleted_only,
+            deleted_only=deleted_only,
             character_id=character_id,
             character_scope=character_scope,
             state=state,
@@ -12985,6 +13057,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             date_expr=date_expr,
             keyword_table=keyword_table,
             keyword_deleted_literal="0",
+            deleted_true_literal="1",
+            deleted_false_literal="0",
         )
         filters.extend(extra_filters)
         params.extend(extra_params)
@@ -13004,6 +13078,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         query: str | None,
         *,
         client_id: str | None = None,
+        include_deleted: bool = False,
+        deleted_only: bool = False,
         character_id: int | None = None,
         character_scope: str | None = None,
         state: str | None = None,
@@ -13049,26 +13125,38 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             normalized_recency_weight = (recency_weight or 0.0) / total_weight
 
         keyword_table = self._map_table_for_backend("keywords")
+        use_deleted_text_search = safe_query is not None and (include_deleted or deleted_only)
 
         if self.backend_type == BackendType.POSTGRESQL:
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
             bm25_expr = "0.0"
-            where_clauses = ["c.deleted = FALSE"]
+            where_clauses = ["TRUE"]
             base_params: list[Any] = []
             count_params: list[Any] = []
             if safe_query:
-                tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
-                if not tsquery:
-                    return [], 0, 0.0
-                bm25_expr = "ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?))"
-                base_params.append(tsquery)
-                where_clauses.append("c.conversations_fts_tsv @@ to_tsquery('english', ?)")
-                base_params.append(tsquery)
-                count_params.append(tsquery)
+                if use_deleted_text_search:
+                    text_clause, text_params = self._conversation_deleted_text_search_clause(
+                        alias="c",
+                        query=safe_query,
+                    )
+                    where_clauses.append(text_clause)
+                    base_params.extend(text_params)
+                    count_params.extend(text_params)
+                else:
+                    tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
+                    if not tsquery:
+                        return [], 0, 0.0
+                    bm25_expr = "ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?))"
+                    base_params.append(tsquery)
+                    where_clauses.append("c.conversations_fts_tsv @@ to_tsquery('english', ?)")
+                    base_params.append(tsquery)
+                    count_params.append(tsquery)
 
             extra_filters, extra_params = self._build_conversation_search_filters(
                 alias="c",
                 client_filter=client_filter,
+                include_deleted=include_deleted or deleted_only,
+                deleted_only=deleted_only,
                 character_id=character_id,
                 character_scope=character_scope,
                 state=state,
@@ -13081,6 +13169,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 date_expr=date_expr,
                 keyword_table=keyword_table,
                 keyword_deleted_literal="FALSE",
+                deleted_true_literal="TRUE",
+                deleted_false_literal="FALSE",
             )
             where_clauses.extend(extra_filters)
             base_params.extend(extra_params)
@@ -13094,18 +13184,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(NULLIF(c.last_modified,''), c.created_at)"
             bm25_expr = "0.0"
-            where_clauses = ["c.deleted = 0"]
+            where_clauses = ["1 = 1"]
             base_params = []
             count_params = []
             if safe_query:
-                bm25_expr = "(bm25(conversations_fts) * -1)"
-                where_clauses.append("conversations_fts MATCH ?")
-                base_params.append(safe_query)
-                count_params.append(safe_query)
+                if use_deleted_text_search:
+                    text_clause, text_params = self._conversation_deleted_text_search_clause(
+                        alias="c",
+                        query=safe_query,
+                    )
+                    where_clauses.append(text_clause)
+                    base_params.extend(text_params)
+                    count_params.extend(text_params)
+                else:
+                    bm25_expr = "(bm25(conversations_fts) * -1)"
+                    where_clauses.append("conversations_fts MATCH ?")
+                    base_params.append(safe_query)
+                    count_params.append(safe_query)
 
             extra_filters, extra_params = self._build_conversation_search_filters(
                 alias="c",
                 client_filter=client_filter,
+                include_deleted=include_deleted or deleted_only,
+                deleted_only=deleted_only,
                 character_id=character_id,
                 character_scope=character_scope,
                 state=state,
@@ -13118,6 +13219,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 date_expr=date_expr,
                 keyword_table=keyword_table,
                 keyword_deleted_literal="0",
+                deleted_true_literal="1",
+                deleted_false_literal="0",
             )
             where_clauses.extend(extra_filters)
             base_params.extend(extra_params)
@@ -13127,7 +13230,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "CASE WHEN sort_timestamp IS NULL OR ? <= 0 THEN 0.0 "
                 "ELSE exp(-MAX(julianday(?) - julianday(sort_timestamp), 0.0) / ?) END"
             )
-            from_clause = "conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid" if safe_query else "conversations c"
+            from_clause = (
+                "conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid"
+                if safe_query and not use_deleted_text_search
+                else "conversations c"
+            )
 
         base_query = (
             "SELECT c.*, "
@@ -13143,7 +13250,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             f"WHERE {' AND '.join(where_clauses)}"
         )  # nosec B608
 
-        needs_global_bm25 = safe_query is not None and normalized_order in {"bm25", "hybrid", "topic"}
+        needs_global_bm25 = (
+            safe_query is not None
+            and not use_deleted_text_search
+            and normalized_order in {"bm25", "hybrid", "topic"}
+        )
         try:
             count_cursor = self.execute_query(count_query, tuple(count_params))
             count_row = count_cursor.fetchone()

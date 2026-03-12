@@ -4473,6 +4473,8 @@ async def list_chat_conversations(
         "all",
         description="Filter conversations by whether they are character-backed or not",
     ),
+    include_deleted: bool = Query(False, description="Include soft-deleted conversations in results"),
+    deleted_only: bool = Query(False, description="Return only soft-deleted conversations"),
     start_date: str | None = Query(None, description="ISO-8601 start date"),
     end_date: str | None = Query(None, description="ISO-8601 end date"),
     date_field: Literal["last_modified", "created_at"] = Query("last_modified", description="Date field for filtering"),
@@ -4496,6 +4498,7 @@ async def list_chat_conversations(
 
         start_iso = _parse_iso_datetime(start_date, "start_date").isoformat() if start_date else None
         end_iso = _parse_iso_datetime(end_date, "end_date").isoformat() if end_date else None
+        include_deleted_effective = include_deleted or deleted_only
 
         if character_id is not None and character_scope == "non_character":
             raise HTTPException(
@@ -4507,6 +4510,8 @@ async def list_chat_conversations(
         page_rows, total, _max_bm25 = db.search_conversations_page(
             query,
             client_id=str(current_user.id),
+            include_deleted=include_deleted_effective,
+            deleted_only=deleted_only,
             character_id=character_id,
             character_scope=character_scope,
             state=state,

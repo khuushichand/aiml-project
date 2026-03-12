@@ -333,8 +333,8 @@ describe("useServerChatHistory", () => {
     queryClient.clear()
   })
 
-  it("falls back to deleted-chat overview filtering when search mode targets trash chats", async () => {
-    listChatsWithMetaMock.mockResolvedValueOnce({
+  it("uses server-side search when search mode targets trash chats", async () => {
+    searchConversationsWithMetaMock.mockResolvedValueOnce({
       chats: [createChat(9, { title: "Quota cleanup" })],
       total: 1
     })
@@ -354,15 +354,18 @@ describe("useServerChatHistory", () => {
       expect(result.current.data.map((chat) => chat.id)).toEqual(["chat-9"])
     )
 
-    expect(listChatsWithMetaMock).toHaveBeenCalledWith(
+    expect(searchConversationsWithMetaMock).toHaveBeenCalledWith(
       expect.objectContaining({
         deleted_only: true,
-        ordering: "-updated_at",
-        include_message_counts: false
+        include_deleted: true,
+        query: "quota",
+        limit: 50,
+        offset: 0,
+        order_by: "recency"
       }),
       expect.anything()
     )
-    expect(searchConversationsWithMetaMock).not.toHaveBeenCalled()
+    expect(listChatsWithMetaMock).not.toHaveBeenCalled()
 
     queryClient.clear()
   })
