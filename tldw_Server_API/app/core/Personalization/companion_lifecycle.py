@@ -25,6 +25,11 @@ COMPANION_LIFECYCLE_SCOPES = frozenset(
 
 
 def _normalize_scope(scope: str) -> str:
+    """Normalize and validate a requested companion lifecycle scope.
+
+    Raises:
+        ValueError: If the caller passes an unsupported lifecycle scope.
+    """
     normalized = str(scope or "").strip().lower()
     if normalized not in COMPANION_LIFECYCLE_SCOPES:
         raise ValueError(f"Unsupported companion lifecycle scope: {scope}")
@@ -35,6 +40,7 @@ def _resolve_personalization_db(
     user_id: str,
     personalization_db: PersonalizationDB | None,
 ) -> PersonalizationDB:
+    """Return the provided personalization DB or open the default DB for the user."""
     if personalization_db is not None:
         return personalization_db
     storage_user_id = resolve_companion_storage_user_id(user_id)
@@ -45,12 +51,14 @@ def _resolve_collections_db(
     user_id: str,
     collections_db: CollectionsDatabase | None,
 ) -> CollectionsDatabase:
+    """Return the provided collections DB or open the default DB for the user."""
     if collections_db is not None:
         return collections_db
     return CollectionsDatabase.for_user(user_id=user_id)
 
 
 def _empty_counts() -> dict[str, int]:
+    """Return the standard zeroed count structure used by lifecycle responses."""
     return {
         "knowledge": 0,
         "reflections": 0,

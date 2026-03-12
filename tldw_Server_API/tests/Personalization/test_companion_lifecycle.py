@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,7 +21,10 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def companion_lifecycle_env(monkeypatch, tmp_path) -> Iterator[SimpleNamespace]:
+def companion_lifecycle_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Iterator[SimpleNamespace]:
     base_dir = tmp_path / "test_companion_lifecycle"
     base_dir.mkdir(parents=True, exist_ok=True)
     prev_base_dir = settings.get("USER_DB_BASE_DIR")
@@ -48,7 +52,7 @@ def companion_lifecycle_env(monkeypatch, tmp_path) -> Iterator[SimpleNamespace]:
                 pass
 
 
-def _seed_explicit_activity(env) -> None:
+def _seed_explicit_activity(env: SimpleNamespace) -> None:
     env.personalization_db.insert_companion_activity_event(
         user_id=env.user_id,
         event_type="reading_item_saved",
@@ -73,7 +77,7 @@ def _seed_explicit_activity(env) -> None:
     )
 
 
-def _seed_reflection(env) -> str:
+def _seed_reflection(env: SimpleNamespace) -> str:
     _seed_explicit_activity(env)
     env.personalization_db.upsert_companion_knowledge_card(
         user_id=env.user_id,
@@ -93,7 +97,7 @@ def _seed_reflection(env) -> str:
     return str(result["reflection_id"])
 
 
-def _seed_manual_goal(env) -> str:
+def _seed_manual_goal(env: SimpleNamespace) -> str:
     return env.personalization_db.create_companion_goal(
         user_id=env.user_id,
         title="Follow up on backlog",
@@ -108,7 +112,9 @@ def _seed_manual_goal(env) -> str:
     )
 
 
-def test_purge_reflections_removes_activity_and_linked_notifications(companion_lifecycle_env) -> None:
+def test_purge_reflections_removes_activity_and_linked_notifications(
+    companion_lifecycle_env: SimpleNamespace,
+) -> None:
     reflection_id = _seed_reflection(companion_lifecycle_env)
 
     result = purge_companion_scope(
@@ -131,7 +137,9 @@ def test_purge_reflections_removes_activity_and_linked_notifications(companion_l
     assert companion_lifecycle_env.collections_db.list_user_notifications(limit=10, offset=0) == []
 
 
-def test_rebuild_knowledge_recomputes_cards_without_touching_manual_goals(companion_lifecycle_env) -> None:
+def test_rebuild_knowledge_recomputes_cards_without_touching_manual_goals(
+    companion_lifecycle_env: SimpleNamespace,
+) -> None:
     manual_goal_id = _seed_manual_goal(companion_lifecycle_env)
     _seed_explicit_activity(companion_lifecycle_env)
 
@@ -153,7 +161,9 @@ def test_rebuild_knowledge_recomputes_cards_without_touching_manual_goals(compan
     assert cards
 
 
-def test_rebuild_goal_progress_is_non_destructive_without_derivation_logic(companion_lifecycle_env) -> None:
+def test_rebuild_goal_progress_is_non_destructive_without_derivation_logic(
+    companion_lifecycle_env: SimpleNamespace,
+) -> None:
     goal_id = companion_lifecycle_env.personalization_db.create_companion_goal(
         user_id=companion_lifecycle_env.user_id,
         title="Computed backlog progress",
@@ -185,7 +195,9 @@ def test_rebuild_goal_progress_is_non_destructive_without_derivation_logic(compa
     assert goal["progress"] == {"completed_count": 2}
 
 
-def test_rebuild_derived_goals_is_non_destructive_without_derivation_logic(companion_lifecycle_env) -> None:
+def test_rebuild_derived_goals_is_non_destructive_without_derivation_logic(
+    companion_lifecycle_env: SimpleNamespace,
+) -> None:
     goal_id = companion_lifecycle_env.personalization_db.create_companion_goal(
         user_id=companion_lifecycle_env.user_id,
         title="Derived focus goal",

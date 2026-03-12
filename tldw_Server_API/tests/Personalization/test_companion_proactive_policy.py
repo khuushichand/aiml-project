@@ -21,7 +21,10 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def companion_proactive_env(monkeypatch, tmp_path) -> Iterator[Path]:
+def companion_proactive_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Iterator[Path]:
     base_dir = tmp_path / "test_companion_proactive_policy"
     base_dir.mkdir(parents=True, exist_ok=True)
     prev_base_dir = settings.get("USER_DB_BASE_DIR")
@@ -114,7 +117,7 @@ def test_companion_proactive_policy_suppresses_low_signal_duplicate_theme() -> N
 
 
 def test_companion_reflection_job_persists_suppressed_reflection_without_notification(
-    companion_proactive_env,
+    companion_proactive_env: Path,
 ) -> None:
     personalization_db, collections_db = _seed_low_signal_duplicate_theme("1")
 

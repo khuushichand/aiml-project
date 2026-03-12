@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,13 +16,15 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def client_with_companion_profile_db(tmp_path) -> Iterator[tuple[TestClient, PersonalizationDB]]:
+def client_with_companion_profile_db(
+    tmp_path: Path,
+) -> Iterator[tuple[TestClient, PersonalizationDB]]:
     db = PersonalizationDB(str(tmp_path / "personalization.db"))
 
-    async def override_user():
+    async def override_user() -> User:
         return User(id=1, username="tester", email=None, is_active=True)
 
-    def override_db_dep():
+    def override_db_dep() -> PersonalizationDB:
         return db
 
     fastapi_app.dependency_overrides[get_request_user] = override_user
@@ -34,7 +37,7 @@ def client_with_companion_profile_db(tmp_path) -> Iterator[tuple[TestClient, Per
 
 
 def test_personalization_profile_exposes_companion_reflection_flags(
-    client_with_companion_profile_db,
+    client_with_companion_profile_db: tuple[TestClient, PersonalizationDB],
 ) -> None:
     client, db = client_with_companion_profile_db
     db.update_profile(

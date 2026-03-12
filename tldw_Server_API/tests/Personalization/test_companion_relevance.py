@@ -16,7 +16,10 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def companion_relevance_env(monkeypatch, tmp_path) -> Iterator[Path]:
+def companion_relevance_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Iterator[Path]:
     base_dir = tmp_path / "user_dbs"
     base_dir.mkdir(parents=True, exist_ok=True)
     prev_base_dir = settings.get("USER_DB_BASE_DIR")
@@ -75,7 +78,9 @@ def test_rank_companion_candidates_prefers_query_matching_goal_and_card() -> Non
     assert ranked["card_ids"][0] == "card-1"
 
 
-def test_load_companion_context_falls_back_when_scores_are_weak(companion_relevance_env) -> None:
+def test_load_companion_context_falls_back_when_scores_are_weak(
+    companion_relevance_env: Path,
+) -> None:
     user_id = "81"
     db = PersonalizationDB(str(DatabasePaths.get_personalization_db_path(user_id)))
     db.update_profile(user_id, enabled=1)
