@@ -9,67 +9,63 @@ Add one new safe inline remediation action in the MCP Hub `Audit` tab:
 
 - clear a broken `path_scope_object_id` reference
 
-This extends the existing inline remediation model beyond `Deactivate server`
-while preserving the same narrow safety boundary:
+This extends the audit view beyond read-only remediation guidance and the
+existing `Deactivate server` action, while keeping the scope strictly within the
+same low-risk mutation boundary:
 
 - one exact target object
 - one exact deterministic mutation
 - no secret writes
-- no membership changes
+- no membership edits
 - no source-mode changes
-- no policy-content edits
+- no policy-content rewrites
 
 ## Scope
 
-This slice covers two consumer kinds:
+Eligible consumer objects:
 
 - `policy_assignment`
 - `permission_profile`
 
-Eligible findings must be:
+Eligible findings:
 
 - `finding_type === "broken_object_reference"`
 - `details.reference_field === "path_scope_object_id"`
 - `details.reference_object_kind === "path_scope_object"`
 
-Eligible broken-reference reasons:
+Supported broken-reference reasons:
 
 - `missing_reference`
 - `inactive_reference`
 - `scope_incompatible_reference`
 
-This slice does not cover:
+Out of scope:
 
 - `workspace_set_object_id` remediation
-- replacement of the broken reference with a new object
-- any mutation of inline policy content
+- replacement of the broken reference with another object
 - any backend audit-remediation endpoint
+- any bulk or multi-choice audit action
 
 ## Why This Is Safe
 
-Unlike `workspace_set_object_id`, clearing `path_scope_object_id` does not force a
-source-mode change or reactivate preserved membership data. It is a direct
-`field -> null` mutation for both supported consumer types.
+Clearing `path_scope_object_id` is a direct `field -> null` mutation for both
+supported consumer types.
 
-The underlying update flows already exist:
+It does not:
 
-- assignment update
-- permission profile update
+- reactivate preserved inline workspace membership
+- force a source-mode switch
+- mutate inline path policy
+- alter approval policy or profile linkage
 
-So the audit tab only needs to map a structured finding to an exact existing
-mutation call.
+That makes it materially safer than `workspace_set_object_id` remediation under
+the current branch semantics.
 
 ## Action Model
 
-Add one new inline action kind:
+Extend the existing audit inline-action descriptor into a discriminated union.
 
-- `clear_path_scope_reference`
-
-The action descriptor should be a discriminated union alongside the existing:
-
-- `deactivate_external_server`
-
-Suggested action shape:
+Suggested shape:
 
 ```ts
 type GovernanceAuditInlineAction =
@@ -94,37 +90,52 @@ type GovernanceAuditInlineAction =
     }
 ```
 
+This avoids hardcoding action-specific success/error text into the audit tab and
+keeps the component from turning into a branching mutation switchboard.
+
 ## Eligibility Rules
 
-Inline mutation eligibility must be driven only by structured finding data.
+Inline mutation eligibility must be derived only from structured finding data.
 
-Return the new action only when:
+Return the new action only when all of these are true:
 
 - `finding.finding_type === "broken_object_reference"`
 - `finding.object_kind === "policy_assignment"` or `finding.object_kind === "permission_profile"`
 - `details.reference_field === "path_scope_object_id"`
 - `details.reference_object_kind === "path_scope_object"`
+- `finding.object_id` is present
 
-Return `null` otherwise.
+Return `null` for:
 
-No message-string parsing should be used for mutation eligibility.
+- broken workspace-set references
+- generic blockers
+- readiness warnings
+- any finding that would require inferring intent from message strings
+
+No message-string parsing should be used for action eligibility.
 
 ## Mutation Mapping
 
-Assignment:
+Reuse the existing MCP Hub client update functions.
 
-- call the existing assignment update client with:
-  - `{ path_scope_object_id: null }`
+For assignments:
 
-Permission profile:
+- call `updatePolicyAssignment(id, { path_scope_object_id: null })`
 
-- call the existing permission profile update client with:
-  - `{ path_scope_object_id: null }`
+For permission profiles:
 
-No other fields should be sent.
+- call `updatePermissionProfile(id, { path_scope_object_id: null })`
 
-This is important because the action must remove only the broken object
-reference, not modify inline path policy or inherited profile behavior.
+This slice should remain UI-only. No new backend endpoint is needed.
+
+The payload must remain minimal:
+
+- only `path_scope_object_id: null`
+
+No other field should be sent.
+
+That ensures the action removes only the broken path-scope object reference and
+does not implicitly alter any other path-policy state.
 
 ## UX And Messaging
 
@@ -132,72 +143,75 @@ Button label:
 
 - `Clear broken path scope`
 
-Confirmation copy should be object-kind-specific.
-
-For assignments:
+### Assignment confirmation
 
 - title:
   - `Clear the broken path scope reference from this assignment?`
 - description:
   - `This removes the broken path scope object reference only. Inline policy and other assignment settings stay unchanged.`
 
-For permission profiles:
+### Permission profile confirmation
 
 - title:
   - `Clear the broken path scope reference from this permission profile?`
 - description:
   - `This removes the broken path scope object reference only. Policy content stays unchanged.`
 
-Success copy should also be object-kind-specific:
+### Success messages
 
 - assignment:
   - `Broken path scope cleared from assignment.`
 - profile:
   - `Broken path scope cleared from permission profile.`
 
-Failure copy should be explicit but generic:
+### Error messages
 
 - assignment:
   - `Failed to clear broken path scope from assignment.`
 - profile:
   - `Failed to clear broken path scope from permission profile.`
 
+This object-kind-specific copy is important so the user understands what is
+being changed and what is not.
+
 ## Audit Tab Behavior
 
 The audit tab should continue to:
 
-1. render the finding
-2. show `Open`
-3. show the inline action when eligible
+1. render the finding row
+2. render `Open`
+3. render the inline action only when eligible
 4. confirm before mutating
-5. refresh the audit feed after success
-6. show inline success/error feedback
+5. show pending state while the mutation runs
+6. refresh the audit feed after success
+7. show inline success/error feedback
 
 The refreshed audit feed remains the source of truth. If the finding still
-exists after refresh, the row stays visible.
+exists after refresh, the row remains visible.
 
 ## Testing
 
 ### Helper tests
 
-- assignment broken path-scope reference -> action descriptor
-- profile broken path-scope reference -> action descriptor
+- assignment broken path-scope reference -> `clear_path_scope_reference`
+- profile broken path-scope reference -> `clear_path_scope_reference`
 - broken workspace-set reference -> `null`
 
 ### Audit tab tests
 
-- button renders for eligible assignment broken-reference finding
-- button renders for eligible profile broken-reference finding
-- assignment action calls assignment update with `path_scope_object_id: null`
-- profile action calls profile update with `path_scope_object_id: null`
-- success refreshes findings and shows correct success message
-- failure shows correct error message
+- assignment broken-reference finding renders `Clear broken path scope`
+- permission-profile broken-reference finding renders `Clear broken path scope`
+- assignment action calls `updatePolicyAssignment(id, { path_scope_object_id: null })`
+- profile action calls `updatePermissionProfile(id, { path_scope_object_id: null })`
+- assignment success refreshes findings and shows assignment-specific success text
+- profile success refreshes findings and shows profile-specific success text
+- failure shows the correct object-kind-specific error text
 
 ## Out Of Scope
 
 - clearing broken `workspace_set_object_id`
 - replacing broken references
-- backend audit remediation endpoint
-- bulk audit actions
-- any new finding family
+- backend audit-remediation endpoint
+- bulk actions
+- confirmation flows with user choices
 

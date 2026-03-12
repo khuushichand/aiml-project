@@ -2,28 +2,28 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add one safe inline audit action that clears broken `path_scope_object_id` references from assignments and permission profiles.
+**Goal:** Add one safe audit inline action that clears broken `path_scope_object_id` references from assignments and permission profiles.
 
-**Architecture:** Extend the existing client-side audit inline action helper with a new discriminated action kind and reuse the existing MCP Hub update clients to send an exact `path_scope_object_id: null` mutation. Keep the slice UI-only, refresh the audit feed after mutation, and preserve the existing audit-driven workflow.
+**Architecture:** Extend the current client-side audit action helper with a second discriminated action kind, keep eligibility strictly structured around `broken_object_reference` findings, and reuse the existing MCP Hub update clients to send an exact `{ path_scope_object_id: null }` mutation. This remains a UI-only slice with audit-refresh-on-success semantics.
 
-**Tech Stack:** React, TypeScript, Ant Design, Vitest, existing MCP Hub service client helpers
+**Tech Stack:** React, TypeScript, Ant Design, Vitest, existing MCP Hub client service helpers
 
 ---
 
-### Task 1: Add Red Tests For The New Inline Action
+### Task 1: Add Red Tests For The New Action
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/apps/packages/ui/src/components/Option/MCPHub/__tests__/governanceAuditHelpers.test.ts`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/apps/packages/ui/src/components/Option/MCPHub/__tests__/GovernanceAuditTab.test.tsx`
 
-**Step 1: Write the failing helper tests**
+**Step 1: Add helper tests for action eligibility**
 
-Add tests that expect:
-- `broken_object_reference` on a `policy_assignment` with `reference_field=path_scope_object_id` returns a `clear_path_scope_reference` action descriptor
-- the same for a `permission_profile`
-- a `workspace_set_object_id` broken reference still returns `null`
+Write failing tests that expect:
+- an assignment `broken_object_reference` with `reference_field=path_scope_object_id` returns a `clear_path_scope_reference` action
+- a permission profile `broken_object_reference` with the same field returns the same action kind
+- a broken workspace-set reference still returns `null`
 
-**Step 2: Run helper tests to verify they fail**
+**Step 2: Run helper tests to confirm RED**
 
 Run:
 
@@ -31,16 +31,17 @@ Run:
 bunx vitest run src/components/Option/MCPHub/__tests__/governanceAuditHelpers.test.ts
 ```
 
-Expected: fail because `buildAuditInlineAction(...)` only supports `deactivate_external_server`
+Expected: fail because `buildAuditInlineAction(...)` only returns `deactivate_external_server`
 
-**Step 3: Write the failing tab tests**
+**Step 3: Add audit tab interaction tests**
 
-Add tests that expect:
-- the audit row renders `Clear broken path scope` for eligible assignment findings
-- clicking it calls the assignment update client with `{ path_scope_object_id: null }`
-- the same for permission profiles with the profile update client
+Write failing tests that expect:
+- `Clear broken path scope` button renders for assignment broken-reference findings
+- `Clear broken path scope` button renders for permission-profile broken-reference findings
+- clicking the button calls the correct existing client mutation with `{ path_scope_object_id: null }`
+- success and failure messages are object-kind-specific
 
-**Step 4: Run the focused UI tests to verify they fail**
+**Step 4: Run focused audit tests to confirm RED**
 
 Run:
 
@@ -48,7 +49,7 @@ Run:
 bunx vitest run src/components/Option/MCPHub/__tests__/GovernanceAuditTab.test.tsx src/components/Option/MCPHub/__tests__/governanceAuditHelpers.test.ts
 ```
 
-Expected: fail because the new action kind and mutation path do not exist yet
+Expected: fail because the new action kind and execution path do not exist yet
 
 **Step 5: Commit**
 
@@ -59,25 +60,29 @@ Do not commit yet. Continue to Task 2 once the red tests fail as expected.
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/apps/packages/ui/src/components/Option/MCPHub/governanceAuditHelpers.ts`
 
-**Step 1: Add the new action union shape**
+**Step 1: Convert the action type into a discriminated union**
 
-Extend `GovernanceAuditInlineAction` with:
-- `kind: "clear_path_scope_reference"`
+Add a second action kind:
+- `clear_path_scope_reference`
+
+Include:
 - `object_kind`
 - `object_id`
-- object-kind-specific confirm/success/error copy
+- confirm text
+- success text
+- error text
 
-**Step 2: Implement deterministic eligibility**
+**Step 2: Implement strict structured eligibility**
 
-Update `buildAuditInlineAction(...)` so it returns the new action only when:
+Update `buildAuditInlineAction(...)` so the new action is returned only when:
 - `finding_type === "broken_object_reference"`
-- `reference_field === "path_scope_object_id"`
-- `reference_object_kind === "path_scope_object"`
+- `details.reference_field === "path_scope_object_id"`
+- `details.reference_object_kind === "path_scope_object"`
 - consumer is `policy_assignment` or `permission_profile`
 
-**Step 3: Keep all other findings unchanged**
+**Step 3: Preserve current behavior**
 
-Existing `Deactivate server` logic should stay intact.
+Leave the existing `Deactivate server` logic intact.
 
 **Step 4: Run helper tests**
 
@@ -87,7 +92,7 @@ Run:
 bunx vitest run src/components/Option/MCPHub/__tests__/governanceAuditHelpers.test.ts
 ```
 
-Expected: helper tests pass, tab tests still fail
+Expected: helper tests pass, tab interaction tests still fail
 
 **Step 5: Commit**
 
@@ -99,11 +104,13 @@ Do not commit yet. Continue to Task 3.
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/apps/packages/ui/src/components/Option/MCPHub/GovernanceAuditTab.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/apps/packages/ui/src/services/tldw/mcp-hub.ts`
 
-**Step 1: Import and use the existing update clients**
+**Step 1: Import the existing client update functions**
 
-Ensure the tab can call:
+Use:
 - `updatePolicyAssignment(...)`
 - `updatePermissionProfile(...)`
+
+Do not add any new backend endpoint.
 
 **Step 2: Extend `_runInlineAction(...)`**
 
@@ -111,26 +118,26 @@ Handle:
 - `deactivate_external_server`
 - `clear_path_scope_reference`
 
-For `clear_path_scope_reference`:
+Mutation mapping:
 - assignment -> `updatePolicyAssignment(id, { path_scope_object_id: null })`
 - profile -> `updatePermissionProfile(id, { path_scope_object_id: null })`
 
-**Step 3: Use object-kind-specific copy**
+**Step 3: Use action-provided copy**
 
-Show the exact success/error message from the action descriptor.
+Show success/error messages from the action descriptor, not hardcoded strings.
 
-**Step 4: Keep the refresh behavior unchanged**
+**Step 4: Preserve refresh semantics**
 
 After success:
-- call `loadAuditFindings()`
-- clear pending state
+- refetch audit findings
 - show success feedback
+- clear pending state
 
 After failure:
-- keep current row visible
+- keep the finding visible
 - show error feedback
 
-**Step 5: Run focused UI tests**
+**Step 5: Run focused audit tests**
 
 Run:
 
@@ -161,10 +168,10 @@ Expected: all MCP Hub UI tests pass
 
 **Step 2: Review for regressions**
 
-Verify that:
+Confirm:
 - existing `Deactivate server` behavior still works
-- audit exports still work
-- grouped findings still render in fixed order
+- audit export/correlation behavior still works
+- grouped finding order remains stable
 
 **Step 3: Commit**
 
@@ -176,20 +183,21 @@ Do not commit yet. Continue to Task 5.
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/Docs/Plans/2026-03-11-mcp-hub-clear-broken-path-scope-inline-action-design.md`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/mcp-hub-tool-permissions/Docs/Plans/2026-03-11-mcp-hub-clear-broken-path-scope-inline-action-implementation-plan.md`
 
-**Step 1: Update document statuses**
+**Step 1: Update doc statuses**
 
 Set:
 - design doc -> `Implemented`
-- plan doc task statuses -> `Complete`
+- plan doc -> `Complete`
+- task statuses -> `Complete`
 
-**Step 2: Stage the touched files**
+**Step 2: Stage touched files**
 
 Stage:
-- helper
-- audit tab
-- any touched client types
-- test files
-- the two docs
+- `governanceAuditHelpers.ts`
+- `GovernanceAuditTab.tsx`
+- `mcp-hub.ts` if touched
+- both test files
+- both docs
 
 **Step 3: Commit**
 
