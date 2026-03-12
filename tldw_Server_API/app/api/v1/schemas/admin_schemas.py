@@ -474,6 +474,76 @@ class BackupCreateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class BackupScheduleItem(BaseModel):
+    """Authoritative backup schedule record for admin surfaces."""
+
+    id: str
+    dataset: str
+    target_user_id: int | None = None
+    frequency: Literal["daily", "weekly", "monthly"]
+    time_of_day: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    timezone: str
+    anchor_day_of_week: int | None = Field(default=None, ge=0, le=6)
+    anchor_day_of_month: int | None = Field(default=None, ge=1, le=31)
+    retention_count: int = Field(..., ge=1, le=1000)
+    is_paused: bool = False
+    schedule_description: str
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    last_status: str | None = None
+    last_job_id: str | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleListResponse(BaseModel):
+    """Response for backup schedule listing."""
+
+    items: list[BackupScheduleItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleCreateRequest(BaseModel):
+    """Request to create a platform-owned backup schedule."""
+
+    dataset: str
+    target_user_id: int | None = Field(default=None, ge=1)
+    frequency: Literal["daily", "weekly", "monthly"]
+    time_of_day: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    timezone: str | None = None
+    retention_count: int = Field(..., ge=1, le=1000)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleUpdateRequest(BaseModel):
+    """Request to update mutable backup schedule fields."""
+
+    frequency: Literal["daily", "weekly", "monthly"] | None = None
+    time_of_day: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    timezone: str | None = None
+    retention_count: int | None = Field(default=None, ge=1, le=1000)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleMutationResponse(BaseModel):
+    """Response for backup schedule create/update/pause/resume/delete operations."""
+
+    status: str
+    item: BackupScheduleItem
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class BackupRestoreRequest(BaseModel):
     """Request to restore a backup snapshot."""
     dataset: str

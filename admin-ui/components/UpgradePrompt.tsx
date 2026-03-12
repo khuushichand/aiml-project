@@ -21,9 +21,9 @@ export function UpgradePrompt({ requiredPlan, featureName, showUpgradeLink }: Up
           {!showUpgradeLink && ' Contact your administrator to upgrade.'}
         </span>
         {showUpgradeLink && (
-          <Button asChild size="sm" variant="outline" className="ml-4">
-            <Link href="/plans">Upgrade Plan</Link>
-          </Button>
+          <Link href="/plans" className="ml-4">
+            <Button size="sm" variant="outline">Upgrade Plan</Button>
+          </Link>
         )}
       </AlertDescription>
     </Alert>

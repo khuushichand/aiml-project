@@ -6,6 +6,8 @@ import type {
   ApiKey,
   ApiKeyMutationResponse,
   AuditLog,
+  BackupScheduleListResponse,
+  BackupScheduleMutationResponse,
   BackupsResponse,
   EffectivePermissionsResponse,
   FeatureRegistryEntry,
@@ -457,6 +459,35 @@ export const api = {
     requestJson(`/admin/backups/${encodeURIComponent(backupId)}/restore`, {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+  listBackupSchedules: (params?: Record<string, string>, options?: RequestInit) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return requestJson<BackupScheduleListResponse>(
+      `/admin/backup-schedules${queryParams ? `?${queryParams}` : ''}`,
+      options
+    );
+  },
+  createBackupSchedule: (data: Record<string, unknown>) =>
+    requestJson<BackupScheduleMutationResponse>('/admin/backup-schedules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateBackupSchedule: (scheduleId: string, data: Record<string, unknown>) =>
+    requestJson<BackupScheduleMutationResponse>(`/admin/backup-schedules/${encodeURIComponent(scheduleId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  pauseBackupSchedule: (scheduleId: string) =>
+    requestJson<BackupScheduleMutationResponse>(`/admin/backup-schedules/${encodeURIComponent(scheduleId)}/pause`, {
+      method: 'POST',
+    }),
+  resumeBackupSchedule: (scheduleId: string) =>
+    requestJson<BackupScheduleMutationResponse>(`/admin/backup-schedules/${encodeURIComponent(scheduleId)}/resume`, {
+      method: 'POST',
+    }),
+  deleteBackupSchedule: (scheduleId: string) =>
+    requestJson<BackupScheduleMutationResponse>(`/admin/backup-schedules/${encodeURIComponent(scheduleId)}`, {
+      method: 'DELETE',
     }),
   getRetentionPolicies: () => requestJson<RetentionPoliciesResponse>('/admin/retention-policies'),
   previewRetentionPolicyImpact: (policyKey: string, data: Record<string, unknown>) =>

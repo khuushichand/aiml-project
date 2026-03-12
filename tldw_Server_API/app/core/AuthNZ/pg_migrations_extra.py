@@ -1496,6 +1496,66 @@ _CREATE_ADMIN_MONITORING_TABLES = [
     ),
 ]
 
+_CREATE_BACKUP_SCHEDULES_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedules (
+            id TEXT PRIMARY KEY,
+            dataset TEXT NOT NULL,
+            target_user_id INTEGER NULL,
+            target_scope_key TEXT NOT NULL,
+            frequency TEXT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            timezone TEXT NOT NULL,
+            anchor_day_of_week INTEGER NULL,
+            anchor_day_of_month INTEGER NULL,
+            retention_count INTEGER NOT NULL,
+            is_paused BOOLEAN NOT NULL DEFAULT FALSE,
+            created_by_user_id INTEGER NULL,
+            updated_by_user_id INTEGER NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL,
+            next_run_at TIMESTAMPTZ NULL,
+            last_run_at TIMESTAMPTZ NULL,
+            last_status TEXT NULL,
+            last_job_id TEXT NULL,
+            last_error TEXT NULL,
+            deleted_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backup_schedules_target_scope_active
+        ON backup_schedules(target_scope_key)
+        WHERE deleted_at IS NULL
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedules_next_run_at ON backup_schedules(next_run_at)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedules_deleted_at ON backup_schedules(deleted_at)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedule_runs (
+            id TEXT PRIMARY KEY,
+            schedule_id TEXT NOT NULL REFERENCES backup_schedules(id) ON DELETE CASCADE,
+            scheduled_for TIMESTAMPTZ NOT NULL,
+            run_slot_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            job_id TEXT NULL,
+            error TEXT NULL,
+            enqueued_at TIMESTAMPTZ NULL,
+            started_at TIMESTAMPTZ NULL,
+            completed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_schedule_id ON backup_schedule_runs(schedule_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for ON backup_schedule_runs(scheduled_for)", ()),
+]
+
 
 async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
@@ -1520,6 +1580,28 @@ async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bo
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL tool catalogs tables: {exc}")
+        return False
+
+
+async def ensure_backup_schedules_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure backup schedule tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before backup schedules failed: {exc}")
+        for sql, params in _CREATE_BACKUP_SCHEDULES_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure backup schedules DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL backup schedule tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL backup schedule tables: {exc}")
         return False
 
 
