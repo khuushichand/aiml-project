@@ -7,14 +7,18 @@ import type { AttachedResearchContext } from "./research-chat-context"
 
 type AttachedResearchContextChipProps = {
   context: AttachedResearchContext
+  history?: AttachedResearchContext[]
   onPreview?: () => void
   onRemove: () => void
+  onSelectHistory?: (context: AttachedResearchContext) => void
 }
 
 export const AttachedResearchContextChip = ({
   context,
+  history = [],
   onPreview,
-  onRemove
+  onRemove,
+  onSelectHistory
 }: AttachedResearchContextChipProps) => {
   const { t } = useTranslation(["playground", "common"])
 
@@ -76,6 +80,26 @@ export const AttachedResearchContextChip = ({
           <X className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
+      {history.length > 0 ? (
+        <div
+          data-testid="attached-research-context-history"
+          className="flex w-full flex-wrap items-center gap-2 border-t border-primary/20 pt-2 text-[11px]"
+        >
+          <span className="font-medium text-primaryStrong/90">
+            {t("playground:composer.recentResearch", "Recent research")}
+          </span>
+          {history.map((entry) => (
+            <button
+              key={entry.run_id}
+              type="button"
+              onClick={() => onSelectHistory?.(entry)}
+              className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
+            >
+              {entry.query}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

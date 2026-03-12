@@ -8,6 +8,8 @@
 
 **Tech Stack:** FastAPI, existing chat settings endpoints, React, TypeScript, package-side chat settings helpers, vitest, pytest.
 
+**Status:** Complete
+
 ---
 
 ### Task 1: Add Red Backend Tests For Attachment History Validation
@@ -189,7 +191,8 @@ Expected:
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/AttachedResearchContextChip.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`
-- Add tests near the existing Playground UI test scope
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/AttachedResearchContextChip.test.tsx`
 
 **Step 1: Write the failing tests**
 
@@ -235,7 +238,8 @@ Frontend:
 ./apps/packages/ui/node_modules/.bin/vitest run \
   apps/packages/ui/src/services/__tests__/chat-settings.deep-research-history.test.ts \
   apps/packages/ui/src/components/Option/Playground/__tests__/research-chat-context.test.ts \
-  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx
+  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/AttachedResearchContextChip.test.tsx
 ```
 
 **Step 2: Run Bandit on touched backend scope**
@@ -261,6 +265,14 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research
   apps/packages/ui/src/components/Option/Playground/AttachedResearchContextChip.tsx \
   apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/research-chat-context.test.ts \
-  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx
+  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/AttachedResearchContextChip.test.tsx \
+  Docs/Plans/2026-03-08-deep-research-chat-attachment-history-implementation-plan.md
 git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr commit -m "feat(chat): add research attachment history"
 ```
+
+### Execution Outcome
+
+- Backend verification passed: `8 passed, 1 skipped`
+- Focused frontend verification passed: `22 passed`
+- Bandit on the touched backend scope reported only pre-existing low-severity findings in unrelated legacy lines of `character_chat_sessions.py`; no new findings were introduced by this slice

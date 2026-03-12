@@ -110,11 +110,19 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
       query?: string
       question?: string
     } | null
+    attachedResearchContextHistory?: Array<{
+      run_id?: string
+      query?: string
+      question?: string
+    }>
     onApplyAttachedResearchContext?: (
       context: ReturnType<typeof buildAttachedContext>
     ) => void
     onResetAttachedResearchContext?: () => void
     onRemoveAttachedResearchContext?: () => void
+    onSelectAttachedResearchContextHistory?: (
+      context: ReturnType<typeof buildAttachedContext>
+    ) => void
   }) => (
     <div
       data-testid="playground-form"
@@ -123,6 +131,9 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
       data-attached-question={props.attachedResearchContext?.question || ""}
       data-baseline-run-id={props.attachedResearchContextBaseline?.run_id || ""}
       data-baseline-question={props.attachedResearchContextBaseline?.question || ""}
+      data-history-run-ids={(props.attachedResearchContextHistory || [])
+        .map((entry) => entry.run_id || "")
+        .join(",")}
     >
       {props.attachedResearchContext ? (
         <>
@@ -154,6 +165,22 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
           </button>
         </>
       ) : null}
+      {(props.attachedResearchContextHistory || []).map((entry) => (
+        <button
+          key={entry.run_id}
+          type="button"
+          onClick={() =>
+            props.onSelectAttachedResearchContextHistory?.(
+              buildAttachedContext(
+                entry.run_id || "run_history",
+                entry.query || "History query"
+              )
+            )
+          }
+        >
+          {`Use history ${entry.run_id}`}
+        </button>
+      ))}
     </div>
   )
 }))
@@ -409,13 +436,17 @@ describe("Playground research context integration", () => {
     )
   })
 
-  it("auto-restores persisted attached research context for saved chats", async () => {
+  it("auto-restores persisted attached research context and bounded history for saved chats", async () => {
     chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
       updatedAt: "2026-03-08T20:10:00Z",
       deepResearchAttachment: buildPersistedAttachment(
         "run_saved",
         "Recovered battery recycling run"
-      )
+      ),
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1"),
+        buildPersistedAttachment("run_hist_2", "History 2")
+      ]
     })
 
     render(<Playground />)
@@ -430,14 +461,37 @@ describe("Playground research context integration", () => {
       "data-baseline-run-id",
       "run_saved"
     )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-history-run-ids",
+      "run_hist_1,run_hist_2"
+    )
     expect(chatSettingsState.syncChatSettingsForServerChat).toHaveBeenCalledWith({
       historyId: "history-1",
       serverChatId: "chat-1"
     })
   })
 
-  it("persists attachment attach, apply, and remove actions for saved chats", async () => {
+  it("persists attachment attach, edit, remove, and history swaps for saved chats", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchAttachment: buildPersistedAttachment(
+        "run_saved",
+        "Recovered battery recycling run"
+      ),
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1"),
+        buildPersistedAttachment("run_hist_2", "History 2")
+      ]
+    })
+
     render(<Playground />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_saved"
+      )
+    )
 
     fireEvent.click(screen.getByRole("button", { name: "Attach run 1" }))
     await waitFor(() =>
@@ -449,20 +503,50 @@ describe("Playground research context integration", () => {
             deepResearchAttachment: expect.objectContaining({
               run_id: "run_1",
               query: "Battery recycling supply chain"
-            })
+            }),
+            deepResearchAttachmentHistory: [
+              expect.objectContaining({ run_id: "run_saved" }),
+              expect.objectContaining({ run_id: "run_hist_1" }),
+              expect.objectContaining({ run_id: "run_hist_2" })
+            ]
           })
         })
       )
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit attached research" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit attached research" })
+    )
     await waitFor(() =>
       expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
         expect.objectContaining({
           patch: expect.objectContaining({
             deepResearchAttachment: expect.objectContaining({
               question: "Edited attached question"
-            })
+            }),
+            deepResearchAttachmentHistory: [
+              expect.objectContaining({ run_id: "run_saved" }),
+              expect.objectContaining({ run_id: "run_hist_1" }),
+              expect.objectContaining({ run_id: "run_hist_2" })
+            ]
+          })
+        })
+      )
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Use history run_hist_1" }))
+    await waitFor(() =>
+      expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          patch: expect.objectContaining({
+            deepResearchAttachment: expect.objectContaining({
+              run_id: "run_hist_1"
+            }),
+            deepResearchAttachmentHistory: [
+              expect.objectContaining({ run_id: "run_1" }),
+              expect.objectContaining({ run_id: "run_saved" }),
+              expect.objectContaining({ run_id: "run_hist_2" })
+            ]
           })
         })
       )
@@ -475,11 +559,23 @@ describe("Playground research context integration", () => {
       expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
         expect.objectContaining({
           patch: expect.objectContaining({
-            deepResearchAttachment: null
+            deepResearchAttachment: null,
+            deepResearchAttachmentHistory: [
+              expect.objectContaining({ run_id: "run_1" }),
+              expect.objectContaining({ run_id: "run_saved" }),
+              expect.objectContaining({ run_id: "run_hist_2" })
+            ]
           })
         })
       )
     )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-history-run-ids",
+      "run_1,run_saved,run_hist_2"
+    )
+    expect(
+      screen.getByRole("button", { name: "Use history run_1" })
+    ).toBeInTheDocument()
   })
 
   it("does not persist attachments for temporary chats", async () => {

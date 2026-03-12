@@ -4,6 +4,7 @@ import { buildChatLinkedResearchPath } from "./research-run-status"
 
 const MAX_ATTACHED_RESEARCH_CLAIMS = 5
 const MAX_ATTACHED_RESEARCH_UNRESOLVED_QUESTIONS = 5
+const MAX_ATTACHED_RESEARCH_HISTORY = 3
 
 type RecordLike = Record<string, unknown>
 
@@ -18,6 +19,12 @@ export type DeepResearchCompletionMetadata = {
 }
 
 export type AttachedResearchContextEdits = Partial<AttachedResearchContext>
+
+export type AttachedResearchContextState = {
+  active: AttachedResearchContext | null
+  baseline: AttachedResearchContext | null
+  history: AttachedResearchContext[]
+}
 
 const isRecord = (value: unknown): value is RecordLike =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -210,6 +217,61 @@ export const resetAttachedResearchContext = (
   baseline: AttachedResearchContext | null
 ): AttachedResearchContext | null =>
   baseline ? sanitizeAttachedResearchContext(baseline) : null
+
+const rebuildAttachedResearchContextHistory = (
+  entries: AttachedResearchContext[],
+  activeRunId?: string | null
+): AttachedResearchContext[] => {
+  const seen = new Set<string>()
+  const next: AttachedResearchContext[] = []
+  for (const entry of entries) {
+    const sanitized = sanitizeAttachedResearchContext(entry)
+    if (activeRunId && sanitized.run_id === activeRunId) {
+      continue
+    }
+    if (seen.has(sanitized.run_id)) {
+      continue
+    }
+    seen.add(sanitized.run_id)
+    next.push(sanitized)
+    if (next.length >= MAX_ATTACHED_RESEARCH_HISTORY) {
+      break
+    }
+  }
+  return next
+}
+
+export const setAttachedResearchContextActive = ({
+  active,
+  baseline: _baseline,
+  history,
+  nextActive
+}: AttachedResearchContextState & {
+  nextActive: AttachedResearchContext
+}): AttachedResearchContextState => {
+  const sanitizedNextActive = sanitizeAttachedResearchContext(nextActive)
+  const nextHistory = rebuildAttachedResearchContextHistory(
+    [
+      ...(active && active.run_id !== sanitizedNextActive.run_id ? [active] : []),
+      ...history
+    ],
+    sanitizedNextActive.run_id
+  )
+
+  return {
+    active: sanitizedNextActive,
+    baseline: sanitizedNextActive,
+    history: nextHistory
+  }
+}
+
+export const clearAttachedResearchContext = ({
+  history
+}: AttachedResearchContextState): AttachedResearchContextState => ({
+  active: null,
+  baseline: null,
+  history: rebuildAttachedResearchContextHistory(history)
+})
 
 export const toPersistedDeepResearchAttachment = (
   value: AttachedResearchContext,

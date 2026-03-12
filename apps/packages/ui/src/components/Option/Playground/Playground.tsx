@@ -40,8 +40,10 @@ import {
   syncChatSettingsForServerChat
 } from "@/services/chat-settings"
 import {
+  clearAttachedResearchContext,
   fromPersistedDeepResearchAttachment,
   resetAttachedResearchContext,
+  setAttachedResearchContextActive,
   toPersistedDeepResearchAttachment,
   type AttachedResearchContext
 } from "./research-chat-context"
@@ -64,6 +66,8 @@ export const Playground = () => {
     React.useState<AttachedResearchContext | null>(null)
   const [attachedResearchContextBaseline, setAttachedResearchContextBaseline] =
     React.useState<AttachedResearchContext | null>(null)
+  const [attachedResearchContextHistory, setAttachedResearchContextHistory] =
+    React.useState<AttachedResearchContext[]>([])
   const { t } = useTranslation(["playground", "common"])
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const [stickyChatInput] = useStorage(
@@ -253,12 +257,16 @@ export const Playground = () => {
     ) {
       setAttachedResearchContext(null)
       setAttachedResearchContextBaseline(null)
+      setAttachedResearchContextHistory([])
     }
     previousThreadRef.current = currentThreadKey
   }, [historyId, serverChatId])
 
   const persistAttachedResearchContext = React.useCallback(
-    async (context: AttachedResearchContext | null) => {
+    async (
+      context: AttachedResearchContext | null,
+      history: AttachedResearchContext[]
+    ) => {
       if (!serverChatId || !stableHistoryId) {
         return
       }
@@ -269,7 +277,10 @@ export const Playground = () => {
           patch: {
             deepResearchAttachment: context
               ? toPersistedDeepResearchAttachment(context)
-              : null
+              : null,
+            deepResearchAttachmentHistory: history.map((entry) =>
+              toPersistedDeepResearchAttachment(entry, entry.attached_at)
+            )
           }
         })
       } catch {
@@ -298,8 +309,16 @@ export const Playground = () => {
         const restoredAttachment = settings?.deepResearchAttachment
           ? fromPersistedDeepResearchAttachment(settings.deepResearchAttachment)
           : null
+        const restoredHistory = Array.isArray(settings?.deepResearchAttachmentHistory)
+          ? settings.deepResearchAttachmentHistory.map(
+              fromPersistedDeepResearchAttachment
+            )
+          : []
         setAttachedResearchContext((current) => current ?? restoredAttachment)
         setAttachedResearchContextBaseline((current) => current ?? restoredAttachment)
+        setAttachedResearchContextHistory((current) =>
+          current.length > 0 ? current : restoredHistory
+        )
       } catch {
         // Silent, non-blocking auxiliary restore.
       }
@@ -314,32 +333,80 @@ export const Playground = () => {
 
   const handleAttachResearchContext = React.useCallback(
     (context: AttachedResearchContext) => {
-      setAttachedResearchContext(context)
-      setAttachedResearchContextBaseline(context)
-      void persistAttachedResearchContext(context)
+      const nextState = setAttachedResearchContextActive({
+        active: attachedResearchContext,
+        baseline: attachedResearchContextBaseline,
+        history: attachedResearchContextHistory,
+        nextActive: context
+      })
+      setAttachedResearchContext(nextState.active)
+      setAttachedResearchContextBaseline(nextState.baseline)
+      setAttachedResearchContextHistory(nextState.history)
+      void persistAttachedResearchContext(nextState.active, nextState.history)
     },
-    [persistAttachedResearchContext]
+    [
+      attachedResearchContext,
+      attachedResearchContextBaseline,
+      attachedResearchContextHistory,
+      persistAttachedResearchContext
+    ]
   )
 
   const handleApplyAttachedResearchContext = React.useCallback(
     (context: AttachedResearchContext) => {
       setAttachedResearchContext(context)
-      void persistAttachedResearchContext(context)
+      void persistAttachedResearchContext(context, attachedResearchContextHistory)
     },
-    [persistAttachedResearchContext]
+    [attachedResearchContextHistory, persistAttachedResearchContext]
   )
 
   const handleResetAttachedResearchContext = React.useCallback(() => {
-    setAttachedResearchContext(
-      resetAttachedResearchContext(attachedResearchContextBaseline)
-    )
-  }, [attachedResearchContextBaseline])
+    const resetContext = resetAttachedResearchContext(attachedResearchContextBaseline)
+    setAttachedResearchContext(resetContext)
+    void persistAttachedResearchContext(resetContext, attachedResearchContextHistory)
+  }, [
+    attachedResearchContextBaseline,
+    attachedResearchContextHistory,
+    persistAttachedResearchContext
+  ])
 
   const handleRemoveAttachedResearchContext = React.useCallback(() => {
-    setAttachedResearchContext(null)
-    setAttachedResearchContextBaseline(null)
-    void persistAttachedResearchContext(null)
-  }, [persistAttachedResearchContext])
+    const cleared = clearAttachedResearchContext({
+      active: attachedResearchContext,
+      baseline: attachedResearchContextBaseline,
+      history: attachedResearchContextHistory
+    })
+    setAttachedResearchContext(cleared.active)
+    setAttachedResearchContextBaseline(cleared.baseline)
+    setAttachedResearchContextHistory(cleared.history)
+    void persistAttachedResearchContext(cleared.active, cleared.history)
+  }, [
+    attachedResearchContext,
+    attachedResearchContextBaseline,
+    attachedResearchContextHistory,
+    persistAttachedResearchContext
+  ])
+
+  const handleSelectAttachedResearchContextHistory = React.useCallback(
+    (context: AttachedResearchContext) => {
+      const nextState = setAttachedResearchContextActive({
+        active: attachedResearchContext,
+        baseline: attachedResearchContextBaseline,
+        history: attachedResearchContextHistory,
+        nextActive: context
+      })
+      setAttachedResearchContext(nextState.active)
+      setAttachedResearchContextBaseline(nextState.baseline)
+      setAttachedResearchContextHistory(nextState.history)
+      void persistAttachedResearchContext(nextState.active, nextState.history)
+    },
+    [
+      attachedResearchContext,
+      attachedResearchContextBaseline,
+      attachedResearchContextHistory,
+      persistAttachedResearchContext
+    ]
+  )
 
   // Session persistence for draft restoration
   const {
@@ -1303,9 +1370,13 @@ export const Playground = () => {
               droppedFiles={droppedFiles}
               attachedResearchContext={attachedResearchContext}
               attachedResearchContextBaseline={attachedResearchContextBaseline}
+              attachedResearchContextHistory={attachedResearchContextHistory}
               onApplyAttachedResearchContext={handleApplyAttachedResearchContext}
               onResetAttachedResearchContext={handleResetAttachedResearchContext}
               onRemoveAttachedResearchContext={handleRemoveAttachedResearchContext}
+              onSelectAttachedResearchContextHistory={
+                handleSelectAttachedResearchContextHistory
+              }
             />
           </div>
         </div>

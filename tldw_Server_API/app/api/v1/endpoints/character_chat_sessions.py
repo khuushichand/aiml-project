@@ -392,6 +392,7 @@ _complete_windows = _BoundedThrottleCache()
 
 _MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS = 5
 _MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS = 5
+_MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY = 3
 _DEEP_RESEARCH_ATTACHMENT_ALLOWED_KEYS = {
     "run_id",
     "query",
@@ -516,186 +517,11 @@ def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
             detail="Invalid updatedAt. Expected ISO timestamp string"
         )
 
-    def _validate_deep_research_attachment(value: Any) -> None:
-        if value is None:
-            return
-        if not isinstance(value, dict):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Invalid deepResearchAttachment. Expected object or null",
-            )
-
-        unknown_keys = sorted(set(value.keys()) - _DEEP_RESEARCH_ATTACHMENT_ALLOWED_KEYS)
-        if unknown_keys:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    "Invalid deepResearchAttachment. Unknown keys: "
-                    + ", ".join(unknown_keys)
-                ),
-            )
-
-        required_string_fields = ("run_id", "query", "question", "research_url")
-        for key in required_string_fields:
-            raw = value.get(key)
-            if not isinstance(raw, str) or not raw.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Invalid deepResearchAttachment.{key}. Expected non-empty string",
-                )
-
-        for timestamp_key in ("attached_at", "updatedAt"):
-            raw = value.get(timestamp_key)
-            if not isinstance(raw, str) or _parse_iso_timestamp(raw) is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"Invalid deepResearchAttachment.{timestamp_key}. "
-                        "Expected ISO timestamp string"
-                    ),
-                )
-
-        outline = value.get("outline")
-        if not isinstance(outline, list):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Invalid deepResearchAttachment.outline. Expected array",
-            )
-        for index, section in enumerate(outline):
-            if not isinstance(section, dict) or set(section.keys()) != {"title"}:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"Invalid deepResearchAttachment.outline[{index}]. "
-                        "Expected object with title"
-                    ),
-                )
-            title = section.get("title")
-            if not isinstance(title, str) or not title.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"Invalid deepResearchAttachment.outline[{index}].title. "
-                        "Expected non-empty string"
-                    ),
-                )
-
-        key_claims = value.get("key_claims")
-        if not isinstance(key_claims, list):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Invalid deepResearchAttachment.key_claims. Expected array",
-            )
-        if len(key_claims) > _MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    "Invalid deepResearchAttachment.key_claims. "
-                    f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS} entries"
-                ),
-            )
-        for index, claim in enumerate(key_claims):
-            if not isinstance(claim, dict) or set(claim.keys()) != {"text"}:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"Invalid deepResearchAttachment.key_claims[{index}]. "
-                        "Expected object with text"
-                    ),
-                )
-            text = claim.get("text")
-            if not isinstance(text, str) or not text.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"Invalid deepResearchAttachment.key_claims[{index}].text. "
-                        "Expected non-empty string"
-                    ),
-                )
-
-        unresolved_questions = value.get("unresolved_questions")
-        if not isinstance(unresolved_questions, list):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Invalid deepResearchAttachment.unresolved_questions. Expected array",
-            )
-        if len(unresolved_questions) > _MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    "Invalid deepResearchAttachment.unresolved_questions. "
-                    f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS} entries"
-                ),
-            )
-        for index, question in enumerate(unresolved_questions):
-            if not isinstance(question, str) or not question.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        "Invalid deepResearchAttachment.unresolved_questions"
-                        f"[{index}]. Expected non-empty string"
-                    ),
-                )
-
-        verification_summary = value.get("verification_summary")
-        if verification_summary is not None:
-            if not isinstance(verification_summary, dict):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Invalid deepResearchAttachment.verification_summary. Expected object",
-                )
-            if set(verification_summary.keys()) - {"unsupported_claim_count"}:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        "Invalid deepResearchAttachment.verification_summary. "
-                        "Unsupported keys present"
-                    ),
-                )
-            unsupported_claim_count = verification_summary.get("unsupported_claim_count")
-            if unsupported_claim_count is not None and (
-                isinstance(unsupported_claim_count, bool)
-                or not isinstance(unsupported_claim_count, int)
-                or unsupported_claim_count < 0
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        "Invalid deepResearchAttachment.verification_summary"
-                        ".unsupported_claim_count. Expected non-negative integer"
-                    ),
-                )
-
-        source_trust_summary = value.get("source_trust_summary")
-        if source_trust_summary is not None:
-            if not isinstance(source_trust_summary, dict):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Invalid deepResearchAttachment.source_trust_summary. Expected object",
-                )
-            if set(source_trust_summary.keys()) - {"high_trust_count"}:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        "Invalid deepResearchAttachment.source_trust_summary. "
-                        "Unsupported keys present"
-                    ),
-                )
-            high_trust_count = source_trust_summary.get("high_trust_count")
-            if high_trust_count is not None and (
-                isinstance(high_trust_count, bool)
-                or not isinstance(high_trust_count, int)
-                or high_trust_count < 0
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        "Invalid deepResearchAttachment.source_trust_summary"
-                        ".high_trust_count. Expected non-negative integer"
-                    ),
-                )
-
-    _validate_deep_research_attachment(settings.get("deepResearchAttachment"))
+    _validate_deep_research_attachment(
+        settings.get("deepResearchAttachment"),
+        detail_prefix="deepResearchAttachment",
+    )
+    _validate_deep_research_attachment_history(settings.get("deepResearchAttachmentHistory"))
 
     memory_by_id = settings.get("characterMemoryById")
     if memory_by_id is not None:
@@ -835,6 +661,250 @@ def _parse_iso_timestamp(value: Any) -> Optional[float]:
     return dt.timestamp()
 
 
+def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {detail_prefix}. Expected object or null",
+        )
+
+    unknown_keys = sorted(set(value.keys()) - _DEEP_RESEARCH_ATTACHMENT_ALLOWED_KEYS)
+    if unknown_keys:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Invalid {detail_prefix}. Unknown keys: "
+                + ", ".join(unknown_keys)
+            ),
+        )
+
+    required_string_fields = ("run_id", "query", "question", "research_url")
+    for key in required_string_fields:
+        raw = value.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {detail_prefix}.{key}. Expected non-empty string",
+            )
+
+    for timestamp_key in ("attached_at", "updatedAt"):
+        raw = value.get(timestamp_key)
+        if not isinstance(raw, str) or _parse_iso_timestamp(raw) is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.{timestamp_key}. "
+                    "Expected ISO timestamp string"
+                ),
+            )
+
+    outline = value.get("outline")
+    if not isinstance(outline, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {detail_prefix}.outline. Expected array",
+        )
+    for index, section in enumerate(outline):
+        if not isinstance(section, dict) or set(section.keys()) != {"title"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.outline[{index}]. "
+                    "Expected object with title"
+                ),
+            )
+        title = section.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.outline[{index}].title. "
+                    "Expected non-empty string"
+                ),
+            )
+
+    key_claims = value.get("key_claims")
+    if not isinstance(key_claims, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {detail_prefix}.key_claims. Expected array",
+        )
+    if len(key_claims) > _MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Invalid {detail_prefix}.key_claims. "
+                f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS} entries"
+            ),
+        )
+    for index, claim in enumerate(key_claims):
+        if not isinstance(claim, dict) or set(claim.keys()) != {"text"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.key_claims[{index}]. "
+                    "Expected object with text"
+                ),
+            )
+        text = claim.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.key_claims[{index}].text. "
+                    "Expected non-empty string"
+                ),
+            )
+
+    unresolved_questions = value.get("unresolved_questions")
+    if not isinstance(unresolved_questions, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {detail_prefix}.unresolved_questions. Expected array",
+        )
+    if len(unresolved_questions) > _MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Invalid {detail_prefix}.unresolved_questions. "
+                f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS} entries"
+            ),
+        )
+    for index, question in enumerate(unresolved_questions):
+        if not isinstance(question, str) or not question.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.unresolved_questions[{index}]. "
+                    "Expected non-empty string"
+                ),
+            )
+
+    verification_summary = value.get("verification_summary")
+    if verification_summary is not None:
+        if not isinstance(verification_summary, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {detail_prefix}.verification_summary. Expected object",
+            )
+        if set(verification_summary.keys()) - {"unsupported_claim_count"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.verification_summary. "
+                    "Unsupported keys present"
+                ),
+            )
+        unsupported_claim_count = verification_summary.get("unsupported_claim_count")
+        if unsupported_claim_count is not None and (
+            isinstance(unsupported_claim_count, bool)
+            or not isinstance(unsupported_claim_count, int)
+            or unsupported_claim_count < 0
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.verification_summary"
+                    ".unsupported_claim_count. Expected non-negative integer"
+                ),
+            )
+
+    source_trust_summary = value.get("source_trust_summary")
+    if source_trust_summary is not None:
+        if not isinstance(source_trust_summary, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {detail_prefix}.source_trust_summary. Expected object",
+            )
+        if set(source_trust_summary.keys()) - {"high_trust_count"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.source_trust_summary. "
+                    "Unsupported keys present"
+                ),
+            )
+        high_trust_count = source_trust_summary.get("high_trust_count")
+        if high_trust_count is not None and (
+            isinstance(high_trust_count, bool)
+            or not isinstance(high_trust_count, int)
+            or high_trust_count < 0
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.source_trust_summary"
+                    ".high_trust_count. Expected non-negative integer"
+                ),
+            )
+
+
+def _validate_deep_research_attachment_history(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid deepResearchAttachmentHistory. Expected array or null",
+        )
+    if len(value) > _MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Invalid deepResearchAttachmentHistory. "
+                f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY} entries"
+            ),
+        )
+    for index, entry in enumerate(value):
+        _validate_deep_research_attachment(
+            entry,
+            detail_prefix=f"deepResearchAttachmentHistory[{index}]",
+        )
+
+
+def _merge_deep_research_attachment_history(
+    server_history_raw: Any,
+    incoming_history_raw: Any,
+    *,
+    active_run_id: str | None,
+) -> Optional[list[dict[str, Any]]]:
+    if not isinstance(server_history_raw, list) and not isinstance(incoming_history_raw, list):
+        return None
+
+    merged_by_run_id: dict[str, tuple[float, dict[str, Any]]] = {}
+    for history in (
+        server_history_raw if isinstance(server_history_raw, list) else [],
+        incoming_history_raw if isinstance(incoming_history_raw, list) else [],
+    ):
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            run_id = entry.get("run_id")
+            if not isinstance(run_id, str) or not run_id.strip():
+                continue
+            if active_run_id and run_id == active_run_id:
+                continue
+            entry_updated_at = _parse_iso_timestamp(entry.get("updatedAt")) or 0.0
+            existing = merged_by_run_id.get(run_id)
+            if existing is None or entry_updated_at > existing[0]:
+                merged_by_run_id[run_id] = (entry_updated_at, entry)
+
+    if not merged_by_run_id:
+        return None
+
+    ordered_entries = sorted(
+        merged_by_run_id.values(),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    return [
+        entry
+        for _timestamp, entry in ordered_entries[:_MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY]
+    ]
+
+
 def _normalize_memory_entry(entry: Any) -> Optional[dict[str, Any]]:
     """Normalize a characterMemoryById entry while preserving extra fields."""
     if entry is None:
@@ -957,6 +1027,22 @@ def _merge_conversation_settings(
                     merged["deepResearchAttachment"] = incoming_attachment
                 else:
                     merged["deepResearchAttachment"] = server_attachment
+
+    active_attachment = merged.get("deepResearchAttachment")
+    active_run_id = active_attachment.get("run_id") if isinstance(active_attachment, dict) else None
+
+    if "deepResearchAttachmentHistory" in incoming_settings and incoming_settings.get("deepResearchAttachmentHistory") is None:
+        merged.pop("deepResearchAttachmentHistory", None)
+    else:
+        merged_history = _merge_deep_research_attachment_history(
+            server_settings.get("deepResearchAttachmentHistory"),
+            incoming_settings.get("deepResearchAttachmentHistory"),
+            active_run_id=active_run_id if isinstance(active_run_id, str) else None,
+        )
+        if merged_history:
+            merged["deepResearchAttachmentHistory"] = merged_history
+        else:
+            merged.pop("deepResearchAttachmentHistory", None)
 
     schema_version = merged.get("schemaVersion")
     if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1:

@@ -47,9 +47,9 @@ def _create_character_and_chat(client, headers: dict[str, str]) -> str:
     return create_chat.json()["id"]
 
 
-def _valid_attachment() -> dict:
+def _valid_attachment(*, run_id: str = "run_123") -> dict:
     return {
-        "run_id": "run_123",
+        "run_id": run_id,
         "query": "Owner-scoped attachment",
         "question": "Owner-scoped attachment",
         "outline": [{"title": "Summary"}],
@@ -57,7 +57,7 @@ def _valid_attachment() -> dict:
         "unresolved_questions": ["What remains unclear?"],
         "verification_summary": {"unsupported_claim_count": 1},
         "source_trust_summary": {"high_trust_count": 1},
-        "research_url": "/research?run=run_123",
+        "research_url": f"/research?run={run_id}",
         "attached_at": "2026-03-08T19:55:00Z",
         "updatedAt": "2026-03-08T20:00:00Z",
     }
@@ -88,6 +88,9 @@ def test_chat_settings_endpoint_enforces_chat_ownership(isolated_test_environmen
                 "schemaVersion": 2,
                 "updatedAt": "2026-03-08T20:00:00Z",
                 "deepResearchAttachment": _valid_attachment(),
+                "deepResearchAttachmentHistory": [
+                    _valid_attachment(run_id="run_hist_owner"),
+                ],
             }
         },
     )
@@ -95,6 +98,8 @@ def test_chat_settings_endpoint_enforces_chat_ownership(isolated_test_environmen
 
     owner_get = client.get(f"/api/v1/chats/{chat_id}/settings", headers=owner_headers)
     assert owner_get.status_code == 200, owner_get.text
+    owner_settings = owner_get.json()["settings"]
+    assert owner_settings["deepResearchAttachmentHistory"][0]["run_id"] == "run_hist_owner"
 
     other_get = client.get(f"/api/v1/chats/{chat_id}/settings", headers=other_headers)
     assert other_get.status_code == 404, other_get.text
@@ -107,6 +112,9 @@ def test_chat_settings_endpoint_enforces_chat_ownership(isolated_test_environmen
                 "schemaVersion": 2,
                 "updatedAt": "2026-03-08T20:05:00Z",
                 "deepResearchAttachment": _valid_attachment(),
+                "deepResearchAttachmentHistory": [
+                    _valid_attachment(run_id="run_hist_other"),
+                ],
             }
         },
     )

@@ -8,8 +8,10 @@ import {
 } from "@/types/chat-session-settings"
 
 const storage = createSafeStorage()
+const MAX_CHAT_SETTINGS_BYTES = 200_000
 const MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS = 5
 const MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS = 5
+const MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY = 3
 const DEEP_RESEARCH_ATTACHMENT_ALLOWED_KEYS = new Set([
   "run_id",
   "query",
@@ -166,6 +168,42 @@ const sanitizeDeepResearchAttachment = (
   }
 }
 
+const sanitizeDeepResearchAttachmentHistory = (
+  value: unknown,
+  activeRunId?: string | null
+): DeepResearchAttachment[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+
+  const byRunId = new Map<string, DeepResearchAttachment>()
+  for (const rawEntry of value) {
+    const entry = sanitizeDeepResearchAttachment(rawEntry)
+    if (!entry) continue
+    if (activeRunId && entry.run_id === activeRunId) continue
+    const existing = byRunId.get(entry.run_id)
+    if (!existing || toEpoch(entry.updatedAt) > toEpoch(existing.updatedAt)) {
+      byRunId.set(entry.run_id, entry)
+    }
+  }
+
+  return Array.from(byRunId.values())
+    .sort((left, right) => toEpoch(right.updatedAt) - toEpoch(left.updatedAt))
+    .slice(0, MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY)
+}
+
+const enforceChatSettingsSize = (
+  settings: ChatSettingsRecord
+): ChatSettingsRecord | null => {
+  try {
+    const encoded = new TextEncoder().encode(JSON.stringify(settings))
+    if (encoded.byteLength > MAX_CHAT_SETTINGS_BYTES) {
+      return null
+    }
+    return settings
+  } catch {
+    return null
+  }
+}
+
 const coerceSettings = (raw: any): ChatSettingsRecord | null => {
   if (!isRecord(raw)) return null
   const schemaVersion =
@@ -181,17 +219,27 @@ const coerceSettings = (raw: any): ChatSettingsRecord | null => {
     schemaVersion,
     updatedAt
   }
+  const sanitizedAttachment = Object.prototype.hasOwnProperty.call(
+    raw,
+    "deepResearchAttachment"
+  )
+    ? raw.deepResearchAttachment === null
+      ? null
+      : sanitizeDeepResearchAttachment(raw.deepResearchAttachment)
+    : undefined
+
   if (Object.prototype.hasOwnProperty.call(raw, "deepResearchAttachment")) {
-    if (raw.deepResearchAttachment === null) {
+    if (sanitizedAttachment === null) {
       next.deepResearchAttachment = null
-    } else {
-      const sanitizedAttachment = sanitizeDeepResearchAttachment(
-        raw.deepResearchAttachment
-      )
-      if (sanitizedAttachment) {
-        next.deepResearchAttachment = sanitizedAttachment
-      }
+    } else if (sanitizedAttachment) {
+      next.deepResearchAttachment = sanitizedAttachment
     }
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, "deepResearchAttachmentHistory")) {
+    next.deepResearchAttachmentHistory = sanitizeDeepResearchAttachmentHistory(
+      raw.deepResearchAttachmentHistory,
+      sanitizedAttachment?.run_id ?? next.deepResearchAttachment?.run_id ?? null
+    )
   }
   return next
 }
@@ -266,6 +314,17 @@ export const mergeChatSettings = (
         : local.deepResearchAttachment
   }
 
+  const mergedHistory = sanitizeDeepResearchAttachmentHistory(
+    [
+      ...(local.deepResearchAttachmentHistory || []),
+      ...(remote.deepResearchAttachmentHistory || [])
+    ],
+    merged.deepResearchAttachment?.run_id ?? null
+  )
+  if (mergedHistory !== undefined) {
+    merged.deepResearchAttachmentHistory = mergedHistory
+  }
+
   return merged
 }
 
@@ -296,7 +355,11 @@ export const saveChatSettingsForKey = async (
     if (!payload) {
       return false
     }
-    await storage.set(key, payload)
+    const boundedPayload = enforceChatSettingsSize(payload)
+    if (!boundedPayload) {
+      return false
+    }
+    await storage.set(key, boundedPayload)
     return true
   } catch (error) {
     console.error("Failed to save chat settings", error)
@@ -406,7 +469,10 @@ export const applyChatSettingsPatch = async (params: {
       updatedAt: new Date().toISOString()
     } as ChatSettingsRecord)
 
-  await saveChatSettingsForKey(chatKey, next)
+  const saved = await saveChatSettingsForKey(chatKey, next)
+  if (!saved) {
+    return null
+  }
 
   if (!serverChatId) {
     return next

@@ -2,14 +2,34 @@ import { describe, expect, it } from "vitest"
 
 import {
   applyAttachedResearchContextEdits,
+  clearAttachedResearchContext,
   deriveAttachedResearchContext,
   isDeepResearchCompletionMetadata,
   resetAttachedResearchContext,
+  setAttachedResearchContextActive,
   sanitizeAttachedResearchContext,
+  type AttachedResearchContext,
   toChatResearchContext
 } from "../research-chat-context"
 
 describe("research-chat-context", () => {
+  const buildContext = (
+    runId: string,
+    overrides: Partial<AttachedResearchContext> = {}
+  ): AttachedResearchContext => ({
+    attached_at: "2026-03-08T20:00:00Z",
+    run_id: runId,
+    query: `Query for ${runId}`,
+    question: `Question for ${runId}`,
+    outline: [{ title: `Outline ${runId}` }],
+    key_claims: [{ text: `Claim ${runId}` }],
+    unresolved_questions: [`Question ${runId}`],
+    verification_summary: { unsupported_claim_count: 0 },
+    source_trust_summary: { high_trust_count: 1 },
+    research_url: `/research?run=${runId}`,
+    ...overrides
+  })
+
   it("derives a bounded attached context from a completed research bundle", () => {
     const context = deriveAttachedResearchContext(
       {
@@ -178,5 +198,112 @@ describe("research-chat-context", () => {
 
     expect(resetAttachedResearchContext(baseline)).toEqual(baseline)
     expect(resetAttachedResearchContext(null)).toBeNull()
+  })
+
+  it("attaching a different run pushes the old active attachment into history and resets baseline", () => {
+    const active = buildContext("run_active")
+    const prior = buildContext("run_prior", {
+      attached_at: "2026-03-08T19:00:00Z"
+    })
+    const next = buildContext("run_next", {
+      attached_at: "2026-03-08T21:00:00Z"
+    })
+
+    const transitioned = setAttachedResearchContextActive({
+      active,
+      baseline: active,
+      history: [prior],
+      nextActive: next
+    })
+
+    expect(transitioned.active).toEqual(next)
+    expect(transitioned.baseline).toEqual(next)
+    expect(transitioned.history.map((entry) => entry.run_id)).toEqual([
+      "run_active",
+      "run_prior"
+    ])
+  })
+
+  it("attaching the same run_id updates active and baseline without churning history", () => {
+    const active = buildContext("run_same", {
+      question: "Original question"
+    })
+    const history = [buildContext("run_prior")]
+    const replacement = buildContext("run_same", {
+      question: "Replacement question"
+    })
+
+    const transitioned = setAttachedResearchContextActive({
+      active,
+      baseline: active,
+      history,
+      nextActive: replacement
+    })
+
+    expect(transitioned.active?.question).toBe("Replacement question")
+    expect(transitioned.baseline?.question).toBe("Replacement question")
+    expect(transitioned.history.map((entry) => entry.run_id)).toEqual([
+      "run_prior"
+    ])
+  })
+
+  it("restoring a history entry swaps it into active immediately and keeps history deduped", () => {
+    const active = buildContext("run_active")
+    const history = [
+      buildContext("run_restore", { attached_at: "2026-03-08T21:00:00Z" }),
+      buildContext("run_old", { attached_at: "2026-03-08T19:00:00Z" })
+    ]
+
+    const transitioned = setAttachedResearchContextActive({
+      active,
+      baseline: active,
+      history,
+      nextActive: history[0]
+    })
+
+    expect(transitioned.active?.run_id).toBe("run_restore")
+    expect(transitioned.baseline?.run_id).toBe("run_restore")
+    expect(transitioned.history.map((entry) => entry.run_id)).toEqual([
+      "run_active",
+      "run_old"
+    ])
+  })
+
+  it("removing the active attachment preserves history and clears baseline", () => {
+    const active = buildContext("run_active")
+    const history = [buildContext("run_prior")]
+
+    const cleared = clearAttachedResearchContext({
+      active,
+      baseline: active,
+      history
+    })
+
+    expect(cleared.active).toBeNull()
+    expect(cleared.baseline).toBeNull()
+    expect(cleared.history.map((entry) => entry.run_id)).toEqual(["run_prior"])
+  })
+
+  it("caps history at three entries after repeated swaps", () => {
+    const active = buildContext("run_active")
+    const history = [
+      buildContext("run_hist_1", { attached_at: "2026-03-08T19:00:00Z" }),
+      buildContext("run_hist_2", { attached_at: "2026-03-08T18:00:00Z" }),
+      buildContext("run_hist_3", { attached_at: "2026-03-08T17:00:00Z" })
+    ]
+    const next = buildContext("run_next", { attached_at: "2026-03-08T21:00:00Z" })
+
+    const transitioned = setAttachedResearchContextActive({
+      active,
+      baseline: active,
+      history,
+      nextActive: next
+    })
+
+    expect(transitioned.history.map((entry) => entry.run_id)).toEqual([
+      "run_active",
+      "run_hist_1",
+      "run_hist_2"
+    ])
   })
 })
