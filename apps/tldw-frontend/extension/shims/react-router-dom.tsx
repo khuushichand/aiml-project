@@ -42,6 +42,8 @@ const runNavigationTransition = (update: () => void) => {
 
 const noop = () => {}
 
+export const UNSAFE_DataRouterContext = React.createContext<unknown | null>(null)
+
 export const Link = React.forwardRef<HTMLAnchorElement, LinkProps>(
   function Link({ to, href, ...rest }, ref) {
     const resolvedHref = href ?? to ?? "#"

@@ -3579,6 +3579,11 @@ async def persona_stream(
                     for line in companion_payload.get("knowledge_lines", [])
                     if str(line or "").strip()
                 ]
+                companion_goal_lines = [
+                    str(line).strip()
+                    for line in companion_payload.get("goal_lines", [])
+                    if str(line or "").strip()
+                ]
                 companion_activity_lines = [
                     str(line).strip()
                     for line in companion_payload.get("activity_lines", [])
@@ -3594,6 +3599,11 @@ async def persona_stream(
                         f"{query_text}\n\nCompanion knowledge:\n"
                         + "\n".join(companion_knowledge_lines)
                     )
+                if companion_goal_lines:
+                    query_text = (
+                        f"{query_text}\n\nActive companion goals:\n"
+                        + "\n".join(companion_goal_lines)
+                    )
                 if companion_activity_lines:
                     query_text = (
                         f"{query_text}\n\nRecent explicit companion activity:\n"
@@ -3604,7 +3614,7 @@ async def persona_stream(
                     applied_context_labels.append("persistent persona state")
                 if compact_memories:
                     applied_context_labels.append("personalization memories")
-                if companion_knowledge_lines or companion_activity_lines:
+                if companion_knowledge_lines or companion_goal_lines or companion_activity_lines:
                     applied_context_labels.append("companion context")
                 query_text = append_persona_exemplar_sections(query_text, persona_exemplar_sections)
                 has_exemplar_guidance = any(
@@ -3827,6 +3837,7 @@ async def persona_stream(
                     companion_context = await asyncio.to_thread(
                         load_companion_context,
                         user_id=authenticated_user_id,
+                        query=text,
                     )
                 persona_state_hints: dict[str, str] = {}
                 if use_persona_state_context and state_context_allowed_by_mode:
@@ -3853,7 +3864,9 @@ async def persona_stream(
                 companion_usage = {
                     "enabled": use_companion_context,
                     "requested_enabled": requested_use_companion_context,
+                    "mode": str(companion_context.get("mode") or "recent_fallback"),
                     "applied_card_count": int(companion_context.get("card_count", 0) or 0),
+                    "applied_goal_count": int(companion_context.get("goal_count", 0) or 0),
                     "applied_activity_count": int(companion_context.get("activity_count", 0) or 0),
                 }
                 if use_memory_context and memory_context:
@@ -3878,7 +3891,9 @@ async def persona_stream(
                         message="Memory context disabled for this message",
                     )
                 if use_companion_context and (
-                    companion_usage["applied_card_count"] or companion_usage["applied_activity_count"]
+                    companion_usage["applied_card_count"]
+                    or companion_usage["applied_goal_count"]
+                    or companion_usage["applied_activity_count"]
                 ):
                     await _emit_notice(
                         session_id=session_id,
@@ -3887,6 +3902,7 @@ async def persona_stream(
                         message=(
                             "Applied companion context from "
                             f"{companion_usage['applied_card_count']} knowledge cards and "
+                            f"{companion_usage['applied_goal_count']} goals and "
                             f"{companion_usage['applied_activity_count']} recent activities"
                         ),
                     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 """Pydantic schemas for the companion personalization API."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -29,6 +29,10 @@ class CompanionActivityListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class CompanionActivityDetail(CompanionActivityItem):
+    """One detailed companion activity entry."""
 
 
 class CompanionActivityCreate(BaseModel):
@@ -107,6 +111,13 @@ class CompanionKnowledgeListResponse(BaseModel):
     total: int
 
 
+class CompanionKnowledgeDetail(CompanionKnowledgeCard):
+    """Detailed response for one companion knowledge card."""
+
+    evidence_events: list[CompanionActivityItem] = Field(default_factory=list)
+    evidence_goals: list["CompanionGoal"] = Field(default_factory=list)
+
+
 class CompanionGoal(BaseModel):
     """One tracked companion goal."""
 
@@ -116,6 +127,10 @@ class CompanionGoal(BaseModel):
     goal_type: str
     config: dict[str, Any] = Field(default_factory=dict)
     progress: dict[str, Any] = Field(default_factory=dict)
+    origin_kind: str = "manual"
+    progress_mode: str = "manual"
+    derivation_key: str | None = None
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
     status: str
     created_at: datetime
     updated_at: datetime
@@ -158,4 +173,81 @@ class CompanionReflectionItem(BaseModel):
     cadence: str | None = None
     summary: str
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    delivery_decision: str | None = None
+    delivery_reason: str | None = None
+    theme_key: str | None = None
+    signal_strength: float | None = None
+    follow_up_prompts: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
+
+
+class CompanionReflectionDetail(BaseModel):
+    """Detailed response for one companion reflection entry."""
+
+    id: str
+    title: str
+    cadence: str | None = None
+    summary: str
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    delivery_decision: str | None = None
+    delivery_reason: str | None = None
+    theme_key: str | None = None
+    signal_strength: float | None = None
+    follow_up_prompts: list[dict[str, Any]] = Field(default_factory=list)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    activity_events: list[CompanionActivityItem] = Field(default_factory=list)
+    knowledge_cards: list[CompanionKnowledgeCard] = Field(default_factory=list)
+    goals: list[CompanionGoal] = Field(default_factory=list)
+
+
+class CompanionFollowUpPrompt(BaseModel):
+    """One deterministic follow-up prompt suggestion."""
+
+    prompt_id: str
+    label: str
+    prompt_text: str
+    prompt_type: str
+    source_reflection_id: str | None = None
+    source_evidence_ids: list[str] = Field(default_factory=list)
+
+
+class CompanionConversationPromptsResponse(BaseModel):
+    """Prompt suggestions for the companion conversation surface."""
+
+    prompt_source_kind: str
+    prompt_source_id: str | None = None
+    prompts: list[CompanionFollowUpPrompt] = Field(default_factory=list)
+
+
+CompanionLifecycleScope = Literal["knowledge", "reflections", "derived_goals", "goal_progress"]
+
+
+class CompanionPurgeRequest(BaseModel):
+    """Request payload for purging a scoped slice of companion state."""
+
+    scope: CompanionLifecycleScope
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CompanionRebuildRequest(BaseModel):
+    """Request payload for rebuilding a scoped slice of companion state."""
+
+    scope: CompanionLifecycleScope
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CompanionLifecycleResponse(BaseModel):
+    """Response payload for purge and rebuild lifecycle operations."""
+
+    status: str
+    scope: CompanionLifecycleScope
+    deleted_counts: dict[str, int] = Field(default_factory=dict)
+    rebuilt_counts: dict[str, int] = Field(default_factory=dict)
+    job_id: int | None = None
+    job_uuid: str | None = None
+
+
+CompanionKnowledgeDetail.model_rebuild()

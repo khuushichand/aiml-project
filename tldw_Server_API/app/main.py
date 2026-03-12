@@ -2243,6 +2243,7 @@ async def lifespan(app: FastAPI):
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
     reminder_jobs_task = None
+    admin_backup_jobs_task = None
     jobs_notifications_bridge_task = None
     chatbooks_cleanup_stop_event = None
     files_jobs_stop_event = None
@@ -2649,6 +2650,21 @@ async def lifespan(app: FastAPI):
                 logger.info("Reminder Jobs worker disabled (REMINDER_JOBS_WORKER_ENABLED != true)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reminder Jobs worker: {e}")
+
+    # Admin backup Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Admin backup Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.services.admin_backup_jobs_worker import start_admin_backup_jobs_worker
+
+            admin_backup_jobs_task = await start_admin_backup_jobs_worker()
+            if admin_backup_jobs_task:
+                logger.info("Admin backup Jobs worker started")
+            else:
+                logger.info("Admin backup Jobs worker disabled (ADMIN_BACKUP_JOBS_WORKER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Admin backup Jobs worker: {e}")
 
     # Jobs notifications bridge worker
     try:
@@ -3237,6 +3253,19 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Reading digest scheduler: {e}")
 
+    # Start Admin backup scheduler (platform backup schedule submission into Jobs)
+    admin_backup_sched_task = None
+    try:
+        from tldw_Server_API.app.services.admin_backup_scheduler import start_admin_backup_scheduler
+
+        admin_backup_sched_task = await start_admin_backup_scheduler()
+        if admin_backup_sched_task:
+            logger.info("Admin backup scheduler started")
+        else:
+            logger.info("Admin backup scheduler disabled (ADMIN_BACKUP_SCHEDULER_ENABLED != true)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Admin backup scheduler: {e}")
+
     # Start Companion reflection scheduler (cron-based submission into Jobs)
     companion_reflection_sched_task = None
     try:
@@ -3636,6 +3665,16 @@ async def lifespan(app: FastAPI):
             except _STARTUP_GUARD_EXCEPTIONS:
                 with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     reminder_jobs_task.cancel()
+        if "admin_backup_jobs_task" in locals() and admin_backup_jobs_task:
+            try:
+                admin_backup_jobs_task.cancel()
+                await _asyncio.wait_for(admin_backup_jobs_task, timeout=5.0)
+                logger.info("Admin backup Jobs worker cancelled")
+            except _asyncio.CancelledError:
+                pass
+            except _STARTUP_GUARD_EXCEPTIONS:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                    admin_backup_jobs_task.cancel()
         if "jobs_notifications_bridge_task" in locals() and jobs_notifications_bridge_task:
             try:
                 jobs_notifications_bridge_task.cancel()
@@ -3718,6 +3757,20 @@ async def lifespan(app: FastAPI):
             try:
                 if "reading_digest_sched_task" in locals() and reading_digest_sched_task:
                     reading_digest_sched_task.cancel()
+            except _STARTUP_GUARD_EXCEPTIONS:
+                pass
+        # Stop Admin backup scheduler
+        try:
+            if "admin_backup_sched_task" in locals() and admin_backup_sched_task:
+                from tldw_Server_API.app.services.admin_backup_scheduler import (
+                    stop_admin_backup_scheduler as _stop_admin_backup_scheduler,
+                )
+
+                await _stop_admin_backup_scheduler(admin_backup_sched_task)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            try:
+                if "admin_backup_sched_task" in locals() and admin_backup_sched_task:
+                    admin_backup_sched_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
                 pass
         # Stop Companion reflection scheduler
@@ -5971,6 +6024,15 @@ elif _MINIMAL_TEST_APP:
             logger.info("Route disabled by policy: evaluations (minimal test app)")
     except _STARTUP_GUARD_EXCEPTIONS as _evals_min_err:
         logger.debug(f"Skipping evaluations routers in minimal test app: {_evals_min_err}")
+    try:
+        if route_enabled("monitoring"):
+            from tldw_Server_API.app.api.v1.endpoints.monitoring import router as _monitoring_router
+
+            app.include_router(_monitoring_router, prefix=f"{API_V1_PREFIX}", tags=["monitoring"])
+        else:
+            logger.info("Route disabled by policy: monitoring (minimal test app)")
+    except _STARTUP_GUARD_EXCEPTIONS as _monitoring_min_err:
+        logger.debug(f"Skipping monitoring router in minimal test app: {_monitoring_min_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(

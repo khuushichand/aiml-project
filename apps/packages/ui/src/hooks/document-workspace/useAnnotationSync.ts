@@ -26,11 +26,6 @@ function syncAnnotationsWithBeacon(
     return false
   }
 
-  // sendBeacon is not available in all environments (e.g., some older browsers, Node.js)
-  if (typeof navigator === "undefined" || !navigator.sendBeacon) {
-    return false
-  }
-
   try {
     const url = `${serverUrl}/api/v1/media/${mediaId}/annotations/sync`
     const payload = JSON.stringify({
@@ -44,11 +39,36 @@ function syncAnnotationsWithBeacon(
       client_ids: pendingAnnotations.map((ann) => ann.id)
     })
 
-    // sendBeacon returns true if the browser successfully queued the request
     const blob = new Blob([payload], { type: "application/json" })
+
+    // Guard: sendBeacon has a ~64KB limit in most browsers.
+    // If payload exceeds 60KB, fall back to fetch with keepalive.
+    const MAX_BEACON_SIZE = 60_000
+    if (blob.size > MAX_BEACON_SIZE) {
+      // fetch with keepalive behaves like sendBeacon but has no size limit
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        keepalive: true
+      }).catch((err) => console.error("keepalive fetch for annotations failed:", err))
+      return true
+    }
+
+    // sendBeacon is not available in all environments
+    if (typeof navigator === "undefined" || !navigator.sendBeacon) {
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        keepalive: true
+      }).catch((err) => console.error("keepalive fetch for annotations failed:", err))
+      return true
+    }
+
     return navigator.sendBeacon(url, blob)
   } catch (error) {
-    console.error("sendBeacon failed:", error)
+    console.error("syncAnnotationsWithBeacon failed:", error)
     return false
   }
 }

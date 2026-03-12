@@ -12,11 +12,10 @@ import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
-import { isUnsafeLocalToolsEnabled } from '@/lib/admin-ui-flags';
 import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
 import { useUrlPagination } from '@/lib/use-url-state';
 import { usePagedResource, type LoadOptions } from '@/lib/use-paged-resource';
-import type { BackupItem } from '@/types';
+import type { BackupItem, BackupScheduleItem, User } from '@/types';
 import {
   AlertCircle,
   CheckCircle2,
@@ -48,17 +47,6 @@ type BackupListItem = BackupItem & {
   status_message?: string | null;
 };
 
-type BackupSchedule = {
-  id: string;
-  dataset: string;
-  frequency: BackupScheduleFrequency;
-  time_of_day: string;
-  retention_count: number;
-  is_paused: boolean;
-  created_at: string;
-  updated_at: string;
-};
-
 type BackupTrendPoint = {
   id: string;
   createdAt: string;
@@ -82,6 +70,8 @@ const DATASET_OPTIONS = [
   { value: 'authnz', label: 'AuthNZ Users DB' },
 ];
 
+const PER_USER_BACKUP_DATASETS = new Set(['media', 'chacha', 'prompts', 'evaluations', 'audit']);
+
 const BACKUP_TYPES = [
   { value: 'full', label: 'Full' },
   { value: 'incremental', label: 'Incremental' },
@@ -92,8 +82,6 @@ const SCHEDULE_FREQUENCY_OPTIONS: Array<{ value: BackupScheduleFrequency; label:
   { value: 'weekly', label: 'Weekly' },
   { value: 'monthly', label: 'Monthly' },
 ];
-
-const SCHEDULE_STORAGE_KEY = 'data_ops_backup_schedules_v1';
 
 const formatBackupDate = (value?: string | null) => formatDateTime(value, {
   fallback: '—',
@@ -128,33 +116,6 @@ const parseBackupItems = (value: unknown): BackupListItem[] => {
     }
   }
   return [];
-};
-
-const parseScheduleStorage = (value: unknown): BackupSchedule[] => {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry): BackupSchedule | null => {
-      if (!entry || typeof entry !== 'object') return null;
-      const record = entry as Partial<BackupSchedule>;
-      if (typeof record.id !== 'string' || !record.id.trim()) return null;
-      if (typeof record.dataset !== 'string' || !record.dataset.trim()) return null;
-      if (typeof record.frequency !== 'string' || !isBackupScheduleFrequency(record.frequency)) return null;
-      if (typeof record.time_of_day !== 'string' || !/^\d{2}:\d{2}$/.test(record.time_of_day)) return null;
-      if (typeof record.retention_count !== 'number' || !Number.isInteger(record.retention_count) || record.retention_count <= 0) {
-        return null;
-      }
-      return {
-        id: record.id,
-        dataset: record.dataset,
-        frequency: record.frequency,
-        time_of_day: record.time_of_day,
-        retention_count: record.retention_count,
-        is_paused: Boolean(record.is_paused),
-        created_at: typeof record.created_at === 'string' ? record.created_at : new Date().toISOString(),
-        updated_at: typeof record.updated_at === 'string' ? record.updated_at : new Date().toISOString(),
-      };
-    })
-    .filter((entry): entry is BackupSchedule => entry !== null);
 };
 
 const normalizeBackupStatus = (status?: string | null): BackupHistoryStatusFilter => {
@@ -243,6 +204,17 @@ const buildDatasetTrends = (items: BackupListItem[]): BackupDatasetTrend[] => {
     .sort((a, b) => a.dataset.localeCompare(b.dataset));
 };
 
+const requiresScheduleTargetUser = (dataset: string) => PER_USER_BACKUP_DATASETS.has(dataset);
+
+const formatScheduleExecutionStatus = (status?: string | null) => {
+  const normalized = String(status || '').trim();
+  if (!normalized) return 'No runs yet';
+  return normalized
+    .split('_')
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+};
+
 const BackupStatusBadge = ({ status }: { status?: string | null }) => {
   const normalizedStatus = normalizeBackupStatus(status);
   if (normalizedStatus === 'failed') {
@@ -273,7 +245,6 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
   const { success, error: showError } = useToast();
   const confirm = useConfirm();
-  const unsafeLocalToolsEnabled = isUnsafeLocalToolsEnabled();
 
   const [activeTab, setActiveTab] = useState<BackupsTab>('backups');
 
@@ -293,8 +264,14 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   const [historyDatasetFilter, setHistoryDatasetFilter] = useState('');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<BackupHistoryStatusFilter>('all');
 
-  const [schedules, setSchedules] = useState<BackupSchedule[]>([]);
+  const [schedules, setSchedules] = useState<BackupScheduleItem[]>([]);
+  const [scheduleUsers, setScheduleUsers] = useState<User[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(true);
+  const [scheduleUsersLoading, setScheduleUsersLoading] = useState(true);
+  const [scheduleSubmitting, setScheduleSubmitting] = useState(false);
+  const [scheduleActionBusyId, setScheduleActionBusyId] = useState<string | null>(null);
   const [scheduleDataset, setScheduleDataset] = useState('media');
+  const [scheduleTargetUserId, setScheduleTargetUserId] = useState('');
   const [scheduleFrequency, setScheduleFrequency] = useState('');
   const [scheduleTimeOfDay, setScheduleTimeOfDay] = useState('');
   const [scheduleRetentionCount, setScheduleRetentionCount] = useState('30');
@@ -351,33 +328,75 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
     void loadHistory();
   }, [loadHistory, refreshSignal]);
 
-  useEffect(() => {
-    if (!unsafeLocalToolsEnabled) {
-      setSchedules([]);
-      return;
-    }
-    if (typeof window === 'undefined') return;
+  const loadSchedules = useCallback(async () => {
     try {
-      const raw = window.localStorage.getItem(SCHEDULE_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      setSchedules(parseScheduleStorage(parsed));
-    } catch (err) {
-      console.warn('Failed to read backup schedules from local storage:', err);
+      setScheduleLoading(true);
+      const response = await api.listBackupSchedules({
+        limit: '100',
+        offset: '0',
+      });
+      setSchedules(response.items.filter((item) => !item.deleted_at));
+      setScheduleError('');
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to load backup schedules';
+      setScheduleError(message);
       setSchedules([]);
+    } finally {
+      setScheduleLoading(false);
     }
-  }, [unsafeLocalToolsEnabled]);
+  }, []);
 
-  const persistSchedules = useCallback((nextSchedules: BackupSchedule[]) => {
-    if (!unsafeLocalToolsEnabled) return;
-    setSchedules(nextSchedules);
-    if (typeof window === 'undefined') return;
+  const loadScheduleUsers = useCallback(async () => {
     try {
-      window.localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(nextSchedules));
-    } catch (err) {
-      console.warn('Failed to persist backup schedules:', err);
+      setScheduleUsersLoading(true);
+      const response = await api.getUsers({ limit: '100' });
+      setScheduleUsers(response);
+    } catch (err: unknown) {
+      console.error('Failed to load backup schedule users:', err);
+      setScheduleUsers([]);
+    } finally {
+      setScheduleUsersLoading(false);
     }
-  }, [unsafeLocalToolsEnabled]);
+  }, []);
+
+  useEffect(() => {
+    void loadSchedules();
+    void loadScheduleUsers();
+  }, [loadScheduleUsers, loadSchedules, refreshSignal]);
+
+  const upsertSchedule = useCallback((item: BackupScheduleItem) => {
+    setSchedules((current) => {
+      const remaining = current.filter((schedule) => schedule.id !== item.id);
+      if (item.deleted_at) {
+        return remaining;
+      }
+      return [item, ...remaining]
+        .slice()
+        .sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || ''));
+    });
+  }, []);
+
+  const scheduleUsersById = useMemo(() => {
+    const next = new Map<number, User>();
+    scheduleUsers.forEach((user) => {
+      next.set(user.id, user);
+    });
+    return next;
+  }, [scheduleUsers]);
+
+  const scheduleRequiresTargetUser = requiresScheduleTargetUser(scheduleDataset);
+
+  const resolveScheduleTargetLabel = useCallback((schedule: BackupScheduleItem) => {
+    if (!schedule.target_user_id) {
+      return 'Platform';
+    }
+    const user = scheduleUsersById.get(schedule.target_user_id);
+    if (!user) {
+      return `User #${schedule.target_user_id}`;
+    }
+    const identity = user.email?.trim() || user.username?.trim() || `User #${user.id}`;
+    return `${identity} (#${user.id})`;
+  }, [scheduleUsersById]);
 
   const handleBackupFilterChange = (key: 'dataset' | 'user', value: string) => {
     if (key === 'dataset') {
@@ -453,6 +472,12 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
   };
 
   const validateScheduleForm = () => {
+    if (scheduleRequiresTargetUser) {
+      const targetUserId = toPositiveInteger(scheduleTargetUserId);
+      if (targetUserId === null) {
+        return 'Select a target user.';
+      }
+    }
     if (!scheduleFrequency || !isBackupScheduleFrequency(scheduleFrequency)) {
       return 'Frequency is required.';
     }
@@ -468,6 +493,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
 
   const resetScheduleForm = () => {
     setScheduleDataset('media');
+    setScheduleTargetUserId('');
     setScheduleFrequency('');
     setScheduleTimeOfDay('');
     setScheduleRetentionCount('30');
@@ -475,89 +501,108 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
     setEditingScheduleId(null);
   };
 
-  const handleSubmitSchedule = () => {
-    if (!unsafeLocalToolsEnabled) return;
+  const handleSubmitSchedule = async () => {
     const validationError = validateScheduleForm();
     if (validationError) {
       setScheduleError(validationError);
       return;
     }
 
-    const nowIso = new Date().toISOString();
     const retentionCount = toPositiveInteger(scheduleRetentionCount) as number;
+    const targetUserId = scheduleRequiresTargetUser ? toPositiveInteger(scheduleTargetUserId) : null;
 
-    if (editingScheduleId) {
-      const nextSchedules = schedules.map((schedule) => (
-        schedule.id === editingScheduleId
-          ? {
-              ...schedule,
-              dataset: scheduleDataset,
-              frequency: scheduleFrequency as BackupScheduleFrequency,
-              time_of_day: scheduleTimeOfDay,
-              retention_count: retentionCount,
-              updated_at: nowIso,
-            }
-          : schedule
-      ));
-      persistSchedules(nextSchedules);
-      success('Schedule updated', 'Backup schedule updated locally.');
+    try {
+      setScheduleSubmitting(true);
+      setScheduleError('');
+
+      if (editingScheduleId) {
+        const response = await api.updateBackupSchedule(editingScheduleId, {
+          frequency: scheduleFrequency,
+          time_of_day: scheduleTimeOfDay,
+          retention_count: retentionCount,
+        });
+        upsertSchedule(response.item);
+        success('Schedule updated', 'Backup schedule updated.');
+      } else {
+        const payload: Record<string, unknown> = {
+          dataset: scheduleDataset,
+          frequency: scheduleFrequency,
+          time_of_day: scheduleTimeOfDay,
+          retention_count: retentionCount,
+        };
+        if (targetUserId !== null) {
+          payload.target_user_id = targetUserId;
+        }
+        const response = await api.createBackupSchedule(payload);
+        upsertSchedule(response.item);
+        success('Schedule created', 'Backup schedule created.');
+      }
+
       resetScheduleForm();
-      return;
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to save backup schedule';
+      setScheduleError(message);
+      showError('Schedule failed', message);
+    } finally {
+      setScheduleSubmitting(false);
     }
-
-    const nextSchedule: BackupSchedule = {
-      id: `sched-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-      dataset: scheduleDataset,
-      frequency: scheduleFrequency as BackupScheduleFrequency,
-      time_of_day: scheduleTimeOfDay,
-      retention_count: retentionCount,
-      is_paused: false,
-      created_at: nowIso,
-      updated_at: nowIso,
-    };
-    persistSchedules([nextSchedule, ...schedules]);
-    success('Schedule created', 'Backup schedule saved locally.');
-    resetScheduleForm();
   };
 
-  const handleEditSchedule = (schedule: BackupSchedule) => {
-    if (!unsafeLocalToolsEnabled) return;
+  const handleEditSchedule = (schedule: BackupScheduleItem) => {
     setEditingScheduleId(schedule.id);
     setScheduleDataset(schedule.dataset);
+    setScheduleTargetUserId(schedule.target_user_id ? String(schedule.target_user_id) : '');
     setScheduleFrequency(schedule.frequency);
     setScheduleTimeOfDay(schedule.time_of_day);
     setScheduleRetentionCount(String(schedule.retention_count));
     setScheduleError('');
   };
 
-  const handleToggleSchedulePause = (schedule: BackupSchedule) => {
-    if (!unsafeLocalToolsEnabled) return;
-    const nextSchedules = schedules.map((entry) => (
-      entry.id === schedule.id
-        ? { ...entry, is_paused: !entry.is_paused, updated_at: new Date().toISOString() }
-        : entry
-    ));
-    persistSchedules(nextSchedules);
-    success(schedule.is_paused ? 'Schedule resumed' : 'Schedule paused', 'Schedule updated locally.');
+  const handleToggleSchedulePause = async (schedule: BackupScheduleItem) => {
+    try {
+      setScheduleActionBusyId(schedule.id);
+      const response = schedule.is_paused
+        ? await api.resumeBackupSchedule(schedule.id)
+        : await api.pauseBackupSchedule(schedule.id);
+      upsertSchedule(response.item);
+      success(
+        schedule.is_paused ? 'Schedule resumed' : 'Schedule paused',
+        schedule.is_paused ? 'Backup schedule resumed.' : 'Backup schedule paused.'
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to update backup schedule';
+      setScheduleError(message);
+      showError('Schedule update failed', message);
+    } finally {
+      setScheduleActionBusyId(null);
+    }
   };
 
   const handleDeleteSchedule = async (scheduleId: string) => {
-    if (!unsafeLocalToolsEnabled) return;
     const accepted = await confirm({
       title: 'Delete backup schedule?',
-      message: 'This removes the local schedule configuration.',
+      message: 'This removes the shared backup schedule configuration.',
       confirmText: 'Delete',
       variant: 'danger',
       icon: 'delete',
     });
     if (!accepted) return;
 
-    const nextSchedules = schedules.filter((schedule) => schedule.id !== scheduleId);
-    persistSchedules(nextSchedules);
-    if (editingScheduleId === scheduleId) {
-      resetScheduleForm();
+    try {
+      setScheduleActionBusyId(scheduleId);
+      await api.deleteBackupSchedule(scheduleId);
+      setSchedules((current) => current.filter((schedule) => schedule.id !== scheduleId));
+      if (editingScheduleId === scheduleId) {
+        resetScheduleForm();
+      }
+      success('Schedule deleted', 'Backup schedule removed.');
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to delete backup schedule';
+      setScheduleError(message);
+      showError('Schedule delete failed', message);
+    } finally {
+      setScheduleActionBusyId(null);
     }
-    success('Schedule deleted', 'Backup schedule removed locally.');
   };
 
   const filteredHistoryItems = useMemo(() => {
@@ -598,27 +643,22 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
       <CardContent className="space-y-6">
         {activeTab === 'schedule' ? (
           <>
-            {unsafeLocalToolsEnabled ? (
-              <Alert>
-                <AlertDescription>
-                  Backup scheduling is currently stored in browser local storage for development only.
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <Alert>
-                <AlertDescription>
-                  Backup scheduling is unavailable until backend schedule APIs are available.
-                </AlertDescription>
-              </Alert>
-            )}
+            <Alert>
+              <AlertDescription>
+                Backup schedules are shared platform policy. Scheduled runs enqueue backup jobs and retain their latest run state here.
+              </AlertDescription>
+            </Alert>
 
-            <div className="grid gap-3 md:grid-cols-5">
+            <div className="grid gap-3 md:grid-cols-6">
               <Field id="backup-schedule-dataset" label="Dataset">
                 <Select
                   id="backup-schedule-dataset"
                   value={scheduleDataset}
-                  disabled={!unsafeLocalToolsEnabled}
-                  onChange={(event) => setScheduleDataset(event.target.value)}
+                  onChange={(event) => {
+                    setScheduleDataset(event.target.value);
+                    setScheduleError('');
+                  }}
+                  disabled={Boolean(editingScheduleId)}
                 >
                   {DATASET_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -627,12 +667,36 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                   ))}
                 </Select>
               </Field>
+              {scheduleRequiresTargetUser && (
+                <Field id="backup-schedule-target-user" label="Target user">
+                  <Select
+                    id="backup-schedule-target-user"
+                    value={scheduleTargetUserId}
+                    onChange={(event) => {
+                      setScheduleTargetUserId(event.target.value);
+                      setScheduleError('');
+                    }}
+                    disabled={Boolean(editingScheduleId) || scheduleUsersLoading}
+                  >
+                    <option value="">
+                      {scheduleUsersLoading ? 'Loading users…' : 'Select a user'}
+                    </option>
+                    {scheduleUsers.map((user) => (
+                      <option key={user.id} value={String(user.id)}>
+                        {(user.email?.trim() || user.username?.trim() || `User #${user.id}`)} ({user.id})
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
               <Field id="backup-schedule-frequency" label="Frequency">
                 <Select
                   id="backup-schedule-frequency"
                   value={scheduleFrequency}
-                  disabled={!unsafeLocalToolsEnabled}
-                  onChange={(event) => setScheduleFrequency(event.target.value)}
+                  onChange={(event) => {
+                    setScheduleFrequency(event.target.value);
+                    setScheduleError('');
+                  }}
                 >
                   <option value="">Select frequency</option>
                   {SCHEDULE_FREQUENCY_OPTIONS.map((option) => (
@@ -647,35 +711,33 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                   id="backup-schedule-time"
                   type="time"
                   value={scheduleTimeOfDay}
-                  disabled={!unsafeLocalToolsEnabled}
-                  onChange={(event) => setScheduleTimeOfDay(event.target.value)}
+                  onChange={(event) => {
+                    setScheduleTimeOfDay(event.target.value);
+                    setScheduleError('');
+                  }}
                 />
               </Field>
               <Field id="backup-schedule-retention" label="Retention count">
                 <Input
                   id="backup-schedule-retention"
                   value={scheduleRetentionCount}
-                  disabled={!unsafeLocalToolsEnabled}
-                  onChange={(event) => setScheduleRetentionCount(event.target.value)}
+                  onChange={(event) => {
+                    setScheduleRetentionCount(event.target.value);
+                    setScheduleError('');
+                  }}
                 />
               </Field>
               <div className="flex items-end gap-2">
-                <Button onClick={handleSubmitSchedule} disabled={!unsafeLocalToolsEnabled}>
+                <Button onClick={() => { void handleSubmitSchedule(); }} disabled={scheduleSubmitting}>
                   {editingScheduleId ? 'Update schedule' : 'Create schedule'}
                 </Button>
                 {editingScheduleId && (
-                  <Button variant="outline" onClick={resetScheduleForm} disabled={!unsafeLocalToolsEnabled}>
+                  <Button variant="outline" onClick={resetScheduleForm} disabled={scheduleSubmitting}>
                     Cancel
                   </Button>
                 )}
               </div>
             </div>
-
-            {!unsafeLocalToolsEnabled && (
-              <p className="text-sm text-muted-foreground">
-                Scheduling controls are disabled in production-safe mode.
-              </p>
-            )}
 
             {scheduleError && (
               <Alert variant="destructive">
@@ -687,16 +749,22 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
               <TableHeader>
                 <TableRow>
                   <TableHead>Dataset</TableHead>
-                  <TableHead>Frequency</TableHead>
-                  <TableHead>Time</TableHead>
-                  <TableHead>Retention</TableHead>
+                  <TableHead>Target</TableHead>
+                  <TableHead>Schedule</TableHead>
+                  <TableHead>Next run</TableHead>
+                  <TableHead>Last run</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Updated</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {schedules.length === 0 ? (
+                {scheduleLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-muted-foreground">
+                      Loading backup schedules…
+                    </TableCell>
+                  </TableRow>
+                ) : schedules.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-muted-foreground">
                       No backup schedules configured.
@@ -706,35 +774,52 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                   schedules.map((schedule) => (
                     <TableRow key={schedule.id} data-testid={`backup-schedule-row-${schedule.id}`}>
                       <TableCell>{schedule.dataset}</TableCell>
-                      <TableCell className="capitalize">{schedule.frequency}</TableCell>
-                      <TableCell>{schedule.time_of_day}</TableCell>
-                      <TableCell>{schedule.retention_count}</TableCell>
+                      <TableCell>{resolveScheduleTargetLabel(schedule)}</TableCell>
                       <TableCell>
-                        <Badge variant={schedule.is_paused ? 'secondary' : 'default'}>
-                          {schedule.is_paused ? 'Paused' : 'Active'}
-                        </Badge>
+                        <div className="space-y-1">
+                          <div>{schedule.schedule_description}</div>
+                          <div className="text-xs text-muted-foreground">
+                            Retain {schedule.retention_count} snapshots
+                          </div>
+                        </div>
                       </TableCell>
-                      <TableCell>{formatBackupDate(schedule.updated_at)}</TableCell>
+                      <TableCell>{formatBackupDate(schedule.next_run_at)}</TableCell>
+                      <TableCell>{formatBackupDate(schedule.last_run_at)}</TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          <Badge variant={schedule.is_paused ? 'secondary' : 'default'}>
+                            {schedule.is_paused ? 'Paused' : 'Active'}
+                          </Badge>
+                          {(!schedule.is_paused || String(schedule.last_status || '').trim().toLowerCase() !== 'paused') ? (
+                            <div className="text-xs text-muted-foreground">
+                              {formatScheduleExecutionStatus(schedule.last_status)}
+                            </div>
+                          ) : null}
+                          {schedule.last_error ? (
+                            <div className="text-xs text-red-600">{schedule.last_error}</div>
+                          ) : null}
+                        </div>
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Button
                             variant="ghost"
                             size="sm"
                             onClick={() => handleEditSchedule(schedule)}
-                            disabled={!unsafeLocalToolsEnabled}
                             aria-label="Edit schedule"
                             title="Edit schedule"
+                            disabled={scheduleActionBusyId === schedule.id || scheduleSubmitting}
                           >
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleToggleSchedulePause(schedule)}
-                            disabled={!unsafeLocalToolsEnabled}
+                            onClick={() => { void handleToggleSchedulePause(schedule); }}
                             aria-label={schedule.is_paused ? 'Resume schedule' : 'Pause schedule'}
                             title={schedule.is_paused ? 'Resume schedule' : 'Pause schedule'}
                             data-testid={`backup-schedule-toggle-${schedule.id}`}
+                            disabled={scheduleActionBusyId === schedule.id || scheduleSubmitting}
                           >
                             {schedule.is_paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
                           </Button>
@@ -742,9 +827,9 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
                             variant="ghost"
                             size="sm"
                             onClick={() => { void handleDeleteSchedule(schedule.id); }}
-                            disabled={!unsafeLocalToolsEnabled}
                             aria-label="Delete schedule"
                             title="Delete schedule"
+                            disabled={scheduleActionBusyId === schedule.id || scheduleSubmitting}
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>

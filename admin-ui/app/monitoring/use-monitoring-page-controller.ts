@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
-import { isUnsafeLocalToolsEnabled } from '@/lib/admin-ui-flags';
 import { isAlertSnoozed } from '@/lib/monitoring-alerts';
 import {
   MONITORING_DEFAULT_SERIES_VISIBILITY,
@@ -57,7 +56,6 @@ type MonitoringPageController = {
 
 export const useMonitoringPageController = (): MonitoringPageController => {
   const confirm = useConfirm();
-  const unsafeLocalToolsEnabled = isUnsafeLocalToolsEnabled();
   const {
     metrics,
     setMetrics,
@@ -175,12 +173,9 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     apiClient: api,
     confirm,
     setAlerts,
-    setAlertHistory,
     setError,
     setSuccess,
     onReloadRequested: loadData,
-    assignableUsers,
-    allowLocalMutations: unsafeLocalToolsEnabled,
   });
 
   const {
@@ -205,8 +200,9 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     handleCreateAlertRule,
     handleDeleteAlertRule,
   } = useAlertRules({
+    apiClient: api,
+    setError,
     setSuccess,
-    unsafeLocalToolsEnabled,
   });
 
   useEffect(() => {
@@ -256,7 +252,6 @@ export const useMonitoringPageController = (): MonitoringPageController => {
   });
 
   const managementPanelsProps = useMonitoringManagementPanelsProps({
-    unsafeLocalToolsEnabled,
     alertRules,
     alertRuleDraft,
     alertRuleValidationErrors,

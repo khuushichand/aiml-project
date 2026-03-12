@@ -11,6 +11,7 @@ export { WorkflowCard } from "./WorkflowCard"
 export { WorkflowLanding, WorkflowLandingModal } from "./WorkflowLanding"
 export { WorkflowContainer, WorkflowOverlay } from "./WorkflowContainer"
 export { WorkflowIntegrationHost } from "./WorkflowIntegrationHost"
+export { WorkflowRunInspector } from "./WorkflowRunInspector"
 export {
   ContextualSuggestionCard,
   ContextualSuggestionList,

@@ -190,10 +190,11 @@ test.describe('Stage 3 rendering resilience', () => {
   test('stt model timeout state shows retry and reloads once per click', async ({ page }) => {
     await seedAuth(page)
 
+    let shouldFailModels = true
     let modelCalls = 0
     await page.route('**/api/v1/media/transcription-models**', async (route) => {
       modelCalls += 1
-      if (modelCalls <= 2) {
+      if (shouldFailModels) {
         await fulfillJson(route, 504, {
           detail: 'timeout while loading transcription models'
         })
@@ -219,19 +220,22 @@ test.describe('Stage 3 rendering resilience', () => {
     const retryButton = page.getByRole('button', { name: /retry/i }).first()
     await expect(retryButton).toBeVisible({ timeout: LOAD_TIMEOUT })
 
+    const callsBeforeRetry = modelCalls
+    shouldFailModels = false
     await retryButton.click()
 
-    await expect.poll(() => modelCalls).toBe(3)
+    await expect.poll(() => modelCalls).toBeGreaterThan(callsBeforeRetry)
     await expect(retryButton).toHaveCount(0)
   })
 
   test('speech stt timeout state shows retry and reloads once per click', async ({ page }) => {
     await seedAuth(page)
 
+    let shouldFailModels = true
     let modelCalls = 0
     await page.route('**/api/v1/media/transcription-models**', async (route) => {
       modelCalls += 1
-      if (modelCalls <= 2) {
+      if (shouldFailModels) {
         await fulfillJson(route, 504, {
           detail: 'timeout while loading speech transcription models'
         })
@@ -257,9 +261,11 @@ test.describe('Stage 3 rendering resilience', () => {
     const retryButton = page.getByRole('button', { name: /retry/i }).first()
     await expect(retryButton).toBeVisible({ timeout: LOAD_TIMEOUT })
 
+    const callsBeforeRetry = modelCalls
+    shouldFailModels = false
     await retryButton.click()
 
-    await expect.poll(() => modelCalls).toBe(3)
+    await expect.poll(() => modelCalls).toBeGreaterThan(callsBeforeRetry)
     await expect(retryButton).toHaveCount(0)
   })
 

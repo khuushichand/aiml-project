@@ -6,7 +6,6 @@ import SystemStatusPanel from './SystemStatusPanel';
 import WatchlistsPanel from './WatchlistsPanel';
 
 type MonitoringManagementPanelsProps = {
-  unsafeLocalToolsEnabled: boolean;
   alertRulesPanelProps: ComponentProps<typeof AlertRulesPanel>;
   alertsPanelProps: ComponentProps<typeof AlertsPanel>;
   watchlistsPanelProps: ComponentProps<typeof WatchlistsPanel>;
@@ -15,7 +14,6 @@ type MonitoringManagementPanelsProps = {
 };
 
 export default function MonitoringManagementPanels({
-  unsafeLocalToolsEnabled,
   alertRulesPanelProps,
   alertsPanelProps,
   watchlistsPanelProps,
@@ -26,23 +24,12 @@ export default function MonitoringManagementPanels({
     <>
       <div className="mb-6">
         <AlertRulesPanel {...alertRulesPanelProps} />
-        <p className="mt-2 text-xs text-muted-foreground">
-          {unsafeLocalToolsEnabled
-            ? 'Local-only alert rule editing is enabled for development and is not persisted server-side.'
-            : 'Alert rule editing is unavailable until a backend alert-rules endpoint is available.'}
-        </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <AlertsPanel {...alertsPanelProps} />
         <WatchlistsPanel {...watchlistsPanelProps} />
       </div>
-
-      {!unsafeLocalToolsEnabled ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Alert assignment, snoozing, and escalation are unavailable until backend alert mutation endpoints are available.
-        </p>
-      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-2 mt-6">
         <NotificationsPanel {...notificationsPanelProps} />

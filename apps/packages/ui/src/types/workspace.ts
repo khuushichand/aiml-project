@@ -34,6 +34,28 @@ export interface WorkspaceSource {
   pageCount?: number // For PDFs
 }
 
+export interface WorkspaceSourceFolder {
+  id: string
+  workspaceId: string
+  name: string
+  parentFolderId: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface WorkspaceSourceFolderMembership {
+  folderId: string
+  sourceId: string
+}
+
+export interface WorkspaceCollection {
+  id: string
+  name: string
+  description: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Artifact Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -279,6 +301,7 @@ export interface SavedWorkspace {
   id: string
   name: string
   tag: string
+  collectionId: string | null
   createdAt: Date
   lastAccessedAt: Date
   /** Number of sources in this workspace */

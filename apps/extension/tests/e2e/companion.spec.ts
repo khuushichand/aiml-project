@@ -113,6 +113,31 @@ const installCompanionApiMock = async (
           }
         }
 
+        if (
+          method === "GET" &&
+          path.startsWith("/api/v1/companion/conversation-prompts")
+        ) {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              prompt_source_kind: "reflection",
+              prompt_source_id: "reflection-1",
+              prompts: [
+                {
+                  prompt_id: "prompt-1",
+                  label: "Next concrete step",
+                  prompt_text:
+                    "What is the next concrete step for project alpha?",
+                  prompt_type: "clarify_priority",
+                  source_reflection_id: "reflection-1",
+                  source_evidence_ids: ["activity-1"]
+                }
+              ]
+            }
+          }
+        }
+
         if (method === "GET" && path.startsWith("/api/v1/notifications")) {
           return {
             ok: true,
@@ -298,6 +323,85 @@ test.describe("Extension companion capture", () => {
       await expect(
         sidepanel.getByText("companion_check_in #checkin-1", { exact: false })
       ).toBeVisible()
+    } finally {
+      try {
+        await sidepanel.evaluate(() => {
+          ;(window as any).__restoreCompanionPatch?.()
+        })
+      } catch {
+        // ignore cleanup failures if page already closed
+      }
+      await context.close()
+    }
+  })
+
+  test("shows settings but keeps lifecycle controls out of the sidepanel workspace", async () => {
+    const { context, openSidepanel } = await launchWithBuiltExtension({
+      allowOffline: true,
+      seedConfig: {
+        __tldw_first_run_complete: true,
+        __tldw_allow_offline: true
+      }
+    })
+
+    await installCompanionApiMock(context)
+
+    const sidepanel = await openSidepanel()
+
+    try {
+      await sidepanel.waitForFunction(
+        () => typeof (window as any).__tldwNavigate === "function"
+      )
+      await sidepanel.evaluate(() => {
+        ;(window as any).__tldwNavigate?.("/companion")
+      })
+      await expect(sidepanel.getByRole("heading", { name: "Settings" })).toBeVisible()
+      await expect(
+        sidepanel.getByRole("checkbox", { name: "Daily reflections" })
+      ).toBeVisible()
+      await expect(
+        sidepanel.getByRole("button", { name: "Purge knowledge" })
+      ).toHaveCount(0)
+    } finally {
+      try {
+        await sidepanel.evaluate(() => {
+          ;(window as any).__restoreCompanionPatch?.()
+        })
+      } catch {
+        // ignore cleanup failures if page already closed
+      }
+      await context.close()
+    }
+  })
+
+  test("inserts a companion conversation prompt chip into the draft", async () => {
+    const { context, openSidepanel } = await launchWithBuiltExtension({
+      allowOffline: true,
+      seedConfig: {
+        __tldw_first_run_complete: true,
+        __tldw_allow_offline: true
+      }
+    })
+
+    await installCompanionApiMock(context)
+
+    const sidepanel = await openSidepanel()
+
+    try {
+      await sidepanel.waitForFunction(
+        () => typeof (window as any).__tldwNavigate === "function"
+      )
+      await sidepanel.evaluate(() => {
+        ;(window as any).__tldwNavigate?.("/companion/conversation")
+      })
+
+      await expect(
+        sidepanel.getByPlaceholder("Ask Companion...")
+      ).toBeVisible()
+      await sidepanel.getByRole("button", { name: "Next concrete step" }).click()
+      await expect(sidepanel.getByPlaceholder("Ask Companion...")).toHaveValue(
+        "What is the next concrete step for project alpha?"
+      )
     } finally {
       try {
         await sidepanel.evaluate(() => {

@@ -23,28 +23,46 @@ const TEST_BYPASS_KEY = "__tldw_allow_offline"
 const FORCE_UNCONFIGURED_KEY = "__tldw_force_unconfigured"
 const FIRST_RUN_COMPLETE_KEY = "__tldw_first_run_complete"
 
+const coerceStorageFlag = (value: unknown): boolean | null => {
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") return value === "true"
+  return null
+}
+
+const readLocalStorageFlag = (key: string): boolean | null => {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem(key)
+      if (raw != null) {
+        return raw === "true"
+      }
+    }
+  } catch {
+    // ignore localStorage availability
+  }
+
+  return null
+}
+
 const getStorageFlag = async (key: string): Promise<boolean> => {
   try {
     if (typeof chrome !== "undefined" && chrome?.storage?.local) {
       return await new Promise<boolean>((resolve) => {
-        chrome.storage.local.get(key, (res) =>
-          resolve(Boolean(res?.[key]))
-        )
+        chrome.storage.local.get(key, (res) => {
+          if (res && Object.prototype.hasOwnProperty.call(res, key)) {
+            resolve(coerceStorageFlag(res[key]) ?? false)
+            return
+          }
+
+          resolve(readLocalStorageFlag(key) ?? false)
+        })
       })
     }
   } catch {
     // ignore storage read errors
   }
 
-  try {
-    if (typeof localStorage !== "undefined") {
-      return localStorage.getItem(key) === "true"
-    }
-  } catch {
-    // ignore localStorage availability
-  }
-
-  return false
+  return readLocalStorageFlag(key) ?? false
 }
 
 const getOfflineBypassFlag = async (): Promise<boolean> => {
