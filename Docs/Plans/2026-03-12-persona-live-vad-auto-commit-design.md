@@ -60,6 +60,8 @@ Rejected alternatives:
 
 The client does not own turn finalization even when it sends these values. They are server hints only.
 
+Persona live sessions should treat `enable_vad` as effectively on by default when the client omits it. The frontend does not need a dedicated VAD settings UI in this slice.
+
 `voice_commit` remains supported, but only for:
 
 - manual `Send now`
@@ -81,14 +83,16 @@ When `audio_chunk` arrives:
 1. decode and normalize audio as the persona live STT path already does
 2. feed the chunk into the session transcriber
 3. emit safe forward-only `partial_transcript` deltas
-4. feed the same chunk into the turn detector when VAD is enabled and available
-5. when VAD marks end-of-turn, finalize the current transcript snapshot and route it through the existing `_handle_persona_live_turn(...)` path
+4. feed the same normalized chunk into the turn detector when VAD is enabled and available
+5. when VAD marks end-of-turn, finalize the current transcript snapshot, apply trigger-phrase gating/stripping, then route the cleaned transcript through the existing `_handle_persona_live_turn(...)` path
 
 The persona websocket should emit a structured notice when auto-commit happens. The exact wire shape can stay within the existing `notice` contract, for example:
 
 - `reason_code: "VOICE_TURN_COMMITTED"`
 - `commit_source: "vad_auto"`
 - `transcript: "<final transcript>"`
+
+The commit notice should be emitted before expensive turn handling begins so the client can transition out of `listening` deterministically instead of racing the later `tool_plan` or assistant events.
 
 ### Manual Fallback And Dedupe
 
@@ -105,6 +109,24 @@ After any successful commit, the session should reset only the current utterance
 - clear the committed flag for the next utterance
 
 This state must remain ephemeral and session-local. It is not a second persistence layer.
+
+### Trigger Phrase Gating
+
+Trigger-phrase detection and stripping must move to the server for the auto-commit path.
+
+The current client-side `voice_commit` path strips configured trigger phrases before sending the transcript. That is no longer sufficient once the server can commit directly from `audio_chunk` + VAD.
+
+For both `vad_auto` and manual commit paths, the server should:
+
+- inspect `voice_runtime.trigger_phrases`
+- if trigger phrases are configured and none are present in the transcript, do not create a user turn
+- strip detected trigger phrases before calling `_handle_persona_live_turn(...)`
+- if stripping leaves an empty command, emit a benign notice and do not create a user turn
+
+Recommended notice reason codes:
+
+- `VOICE_TRIGGER_NOT_HEARD`
+- `VOICE_EMPTY_COMMAND_AFTER_TRIGGER`
 
 ## VAD Reuse Strategy
 
@@ -148,6 +170,8 @@ When VAD is unavailable, the UI should:
 - show a warning that live voice is in manual send mode
 - expose `Send now` as the primary action for committing the heard transcript
 
+Use one stable warning reason code for this degraded state, for example `VOICE_MANUAL_MODE_REQUIRED`, so the controller does not have to guess from free-text warning messages.
+
 When the server ignores a duplicate manual commit after an auto-commit, the controller should treat it as informational rather than an error.
 
 ### Existing Session-Only Toggles
@@ -158,6 +182,18 @@ When the server ignores a duplicate manual commit after an auto-commit, the cont
 - `barge-in` still controls whether current playback is interrupted when the user starts listening again
 
 Neither toggle should change server commit authority.
+
+### Manual `Send now`
+
+`Send now` should not race active microphone capture.
+
+If the user presses `Send now` while the mic is still active, the controller should:
+
+1. stop microphone capture first
+2. then send manual `voice_commit`
+3. ignore any later duplicate server notice for that same utterance
+
+The client should also stop mic capture immediately when it receives `VOICE_TURN_COMMITTED`, so it does not continue streaming chunks into a newly reset utterance while the assistant is already thinking.
 
 ## Error Handling
 
@@ -178,6 +214,8 @@ Backend websocket coverage should prove:
 - a session emits the degraded manual-mode warning when VAD is unavailable
 - manual `voice_commit` still works in degraded mode
 - duplicate manual commit after VAD auto-commit is ignored safely
+- trigger phrases are stripped server-side before the persona turn runs
+- missing trigger phrases do not create persona turns
 - empty/noise-only VAD finalization does not create a user turn
 - transcriber and turn-detector state reset correctly between utterances
 
@@ -185,6 +223,7 @@ Frontend coverage should prove:
 
 - the controller no longer sends routine `voice_commit` on stop-listening
 - the controller enters `thinking` only after the server commit notice
+- the controller stops mic capture when the server commit notice arrives
 - degraded manual mode exposes `Send now` and uses explicit `voice_commit`
 - duplicate manual-commit ignore notices do not surface as hard errors
 - the Live Session UI reflects warning/manual-mode states clearly

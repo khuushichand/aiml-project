@@ -36,6 +36,8 @@ Use fake turn-detector/transcriber doubles so the tests prove:
 - auto-commit can happen without a client `voice_commit`
 - duplicate manual commit is ignored after auto-commit
 - degraded manual mode emits a warning notice rather than failing the session
+- trigger phrases are stripped server-side before the persona plan runs
+- missing trigger phrases do not create persona turns
 
 **Step 2: Run test to verify it fails**
 
@@ -65,6 +67,7 @@ In `persona.py`, add minimal helpers for:
 
 - normalizing VAD config from `voice_config`
 - creating a `SileroTurnDetector`
+- normalizing/stripping trigger phrases server-side
 - resetting one utterance after commit
 - emitting one degraded-manual-mode warning per session
 - committing a transcript snapshot with `commit_source`
@@ -84,16 +87,19 @@ When `voice_config` arrives:
 - clear current utterance state
 - mark the session as not-yet-committed
 
-Use server defaults if VAD fields are omitted.
+Use server defaults if VAD fields are omitted, with VAD enabled by default for persona live sessions.
 
 **Step 3: Wire `audio_chunk` into transcriber + turn detector**
 
 Update the `audio_chunk` path so it:
 
 - keeps the current transcriber-backed partial transcript flow
-- also feeds normalized audio bytes into `SileroTurnDetector`
+- also feeds the same normalized audio bytes into `SileroTurnDetector`
 - auto-commits once when VAD marks the utterance complete
 - emits a `notice` with `reason_code="VOICE_TURN_COMMITTED"` and `commit_source="vad_auto"`
+- emits the commit notice before `_handle_persona_live_turn(...)` begins
+- applies trigger detection/stripping on the server before routing the final transcript
+- emits `VOICE_TRIGGER_NOT_HEARD` or `VOICE_EMPTY_COMMAND_AFTER_TRIGGER` when appropriate instead of creating a turn
 
 Do not send a separate websocket protocol family if `notice` can carry the metadata cleanly.
 
@@ -104,6 +110,7 @@ Update `voice_commit` handling so it:
 - commits the current snapshot only if that utterance has not already been committed
 - emits `VOICE_COMMIT_IGNORED_ALREADY_COMMITTED` when the same utterance was already auto-committed
 - uses `commit_source="manual"` for the success path
+- runs the same server-side trigger detection/stripping logic as the auto-commit path
 
 **Step 5: Run backend tests**
 
@@ -139,6 +146,7 @@ Add tests that prove:
 ```tsx
 it("does not send routine voice_commit when listening stops")
 it("enters thinking only after VOICE_TURN_COMMITTED notice")
+it("stops mic capture when the server commit notice arrives")
 it("uses manual Send now when the session is in degraded manual mode")
 it("renders the manual-send affordance and degraded warning state")
 ```
@@ -176,7 +184,7 @@ In `usePersonaLiveVoiceController`:
 
 - stop sending `voice_commit` from `stopListening()`
 - keep `stopListening()` focused on mic capture only
-- add a dedicated `sendNow()` action that sends manual `voice_commit`
+- add a dedicated `sendNow()` action that stops mic capture first when necessary, then sends manual `voice_commit`
 - enter `thinking` and update `lastCommittedText` only when handling a server commit notice
 
 Treat `VOICE_COMMIT_IGNORED_ALREADY_COMMITTED` as informational, not as an error state.
@@ -191,7 +199,7 @@ manualModeOnly: boolean
 sendNow: () => void
 ```
 
-Set manual-mode state from server warning/notice payloads rather than from browser heuristics.
+Set manual-mode state from server warning/notice payloads rather than from browser heuristics. Prefer stable reason codes like `VOICE_MANUAL_MODE_REQUIRED` and `VOICE_TURN_COMMITTED` instead of parsing warning text.
 
 **Step 3: Update the Assistant Voice card**
 
