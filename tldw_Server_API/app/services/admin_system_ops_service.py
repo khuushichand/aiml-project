@@ -17,6 +17,9 @@ from tldw_Server_API.app.core.Utils.Utils import get_database_dir
 _FLAG_SCOPES = {"global", "org", "user"}
 _INCIDENT_STATUSES = {"open", "investigating", "mitigating", "resolved"}
 _INCIDENT_SEVERITIES = {"low", "medium", "high", "critical"}
+_INCIDENT_ACTION_ITEM_LIMIT = 25
+_INCIDENT_ACTION_ITEM_TEXT_MAX_LENGTH = 500
+_UNSET = object()
 
 _STORE_LOCK = Lock()
 _STORE_PATH = Path(get_database_dir()) / "system_ops.json"
@@ -121,6 +124,56 @@ def _parse_iso(value: str | None) -> datetime:
         return datetime.fromisoformat(raw)
     except ValueError:
         return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _normalize_incident_action_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for raw_item in value[:_INCIDENT_ACTION_ITEM_LIMIT]:
+        if not isinstance(raw_item, dict):
+            continue
+        text = str(raw_item.get("text") or "").strip()
+        if not text:
+            continue
+        normalized.append(
+            {
+                "id": str(raw_item.get("id") or f"ai_{uuid4().hex[:10]}"),
+                "text": text[:_INCIDENT_ACTION_ITEM_TEXT_MAX_LENGTH],
+                "done": bool(raw_item.get("done")),
+            }
+        )
+    return normalized
+
+
+def _normalize_incident_record(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("invalid_incident")
+
+    incident = dict(value)
+    incident["assigned_to_user_id"] = (
+        int(incident["assigned_to_user_id"])
+        if incident.get("assigned_to_user_id") is not None
+        else None
+    )
+    incident["assigned_to_label"] = (
+        str(incident["assigned_to_label"]).strip() or None
+        if incident.get("assigned_to_label") is not None
+        else None
+    )
+    incident["root_cause"] = (
+        str(incident["root_cause"]).strip() or None
+        if incident.get("root_cause") is not None
+        else None
+    )
+    incident["impact"] = (
+        str(incident["impact"]).strip() or None
+        if incident.get("impact") is not None
+        else None
+    )
+    incident["action_items"] = _normalize_incident_action_items(incident.get("action_items"))
+    return incident
 
 
 def _load_store() -> dict[str, Any]:
@@ -473,7 +526,10 @@ def list_incidents(
     total = len(incidents)
     safe_offset = max(0, offset)
     safe_limit = max(1, limit)
-    return incidents[safe_offset:safe_offset + safe_limit], total
+    return [
+        _normalize_incident_record(item)
+        for item in incidents[safe_offset:safe_offset + safe_limit]
+    ], total
 
 
 def create_incident(
@@ -516,10 +572,15 @@ def create_incident(
         "created_by": actor,
         "updated_by": actor,
         "timeline": [timeline_entry],
+        "assigned_to_user_id": None,
+        "assigned_to_label": None,
+        "root_cause": None,
+        "impact": None,
+        "action_items": [],
     }
     with _locked_store(write=True) as store:
         store.setdefault("incidents", []).append(incident)
-    return dict(incident)
+    return _normalize_incident_record(incident)
 
 
 def update_incident(
@@ -530,44 +591,94 @@ def update_incident(
     severity: str | None,
     summary: str | None,
     tags: list[str] | None,
+    assigned_to_user_id: Any = _UNSET,
+    assigned_to_label: Any = _UNSET,
+    root_cause: Any = _UNSET,
+    impact: Any = _UNSET,
+    action_items: Any = _UNSET,
     update_message: str | None,
     actor: str | None,
 ) -> dict[str, Any]:
     now = _now_iso()
+    note = (update_message or "").strip() or None
     with _locked_store(write=True) as store:
         incidents = store.get("incidents", [])
-        for incident in incidents:
+        for index, incident in enumerate(incidents):
             if incident.get("id") != incident_id:
                 continue
+            current = _normalize_incident_record(incident)
+            updated_incident = dict(current)
+            updated_incident["tags"] = list(current.get("tags") or [])
+            updated_incident["timeline"] = list(current.get("timeline") or [])
+            updated_incident["action_items"] = [dict(item) for item in current.get("action_items") or []]
             if title is not None:
-                incident["title"] = title.strip() or incident.get("title")
+                updated_incident["title"] = title.strip() or current.get("title")
             if status is not None:
                 status_norm = status.strip().lower()
                 if status_norm not in _INCIDENT_STATUSES:
                     raise ValueError("invalid_status")
-                incident["status"] = status_norm
-                incident["resolved_at"] = now if status_norm == "resolved" else None
+                updated_incident["status"] = status_norm
+                updated_incident["resolved_at"] = now if status_norm == "resolved" else None
             if severity is not None:
                 severity_norm = severity.strip().lower()
                 if severity_norm not in _INCIDENT_SEVERITIES:
                     raise ValueError("invalid_severity")
-                incident["severity"] = severity_norm
+                updated_incident["severity"] = severity_norm
             if summary is not None:
-                incident["summary"] = summary.strip() or None
+                updated_incident["summary"] = summary.strip() or None
             if tags is not None:
-                incident["tags"] = tags
-            if update_message:
-                incident.setdefault("timeline", []).append(
+                updated_incident["tags"] = tags
+            if assigned_to_user_id is not _UNSET:
+                if assigned_to_user_id is None:
+                    updated_incident["assigned_to_user_id"] = None
+                    updated_incident["assigned_to_label"] = None
+                else:
+                    updated_incident["assigned_to_user_id"] = int(assigned_to_user_id)
+                    if assigned_to_label is _UNSET:
+                        updated_incident["assigned_to_label"] = (
+                            current["assigned_to_label"]
+                            if current.get("assigned_to_user_id") == updated_incident["assigned_to_user_id"]
+                            else None
+                        )
+                    else:
+                        updated_incident["assigned_to_label"] = (
+                            str(assigned_to_label).strip() or None
+                            if assigned_to_label is not None
+                            else None
+                        )
+            elif assigned_to_label is not _UNSET and current.get("assigned_to_user_id") is not None:
+                updated_incident["assigned_to_label"] = (
+                    str(assigned_to_label).strip() or None
+                    if assigned_to_label is not None
+                    else None
+                )
+            if root_cause is not _UNSET:
+                updated_incident["root_cause"] = (
+                    str(root_cause).strip() or None
+                    if root_cause is not None
+                    else None
+                )
+            if impact is not _UNSET:
+                updated_incident["impact"] = (
+                    str(impact).strip() or None
+                    if impact is not None
+                    else None
+                )
+            if action_items is not _UNSET:
+                updated_incident["action_items"] = _normalize_incident_action_items(action_items)
+            if note:
+                updated_incident.setdefault("timeline", []).append(
                     {
                         "id": f"evt_{uuid4().hex[:10]}",
-                        "message": update_message.strip(),
+                        "message": note,
                         "created_at": now,
                         "actor": actor,
                     }
                 )
-            incident["updated_at"] = now
-            incident["updated_by"] = actor
-            return dict(incident)
+            updated_incident["updated_at"] = now
+            updated_incident["updated_by"] = actor
+            incidents[index] = updated_incident
+            return _normalize_incident_record(updated_incident)
     raise ValueError("not_found")
 
 
@@ -595,7 +706,7 @@ def add_incident_event(
             incident.setdefault("timeline", []).append(event)
             incident["updated_at"] = now
             incident["updated_by"] = actor
-            return dict(incident)
+            return _normalize_incident_record(incident)
     raise ValueError("not_found")
 
 
