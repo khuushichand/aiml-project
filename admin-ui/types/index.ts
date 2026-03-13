@@ -188,6 +188,49 @@ export interface BackupScheduleMutationResponse {
   item: BackupScheduleItem;
 }
 
+export interface MaintenanceRotationRunItem {
+  id: string;
+  mode: 'dry_run' | 'execute';
+  status: 'queued' | 'running' | 'complete' | 'failed';
+  domain?: string | null;
+  queue?: string | null;
+  job_type?: string | null;
+  fields_json: string;
+  limit?: number | null;
+  affected_count?: number | null;
+  requested_by_user_id?: number | null;
+  requested_by_label?: string | null;
+  confirmation_recorded: boolean;
+  job_id?: string | null;
+  scope_summary: string;
+  key_source: string;
+  error_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface MaintenanceRotationRunListResponse {
+  items: MaintenanceRotationRunItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface MaintenanceRotationRunCreateRequest {
+  mode: 'dry_run' | 'execute';
+  domain?: string;
+  queue?: string;
+  job_type?: string;
+  fields: string[];
+  limit: number;
+  confirmed: boolean;
+}
+
+export interface MaintenanceRotationRunCreateResponse {
+  item: MaintenanceRotationRunItem;
+}
+
 export interface RetentionPolicy {
   key: string;
   days?: number | null;
