@@ -13,7 +13,8 @@
 ### Task 1: Capture The Hardening Baseline
 
 **Files:**
-- Modify: `Docs/Plans/2026-03-13-flashcards-quizzes-pr-878-local-hardening-design.md`
+- Read: `Docs/Plans/2026-03-13-flashcards-quizzes-pr-878-local-hardening-design.md`
+- Read: `Docs/Plans/2026-03-13-flashcards-quizzes-pr-878-local-hardening-implementation-plan.md`
 - Test: `git status`, `git log`, `git diff --stat`
 
 **Step 1: Record the current branch state**
@@ -37,14 +38,11 @@ Document in execution notes:
 - docs/link checks
 - slower UI verification
 
-**Step 3: Commit only if the hardening docs changed**
+**Step 3: Confirm docs are already landed and continue**
 
-```bash
-git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import add Docs/Plans/2026-03-13-flashcards-quizzes-pr-878-local-hardening-design.md Docs/Plans/2026-03-13-flashcards-quizzes-pr-878-local-hardening-implementation-plan.md
-git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import commit -m "docs(flashcards): add pr 878 local hardening plan"
-```
+Treat the hardening docs as baseline input for execution. Do not create a second docs-only commit unless the review pass itself changes the plan/design again.
 
-Expected: docs-only commit if not already committed.
+Expected: no-op for already committed planning docs.
 
 ### Task 2: Run Backend Baseline Regression
 
@@ -130,6 +128,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashca
 Run:
 
 ```bash
+cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import/apps/packages/ui
 bunx vitest run \
   src/components/Flashcards/components/__tests__/FlashcardCreateDrawer.image-insert.test.tsx \
   src/components/Flashcards/components/__tests__/FlashcardDocumentRow.image-insert.test.tsx \
@@ -148,6 +147,21 @@ bunx vitest run \
   src/components/Flashcards/tabs/__tests__/ReviewTab.cram-mode.test.tsx \
   src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx \
   src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx \
+  src/components/Quiz/tabs/__tests__/CreateTab.draft-safety.test.tsx \
+  src/components/Quiz/tabs/__tests__/CreateTab.flexible-composition.test.tsx \
+  src/components/Quiz/tabs/__tests__/CreateTab.preview.test.tsx \
+  src/components/Quiz/tabs/__tests__/CreateTab.save-progress.test.tsx \
+  src/components/Quiz/tabs/__tests__/CreateTab.validation-accessibility.test.tsx \
+  src/components/Quiz/tabs/__tests__/GenerateTab.media-selection.test.tsx \
+  src/components/Quiz/tabs/__tests__/ManageTab.bulk-duplicate.test.tsx \
+  src/components/Quiz/tabs/__tests__/ManageTab.edit-modal-scale.test.tsx \
+  src/components/Quiz/tabs/__tests__/ManageTab.undo-accessibility.test.tsx \
+  src/components/Quiz/tabs/__tests__/TakeQuizTab.empty-state.test.tsx \
+  src/components/Quiz/tabs/__tests__/TakeQuizTab.list-controls.test.tsx \
+  src/components/Quiz/tabs/__tests__/TakeQuizTab.navigation-guardrails.test.tsx \
+  src/components/Quiz/tabs/__tests__/TakeQuizTab.start-flow.test.tsx \
+  src/components/Quiz/tabs/__tests__/TakeQuizTab.study-modes.test.tsx \
+  src/components/Quiz/tabs/__tests__/TakeQuizTab.submission-retry.test.tsx \
   src/components/Quiz/hooks/__tests__/useQuizRemediationQueries.test.tsx \
   src/components/Quiz/tabs/__tests__/ResultsTab.details.test.tsx \
   src/components/Quiz/tabs/__tests__/ResultsTab.export.test.tsx \
@@ -161,11 +175,14 @@ bunx vitest run \
 
 Expected: all selected suites pass.
 
+This command must run from the UI package root so the package-local `vitest.config.ts` and path aliases are applied.
+
 **Step 2: If a test fails, isolate before fixing**
 
 Run the smallest failing test file or test name:
 
 ```bash
+cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import/apps/packages/ui
 bunx vitest run src/components/Quiz/tabs/__tests__/ResultsTab.remediation.test.tsx
 ```
 
@@ -199,22 +216,37 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashca
 
 **Files:**
 - Test: `apps/packages/ui/src/components/Flashcards/constants/__tests__/help-links.test.ts`
-- Test: `tldw_Server_API/tests/Docs/test_benchmark_guide_discoverability.py`
+- Create: `tldw_Server_API/tests/Docs/test_flashcards_guide_discoverability.py`
 - Modify: `Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md`
 - Modify: `apps/packages/ui/src/components/Flashcards/constants/help-links.ts`
 
-**Step 1: Run docs-related tests**
+**Step 1: Ensure a flashcards-specific discoverability guard exists**
+
+Inspect `tldw_Server_API/tests/Docs`.
+
+If there is no flashcards-specific guide/index test, add:
+
+- `tldw_Server_API/tests/Docs/test_flashcards_guide_discoverability.py`
+
+It should assert:
+
+- `Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md` exists
+- `Docs/User_Guides/index.md` links to the flashcards guide
+
+**Step 2: Run targeted docs-related tests**
 
 Run:
 
 ```bash
+cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import/apps/packages/ui
 bunx vitest run src/components/Flashcards/constants/__tests__/help-links.test.ts
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Docs -q
+cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Docs/test_flashcards_guide_discoverability.py -q
 ```
 
 Expected: link hygiene and docs discoverability tests pass.
 
-**Step 2: Read the flashcards guide directly**
+**Step 3: Read the flashcards guide directly**
 
 Inspect:
 
@@ -229,23 +261,26 @@ Confirm it still matches:
 - scheduler behavior
 - study assistant and remediation
 
-**Step 3: Fix any drift**
+**Step 4: Fix any drift**
 
 Update only:
 
 - guide content
 - help-link constants/tests
+- flashcards-specific discoverability test if it needed to be added or updated
 
-**Step 4: Rerun the docs checks**
+Do not widen this to the entire `tldw_Server_API/tests/Docs` directory unless the flashcards-specific check points to a shared docs helper that actually needs broader confirmation.
 
-Run the commands from Step 1 again.
+**Step 5: Rerun the targeted docs checks**
+
+Run the commands from Step 2 again.
 
 Expected: docs tier green.
 
-**Step 5: Commit docs fixes if needed**
+**Step 6: Commit docs fixes if needed**
 
 ```bash
-git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import add Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md apps/packages/ui/src/components/Flashcards/constants/help-links.ts apps/packages/ui/src/components/Flashcards/constants/__tests__/help-links.test.ts
+git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import add Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md apps/packages/ui/src/components/Flashcards/constants/help-links.ts apps/packages/ui/src/components/Flashcards/constants/__tests__/help-links.test.ts tldw_Server_API/tests/Docs/test_flashcards_guide_discoverability.py
 git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import commit -m "docs(flashcards): harden guide and help links"
 ```
 
@@ -253,35 +288,60 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashca
 
 **Files:**
 - Read: `apps/extension/tests/e2e/quiz-ux.spec.ts`
+- Read: `apps/extension/playwright.config.ts`
 - Read: `apps/extension/tests/e2e/ux-design-audit.spec.ts`
 - Read: `apps/extension/tests/e2e/ux-review-complete.spec.ts`
 - Read: `apps/tldw-frontend/e2e/smoke/stage5-release-gate.spec.ts`
 
-**Step 1: Reuse existing Playwright coverage where practical**
+**Step 1: Confirm which local harnesses are actually runnable**
 
-Inspect which existing specs already exercise flashcards/quiz routes.
+Before running any slow check, confirm:
 
-Run only the highest-signal existing specs that are realistic in the local environment.
+- Next.js web smoke can autostart or connect to the local WebUI
+- extension Playwright can reach a real local server and API key
+- the extension host-permission prompt is acceptable for this run
 
-Example:
+Record which of these two automated harnesses are runnable:
+
+- `apps/tldw-frontend` smoke gate for shared `/flashcards`
+- `apps/extension` quiz UX spec for quiz workspace coverage
+
+**Step 2: Run the shared `/flashcards` route smoke when the web harness is available**
+
+Run:
+
+```bash
+cd /Users/macbook-dev/Documents/GitHub/tldw_server2/apps/tldw-frontend
+bunx playwright test e2e/smoke/stage5-release-gate.spec.ts --grep "Flashcards" --reporter=line
+```
+
+This uses the local Playwright config to autostart the WebUI unless `TLDW_WEB_AUTOSTART=false` is already set.
+
+If the web harness is unavailable, document the exact reason and verify the `/flashcards` route manually instead.
+
+**Step 3: Run the extension quiz workspace flow when real-server config is available**
+
+Run:
 
 ```bash
 cd /Users/macbook-dev/Documents/GitHub/tldw_server2/apps/extension
-bunx playwright test tests/e2e/quiz-ux.spec.ts --reporter=line
+TLDW_E2E_SERVER_URL=<local_server_host:port> TLDW_E2E_API_KEY=<local_api_key> bunx playwright test tests/e2e/quiz-ux.spec.ts --reporter=line
 ```
 
-If the local harness prerequisites are missing or unstable, stop and switch that path to manual verification instead of forcing through brittle E2E.
+This relies on the extension Playwright config to build the extension if needed. It also expects real-server reachability and may require granting host permission for the local origin during the run.
 
-**Step 2: Run manual walkthroughs for gaps**
+If real-server config, build prerequisites, or host permission make this path unavailable, document the exact blocker and switch only quiz workspace verification to manual coverage instead of forcing a brittle E2E run.
 
-Verify these flows manually in the local app:
+**Step 4: Run manual walkthroughs for the remaining gaps**
 
-1. Structured Q&A preview import and save
-2. Document mode edit/save on multiple rows
-3. Image-backed card create/edit/review
-4. Image occlusion authoring save path
-5. Review assistant quick actions and follow-up
-6. Quiz results remediation explain/quiz/flashcard/study handoff
+Verify these flows manually in the local app or extension surface that owns them:
+
+1. WebUI `/flashcards`: structured Q&A preview import and save
+2. WebUI `/flashcards`: document mode edit/save on multiple rows
+3. WebUI `/flashcards`: image-backed card create/edit/review
+4. WebUI `/flashcards`: image occlusion authoring save path
+5. WebUI `/flashcards`: scheduler-backed review next-card loop plus assistant quick actions and follow-up
+6. Quiz workspace surface: quiz results remediation explain/quiz/flashcard/study handoff
 
 Record for each:
 
@@ -291,14 +351,16 @@ Record for each:
 - expected result
 - actual result
 
-**Step 3: Fix any real regression immediately**
+If a flow is covered by one of the automated slow checks above, capture the command and result instead of duplicating it manually.
+
+**Step 5: Fix any real regression immediately**
 
 Modify only the smallest required files, then rerun:
 
 - the affected Playwright/manual step
 - the smallest relevant Vitest/Pytest suite
 
-**Step 4: Commit slower-verification fixes if needed**
+**Step 6: Commit slower-verification fixes if needed**
 
 ```bash
 git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/codex-flashcards-structured-qa-import add <touched_files>
@@ -355,4 +417,3 @@ Report:
 - slower UI checks run
 - regressions found and fixed
 - any residual risk or unverified path
-

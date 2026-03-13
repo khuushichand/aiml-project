@@ -98,15 +98,17 @@ The frontend tier should cover the main shipped surfaces:
 - quiz remediation handoff to flashcards
 - service/handoff/cache utilities that sit underneath those routes
 
+The frontend command set should run from the UI package itself, or explicitly point Vitest at the UI package config. It should also include the shipped quiz baseline suites for `Create`, `Generate`, `Manage`, `Take`, and `Results`, rather than only remediation-oriented result tests.
+
 ### 3. Docs And Link Hygiene
 
 The docs tier should confirm:
 
 - flashcards help links still point to the correct guide
 - the guide content reflects current shipped behavior
-- repo docs checks that guard user-guide discoverability continue to pass
+- a flashcards-specific guide discoverability guard passes
 
-This is small, but it matters because several roadmap slices added new user-facing flows without a separate docs release track.
+This is small, but it matters because several roadmap slices added new user-facing flows without a separate docs release track. The hardening pass should prefer targeted flashcards guide checks over the entire docs test directory so unrelated guide failures do not drown out the signal.
 
 ### 4. Slower UI Verification
 
@@ -122,6 +124,14 @@ Priority flows:
 - review assistant interactions
 - quiz results remediation flow
 - quiz-to-flashcards and flashcards-to-quiz handoffs
+
+The slow tier should be explicit about which harness owns which check:
+
+- the Next.js smoke gate should be used for the shared `/flashcards` route when the local web harness is available
+- the extension quiz UX spec should be used for quiz workspace coverage when real-server config and host permissions are available
+- remaining gaps should fall back to documented manual walkthroughs rather than ad hoc partial automation
+
+Each automated command should list its local prerequisites up front. If a prerequisite is missing, record the skip reason and switch only that path to manual verification instead of silently dropping the coverage.
 
 This is bounded to happy-path regression plus one or two critical error checks per surface. It is not a mandate to author a large new end-to-end matrix.
 
@@ -165,4 +175,3 @@ This hardening pass is successful if it:
 - verifies the major new `#878` flows beyond unit-level assertions
 - catches and fixes real regressions immediately
 - leaves the branch with a clean verification summary and no known unfixed high-signal issues in the flashcards/quizzes surfaces
-
