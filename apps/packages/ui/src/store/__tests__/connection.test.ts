@@ -344,4 +344,36 @@ describe("connection store stability", () => {
     expect(state.isConnected).toBe(true)
     expect(state.hasCompletedFirstRun).toBe(true)
   })
+
+  it("treats a server URL without single-user credentials as unconfigured auth instead of connected", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.SEARCHING,
+      serverUrl: "http://127.0.0.1:8000",
+      isConnected: false,
+      isChecking: false,
+      lastCheckedAt: Date.now() - 60_000,
+      configStep: "health",
+      hasCompletedFirstRun: true
+    })
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    } as any)
+    mockedApiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { status: "alive" }
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.UNCONFIGURED)
+    expect(state.serverUrl).toBe("http://127.0.0.1:8000")
+    expect(state.configStep).toBe("auth")
+    expect(state.isConnected).toBe(false)
+    expect(state.errorKind).toBe("none")
+    expect(mockedApiSend).not.toHaveBeenCalled()
+  })
 })

@@ -556,8 +556,38 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         }
       }
 
-      // If we have a server URL but no API key, treat as unconfigured/unauthenticated.
-      // Users must explicitly configure their own credentials in Settings/Onboarding.
+      const missingSingleUserApiKey =
+        Boolean(serverUrl) &&
+        (cfg?.authMode ?? "single-user") === "single-user" &&
+        !String(cfg?.apiKey || "").trim()
+
+      // If we have a server URL but no single-user API key, treat as
+      // unconfigured/unauthenticated instead of marking the app connected
+      // off an unauthenticated liveness check.
+      // Users must explicitly configure their own credentials in
+      // Settings/Onboarding before authenticated pages can function.
+      if (missingSingleUserApiKey) {
+        set({
+          state: {
+            ...currentState,
+            phase: ConnectionPhase.UNCONFIGURED,
+            serverUrl,
+            isConnected: false,
+            isChecking: false,
+            consecutiveFailures: 0,
+            offlineBypass: false,
+            errorKind: "none",
+            configStep: "auth",
+            lastCheckedAt: Date.now(),
+            lastError: null,
+            lastStatusCode: null,
+            knowledgeStatus: "unknown",
+            knowledgeLastCheckedAt: null,
+            knowledgeError: null
+          }
+        })
+        return
+      }
 
       if (!serverUrl) {
         set({
