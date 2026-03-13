@@ -712,7 +712,13 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                   commands.map((command) => (
                     <div
                       key={command.id}
-                      className="rounded-md border border-border bg-bg p-3"
+                      data-testid={`persona-commands-row-${command.id}`}
+                      data-selected={formState.commandId === command.id ? "true" : "false"}
+                      className={`rounded-md border bg-bg p-3 transition ${
+                        formState.commandId === command.id
+                          ? "border-primary bg-primary/5 shadow-sm ring-1 ring-primary/20"
+                          : "border-border"
+                      }`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>

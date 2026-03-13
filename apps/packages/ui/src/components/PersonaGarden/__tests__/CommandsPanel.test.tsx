@@ -476,6 +476,9 @@ describe("CommandsPanel", () => {
     expect(screen.getByTestId("persona-commands-connection-select")).toHaveValue(
       "conn-missing"
     )
+    expect(
+      screen.getByTestId("persona-commands-row-cmd-missing-connection")
+    ).toHaveAttribute("data-selected", "true")
     expect(onOpenCommandHandled).toHaveBeenCalledWith("cmd-missing-connection")
   })
 })
