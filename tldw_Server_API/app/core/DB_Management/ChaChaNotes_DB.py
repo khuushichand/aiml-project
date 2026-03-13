@@ -89,6 +89,17 @@ from tldw_Server_API.app.core.Flashcards.asset_refs import (  # noqa: E402
     extract_flashcard_asset_uuids,
     sanitize_flashcard_text_for_search,
 )
+from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (  # noqa: E402
+    MATURE_INTERVAL_DAYS,
+    build_next_interval_previews,
+    coerce_queue_state,
+    get_default_scheduler_settings,
+    normalize_scheduler_settings,
+    parse_iso_datetime,
+    scheduler_settings_to_json,
+    simulate_review_transition,
+    to_iso_z,
+)
 
 #
 ########################################################################################################################
@@ -440,7 +451,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 36  # Schema v36 adds lean chat overview list indexes
+    _CURRENT_SCHEMA_VERSION = 37  # Schema v37 adds flashcard scheduler state and deck settings
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -3067,6 +3078,15 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 36;
 """
+    _MIGRATION_SQL_V36_TO_V37 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 37 - Flashcard scheduler state and deck settings (2026-03-13)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 37
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 37;
+"""
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4762,6 +4782,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V35->V36: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V36 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v36_to_v37(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V36 to V37 (flashcard scheduler state and deck settings)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V36 to V37 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V36_TO_V37)
+            final_version = self._get_db_version(conn)
+            if final_version != 37:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V36->V37 failed version check. Expected 37, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V37 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V36->V37 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V36->V37 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V36->V37: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V37 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -4989,6 +5029,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     # Verify core FTS tables exist to avoid silent search failures
                     self._verify_required_fts_tables_sqlite(conn)
                     self._ensure_flashcard_asset_schema_sqlite(conn)
+                    self._ensure_flashcard_scheduler_schema_sqlite(conn)
                     self._ensure_flashcard_fts_triggers_sqlite(conn)
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
                     self._ensure_notes_fts_triggers_sqlite(conn)
@@ -5100,6 +5141,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 36 and current_db_version == 35:
                         self._migrate_from_v35_to_v36(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 37 and current_db_version == 36:
+                        self._migrate_from_v36_to_v37(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -5427,6 +5471,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v34_to_v35(conn)
                             elif fallback_version == 35:
                                 self._migrate_from_v35_to_v36(conn)
+                            elif fallback_version == 36:
+                                self._migrate_from_v36_to_v37(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5511,6 +5557,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 36 and current_db_version == 35:
                     self._migrate_from_v35_to_v36(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 37 and current_db_version == 36:
+                    self._migrate_from_v36_to_v37(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
 
@@ -5521,6 +5570,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
                 self._ensure_flashcard_asset_schema_sqlite(conn)
+                self._ensure_flashcard_scheduler_schema_sqlite(conn)
                 self._ensure_flashcard_fts_triggers_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
                 self._ensure_notes_fts_triggers_sqlite(conn)
@@ -5794,6 +5844,252 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed backfilling flashcard search shadow columns: {exc}") from exc  # noqa: TRY003
 
+    def _infer_queue_state_for_row(self, row: Mapping[str, Any]) -> str:
+        queue_state = str(row.get("queue_state") or "").strip().lower()
+        if queue_state in ("new", "learning", "review", "relearning", "suspended"):
+            return queue_state
+        last_reviewed_at = row.get("last_reviewed_at")
+        repetitions = int(row.get("repetitions") or 0)
+        if not last_reviewed_at:
+            return "new"
+        if repetitions in (1, 2):
+            return "learning"
+        return "review"
+
+    def _ensure_flashcard_scheduler_sync_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure deck and flashcard sync triggers include scheduler fields."""
+        try:
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS decks_sync_create;
+                DROP TRIGGER IF EXISTS decks_sync_update;
+                DROP TRIGGER IF EXISTS decks_sync_delete;
+                DROP TRIGGER IF EXISTS decks_sync_undelete;
+
+                CREATE TRIGGER decks_sync_create
+                AFTER INSERT ON decks BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('decks',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'scheduler_settings_json',NEW.scheduler_settings_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER decks_sync_update
+                AFTER UPDATE ON decks
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.name IS NOT NEW.name OR
+                     OLD.description IS NOT NEW.description OR
+                     OLD.scheduler_settings_json IS NOT NEW.scheduler_settings_json OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'scheduler_settings_json',NEW.scheduler_settings_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER decks_sync_delete
+                AFTER UPDATE ON decks
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('decks',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER decks_sync_undelete
+                AFTER UPDATE ON decks
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'scheduler_settings_json',NEW.scheduler_settings_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                DROP TRIGGER IF EXISTS flashcards_sync_create;
+                DROP TRIGGER IF EXISTS flashcards_sync_update;
+                DROP TRIGGER IF EXISTS flashcards_sync_delete;
+                DROP TRIGGER IF EXISTS flashcards_sync_undelete;
+
+                CREATE TRIGGER flashcards_sync_create
+                AFTER INSERT ON flashcards BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcards',NEW.uuid,'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('uuid',NEW.uuid,'deck_id',NEW.deck_id,'front',NEW.front,'back',NEW.back,
+                                     'notes',NEW.notes,'extra',NEW.extra,'is_cloze',NEW.is_cloze,'tags_json',NEW.tags_json,
+                                     'source_ref_type',NEW.source_ref_type,'source_ref_id',NEW.source_ref_id,
+                                     'conversation_id',NEW.conversation_id,'message_id',NEW.message_id,
+                                     'ef',NEW.ef,'interval_days',NEW.interval_days,'repetitions',NEW.repetitions,
+                                     'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
+                                     'model_type',NEW.model_type,'reverse',NEW.reverse,
+                                     'queue_state',NEW.queue_state,'step_index',NEW.step_index,'suspended_reason',NEW.suspended_reason,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcards_sync_update
+                AFTER UPDATE ON flashcards
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.deck_id IS NOT NEW.deck_id OR
+                     OLD.front IS NOT NEW.front OR
+                     OLD.back IS NOT NEW.back OR
+                     OLD.notes IS NOT NEW.notes OR
+                     OLD.extra IS NOT NEW.extra OR
+                     OLD.is_cloze IS NOT NEW.is_cloze OR
+                     OLD.tags_json IS NOT NEW.tags_json OR
+                     OLD.source_ref_type IS NOT NEW.source_ref_type OR
+                     OLD.source_ref_id IS NOT NEW.source_ref_id OR
+                     OLD.conversation_id IS NOT NEW.conversation_id OR
+                     OLD.message_id IS NOT NEW.message_id OR
+                     OLD.ef IS NOT NEW.ef OR
+                     OLD.interval_days IS NOT NEW.interval_days OR
+                     OLD.repetitions IS NOT NEW.repetitions OR
+                     OLD.lapses IS NOT NEW.lapses OR
+                     OLD.due_at IS NOT NEW.due_at OR
+                     OLD.last_reviewed_at IS NOT NEW.last_reviewed_at OR
+                     OLD.model_type IS NOT NEW.model_type OR
+                     OLD.reverse IS NOT NEW.reverse OR
+                     OLD.queue_state IS NOT NEW.queue_state OR
+                     OLD.step_index IS NOT NEW.step_index OR
+                     OLD.suspended_reason IS NOT NEW.suspended_reason OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcards',NEW.uuid,'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('uuid',NEW.uuid,'deck_id',NEW.deck_id,'front',NEW.front,'back',NEW.back,
+                                     'notes',NEW.notes,'extra',NEW.extra,'is_cloze',NEW.is_cloze,'tags_json',NEW.tags_json,
+                                     'source_ref_type',NEW.source_ref_type,'source_ref_id',NEW.source_ref_id,
+                                     'conversation_id',NEW.conversation_id,'message_id',NEW.message_id,
+                                     'ef',NEW.ef,'interval_days',NEW.interval_days,'repetitions',NEW.repetitions,
+                                     'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
+                                     'model_type',NEW.model_type,'reverse',NEW.reverse,
+                                     'queue_state',NEW.queue_state,'step_index',NEW.step_index,'suspended_reason',NEW.suspended_reason,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcards_sync_delete
+                AFTER UPDATE ON flashcards
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcards',NEW.uuid,'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('uuid',NEW.uuid,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER flashcards_sync_undelete
+                AFTER UPDATE ON flashcards
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcards',NEW.uuid,'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('uuid',NEW.uuid,'deck_id',NEW.deck_id,'front',NEW.front,'back',NEW.back,
+                                     'notes',NEW.notes,'extra',NEW.extra,'is_cloze',NEW.is_cloze,'tags_json',NEW.tags_json,
+                                     'source_ref_type',NEW.source_ref_type,'source_ref_id',NEW.source_ref_id,
+                                     'conversation_id',NEW.conversation_id,'message_id',NEW.message_id,
+                                     'ef',NEW.ef,'interval_days',NEW.interval_days,'repetitions',NEW.repetitions,
+                                     'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
+                                     'model_type',NEW.model_type,'reverse',NEW.reverse,
+                                     'queue_state',NEW.queue_state,'step_index',NEW.step_index,'suspended_reason',NEW.suspended_reason,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard scheduler sync triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_flashcard_scheduler_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure scheduler-related deck, flashcard, and review columns exist for SQLite."""
+        default_settings_json = scheduler_settings_to_json(None)
+        try:
+            deck_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
+            if "scheduler_settings_json" not in deck_cols:
+                conn.execute(
+                    f"ALTER TABLE decks ADD COLUMN scheduler_settings_json TEXT NOT NULL DEFAULT '{default_settings_json}'"
+                )
+            conn.execute(
+                """
+                UPDATE decks
+                   SET scheduler_settings_json = ?
+                 WHERE scheduler_settings_json IS NULL OR trim(scheduler_settings_json) = ''
+                """,
+                (default_settings_json,),
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring decks.scheduler_settings_json: {exc}") from exc  # noqa: TRY003
+
+        try:
+            flashcard_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()}
+            if "queue_state" not in flashcard_cols:
+                conn.execute("ALTER TABLE flashcards ADD COLUMN queue_state TEXT NOT NULL DEFAULT 'new'")
+            if "step_index" not in flashcard_cols:
+                conn.execute("ALTER TABLE flashcards ADD COLUMN step_index INTEGER")
+            if "suspended_reason" not in flashcard_cols:
+                conn.execute("ALTER TABLE flashcards ADD COLUMN suspended_reason TEXT")
+
+            rows = conn.execute(
+                """
+                SELECT id, queue_state, last_reviewed_at, repetitions, lapses, interval_days, due_at, created_at
+                  FROM flashcards
+                """
+            ).fetchall()
+            scheduler_params: list[tuple[str, int]] = []
+            due_params: list[tuple[str, int]] = []
+            now_iso = self._get_current_utc_timestamp_iso()
+            for row in rows:
+                record = {
+                    "queue_state": row["queue_state"],
+                    "last_reviewed_at": row["last_reviewed_at"],
+                    "repetitions": row["repetitions"],
+                    "lapses": row["lapses"],
+                    "interval_days": row["interval_days"],
+                    "due_at": row["due_at"],
+                }
+                scheduler_params.append((self._infer_queue_state_for_row(record), int(row["id"])))
+                if not row["due_at"]:
+                    due_params.append((str(row["created_at"] or now_iso), int(row["id"])))
+            if scheduler_params:
+                conn.executemany(
+                    """
+                    UPDATE flashcards
+                       SET queue_state = ?,
+                           suspended_reason = NULL
+                     WHERE id = ?
+                    """,
+                    scheduler_params,
+                )
+            if due_params:
+                conn.executemany("UPDATE flashcards SET due_at = ? WHERE id = ?", due_params)
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard scheduler columns: {exc}") from exc  # noqa: TRY003
+
+        try:
+            review_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcard_reviews')").fetchall()}
+            if "previous_queue_state" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_queue_state TEXT")
+            if "next_queue_state" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_queue_state TEXT")
+            if "previous_due_at" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_due_at DATETIME")
+            if "next_due_at" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_due_at DATETIME")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard review scheduler columns: {exc}") from exc  # noqa: TRY003
+
+        self._ensure_flashcard_scheduler_sync_triggers_sqlite(conn)
+
     def _ensure_flashcard_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild flashcard FTS around sanitized search shadow columns."""
         try:
@@ -5921,6 +6217,50 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 )
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise SchemaError(f"Failed backfilling PostgreSQL flashcard search shadow columns: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_flashcard_scheduler_schema_postgres(self, conn) -> None:
+        """Ensure scheduler-related deck, flashcard, and review columns exist for PostgreSQL."""
+        default_settings_json = scheduler_settings_to_json(None)
+        try:
+            self.backend.execute(
+                "ALTER TABLE decks ADD COLUMN IF NOT EXISTS scheduler_settings_json TEXT NOT NULL DEFAULT '{}'",
+                connection=conn,
+            )
+            self.backend.execute(
+                "UPDATE decks SET scheduler_settings_json = %s WHERE scheduler_settings_json IS NULL OR btrim(scheduler_settings_json) = ''",
+                (default_settings_json,),
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS queue_state TEXT NOT NULL DEFAULT 'new'",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS step_index INTEGER",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS suspended_reason TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS previous_queue_state TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS next_queue_state TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS previous_due_at TIMESTAMPTZ",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS next_due_at TIMESTAMPTZ",
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL flashcard scheduler schema: {exc}") from exc  # noqa: TRY003
 
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
@@ -6096,6 +6436,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 36:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36, conn, expected_version=36)
                 current_version = 36
+            if current_version < 37:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V36_TO_V37, conn, expected_version=37)
+                current_version = 37
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -6103,6 +6446,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 )
 
             self._ensure_flashcard_asset_schema_postgres(conn)
+            self._ensure_flashcard_scheduler_schema_postgres(conn)
             self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
 
@@ -16720,9 +17064,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     # ==========================
     # Flashcards & Decks (V5)
     # ==========================
-    def add_deck(self, name: str, description: str | None = None) -> int:
+    def add_deck(
+        self,
+        name: str,
+        description: str | None = None,
+        scheduler_settings: Mapping[str, Any] | str | None = None,
+    ) -> int:
         """Create a deck and return its id."""
         now = self._get_current_utc_timestamp_iso()
+        scheduler_settings_json = scheduler_settings_to_json(scheduler_settings)
         try:
             with self.transaction() as conn:
                 # Undelete if a deck with the same name exists but is deleted
@@ -16737,9 +17087,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     rc = conn.execute(
                         (
                             "UPDATE decks SET deleted = ?, last_modified = ?, version = ?, client_id = ?, "
-                            "description = COALESCE(?, description) WHERE id = ? AND version = ?"
+                            "description = COALESCE(?, description), "
+                            "scheduler_settings_json = COALESCE(?, scheduler_settings_json) "
+                            "WHERE id = ? AND version = ?"
                         ),
-                        (deleted_value, now, next_version, self.client_id, description, deck_id, current_version),
+                        (
+                            deleted_value,
+                            now,
+                            next_version,
+                            self.client_id,
+                            description,
+                            scheduler_settings_json,
+                            deck_id,
+                            current_version,
+                        ),
                     ).rowcount
                     if rc == 0:
                         raise ConflictError(  # noqa: TRY003
@@ -16749,12 +17110,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         )
                     return deck_id
                 insert_sql = (
-                    "INSERT INTO decks(name, description, created_at, last_modified, client_id, version, deleted)"
-                    " VALUES(?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO decks(name, description, scheduler_settings_json, created_at, last_modified, client_id, version, deleted)"
+                    " VALUES(?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
+                    scheduler_settings_json,
                     now,
                     now,
                     self.client_id,
@@ -16785,8 +17147,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Failed to create deck: {e}") from e  # noqa: TRY003
 
     def list_decks(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> list[dict[str, Any]]:
-        cond = "" if include_deleted else "WHERE deleted = 0"
-        query = f"SELECT id, name, description, created_at, last_modified, deleted, client_id, version FROM decks {cond} ORDER BY name LIMIT ? OFFSET ?"  # nosec B608
+        if include_deleted:
+            query = (
+                "SELECT id, name, description, scheduler_settings_json, created_at, last_modified, "
+                "deleted, client_id, version FROM decks ORDER BY name LIMIT ? OFFSET ?"
+            )
+        else:
+            query = (
+                "SELECT id, name, description, scheduler_settings_json, created_at, last_modified, "
+                "deleted, client_id, version FROM decks WHERE deleted = 0 ORDER BY name LIMIT ? OFFSET ?"
+            )
         try:
             cursor = self.execute_query(query, (limit, offset))
             return [dict(row) for row in cursor.fetchall()]
@@ -16796,7 +17166,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_deck(self, deck_id: int) -> dict[str, Any] | None:
         """Fetch a single deck row by id."""
         query = (
-            "SELECT id, name, description, created_at, last_modified, deleted, client_id, version "
+            "SELECT id, name, description, scheduler_settings_json, created_at, last_modified, deleted, client_id, version "
             "FROM decks WHERE id = ?"
         )
         try:
@@ -16805,6 +17175,64 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return dict(row) if row else None
         except CharactersRAGDBError:  # noqa: TRY203
             raise
+
+    def update_deck(
+        self,
+        deck_id: int,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        scheduler_settings: Mapping[str, Any] | str | None = None,
+        expected_version: int | None = None,
+    ) -> bool:
+        """Update mutable deck fields with optimistic locking."""
+        set_parts: list[str] = []
+        params: list[Any] = []
+        if name is not None:
+            set_parts.append("name = ?")
+            params.append(name)
+        if description is not None:
+            set_parts.append("description = ?")
+            params.append(description)
+        if scheduler_settings is not None:
+            set_parts.append("scheduler_settings_json = ?")
+            params.append(scheduler_settings_to_json(scheduler_settings))
+        if not set_parts:
+            if expected_version is None:
+                return True
+            deck = self.get_deck(deck_id)
+            if not deck:
+                raise ConflictError("Deck not found", entity="decks", identifier=deck_id)  # noqa: TRY003
+            if int(deck["version"]) != expected_version:
+                raise ConflictError("Version mismatch updating deck", entity="decks", identifier=deck_id)  # noqa: TRY003
+            return True
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1", "client_id = ?"])
+        params.extend([now, self.client_id])
+
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT version FROM decks WHERE id = ? AND deleted = 0",
+                    (deck_id,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Deck not found", entity="decks", identifier=deck_id)  # noqa: TRY003
+                current_version = int(row[0])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch updating deck", entity="decks", identifier=deck_id)  # noqa: TRY003
+
+                params_final = params + [deck_id]
+                query = f"UPDATE decks SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"  # nosec B608
+                rc = conn.execute(query, tuple(params_final)).rowcount
+                return rc > 0
+        except sqlite3.IntegrityError as exc:
+            if "UNIQUE constraint failed: decks.name" in str(exc):
+                raise ConflictError("Deck name already exists", entity="decks", identifier=name or deck_id) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to update deck: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to update deck: {exc}") from exc  # noqa: TRY003
 
     def _get_flashcard_id_from_uuid(self, conn: sqlite3.Connection, card_uuid: str) -> int | None:
         row = conn.execute("SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0", (card_uuid,)).fetchone()
@@ -16840,6 +17268,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         lapses = max(0, int(card_data.get('lapses', 0) or 0))
         due_at = self._normalize_nullable_text(card_data.get('due_at'))
         last_reviewed_at = self._normalize_nullable_text(card_data.get('last_reviewed_at'))
+        queue_state = coerce_queue_state(
+            {
+                "queue_state": card_data.get("queue_state"),
+                "last_reviewed_at": last_reviewed_at,
+                "repetitions": repetitions,
+                "lapses": lapses,
+                "interval_days": interval_days,
+                "due_at": due_at,
+            }
+        )
+        step_index = card_data.get("step_index")
+        step_index = int(step_index) if step_index is not None else None
+        suspended_reason = self._normalize_nullable_text(card_data.get("suspended_reason"))
+        if queue_state != "suspended":
+            suspended_reason = None
+        if due_at is None and queue_state in ("learning", "relearning", "review"):
+            due_at = now
         model_type = card_data.get('model_type')
         reverse_flag = card_data.get('reverse')
         if not model_type:
@@ -16857,9 +17302,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         uuid, deck_id, front, back, notes, extra, front_search, back_search, notes_search, is_cloze,
                         tags_json, source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days,
                         repetitions, lapses, due_at, last_reviewed_at, created_at, last_modified,
-                        deleted, client_id, version, model_type, reverse
+                        deleted, client_id, version, model_type, reverse, queue_state, step_index, suspended_reason
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                 )
 
@@ -16892,6 +17337,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     1,
                     model_type,
                     bool(reverse_flag),
+                    queue_state,
+                    step_index,
+                    suspended_reason,
                 )
 
                 conn.execute(insert_sql, params)
@@ -16917,9 +17365,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         uuid, deck_id, front, back, notes, extra, front_search, back_search, notes_search, is_cloze,
                         tags_json, source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days,
                         repetitions, lapses, due_at, last_reviewed_at, created_at, last_modified,
-                        deleted, client_id, version, model_type, reverse
+                        deleted, client_id, version, model_type, reverse, queue_state, step_index, suspended_reason
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                 )
 
@@ -16951,6 +17399,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     lapses = max(0, int(card_data.get('lapses', 0) or 0))
                     due_at = self._normalize_nullable_text(card_data.get('due_at'))
                     last_reviewed_at = self._normalize_nullable_text(card_data.get('last_reviewed_at'))
+                    queue_state = coerce_queue_state(
+                        {
+                            "queue_state": card_data.get("queue_state"),
+                            "last_reviewed_at": last_reviewed_at,
+                            "repetitions": repetitions,
+                            "lapses": lapses,
+                            "interval_days": interval_days,
+                            "due_at": due_at,
+                        }
+                    )
+                    step_index = card_data.get("step_index")
+                    step_index = int(step_index) if step_index is not None else None
+                    suspended_reason = self._normalize_nullable_text(card_data.get("suspended_reason"))
+                    if queue_state != "suspended":
+                        suspended_reason = None
+                    if due_at is None and queue_state in ("learning", "relearning", "review"):
+                        due_at = now
                     model_type = card_data.get('model_type')
                     reverse_flag = card_data.get('reverse')
                     if not model_type:
@@ -16990,6 +17455,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             1,
                             model_type,
                             bool(reverse_flag),
+                            queue_state,
+                            step_index,
+                            suspended_reason,
                         )
                     )
 
@@ -17027,11 +17495,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # due filter
         now_iso = self._get_current_utc_timestamp_iso()
         if due_status == 'new':
-            where_clauses.append("f.last_reviewed_at IS NULL")
+            where_clauses.append("f.queue_state = ?")
+            params.append("new")
         elif due_status == 'learning':
-            where_clauses.append("f.last_reviewed_at IS NOT NULL AND f.repetitions IN (1,2)")
+            where_clauses.append("f.queue_state IN ('learning', 'relearning') AND f.due_at IS NOT NULL AND f.due_at <= ?")
+            params.append(now_iso)
         elif due_status == 'due':
-            where_clauses.append("f.due_at IS NOT NULL AND f.due_at <= ?")
+            where_clauses.append("f.queue_state = 'review' AND f.due_at IS NOT NULL AND f.due_at <= ?")
             params.append(now_iso)
 
         # tag filter (single tag)
@@ -17068,6 +17538,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
+                   f.queue_state, f.step_index, f.suspended_reason,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
             FROM flashcards f
             LEFT JOIN decks d ON d.id = f.deck_id
@@ -17104,11 +17575,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         now_iso = self._get_current_utc_timestamp_iso()
         if due_status == 'new':
-            where_clauses.append("f.last_reviewed_at IS NULL")
+            where_clauses.append("f.queue_state = ?")
+            params.append("new")
         elif due_status == 'learning':
-            where_clauses.append("f.last_reviewed_at IS NOT NULL AND f.repetitions IN (1,2)")
+            where_clauses.append("f.queue_state IN ('learning', 'relearning') AND f.due_at IS NOT NULL AND f.due_at <= ?")
+            params.append(now_iso)
         elif due_status == 'due':
-            where_clauses.append("f.due_at IS NOT NULL AND f.due_at <= ?")
+            where_clauses.append("f.queue_state = 'review' AND f.due_at IS NOT NULL AND f.due_at <= ?")
             params.append(now_iso)
 
         join_tag = ""
@@ -17157,6 +17630,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
+                   f.queue_state, f.step_index, f.suspended_reason,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
               FROM flashcards f
               LEFT JOIN decks d ON d.id = f.deck_id
@@ -17223,6 +17697,90 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             # If any statement fails due to existing objects, ignore and proceed
             logger.debug(f"_ensure_postgres_flashcards_tsvector: {e}")
 
+    def get_next_review_card(
+        self,
+        deck_id: int | None = None,
+    ) -> tuple[dict[str, Any] | None, str]:
+        """Return the next reviewable card using backend queue priority."""
+        deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        now_iso = self._get_current_utc_timestamp_iso()
+        if deck_id is None:
+            selections: tuple[tuple[str, str, tuple[Any, ...]], ...] = (
+                (
+                    "learning_due",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state IN ('learning', 'relearning') "
+                        "AND due_at IS NOT NULL AND due_at <= ? "
+                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                    ),
+                    (deleted_value, now_iso),
+                ),
+                (
+                    "review_due",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state = 'review' "
+                        "AND due_at IS NOT NULL AND due_at <= ? "
+                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                    ),
+                    (deleted_value, now_iso),
+                ),
+                (
+                    "new",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state = 'new' "
+                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                    ),
+                    (deleted_value,),
+                ),
+            )
+        else:
+            selections = (
+                (
+                    "learning_due",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state IN ('learning', 'relearning') "
+                        "AND due_at IS NOT NULL AND due_at <= ? AND deck_id = ? "
+                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                    ),
+                    (deleted_value, now_iso, deck_id),
+                ),
+                (
+                    "review_due",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state = 'review' "
+                        "AND due_at IS NOT NULL AND due_at <= ? AND deck_id = ? "
+                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                    ),
+                    (deleted_value, now_iso, deck_id),
+                ),
+                (
+                    "new",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state = 'new' AND deck_id = ? "
+                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                    ),
+                    (deleted_value, deck_id),
+                ),
+            )
+        try:
+            for reason, query, params in selections:
+                cursor = self.execute_query(query, tuple(params))
+                row = cursor.fetchone()
+                if not row:
+                    continue
+                card = self.get_flashcard(str(row["uuid"]))
+                if card:
+                    return card, reason
+            return None, "none"
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
     def _srs_sm2_update(self, ef: float, interval_days: int, repetitions: int, lapses: int, rating: int) -> dict[str, Any]:
         """
         Apply SM-2 style scheduling update and return new values.
@@ -17256,43 +17814,89 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def review_flashcard(self, card_uuid: str, rating: int, answer_time_ms: int | None = None) -> dict[str, Any]:
         """Submit a review for a flashcard and update scheduling. Returns updated card fields."""
-        now = self._get_current_utc_timestamp_iso()
+        now_dt = datetime.now(timezone.utc)
+        now = to_iso_z(now_dt) or self._get_current_utc_timestamp_iso()
         try:
             with self.transaction() as conn:
                 card = conn.execute(
-                    "SELECT id, ef, interval_days, repetitions, lapses FROM flashcards WHERE uuid = ? AND deleted = 0",
-                    (card_uuid,)
+                    """
+                    SELECT f.id, f.uuid, f.deck_id, f.ef, f.interval_days, f.repetitions, f.lapses,
+                           f.due_at, f.last_reviewed_at, f.queue_state, f.step_index, f.suspended_reason,
+                           COALESCE(d.scheduler_settings_json, ?) AS scheduler_settings_json
+                      FROM flashcards f
+                      LEFT JOIN decks d ON d.id = f.deck_id
+                     WHERE f.uuid = ? AND f.deleted = 0
+                    """,
+                    (scheduler_settings_to_json(None), card_uuid),
                 ).fetchone()
                 if not card:
                     raise ConflictError("Flashcard not found", entity="flashcards", identifier=card_uuid)  # noqa: TRY003
                 card_id = int(card['id'])
-                upd = self._srs_sm2_update(card['ef'], card['interval_days'], card['repetitions'], card['lapses'], rating)
-
-                # Compute next due date
-                due_at = datetime.now(timezone.utc) + timedelta(days=upd['interval_days'])
-                due_at_iso = due_at.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+                previous_queue_state = coerce_queue_state(dict(card))
+                previous_due_at = self._normalize_nullable_text(card["due_at"])
+                scheduler_settings = normalize_scheduler_settings(card["scheduler_settings_json"])
+                upd = simulate_review_transition(dict(card), scheduler_settings, int(rating), now=now_dt)
 
                 conn.execute(
                     """
                     UPDATE flashcards
                        SET ef = ?, interval_days = ?, repetitions = ?, lapses = ?,
-                           last_reviewed_at = ?, due_at = ?, last_modified = ?, version = version + 1, client_id = ?
+                           due_at = ?, last_reviewed_at = ?, queue_state = ?, step_index = ?,
+                           suspended_reason = ?, last_modified = ?, version = version + 1, client_id = ?
                      WHERE id = ? AND deleted = 0
                     """,
-                    (upd['ef'], upd['interval_days'], upd['repetitions'], upd['lapses'], now, due_at_iso, now, self.client_id, card_id)
+                    (
+                        upd["ef"],
+                        upd["interval_days"],
+                        upd["repetitions"],
+                        upd["lapses"],
+                        upd["due_at"],
+                        upd["last_reviewed_at"],
+                        upd["queue_state"],
+                        upd["step_index"],
+                        upd["suspended_reason"],
+                        now,
+                        self.client_id,
+                        card_id,
+                    )
                 )
                 conn.execute(
                     """
-                    INSERT INTO flashcard_reviews(card_id, reviewed_at, rating, answer_time_ms, scheduled_interval_days, new_ef, new_repetitions, was_lapse, client_id)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO flashcard_reviews(
+                        card_id, reviewed_at, rating, answer_time_ms, scheduled_interval_days,
+                        new_ef, new_repetitions, was_lapse, client_id,
+                        previous_queue_state, next_queue_state, previous_due_at, next_due_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (card_id, now, int(rating), answer_time_ms, upd['interval_days'], upd['ef'], upd['repetitions'], 1 if upd['was_lapse'] else 0, self.client_id)
+                    (
+                        card_id,
+                        now,
+                        int(rating),
+                        answer_time_ms,
+                        upd["interval_days"] if upd["queue_state"] == "review" else None,
+                        upd["ef"],
+                        upd["repetitions"],
+                        1 if upd["was_lapse"] else 0,
+                        self.client_id,
+                        previous_queue_state,
+                        upd["queue_state"],
+                        previous_due_at,
+                        upd["due_at"],
+                    )
                 )
                 updated = conn.execute(
-                    "SELECT uuid, ef, interval_days, repetitions, lapses, due_at, last_reviewed_at, last_modified, version FROM flashcards WHERE id = ?",
+                    """
+                    SELECT uuid, ef, interval_days, repetitions, lapses, due_at, last_reviewed_at,
+                           last_modified, version, queue_state, step_index, suspended_reason
+                      FROM flashcards
+                     WHERE id = ?
+                    """,
                     (card_id,)
                 ).fetchone()
-                return dict(updated)
+                updated_payload = dict(updated)
+                updated_payload["next_intervals"] = build_next_interval_previews(updated_payload, scheduler_settings, now=now_dt)
+                return updated_payload
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to review flashcard: {e}") from e  # noqa: TRY003
 
@@ -17368,10 +17972,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     d.id AS deck_id,
                     d.name AS deck_name,
                     COUNT(f.id) AS total_count,
-                    SUM(CASE WHEN f.last_reviewed_at IS NULL THEN 1 ELSE 0 END) AS new_count,
-                    SUM(CASE WHEN f.last_reviewed_at IS NOT NULL AND f.repetitions IN (1, 2) THEN 1 ELSE 0 END) AS learning_count,
-                    SUM(CASE WHEN f.due_at IS NOT NULL AND f.due_at <= ? THEN 1 ELSE 0 END) AS due_count,
-                    SUM(CASE WHEN f.repetitions >= 3 THEN 1 ELSE 0 END) AS mature_count
+                    SUM(CASE WHEN f.queue_state = 'new' THEN 1 ELSE 0 END) AS new_count,
+                    SUM(CASE WHEN f.queue_state IN ('learning', 'relearning') THEN 1 ELSE 0 END) AS learning_count,
+                    SUM(CASE WHEN f.queue_state IN ('learning', 'relearning', 'review') AND f.due_at IS NOT NULL AND f.due_at <= ? THEN 1 ELSE 0 END) AS due_count,
+                    SUM(CASE WHEN f.queue_state = 'review' AND f.interval_days >= ? THEN 1 ELSE 0 END) AS mature_count
                 FROM decks d
                 LEFT JOIN flashcards f
                     ON f.deck_id = d.id
@@ -17380,7 +17984,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 GROUP BY d.id, d.name
                 ORDER BY d.name ASC
                 """.format_map(locals()),  # nosec B608
-                (now_iso, *deck_scope_params),
+                (now_iso, MATURE_INTERVAL_DAYS, *deck_scope_params),
             ).fetchall()
 
             decks = []
@@ -17462,6 +18066,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
+                   f.queue_state, f.step_index, f.suspended_reason,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
               FROM flashcards f
               LEFT JOIN decks d ON d.id = f.deck_id
@@ -17774,6 +18379,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                            interval_days = 0,
                            repetitions = 0,
                            lapses = 0,
+                           queue_state = 'new',
+                           step_index = NULL,
+                           suspended_reason = NULL,
                            due_at = ?,
                            last_reviewed_at = NULL,
                            last_modified = ?,

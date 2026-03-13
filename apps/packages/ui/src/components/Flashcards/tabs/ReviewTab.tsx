@@ -249,7 +249,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   // Calculate intervals for current card
   const intervals = React.useMemo(() => {
     if (!activeCard) return null
-    return calculateIntervals(activeCard)
+    return activeCard.next_intervals ?? calculateIntervals(activeCard)
   }, [activeCard])
 
   // Rating options for Anki-style review with colors, shortcuts, icons, and interval previews

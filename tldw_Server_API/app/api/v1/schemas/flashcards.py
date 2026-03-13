@@ -5,9 +5,29 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 
+class DeckSchedulerSettings(BaseModel):
+    new_steps_minutes: list[int] = Field(default_factory=lambda: [1, 10])
+    relearn_steps_minutes: list[int] = Field(default_factory=lambda: [10])
+    graduating_interval_days: int = 1
+    easy_interval_days: int = 4
+    easy_bonus: float = 1.3
+    interval_modifier: float = 1.0
+    max_interval_days: int = 36500
+    leech_threshold: int = 8
+    enable_fuzz: bool = False
+
+
 class DeckCreate(BaseModel):
     name: str = Field(..., description="Deck name (unique)")
     description: Optional[str] = Field(None, description="Deck description")
+    scheduler_settings: Optional[DeckSchedulerSettings] = None
+
+
+class DeckUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    scheduler_settings: Optional[DeckSchedulerSettings] = None
+    expected_version: Optional[int] = Field(None, ge=1)
 
 
 class Deck(BaseModel):
@@ -19,6 +39,31 @@ class Deck(BaseModel):
     deleted: bool
     client_id: str
     version: int
+    scheduler_settings_json: Optional[str] = None
+    scheduler_settings: DeckSchedulerSettings = Field(default_factory=DeckSchedulerSettings)
+
+    @model_validator(mode="before")
+    def _populate_scheduler_settings(cls, data):
+        if not isinstance(data, dict):
+            return data
+        if data.get("scheduler_settings") is not None:
+            return data
+        raw = data.get("scheduler_settings_json")
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    data["scheduler_settings"] = parsed
+            except Exception:
+                data["scheduler_settings"] = DeckSchedulerSettings().model_dump()
+        return data
+
+
+class FlashcardReviewIntervalPreviews(BaseModel):
+    again: str
+    hard: str
+    good: str
+    easy: str
 
 
 class FlashcardCreate(BaseModel):
@@ -56,6 +101,9 @@ class Flashcard(BaseModel):
     lapses: int
     due_at: Optional[str] = None
     last_reviewed_at: Optional[str] = None
+    queue_state: Literal["new", "learning", "review", "relearning", "suspended"] = "new"
+    step_index: Optional[int] = None
+    suspended_reason: Optional[Literal["manual", "leech"]] = None
     created_at: Optional[str] = None
     last_modified: Optional[str] = None
     deleted: bool
@@ -63,6 +111,7 @@ class Flashcard(BaseModel):
     version: int
     model_type: Literal['basic','basic_reverse','cloze']
     reverse: bool
+    next_intervals: Optional[FlashcardReviewIntervalPreviews] = None
 
     @model_validator(mode="before")
     def _populate_tags(cls, data):
@@ -107,6 +156,15 @@ class FlashcardReviewResponse(BaseModel):
     last_reviewed_at: Optional[str] = None
     last_modified: Optional[str] = None
     version: int
+    queue_state: Literal["new", "learning", "review", "relearning", "suspended"]
+    step_index: Optional[int] = None
+    suspended_reason: Optional[Literal["manual", "leech"]] = None
+    next_intervals: FlashcardReviewIntervalPreviews
+
+
+class FlashcardNextReviewResponse(BaseModel):
+    card: Optional[Flashcard] = None
+    selection_reason: Optional[Literal["learning_due", "review_due", "new", "none"]] = None
 
 
 class FlashcardGenerateRequest(BaseModel):

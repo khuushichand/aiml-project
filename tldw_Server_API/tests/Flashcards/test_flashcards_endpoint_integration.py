@@ -600,6 +600,107 @@ def test_review_missing_flashcard_returns_404(client_with_flashcards_db: TestCli
     assert r.status_code == 404
 
 
+def test_deck_endpoints_expose_and_patch_scheduler_settings(
+    client_with_flashcards_db: TestClient,
+):
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Scheduler Deck", "description": "defaults"},
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    deck = created.json()
+    assert deck["scheduler_settings"]["new_steps_minutes"] == [1, 10]
+    assert deck["scheduler_settings"]["enable_fuzz"] is False
+
+    updated = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/decks/{deck['id']}",
+        json={
+            "description": "updated",
+            "scheduler_settings": {
+                "new_steps_minutes": [2, 20],
+                "relearn_steps_minutes": [15],
+                "easy_bonus": 1.5,
+            },
+            "expected_version": deck["version"],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert payload["description"] == "updated"
+    assert payload["scheduler_settings"]["new_steps_minutes"] == [2, 20]
+    assert payload["scheduler_settings"]["relearn_steps_minutes"] == [15]
+    assert payload["scheduler_settings"]["easy_bonus"] == pytest.approx(1.5)
+    assert payload["scheduler_settings"]["graduating_interval_days"] == 1
+
+    conflict = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/decks/{deck['id']}",
+        json={"expected_version": deck["version"], "description": "stale"},
+        headers=AUTH_HEADERS,
+    )
+    assert conflict.status_code == 409
+
+
+def test_review_next_prefers_due_learning_before_due_review_and_new_cards(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    deck_id = flashcards_db.add_deck("Review ordering")
+
+    review_due_uuid = flashcards_db.add_flashcard(
+        {
+            "deck_id": deck_id,
+            "front": "Review due",
+            "back": "Answer",
+            "queue_state": "review",
+            "interval_days": 7,
+            "repetitions": 4,
+            "lapses": 0,
+            "last_reviewed_at": "2026-03-10T10:00:00Z",
+            "due_at": "2026-03-12T09:00:00Z",
+        }
+    )
+    learning_due_uuid = flashcards_db.add_flashcard(
+        {
+            "deck_id": deck_id,
+            "front": "Learning due",
+            "back": "Answer",
+            "queue_state": "learning",
+            "step_index": 0,
+            "interval_days": 0,
+            "repetitions": 0,
+            "lapses": 0,
+            "last_reviewed_at": "2026-03-12T09:55:00Z",
+            "due_at": "2026-03-12T09:59:00Z",
+        }
+    )
+    new_uuid = flashcards_db.add_flashcard(
+        {
+            "deck_id": deck_id,
+            "front": "Brand new",
+            "back": "Answer",
+            "queue_state": "new",
+        }
+    )
+
+    response = client_with_flashcards_db.get(
+        "/api/v1/flashcards/review/next",
+        params={"deck_id": deck_id},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selection_reason"] == "learning_due"
+    assert payload["card"]["uuid"] == learning_due_uuid
+    assert payload["card"]["queue_state"] == "learning"
+    assert payload["card"]["next_intervals"]["again"] == "1 min"
+    assert payload["card"]["next_intervals"]["easy"] == "4 days"
+    assert payload["card"]["uuid"] != review_due_uuid
+    assert payload["card"]["uuid"] != new_uuid
+
+
 def test_analytics_summary_returns_daily_metrics_and_deck_progress(client_with_flashcards_db: TestClient):
     # Seed one deck and two cards
     r = client_with_flashcards_db.post(

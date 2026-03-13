@@ -13,6 +13,25 @@ const flashcardsClient = createResourceClient({
   basePath: "/api/v1/flashcards" as AllowedPath
 })
 
+export type DeckSchedulerSettings = {
+  new_steps_minutes: number[]
+  relearn_steps_minutes: number[]
+  graduating_interval_days: number
+  easy_interval_days: number
+  easy_bonus: number
+  interval_modifier: number
+  max_interval_days: number
+  leech_threshold: number
+  enable_fuzz: boolean
+}
+
+export type FlashcardIntervalPreviews = {
+  again: string
+  hard: string
+  good: string
+  easy: string
+}
+
 // Minimal client types based on openapi.json
 export type Deck = {
   id: number
@@ -23,6 +42,8 @@ export type Deck = {
   version: number
   created_at?: string | null
   last_modified?: string | null
+  scheduler_settings_json?: string | null
+  scheduler_settings: DeckSchedulerSettings
 }
 
 export type Flashcard = {
@@ -41,6 +62,9 @@ export type Flashcard = {
   due_at?: string | null
   created_at?: string | null
   last_reviewed_at?: string | null
+  queue_state: "new" | "learning" | "review" | "relearning" | "suspended"
+  step_index?: number | null
+  suspended_reason?: "manual" | "leech" | null
   last_modified?: string | null
   deleted: boolean
   client_id: string
@@ -51,6 +75,14 @@ export type Flashcard = {
   source_ref_id?: string | null
   conversation_id?: string | null
   message_id?: string | null
+  next_intervals?: FlashcardIntervalPreviews | null
+}
+
+export type DeckUpdate = {
+  name?: string | null
+  description?: string | null
+  scheduler_settings?: Partial<DeckSchedulerSettings> | null
+  expected_version?: number | null
 }
 
 export type FlashcardCreate = {
@@ -152,6 +184,15 @@ export type FlashcardReviewResponse = {
   last_reviewed_at?: string | null
   last_modified?: string | null
   version: number
+  queue_state: Flashcard["queue_state"]
+  step_index?: number | null
+  suspended_reason?: Flashcard["suspended_reason"]
+  next_intervals: FlashcardIntervalPreviews
+}
+
+export type FlashcardNextReviewResponse = {
+  card?: Flashcard | null
+  selection_reason?: "learning_due" | "review_due" | "new" | "none" | null
 }
 
 export type FlashcardsImportRequest = {
@@ -245,10 +286,20 @@ export async function listDecks(options?: { signal?: AbortSignal }): Promise<Dec
 }
 
 export async function createDeck(
-  input: { name: string; description?: string | null },
+  input: { name: string; description?: string | null; scheduler_settings?: Partial<DeckSchedulerSettings> | null },
   options?: { signal?: AbortSignal }
 ): Promise<Deck> {
   return await decksClient.create<Deck>(input, {
+    abortSignal: options?.signal
+  })
+}
+
+export async function updateDeck(
+  deck_id: number,
+  input: DeckUpdate,
+  options?: { signal?: AbortSignal }
+): Promise<Deck> {
+  return await decksClient.update<Deck>(String(deck_id), input, {
     abortSignal: options?.signal
   })
 }
@@ -338,6 +389,18 @@ export async function reviewFlashcard(input: FlashcardReviewRequest): Promise<Fl
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: input
+  })
+}
+
+export async function getNextReviewCard(
+  deck_id?: number | null
+): Promise<FlashcardNextReviewResponse> {
+  const query = buildQuery({
+    deck_id
+  })
+  return await bgRequest<FlashcardNextReviewResponse, AllowedPath, "GET">({
+    path: `/api/v1/flashcards/review/next${query}` as AllowedPath,
+    method: "GET"
   })
 }
 
