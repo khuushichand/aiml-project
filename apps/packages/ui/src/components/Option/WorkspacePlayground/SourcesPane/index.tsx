@@ -55,7 +55,12 @@ import {
   SourceFolderTree,
   type SourceFolderTreeNode
 } from "./SourceFolderTree"
-import type { SourceListViewState } from "./source-list-view"
+import { SourceAdvancedControls } from "./SourceAdvancedControls"
+import {
+  buildSourceFilterSummary,
+  DEFAULT_SOURCE_LIST_VIEW_STATE,
+  type SourceListViewState
+} from "./source-list-view"
 
 // Icon mapping for source types
 const SOURCE_TYPE_ICONS: Record<WorkspaceSourceType, React.ElementType> = {
@@ -121,10 +126,22 @@ interface SourcesPaneProps {
  */
 export const SourcesPane: React.FC<SourcesPaneProps> = ({
   onHide,
-  statusGuardrailsEnabled = true
+  statusGuardrailsEnabled = true,
+  sourceListViewState = DEFAULT_SOURCE_LIST_VIEW_STATE,
+  onPatchSourceListViewState,
+  onResetAdvancedSourceFilters
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const [messageApi, messageContextHolder] = message.useMessage()
+  const patchSourceListViewState = React.useCallback(
+    (patch: Partial<SourceListViewState>) => {
+      onPatchSourceListViewState?.(patch)
+    },
+    [onPatchSourceListViewState]
+  )
+  const resetAdvancedSourceFilters = React.useCallback(() => {
+    onResetAdvancedSourceFilters?.()
+  }, [onResetAdvancedSourceFilters])
 
   // Store state
   const sources = useWorkspaceStore((s) => s.sources)
@@ -364,6 +381,22 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   const visibleSources = useVirtualizedSources
     ? filteredSources.slice(virtualStartIndex, virtualEndIndex)
     : filteredSources
+  const sourceFilterSummary = React.useMemo(
+    () => buildSourceFilterSummary(sourceListViewState),
+    [sourceListViewState]
+  )
+  const hasFileSizeSources = React.useMemo(
+    () => sources.some((source) => Number.isFinite(source.fileSize)),
+    [sources]
+  )
+  const hasDurationSources = React.useMemo(
+    () => sources.some((source) => Number.isFinite(source.duration)),
+    [sources]
+  )
+  const hasPageCountSources = React.useMemo(
+    () => sources.some((source) => Number.isFinite(source.pageCount)),
+    [sources]
+  )
 
   const effectiveSelectedSourceEntries = React.useMemo(() => {
     if (typeof getEffectiveSelectedSources === "function") {
@@ -1243,6 +1276,15 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             onChange={(e) => setSourceSearchQuery(e.target.value)}
             size="small"
             allowClear
+          />
+          <SourceAdvancedControls
+            viewState={sourceListViewState}
+            summary={sourceFilterSummary}
+            hasFileSizeSources={hasFileSizeSources}
+            hasDurationSources={hasDurationSources}
+            hasPageCountSources={hasPageCountSources}
+            onPatchViewState={patchSourceListViewState}
+            onResetAdvancedFilters={resetAdvancedSourceFilters}
           />
           <div className="mt-2 flex items-center justify-between text-xs">
             <Checkbox

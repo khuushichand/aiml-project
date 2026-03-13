@@ -277,7 +277,10 @@ export const sortSources = (
 const capitalize = (value: string): string =>
   value.length === 0 ? value : value[0].toUpperCase() + value.slice(1)
 
-const SORT_LABELS: Record<Exclude<SourceListSortOption, "manual">, string> = {
+export const SOURCE_LIST_SORT_LABELS: Record<
+  Exclude<SourceListSortOption, "manual">,
+  string
+> = {
   name_asc: "Name (A-Z)",
   name_desc: "Name (Z-A)",
   added_desc: "Added date (newest)",
@@ -306,7 +309,7 @@ export const buildSourceFilterSummary = (viewState: SourceListViewState): string
   }
 
   if (viewState.sort !== "manual") {
-    parts.push(`Sort: ${SORT_LABELS[viewState.sort]}`)
+    parts.push(`Sort: ${SOURCE_LIST_SORT_LABELS[viewState.sort]}`)
   }
 
   return parts.join(" · ")
