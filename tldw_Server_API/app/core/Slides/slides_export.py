@@ -9,7 +9,7 @@ import re
 import shutil
 import tempfile
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,7 @@ except Exception:  # pragma: no cover - playwright is an optional dependency
     PlaywrightTimeoutError = TimeoutError  # type: ignore
 
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Slides.slides_assets import SlidesAssetError, resolve_slide_asset
 from tldw_Server_API.app.core.Slides.slides_images import SlidesImageError, validate_images_payload
 from tldw_Server_API.app.core.testing import is_truthy
 
@@ -174,6 +175,7 @@ _DEFAULT_PDF_MARGIN = "0.4in"
 _DEFAULT_PDF_TIMEOUT_SECONDS = 60
 _DEFAULT_PDF_MAX_SLIDES = 200
 _DEFAULT_PDF_MAX_HTML_BYTES = 25 * 1024 * 1024
+SlideAssetResolver = Callable[[str], dict[str, Any]]
 
 
 def _get_slide_value(slide: Any, key: str, default: Any = None) -> Any:
@@ -312,7 +314,40 @@ def _resolve_pdf_limits() -> tuple[int, int]:
     return max_slides, max_bytes
 
 
-def _extract_images(slide: Any) -> list[dict[str, Any]]:
+def _resolve_image_asset(
+    image: dict[str, Any],
+    *,
+    asset_resolver: SlideAssetResolver | None,
+) -> dict[str, Any]:
+    asset_ref = image.get("asset_ref")
+    if not isinstance(asset_ref, str) or not asset_ref.strip():
+        return image
+    resolver = asset_resolver or resolve_slide_asset
+    try:
+        resolved = resolver(asset_ref.strip())
+    except SlidesAssetError as exc:
+        raise SlidesExportInputError(exc.code) from exc
+    if not isinstance(resolved, dict):
+        raise SlidesExportInputError("slide_asset_unresolved")
+    candidate = {
+        "id": image.get("id") or resolved.get("id"),
+        "mime": resolved.get("mime") or image.get("mime"),
+        "data_b64": resolved.get("data_b64"),
+        "alt": image.get("alt") if image.get("alt") is not None else resolved.get("alt"),
+        "width": image.get("width") if image.get("width") is not None else resolved.get("width"),
+        "height": image.get("height") if image.get("height") is not None else resolved.get("height"),
+    }
+    try:
+        return validate_images_payload([candidate])[0]
+    except SlidesImageError as exc:
+        raise SlidesExportInputError(exc.code) from exc
+
+
+def _extract_images(
+    slide: Any,
+    *,
+    asset_resolver: SlideAssetResolver | None = None,
+) -> list[dict[str, Any]]:
     metadata = _get_slide_value(slide, "metadata", {}) or {}
     if not isinstance(metadata, dict):
         return []
@@ -320,9 +355,10 @@ def _extract_images(slide: Any) -> list[dict[str, Any]]:
     if images is None:
         return []
     try:
-        return validate_images_payload(images)
+        normalized = validate_images_payload(images)
     except SlidesImageError as exc:
         raise SlidesExportInputError(exc.code) from exc
+    return [_resolve_image_asset(image, asset_resolver=asset_resolver) for image in normalized]
 
 
 def _escape_markdown_alt(text: str) -> str:
@@ -446,14 +482,18 @@ def _validate_reveal_assets(assets_dir: Path, theme: str) -> None:
         raise SlidesAssetsMissingError("Reveal.js LICENSE file missing")
 
 
-def _render_sections(slides: Iterable[Any]) -> str:
+def _render_sections(
+    slides: Iterable[Any],
+    *,
+    asset_resolver: SlideAssetResolver | None = None,
+) -> str:
     sections: list[str] = []
     for slide in _sorted_slides(slides):
         layout = escape(str(_get_slide_value(slide, "layout", "content")))
         title = _get_slide_value(slide, "title")
         content = _get_slide_value(slide, "content", "")
         notes = _get_slide_value(slide, "speaker_notes")
-        images = _extract_images(slide)
+        images = _extract_images(slide, asset_resolver=asset_resolver)
         images_html = _render_images_html(images)
 
         title_html = f"<h2>{escape(str(title))}</h2>" if title else ""
@@ -479,10 +519,11 @@ def _render_index_html(
     theme: str,
     settings_json: str,
     include_custom_css: bool,
+    asset_resolver: SlideAssetResolver | None = None,
 ) -> str:
     css_link = "  <link rel=\"stylesheet\" href=\"assets/custom.css\">\n" if include_custom_css else ""
     title_html = escape(title or "Presentation")
-    sections_html = _render_sections(slides)
+    sections_html = _render_sections(slides, asset_resolver=asset_resolver)
     return (
         "<!DOCTYPE html>\n"
         "<html>\n"
@@ -519,6 +560,7 @@ def export_presentation_bundle(
     settings: dict[str, Any] | None,
     custom_css: str | None,
     assets_dir: Path | str | None = None,
+    asset_resolver: SlideAssetResolver | None = None,
 ) -> bytes:
     resolved_assets = _resolve_assets_dir(assets_dir)
     _validate_reveal_assets(resolved_assets, theme)
@@ -530,6 +572,7 @@ def export_presentation_bundle(
         theme=theme,
         settings_json=settings_json,
         include_custom_css=bool(sanitized_css),
+        asset_resolver=asset_resolver,
     )
 
     buffer = io.BytesIO()
@@ -560,6 +603,7 @@ def export_presentation_markdown(
     slides: Iterable[Any],
     theme: str,
     marp_theme: str | None = None,
+    asset_resolver: SlideAssetResolver | None = None,
 ) -> str:
     resolved_theme = marp_theme or _REVEAL_THEME_TO_MARP.get(theme, "default")
     lines: list[str] = [
@@ -574,7 +618,7 @@ def export_presentation_markdown(
         slide_title = _get_slide_value(slide, "title")
         content = _get_slide_value(slide, "content", "")
         notes = _get_slide_value(slide, "speaker_notes")
-        images = _extract_images(slide)
+        images = _extract_images(slide, asset_resolver=asset_resolver)
         if layout in {"title", "section"} and slide_title:
             header = "# " if layout == "title" else "## "
             lines.append(f"{header}{slide_title}")
@@ -611,6 +655,7 @@ def export_presentation_pdf(
     custom_css: str | None,
     assets_dir: Path | str | None = None,
     pdf_options: dict[str, Any] | None = None,
+    asset_resolver: SlideAssetResolver | None = None,
 ) -> bytes:
     slides_list = list(slides)
     max_slides, max_html_bytes = _resolve_pdf_limits()
@@ -627,6 +672,7 @@ def export_presentation_pdf(
         theme=theme,
         settings_json=settings_json,
         include_custom_css=bool(sanitized_css),
+        asset_resolver=asset_resolver,
     )
     if max_html_bytes and len(index_html.encode("utf-8")) > max_html_bytes:
         raise SlidesExportInputError("pdf_html_too_large")

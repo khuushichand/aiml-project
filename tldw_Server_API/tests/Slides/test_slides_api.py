@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -102,6 +103,14 @@ class FakeMediaDB:
         return self.media.get(media_id)
 
 
+class FakeCollectionsDB:
+    def get_output_artifact(self, output_id: int):
+        return {"id": output_id}
+
+    def resolve_output_storage_path(self, path_value):
+        return str(path_value)
+
+
 @pytest.fixture()
 def slides_client(tmp_path):
     app = FastAPI()
@@ -135,9 +144,13 @@ def slides_client(tmp_path):
         finally:
             db.close_connection()
 
+    async def _override_collections_db():
+        return FakeCollectionsDB()
+
     app.dependency_overrides[get_request_user] = _override_user
     app.dependency_overrides[get_auth_principal] = _override_principal
     app.dependency_overrides[get_slides_db_for_user] = _override_db
+    app.dependency_overrides[get_collections_db_for_user] = _override_collections_db
 
     with TestClient(app) as client:
         yield client
@@ -186,11 +199,15 @@ def slides_client_with_sources(tmp_path):
     async def _override_media_db():
         return fake_media
 
+    async def _override_collections_db():
+        return FakeCollectionsDB()
+
     app.dependency_overrides[get_request_user] = _override_user
     app.dependency_overrides[get_auth_principal] = _override_principal
     app.dependency_overrides[get_slides_db_for_user] = _override_db
     app.dependency_overrides[get_chacha_db_for_user] = _override_notes_db
     app.dependency_overrides[get_media_db_for_user] = _override_media_db
+    app.dependency_overrides[get_collections_db_for_user] = _override_collections_db
 
     with TestClient(app) as client:
         yield client, fake_notes, fake_media
@@ -365,6 +382,41 @@ def test_slides_create_rejects_invalid_image(slides_client):
     resp = slides_client.post("/api/v1/slides/presentations", json=payload)
     assert resp.status_code == 422
     assert resp.json()["detail"] == "image_data_b64_invalid"
+
+
+def test_slides_create_and_export_markdown_with_image_asset_ref(slides_client, monkeypatch):
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.resolve_slide_asset",
+        lambda asset_ref, **kwargs: {
+            "asset_ref": asset_ref,
+            "mime": "image/png",
+            "data_b64": _SAMPLE_PNG_B64,
+            "alt": "Cover",
+        },
+    )
+    payload = {
+        "title": "Deck",
+        "theme": "black",
+        "slides": [
+            {
+                "order": 0,
+                "layout": "content",
+                "title": "Slide",
+                "content": "Hello",
+                "speaker_notes": None,
+                "metadata": {"images": [{"asset_ref": "output:123", "alt": "Cover"}]},
+            }
+        ],
+    }
+
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["slides"][0]["metadata"]["images"][0]["asset_ref"] == "output:123"
+
+    export_resp = slides_client.get(f"/api/v1/slides/presentations/{data['id']}/export?format=markdown")
+    assert export_resp.status_code == 200
+    assert "![Cover](data:image/png;base64," in export_resp.text
 
 
 def test_slides_export_reveal(slides_client, tmp_path, monkeypatch):

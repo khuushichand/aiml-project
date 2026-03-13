@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
@@ -49,6 +50,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, ge
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase
+from tldw_Server_API.app.core.Slides.slides_assets import resolve_slide_asset
 from tldw_Server_API.app.core.Slides.slides_export import (
     SlidesAssetsMissingError,
     SlidesExportError,
@@ -1315,6 +1317,7 @@ async def export_presentation(
     pdf_margin_left: str | None = Query(None),
     pdf_margin_right: str | None = Query(None),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
+    collections_db=Depends(get_collections_db_for_user),
 ) -> Response:
     try:
         row = db.get_presentation_by_id(presentation_id, include_deleted=False)
@@ -1325,6 +1328,15 @@ async def export_presentation(
     slides = [_slide_from_obj(item) for item in slides_raw]
     slides = _normalize_slides(slides)
     settings = _deserialize_settings(row.settings)
+    try:
+        user_id = int(db.client_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="user_unavailable") from exc
+    asset_resolver = lambda asset_ref: resolve_slide_asset(
+        asset_ref,
+        collections_db=collections_db,
+        user_id=user_id,
+    )
     try:
         metrics = get_metrics_registry()
     except _SLIDES_NONCRITICAL_EXCEPTIONS:
@@ -1343,6 +1355,7 @@ async def export_presentation(
                 slides=slides,
                 theme=row.theme,
                 marp_theme=getattr(row, "marp_theme", None),
+                asset_resolver=asset_resolver,
             ).encode("utf-8")
         except SlidesExportInputError as exc:
             if metrics is not None:
@@ -1384,6 +1397,7 @@ async def export_presentation(
                 settings=settings,
                 custom_css=row.custom_css,
                 pdf_options=pdf_options,
+                asset_resolver=asset_resolver,
             )
         except SlidesExportInputError as exc:
             if metrics is not None:
@@ -1411,6 +1425,7 @@ async def export_presentation(
                 theme=row.theme,
                 settings=settings,
                 custom_css=row.custom_css,
+                asset_resolver=asset_resolver,
             )
         except SlidesAssetsMissingError as exc:
             if metrics is not None:
