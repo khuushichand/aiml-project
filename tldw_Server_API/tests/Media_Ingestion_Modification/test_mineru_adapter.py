@@ -70,6 +70,39 @@ def test_normalize_mineru_output_returns_versioned_bounded_payload(tmp_path):
     assert "middle_json_excerpt" in structured["artifacts"]
 
 
+def test_normalize_mineru_output_coerces_text_for_text_and_json_formats(tmp_path):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
+        _normalize_mineru_output_dir,
+    )
+
+    out_dir = tmp_path / "mineru-out"
+    out_dir.mkdir()
+    (out_dir / "document.md").write_text("# Title\n\n|A|B|\n|-|-|\n|1|2|\n", encoding="utf-8")
+    (out_dir / "content_list.json").write_text(
+        json.dumps([{"page_idx": 0, "type": "text", "text": "page one"}]),
+        encoding="utf-8",
+    )
+
+    text_result = _normalize_mineru_output_dir(
+        out_dir,
+        output_format="text",
+        prompt_preset=None,
+    )
+    json_result = _normalize_mineru_output_dir(
+        out_dir,
+        output_format="json",
+        prompt_preset="json",
+    )
+
+    assert text_result["text"] == "Title\nA B\n1 2"
+    assert text_result["structured"]["format"] == "text"
+    assert text_result["structured"]["text"] == "Title\nA B\n1 2"
+
+    assert json_result["text"] == "Title\nA B\n1 2"
+    assert json_result["structured"]["format"] == "json"
+    assert json_result["structured"]["text"] == "Title\nA B\n1 2"
+
+
 def test_run_mineru_document_ocr_executes_cli_and_returns_details(monkeypatch, tmp_path):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
         run_mineru_document_ocr,
@@ -116,6 +149,51 @@ def test_run_mineru_document_ocr_executes_cli_and_returns_details(monkeypatch, t
     assert result["details"]["timeout_sec"] == 45
     assert result["details"]["max_concurrency"] == 2
     assert result["details"]["ocr_pages"] == 1
+
+
+def test_run_mineru_document_ocr_preserves_empty_pdf_pages(monkeypatch, tmp_path):
+    import pymupdf
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
+        run_mineru_document_ocr,
+    )
+
+    pdf_path = tmp_path / "sample.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=200, height=200)
+    doc.new_page(width=200, height=200)
+    pdf_path.write_bytes(doc.tobytes())
+    doc.close()
+
+    script_path = tmp_path / "fake_sparse_mineru.py"
+    script_path.write_text(
+        "\n".join(
+            [
+                "import json",
+                "import pathlib",
+                "import sys",
+                "",
+                "args = sys.argv[1:]",
+                "pdf_path = pathlib.Path(args[args.index('-p') + 1])",
+                "out_dir = pathlib.Path(args[args.index('-o') + 1])",
+                "run_dir = out_dir / pdf_path.stem",
+                "run_dir.mkdir(parents=True, exist_ok=True)",
+                "(run_dir / 'document.md').write_text('# Title\\n\\nBody', encoding='utf-8')",
+                "(run_dir / 'content_list.json').write_text(json.dumps([{'page_idx': 0, 'text': 'Body'}]), encoding='utf-8')",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MINERU_CMD", f"{sys.executable} {script_path}")
+
+    result = run_mineru_document_ocr(pdf_path=pdf_path, output_format="markdown")
+
+    assert result["details"]["total_pages"] == 2
+    assert result["details"]["ocr_pages"] == 1
+    assert len(result["structured"]["pages"]) == 2
+    assert result["structured"]["pages"][1]["page"] == 2
+    assert result["structured"]["pages"][1]["text"] == ""
 
 
 def test_run_mineru_document_ocr_times_out(monkeypatch, tmp_path):

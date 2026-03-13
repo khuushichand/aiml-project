@@ -111,6 +111,16 @@ def _normalize_requested_format(output_format: str | None) -> str:
     return "markdown"
 
 
+def _blank_page_entry(page_number: int) -> dict[str, Any]:
+    return {
+        "page": page_number,
+        "text": "",
+        "tables": [],
+        "blocks": [],
+        "meta": {},
+    }
+
+
 def _markdown_to_text(markdown_text: str) -> str:
     lines: list[str] = []
     for raw_line in markdown_text.splitlines():
@@ -134,35 +144,52 @@ def _markdown_to_text(markdown_text: str) -> str:
 
 def _coerce_text_output(markdown_text: str, output_format: str | None) -> str:
     fmt = _normalize_requested_format(output_format)
-    if fmt == "text":
+    if fmt in {"text", "json"}:
         return _markdown_to_text(markdown_text)
     return markdown_text
 
 
-def _pages_from_content_list(content_list: Any) -> list[dict[str, Any]]:
-    if not isinstance(content_list, list):
+def _max_page_from_tables(tables: list[dict[str, Any]]) -> int:
+    max_page = 0
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+        max_page = max(max_page, _coerce_int(table.get("page"), 0))
+    return max_page
+
+
+def _pages_from_content_list(
+    content_list: Any,
+    *,
+    total_pages: int | None = None,
+    tables: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    pages_by_index: dict[int, list[str]] = defaultdict(list)
+    highest_page_index = -1
+
+    if isinstance(content_list, list):
+        for entry in content_list:
+            if not isinstance(entry, dict):
+                continue
+            page_idx = max(_coerce_int(entry.get("page_idx"), 0), 0)
+            highest_page_index = max(highest_page_index, page_idx)
+            text = str(entry.get("text") or "").strip()
+            if text:
+                pages_by_index[page_idx].append(text)
+
+    final_total_pages = max(
+        total_pages or 0,
+        highest_page_index + 1,
+        _max_page_from_tables(tables or []),
+    )
+    if final_total_pages <= 0:
         return []
 
-    pages_by_index: dict[int, list[str]] = defaultdict(list)
-    for entry in content_list:
-        if not isinstance(entry, dict):
+    pages = [_blank_page_entry(page_number) for page_number in range(1, final_total_pages + 1)]
+    for page_idx, texts in pages_by_index.items():
+        if page_idx >= len(pages):
             continue
-        page_idx = max(_coerce_int(entry.get("page_idx"), 0), 0)
-        text = str(entry.get("text") or "").strip()
-        if text:
-            pages_by_index[page_idx].append(text)
-
-    pages: list[dict[str, Any]] = []
-    for page_idx in sorted(pages_by_index):
-        pages.append(
-            {
-                "page": page_idx + 1,
-                "text": "\n".join(pages_by_index[page_idx]).strip(),
-                "tables": [],
-                "blocks": [],
-                "meta": {},
-            }
-        )
+        pages[page_idx]["text"] = "\n".join(texts).strip()
     return pages
 
 
@@ -189,6 +216,19 @@ def _tables_from_middle(middle: Any) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _attach_tables_to_pages(pages: list[dict[str, Any]], tables: list[dict[str, Any]]) -> None:
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+        page_number = max(_coerce_int(table.get("page"), 1), 1)
+        page_index = page_number - 1
+        if page_index >= len(pages):
+            continue
+        page_tables = pages[page_index].setdefault("tables", [])
+        if isinstance(page_tables, list):
+            page_tables.append(table)
 
 
 def _bounded_middle_excerpt(middle: Any) -> dict[str, Any]:
@@ -247,18 +287,50 @@ def _read_first_existing(output_dir: Path, names: tuple[str, ...]) -> str:
     return ""
 
 
+def _get_pdf_page_count(source_pdf_path: Path | None) -> int:
+    if source_pdf_path is None or not source_pdf_path.exists():
+        return 0
+
+    try:
+        import pymupdf
+
+        with pymupdf.open(source_pdf_path) as doc:
+            return len(doc)
+    except Exception:
+        return 0
+
+
+def _page_has_content(page: dict[str, Any]) -> bool:
+    text = str(page.get("text") or "").strip()
+    if text:
+        return True
+    tables = page.get("tables")
+    if isinstance(tables, list) and tables:
+        return True
+    blocks = page.get("blocks")
+    return isinstance(blocks, list) and bool(blocks)
+
+
 def _normalize_mineru_output_dir(
     output_dir: Path,
     *,
     output_format: str | None,
     prompt_preset: str | None,
+    source_pdf_path: Path | None = None,
 ) -> dict[str, Any]:
     primary_output_dir = _resolve_primary_output_dir(output_dir)
     markdown_text = _read_first_existing(primary_output_dir, _MINERU_TEXT_MARKDOWN_FILES)
     content_list = _read_json_if_exists(primary_output_dir / "content_list.json")
     middle = _read_json_if_exists(primary_output_dir / "middle.json")
-    pages = _pages_from_content_list(content_list)
     tables = _tables_from_middle(middle)
+    total_pages = _get_pdf_page_count(source_pdf_path)
+    pages = _pages_from_content_list(
+        content_list,
+        total_pages=total_pages,
+        tables=tables,
+    )
+    _attach_tables_to_pages(pages, tables)
+    coerced_text = _coerce_text_output(markdown_text, output_format)
     artifacts = {
         "content_list_excerpt": content_list[:10] if isinstance(content_list, list) else [],
         "middle_json_excerpt": _bounded_middle_excerpt(middle),
@@ -267,7 +339,7 @@ def _normalize_mineru_output_dir(
 
     structured = {
         "schema_version": 1,
-        "text": markdown_text,
+        "text": coerced_text,
         "format": _normalize_requested_format(output_format),
         "pages": pages,
         "tables": tables,
@@ -282,7 +354,7 @@ def _normalize_mineru_output_dir(
         },
     }
     return {
-        "text": _coerce_text_output(markdown_text, output_format),
+        "text": coerced_text,
         "structured": structured,
     }
 
@@ -349,10 +421,16 @@ def run_mineru_document_ocr(
             output_dir,
             output_format=output_format,
             prompt_preset=prompt_preset,
+            source_pdf_path=pdf_path,
         )
         structured = normalized["structured"]
         pages = structured.get("pages") if isinstance(structured, dict) else []
-        page_count = len(pages) if isinstance(pages, list) else 0
+        total_pages = len(pages) if isinstance(pages, list) else 0
+        ocr_pages = (
+            sum(1 for page in pages if isinstance(page, dict) and _page_has_content(page))
+            if isinstance(pages, list)
+            else 0
+        )
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
         details = {
@@ -365,8 +443,8 @@ def run_mineru_document_ocr(
             "timeout_sec": timeout_sec,
             "max_concurrency": max_concurrency,
             "elapsed_ms": elapsed_ms,
-            "total_pages": page_count,
-            "ocr_pages": page_count,
+            "total_pages": total_pages,
+            "ocr_pages": ocr_pages,
             "artifacts_found": {
                 "markdown": bool(structured.get("text")),
                 "content_list_excerpt": bool(structured.get("artifacts", {}).get("content_list_excerpt")),
