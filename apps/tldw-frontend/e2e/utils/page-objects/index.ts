@@ -1,6 +1,7 @@
 /**
  * Page Objects for E2E testing
  */
+export { BasePage, type InteractiveElement, type InteractiveExpectation } from "./BasePage"
 export { ChatPage } from "./ChatPage"
 export { MediaPage } from "./MediaPage"
 export { SearchPage } from "./SearchPage"
