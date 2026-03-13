@@ -16,15 +16,23 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     IncidentItem,
     IncidentListResponse,
     IncidentUpdateRequest,
+    MaintenanceRotationRunCreateRequest,
+    MaintenanceRotationRunCreateResponse,
+    MaintenanceRotationRunItem,
+    MaintenanceRotationRunListResponse,
     MaintenanceState,
     MaintenanceUpdateRequest,
 )
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Chat.chat_service import (
     invalidate_model_alias_caches,
 )
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
+from tldw_Server_API.app.services.admin_maintenance_rotation_service import (
+    AdminMaintenanceRotationService,
+)
 from tldw_Server_API.app.services.admin_system_ops_service import (
     add_incident_event as svc_add_incident_event,
 )
@@ -84,6 +92,13 @@ def _require_platform_admin(principal: AuthPrincipal) -> None:
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
 
     return admin_mod._require_platform_admin(principal)
+
+
+def _enforce_domain_scope_unified(principal: AuthPrincipal, domain: str | None) -> Any:
+    """Delegate domain-scope enforcement to the shared jobs admin helper."""
+    from tldw_Server_API.app.api.v1.endpoints import jobs_admin as jobs_admin_mod
+
+    return jobs_admin_mod._enforce_domain_scope_unified(principal, domain)
 
 
 async def _get_admin_org_ids(principal: AuthPrincipal) -> list[int] | None:
@@ -151,6 +166,106 @@ async def update_maintenance_mode(
         metadata={"enabled": payload.enabled},
     )
     return MaintenanceState(**state)
+
+
+async def _get_maintenance_rotation_runs_repo(
+    pool: DatabasePool = Depends(get_db_pool),
+):
+    """Build the maintenance rotation runs repository from the shared AuthNZ pool."""
+    from tldw_Server_API.app.core.AuthNZ.repos.maintenance_rotation_runs_repo import (
+        AuthnzMaintenanceRotationRunsRepo,
+    )
+
+    repo = AuthnzMaintenanceRotationRunsRepo(pool)
+    await repo.ensure_schema()
+    return repo
+
+
+async def get_admin_maintenance_rotation_service(
+    repo=Depends(_get_maintenance_rotation_runs_repo),
+) -> AdminMaintenanceRotationService:
+    """Build the maintenance rotation service from the injected repository."""
+    return AdminMaintenanceRotationService(repo=repo)
+
+
+@router.post("/maintenance/rotation-runs", response_model=MaintenanceRotationRunCreateResponse)
+async def create_maintenance_rotation_run(
+    payload: MaintenanceRotationRunCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
+) -> MaintenanceRotationRunCreateResponse:
+    _enforce_domain_scope_unified(principal, payload.domain)
+    actor_label = principal.email or principal.username or (
+        str(principal.user_id) if principal.user_id is not None else None
+    )
+    item = await service.create_run(
+        mode=payload.mode,
+        domain=payload.domain,
+        queue=payload.queue,
+        job_type=payload.job_type,
+        fields=payload.fields,
+        limit=payload.limit,
+        confirmed=payload.confirmed,
+        requested_by_user_id=principal.user_id,
+        requested_by_label=actor_label,
+    )
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="maintenance.rotation_requested",
+        category="system",
+        resource_type="maintenance_rotation_run",
+        resource_id=item["id"],
+        action="maintenance.rotation.create",
+        metadata={
+            "mode": item["mode"],
+            "domain": item.get("domain"),
+            "queue": item.get("queue"),
+            "job_type": item.get("job_type"),
+            "limit": item.get("limit"),
+            "confirmation_recorded": item["confirmation_recorded"],
+        },
+    )
+    return MaintenanceRotationRunCreateResponse(item=MaintenanceRotationRunItem(**item))
+
+
+@router.get("/maintenance/rotation-runs", response_model=MaintenanceRotationRunListResponse)
+async def list_maintenance_rotation_runs(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
+) -> MaintenanceRotationRunListResponse:
+    payload = await service.list_runs(limit=limit, offset=offset)
+    visible_items: list[dict[str, Any]] = []
+    for item in payload["items"]:
+        try:
+            _enforce_domain_scope_unified(principal, item.get("domain"))
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                continue
+            raise
+        visible_items.append(item)
+    return MaintenanceRotationRunListResponse(
+        items=[MaintenanceRotationRunItem(**item) for item in visible_items],
+        total=len(visible_items),
+        limit=payload["limit"],
+        offset=payload["offset"],
+    )
+
+
+@router.get("/maintenance/rotation-runs/{run_id}", response_model=MaintenanceRotationRunItem)
+async def get_maintenance_rotation_run(
+    run_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
+) -> MaintenanceRotationRunItem:
+    item = await service.get_run(run_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="maintenance_rotation_run_not_found")
+    _enforce_domain_scope_unified(principal, item.get("domain"))
+    return MaintenanceRotationRunItem(**item)
 
 
 @router.get("/feature-flags", response_model=FeatureFlagsResponse)
