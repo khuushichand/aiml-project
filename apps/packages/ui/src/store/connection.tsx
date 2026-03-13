@@ -364,6 +364,7 @@ type ConnectionStore = {
   enableOfflineBypass: () => Promise<void>
   disableOfflineBypass: () => Promise<void>
   beginOnboarding: () => Promise<void>
+  restartOnboarding: () => Promise<void>
   setConfigPartial: (config: Partial<TldwConfig>) => Promise<void>
   testConnectionFromOnboarding: () => Promise<void>
   setDemoMode: () => void
@@ -408,6 +409,44 @@ const getPersistedServerUrl = async (): Promise<string | null> => {
   }
 
   return null
+}
+
+const hasRequiredAuthForConfig = (config: Partial<TldwConfig> | null | undefined): boolean => {
+  const authMode = config?.authMode ?? "single-user"
+  if (authMode === "multi-user") {
+    return Boolean(String(config?.accessToken || "").trim())
+  }
+
+  return Boolean(String(config?.apiKey || "").trim())
+}
+
+const deriveOnboardingConfigStep = (
+  config: Partial<TldwConfig> | null | undefined,
+  fallbackServerUrl: string | null,
+  currentState: ConnectionState
+): ConnectionState["configStep"] => {
+  if (!config) {
+    if (
+      currentState.phase === ConnectionPhase.CONNECTED ||
+      currentState.errorKind === "partial"
+    ) {
+      return currentState.configStep === "none" ? "health" : currentState.configStep
+    }
+    if (currentState.errorKind === "auth") {
+      return "auth"
+    }
+  }
+
+  const serverUrl = String(config?.serverUrl || fallbackServerUrl || "").trim()
+  if (!serverUrl) {
+    return "url"
+  }
+
+  if (!hasRequiredAuthForConfig(config)) {
+    return "auth"
+  }
+
+  return currentState.configStep === "none" ? "health" : currentState.configStep
 }
 
 export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, get) => ({
@@ -868,16 +907,67 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
   async beginOnboarding() {
     const prev = get().state
-    // Clear the persisted first-run flag so onboarding can restart
+    const isSyntheticConnectedState =
+      prev.mode === "demo" || prev.offlineBypass === true
+    let config: TldwConfig | null = null
+    try {
+      config = await tldwClient.getConfig()
+    } catch {
+      // ignore config lookup failures and fall back to current state
+    }
+
+    const nextServerUrl =
+      String(config?.serverUrl || prev.serverUrl || "").trim() || null
+    const nextConfigStep = deriveOnboardingConfigStep(
+      config,
+      nextServerUrl,
+      isSyntheticConnectedState
+        ? {
+            ...prev,
+            phase: ConnectionPhase.UNCONFIGURED,
+            isConnected: false,
+            configStep: "none",
+            errorKind: "none",
+            mode: "normal",
+            offlineBypass: false
+          }
+        : prev
+    )
+
+    set({
+      state: {
+        ...prev,
+        ...(isSyntheticConnectedState
+          ? {
+              phase: ConnectionPhase.UNCONFIGURED,
+              isConnected: false,
+              consecutiveFailures: 0,
+              errorKind: "none" as const,
+              lastError: null,
+              lastStatusCode: null,
+              knowledgeStatus: "unknown" as const,
+              knowledgeLastCheckedAt: null,
+              knowledgeError: null
+            }
+          : {}),
+        serverUrl: nextServerUrl,
+        configStep: nextConfigStep,
+        mode: "normal",
+        isChecking: false,
+        offlineBypass: false
+      }
+    })
+  },
+
+  async restartOnboarding() {
+    const prev = get().state
     await setFirstRunCompleteFlag(false)
     set({
       state: {
         ...prev,
         phase: ConnectionPhase.UNCONFIGURED,
-        // Always return to the guided config flow when onboarding starts.
         configStep: "url",
         hasCompletedFirstRun: false,
-        // Exit demo/offline modes so the wizard can take over again.
         mode: "normal",
         isConnected: false,
         isChecking: false,

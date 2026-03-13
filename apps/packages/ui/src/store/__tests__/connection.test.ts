@@ -376,4 +376,73 @@ describe("connection store stability", () => {
     expect(state.errorKind).toBe("none")
     expect(mockedApiSend).not.toHaveBeenCalled()
   })
+
+  it("begins onboarding without clearing first-run completion when a saved server still needs auth", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.ERROR,
+      serverUrl: "http://127.0.0.1:8000",
+      isConnected: false,
+      isChecking: false,
+      errorKind: "auth",
+      configStep: "health",
+      hasCompletedFirstRun: true
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    } as any)
+
+    await useConnectionStore.getState().beginOnboarding()
+
+    const state = useConnectionStore.getState().state
+    expect(state.serverUrl).toBe("http://127.0.0.1:8000")
+    expect(state.configStep).toBe("auth")
+    expect(state.hasCompletedFirstRun).toBe(true)
+    expect(localStorage.getItem("__tldw_first_run_complete")).toBe("true")
+  })
+
+  it("restarts onboarding from the beginning only when explicitly requested", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.ERROR,
+      serverUrl: "http://127.0.0.1:8000",
+      isConnected: false,
+      isChecking: false,
+      errorKind: "auth",
+      configStep: "auth",
+      hasCompletedFirstRun: true
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+
+    await (useConnectionStore.getState() as any).restartOnboarding()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.UNCONFIGURED)
+    expect(state.configStep).toBe("url")
+    expect(state.hasCompletedFirstRun).toBe(false)
+    expect(localStorage.getItem("__tldw_first_run_complete")).toBeNull()
+  })
+
+  it("exits demo mode when entering onboarding so setup does not look connected", async () => {
+    setConnectionState({
+      mode: "demo",
+      phase: ConnectionPhase.CONNECTED,
+      serverUrl: null,
+      isConnected: true,
+      isChecking: false,
+      configStep: "health",
+      errorKind: "none",
+      hasCompletedFirstRun: true
+    })
+    mockedClient.getConfig.mockResolvedValue(null as any)
+
+    await useConnectionStore.getState().beginOnboarding()
+
+    const state = useConnectionStore.getState().state
+    expect(state.mode).toBe("normal")
+    expect(state.phase).toBe(ConnectionPhase.UNCONFIGURED)
+    expect(state.isConnected).toBe(false)
+    expect(state.configStep).toBe("url")
+  })
 })

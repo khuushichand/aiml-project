@@ -2,10 +2,12 @@ import React, { useEffect } from "react"
 import { Empty, Tabs } from "antd"
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
-import { BookOpen, Highlighter, FileText, ArrowLeftRight, CalendarClock } from "lucide-react"
+import { BookOpen, Highlighter, FileText, ArrowLeftRight, CalendarClock, KeyRound, Settings } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useServerOnline } from "@/hooks/useServerOnline"
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { PageShell } from "@/components/Common/PageShell"
+import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useCollectionsStore } from "@/store/collections"
 import type { CollectionsTab } from "@/types/collections"
 import { ReadingItemsList } from "./ReadingList/ReadingItemsList"
@@ -13,6 +15,7 @@ import { HighlightsList } from "./Highlights/HighlightsList"
 import { TemplatesList } from "./Templates/TemplatesList"
 import { ImportExportPanel } from "./ImportExport/ImportExportPanel"
 import { DigestSchedulesPanel } from "./Digests/DigestSchedulesPanel"
+import { useNavigate } from "react-router-dom"
 
 /**
  * CollectionsPlaygroundPage
@@ -23,6 +26,8 @@ import { DigestSchedulesPanel } from "./Digests/DigestSchedulesPanel"
 export const CollectionsPlaygroundPage: React.FC = () => {
   const { t } = useTranslation(["collections", "common"])
   const isOnline = useServerOnline()
+  const navigate = useNavigate()
+  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
 
   const activeTab = useCollectionsStore((s) => s.activeTab)
   const setActiveTab = useCollectionsStore((s) => s.setActiveTab)
@@ -90,7 +95,60 @@ export const CollectionsPlaygroundPage: React.FC = () => {
     }
   ]
 
-  if (!isOnline) {
+  const openSettings = () => navigate("/settings/tldw")
+  const finishSetup = () => navigate("/")
+
+  if (uxState === "error_auth" || uxState === "configuring_auth") {
+    return (
+      <PageShell className="py-6" maxWidthClassName="max-w-6xl">
+        <FeatureEmptyState
+          title={t(
+            "collections:authRequiredTitle",
+            "Collections needs your credentials before it can load data."
+          )}
+          description={t(
+            "collections:authRequiredDescription",
+            "Open Settings to add or repair your tldw server credentials, then come back to Collections."
+          )}
+          primaryActionLabel={t("collections:openSettings", "Open Settings")}
+          onPrimaryAction={openSettings}
+          icon={KeyRound}
+          iconClassName="h-8 w-8 text-warn"
+        />
+      </PageShell>
+    )
+  }
+
+  if (
+    uxState === "unconfigured" ||
+    uxState === "configuring_url"
+  ) {
+    const needsFirstRun = !hasCompletedFirstRun
+    return (
+      <PageShell className="py-6" maxWidthClassName="max-w-6xl">
+        <FeatureEmptyState
+          title={t(
+            "collections:setupRequiredTitle",
+            "Finish setup before using Collections."
+          )}
+          description={t(
+            "collections:setupRequiredDescription",
+            "Collections depends on your connected tldw server for reading items, templates, and digest schedules."
+          )}
+          primaryActionLabel={t(
+            needsFirstRun
+              ? "collections:finishSetup"
+              : "collections:openSettings",
+            needsFirstRun ? "Finish Setup" : "Open Settings"
+          )}
+          onPrimaryAction={needsFirstRun ? finishSetup : openSettings}
+          icon={Settings}
+        />
+      </PageShell>
+    )
+  }
+
+  if (!isOnline || uxState === "error_unreachable") {
     return (
       <PageShell className="py-6" maxWidthClassName="max-w-6xl">
         <Empty
