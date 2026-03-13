@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Mapping
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError, InputError
+
+try:
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+except ImportError:  # pragma: no cover - fallback for limited test imports
+    async def perform_chat_api_call_async(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise ImportError("chat_service_unavailable")
+
+from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
 
 STUDY_ASSISTANT_ACTIONS = ("explain", "mnemonic", "follow_up", "fact_check", "freeform")
 DEFAULT_MAX_HISTORY_MESSAGES = 8
@@ -250,4 +259,88 @@ def build_study_assistant_prompt_package(
             f"Anchor: {anchor_text}\n"
             f"Learner message: {(user_message or '').strip() or '[none provided]'}"
         ),
+    }
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return None
+    candidates = [stripped]
+    match = re.search(r"\{[\s\S]*\}", stripped)
+    if match:
+        candidates.append(match.group(0))
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _render_fact_check_text(payload: Mapping[str, Any]) -> str:
+    verdict = str(payload.get("verdict") or "partially_correct").replace("_", " ")
+    corrections = payload.get("corrections") or []
+    missing_points = payload.get("missing_points") or []
+    parts = [f"Verdict: {verdict}."]
+    if corrections:
+        parts.append("Corrections: " + " ".join(str(item) for item in corrections))
+    if missing_points:
+        parts.append("Missing points: " + " ".join(str(item) for item in missing_points))
+    next_prompt = str(payload.get("next_prompt") or "").strip()
+    if next_prompt:
+        parts.append(next_prompt)
+    return " ".join(part for part in parts if part).strip()
+
+
+async def generate_study_assistant_reply(
+    *,
+    action: str,
+    context: Mapping[str, Any],
+    message: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Generate an assistant reply for the provided card/question context."""
+    prompt_package = build_study_assistant_prompt_package(
+        action=action,
+        context=context,
+        user_message=message,
+    )
+    normalized_action = str(prompt_package["action"])
+    system_prompt = prompt_package["system_prompt"]
+    if normalized_action == "fact_check":
+        system_prompt += (
+            " Return a JSON object with keys: verdict, corrections, missing_points, next_prompt, response_text."
+        )
+
+    response = await perform_chat_api_call_async(
+        messages=[{"role": "user", "content": prompt_package["user_prompt"]}],
+        api_provider=provider,
+        model=model,
+        system_message=system_prompt,
+        max_tokens=1000,
+        temperature=0.3,
+    )
+    response_text = (extract_openai_content(response) or "").strip()
+    resolved_provider = provider or "default"
+    resolved_model = model
+
+    if normalized_action == "fact_check":
+        parsed = _extract_json_object(response_text) or {}
+        assistant_text = str(parsed.get("response_text") or "").strip()
+        structured_payload = normalize_fact_check_payload(parsed, assistant_text=assistant_text or response_text)
+        if not assistant_text:
+            assistant_text = _render_fact_check_text(structured_payload)
+    else:
+        structured_payload = {}
+        assistant_text = response_text or "I couldn't generate a study response."
+
+    return {
+        "assistant_text": assistant_text.strip(),
+        "structured_payload": structured_payload,
+        "provider": resolved_provider,
+        "model": resolved_model,
     }

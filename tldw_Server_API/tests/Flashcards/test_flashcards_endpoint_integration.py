@@ -701,6 +701,163 @@ def test_review_next_prefers_due_learning_before_due_review_and_new_cards(
     assert payload["card"]["uuid"] != new_uuid
 
 
+def test_get_flashcard_assistant_returns_thread_messages_and_context(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "What is a nephron?", "back": "Kidney functional unit", "notes": "renal physiology"},
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    card_uuid = created.json()["uuid"]
+
+    thread = flashcards_db.get_or_create_study_assistant_thread(
+        context_type="flashcard",
+        flashcard_uuid=card_uuid,
+    )
+    flashcards_db.append_study_assistant_message(
+        thread_id=thread["id"],
+        role="user",
+        action_type="follow_up",
+        input_modality="text",
+        content="What does it do first?",
+        structured_payload={"kind": "question"},
+        context_snapshot={"flashcard_uuid": card_uuid},
+    )
+
+    response = client_with_flashcards_db.get(
+        f"/api/v1/flashcards/{card_uuid}/assistant",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["thread"]["id"] == thread["id"]
+    assert payload["messages"][0]["content"] == "What does it do first?"
+    assert payload["context_snapshot"]["flashcard"]["uuid"] == card_uuid
+    assert "fact_check" in payload["available_actions"]
+
+
+def test_flashcard_assistant_respond_persists_user_and_assistant_messages(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "What is the glomerulus?", "back": "It filters blood."},
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    card_uuid = created.json()["uuid"]
+
+    async def fake_generate_reply(*, action, context, message=None, provider=None, model=None):
+        assert action == "explain"
+        assert context["flashcard"]["uuid"] == card_uuid
+        return {
+            "assistant_text": "The glomerulus is the filtration tuft in the nephron.",
+            "structured_payload": {},
+            "provider": provider or "openai",
+            "model": model or "gpt-test",
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.flashcards.generate_study_assistant_reply",
+        fake_generate_reply,
+    )
+
+    response = client_with_flashcards_db.post(
+        f"/api/v1/flashcards/{card_uuid}/assistant/respond",
+        json={"action": "explain"},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user_message"]["role"] == "user"
+    assert payload["assistant_message"]["role"] == "assistant"
+    assert payload["assistant_message"]["content"] == "The glomerulus is the filtration tuft in the nephron."
+    assert payload["thread"]["message_count"] == 2
+
+
+def test_flashcard_assistant_missing_card_returns_404(client_with_flashcards_db: TestClient):
+    response = client_with_flashcards_db.get(
+        f"/api/v1/flashcards/{uuid.uuid4()}/assistant",
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 404
+
+
+def test_flashcard_assistant_invalid_action_returns_422(
+    client_with_flashcards_db: TestClient,
+):
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "Card", "back": "Answer"},
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    card_uuid = created.json()["uuid"]
+
+    response = client_with_flashcards_db.post(
+        f"/api/v1/flashcards/{card_uuid}/assistant/respond",
+        json={"action": "invalid_action"},
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 422
+
+
+def test_flashcard_assistant_fact_check_returns_required_payload_keys(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "What filters blood?", "back": "The glomerulus filters blood."},
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    card_uuid = created.json()["uuid"]
+
+    async def fake_generate_reply(*, action, context, message=None, provider=None, model=None):
+        assert action == "fact_check"
+        return {
+            "assistant_text": "Filtration occurs in the glomerulus.",
+            "structured_payload": {
+                "verdict": "incorrect",
+                "corrections": ["Filtration occurs in the glomerulus."],
+                "missing_points": ["The collecting duct does not filter blood."],
+                "next_prompt": "Explain where filtration starts.",
+            },
+            "provider": "openai",
+            "model": "gpt-test",
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.flashcards.generate_study_assistant_reply",
+        fake_generate_reply,
+    )
+
+    response = client_with_flashcards_db.post(
+        f"/api/v1/flashcards/{card_uuid}/assistant/respond",
+        json={
+            "action": "fact_check",
+            "message": "I think the collecting duct filters blood.",
+            "input_modality": "voice_transcript",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["structured_payload"]["verdict"] == "incorrect"
+    assert payload["structured_payload"]["corrections"] == ["Filtration occurs in the glomerulus."]
+    assert payload["structured_payload"]["missing_points"] == ["The collecting duct does not filter blood."]
+    assert payload["structured_payload"]["next_prompt"] == "Explain where filtration starts."
+    assert payload["user_message"]["input_modality"] == "voice_transcript"
+
+
 def test_analytics_summary_returns_daily_metrics_and_deck_progress(client_with_flashcards_db: TestClient):
     # Seed one deck and two cards
     r = client_with_flashcards_db.post(

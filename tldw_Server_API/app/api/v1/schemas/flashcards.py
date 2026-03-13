@@ -343,6 +343,21 @@ class StudyAssistantRespondRequest(BaseModel):
     expected_thread_version: Optional[int] = Field(None, ge=1)
 
 
+class StudyAssistantContextResponse(BaseModel):
+    thread: StudyAssistantThreadSummary
+    messages: list[StudyAssistantMessage] = Field(default_factory=list)
+    context_snapshot: dict[str, Any] = Field(default_factory=dict)
+    available_actions: list[StudyAssistantAction] = Field(default_factory=list)
+
+
+class StudyAssistantRespondResponse(BaseModel):
+    thread: StudyAssistantThreadSummary
+    user_message: StudyAssistantMessage
+    assistant_message: StudyAssistantMessage
+    structured_payload: dict[str, Any] = Field(default_factory=dict)
+    context_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
 class FlashcardTagsUpdate(BaseModel):
     tags: list[str]
 
