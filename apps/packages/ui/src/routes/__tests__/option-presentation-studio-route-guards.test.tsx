@@ -1,5 +1,6 @@
 import React from "react"
 import { render, screen } from "@testing-library/react"
+import { MemoryRouter } from "react-router-dom"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import OptionPresentationStudio from "../option-presentation-studio"
@@ -61,7 +62,11 @@ describe("presentation studio option route guards", () => {
       }
     })
 
-    render(<OptionPresentationStudio />)
+    render(
+      <MemoryRouter>
+        <OptionPresentationStudio />
+      </MemoryRouter>
+    )
 
     expect(
       screen.getByText("Presentation Studio is not available on this server.")
@@ -69,7 +74,11 @@ describe("presentation studio option route guards", () => {
   })
 
   it("renders the editor shell when presentation studio is supported", () => {
-    render(<OptionPresentationStudio />)
+    render(
+      <MemoryRouter>
+        <OptionPresentationStudio />
+      </MemoryRouter>
+    )
 
     expect(screen.getByTestId("route-boundary-presentation-studio")).toBeVisible()
     expect(screen.getByText("Presentation Studio")).toBeInTheDocument()

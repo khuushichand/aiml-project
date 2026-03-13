@@ -1,9 +1,10 @@
 import React from "react"
 
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
-  tldwClient,
-  type PresentationStudioRecord
-} from "@/services/tldw/TldwApiClient"
+  buildPresentationStudioPatchPayloadFromRecord,
+  mergePresentationStudioDraftWithRemote,
+} from "@/store/presentation-studio"
 import { usePresentationStudioStore } from "@/store/presentation-studio"
 
 const AUTOSAVE_DELAY_MS = 800
@@ -29,9 +30,10 @@ export const usePresentationStudioAutosave = (): void => {
     }
 
     const timer = window.setTimeout(async () => {
+      const localDraft = buildPatchPayload()
       setAutosaveState("saving")
       try {
-        const updated = await tldwClient.patchPresentation(projectId, buildPatchPayload(), {
+        const updated = await tldwClient.patchPresentation(projectId, localDraft, {
           ifMatch: etag
         })
         markPersisted(toEtag(updated.version), updated)
@@ -40,9 +42,20 @@ export const usePresentationStudioAutosave = (): void => {
         if (message.includes("412") || message.includes("precondition_failed")) {
           try {
             const latest = await tldwClient.getPresentation(projectId)
-            loadProject(latest, {
-              etag: toEtag(latest.version)
+            const mergedProject = mergePresentationStudioDraftWithRemote(latest, localDraft)
+            const latestEtag = toEtag(latest.version)
+            loadProject(mergedProject, {
+              etag: latestEtag,
+              preserveDirty: true
             })
+            const updated = await tldwClient.patchPresentation(
+              projectId,
+              buildPresentationStudioPatchPayloadFromRecord(mergedProject),
+              {
+                ifMatch: latestEtag
+              }
+            )
+            markPersisted(toEtag(updated.version), updated)
             return
           } catch (reloadError) {
             setAutosaveState("error", toErrorMessage(reloadError))

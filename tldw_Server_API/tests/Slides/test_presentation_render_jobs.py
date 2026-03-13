@@ -234,15 +234,21 @@ async def test_render_worker_persists_output_artifact(monkeypatch, tmp_path):
 
     output_file = tmp_path / "rendered.mp4"
     output_file.write_bytes(b"video-bytes")
-    monkeypatch.setattr(
-        presentation_render_jobs_worker,
-        "render_presentation_video",
-        lambda **kwargs: PresentationRenderResult(
+    render_kwargs: dict[str, object] = {}
+
+    def _fake_render_presentation_video(**kwargs):
+        render_kwargs.update(kwargs)
+        return PresentationRenderResult(
             output_format="mp4",
             storage_path="rendered.mp4",
             output_path=output_file,
             byte_size=len(b"video-bytes"),
-        ),
+        )
+
+    monkeypatch.setattr(
+        presentation_render_jobs_worker,
+        "render_presentation_video",
+        _fake_render_presentation_video,
     )
 
     recorded: dict[str, object] = {}
@@ -277,3 +283,4 @@ async def test_render_worker_persists_output_artifact(monkeypatch, tmp_path):
     metadata = json.loads(str(recorded["metadata_json"]))
     assert metadata["presentation_id"] == presentation.id
     assert metadata["presentation_version"] == 1
+    assert render_kwargs["user_id"] == 1

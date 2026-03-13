@@ -1,4 +1,5 @@
 import React from "react"
+import { useNavigate } from "react-router-dom"
 
 import { ProjectWorkspace } from "./ProjectWorkspace"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -17,29 +18,91 @@ const formatEtag = (version: number | null | undefined): string | null =>
 const toErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message || "Failed to load presentation." : "Failed to load presentation."
 
+const createBlankSlideId = (): string =>
+  globalThis.crypto?.randomUUID?.() ||
+  `slide-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+
 export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
   mode = "index",
   projectId = null
 }) => {
+  const navigate = useNavigate()
   const isOnline = useServerOnline()
   const { capabilities, loading } = useServerCapabilities()
-  const initializeBlankProject = usePresentationStudioStore((state) => state.initializeBlankProject)
   const loadProject = usePresentationStudioStore((state) => state.loadProject)
   const title = usePresentationStudioStore((state) => state.title)
   const slides = usePresentationStudioStore((state) => state.slides)
   const currentProjectId = usePresentationStudioStore((state) => state.projectId)
-  const [isProjectLoading, setIsProjectLoading] = React.useState(false)
+  const [isProjectLoading, setIsProjectLoading] = React.useState(mode === "new")
   const [loadError, setLoadError] = React.useState<string | null>(null)
+  const newProjectStartedRef = React.useRef(false)
 
   React.useEffect(() => {
     if (mode !== "new") {
       return
     }
-    if (slides.length > 0 && currentProjectId === null) {
+    if (newProjectStartedRef.current) {
       return
     }
-    initializeBlankProject()
-  }, [currentProjectId, initializeBlankProject, mode, slides.length])
+    newProjectStartedRef.current = true
+    let active = true
+    setIsProjectLoading(true)
+    setLoadError(null)
+    const blankSlideId = createBlankSlideId()
+
+    void tldwClient
+      .createPresentation({
+        title: "Untitled Presentation",
+        description: null,
+        theme: "black",
+        studio_data: {
+          origin: "blank",
+          entry_surface: "webui_new"
+        },
+        slides: [
+          {
+            order: 0,
+            layout: "title",
+            title: "Title slide",
+            content: "",
+            speaker_notes: "",
+            metadata: {
+              studio: {
+                slideId: blankSlideId,
+                audio: { status: "missing" },
+                image: { status: "missing" }
+              }
+            }
+          }
+        ]
+      })
+      .then((project) => {
+        if (!active) {
+          return
+        }
+        loadProject(project, {
+          etag: formatEtag(project.version)
+        })
+        navigate(`/presentation-studio/${project.id}`, {
+          replace: true
+        })
+      })
+      .catch((error) => {
+        if (!active) {
+          return
+        }
+        setLoadError(toErrorMessage(error))
+      })
+      .finally(() => {
+        if (active) {
+          setIsProjectLoading(false)
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [loadProject, mode, navigate])
 
   React.useEffect(() => {
     if (mode !== "detail" || !projectId) {
@@ -114,7 +177,9 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
   if (isProjectLoading) {
     return (
       <section className="rounded-xl border border-slate-200 bg-white p-6">
-        <p className="text-sm text-slate-600">Loading presentation…</p>
+        <p className="text-sm text-slate-600">
+          {mode === "new" ? "Creating presentation…" : "Loading presentation…"}
+        </p>
       </section>
     )
   }

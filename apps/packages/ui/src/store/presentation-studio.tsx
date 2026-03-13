@@ -32,6 +32,14 @@ export type PresentationStudioEditorSlide = Omit<PresentationStudioSlide, "metad
   }
 }
 
+export type PresentationStudioPatchPayload = {
+  title: string
+  description: string | null
+  theme: string
+  studio_data: Record<string, any> | null
+  slides: PresentationStudioSlide[]
+}
+
 type AutosaveState = "idle" | "saving" | "error"
 
 type PresentationStudioStore = {
@@ -50,7 +58,7 @@ type PresentationStudioStore = {
   initializeBlankProject: () => void
   loadProject: (
     project: PresentationStudioRecord,
-    options?: { etag?: string | null }
+    options?: { etag?: string | null; preserveDirty?: boolean }
   ) => void
   updateProjectMeta: (updates: {
     title?: string
@@ -144,6 +152,156 @@ const normalizeSlide = (
   }
 }
 
+const buildPatchPayloadFromSlides = (input: {
+  title: string
+  description?: string | null
+  theme: string
+  studio_data?: Record<string, any> | null
+  slides: Array<PresentationStudioSlide | PresentationStudioEditorSlide>
+}): PresentationStudioPatchPayload => ({
+  title: input.title,
+  description: input.description || null,
+  theme: input.theme,
+  studio_data: input.studio_data ?? null,
+  slides: input.slides.map((slide, index) => ({
+    order: index,
+    layout: slide.layout,
+    title: slide.title ?? "",
+    content: slide.content,
+    speaker_notes: slide.speaker_notes ?? "",
+    metadata: slide.metadata
+  }))
+})
+
+const mergeSlideMetadata = (
+  remoteMetadata: Record<string, any> | undefined,
+  localMetadata: Record<string, any> | undefined
+): Record<string, any> => {
+  const remote = remoteMetadata && typeof remoteMetadata === "object" ? remoteMetadata : {}
+  const local = localMetadata && typeof localMetadata === "object" ? localMetadata : {}
+  const remoteStudio =
+    remote.studio && typeof remote.studio === "object" && !Array.isArray(remote.studio)
+      ? remote.studio
+      : {}
+  const localStudio =
+    local.studio && typeof local.studio === "object" && !Array.isArray(local.studio)
+      ? local.studio
+      : {}
+  const remoteAudio =
+    remoteStudio.audio && typeof remoteStudio.audio === "object" && !Array.isArray(remoteStudio.audio)
+      ? remoteStudio.audio
+      : {}
+  const localAudio =
+    localStudio.audio && typeof localStudio.audio === "object" && !Array.isArray(localStudio.audio)
+      ? localStudio.audio
+      : {}
+  const remoteImage =
+    remoteStudio.image && typeof remoteStudio.image === "object" && !Array.isArray(remoteStudio.image)
+      ? remoteStudio.image
+      : {}
+  const localImage =
+    localStudio.image && typeof localStudio.image === "object" && !Array.isArray(localStudio.image)
+      ? localStudio.image
+      : {}
+
+  return {
+    ...remote,
+    ...local,
+    images:
+      Object.prototype.hasOwnProperty.call(local, "images") && Array.isArray(local.images)
+        ? local.images
+        : remote.images,
+    studio: {
+      ...remoteStudio,
+      ...localStudio,
+      slideId:
+        typeof localStudio.slideId === "string" && localStudio.slideId.trim().length > 0
+          ? localStudio.slideId
+          : typeof remoteStudio.slideId === "string" && remoteStudio.slideId.trim().length > 0
+            ? remoteStudio.slideId
+            : createSlideId(),
+      audio: {
+        ...remoteAudio,
+        ...localAudio,
+        status: normalizeAssetStatus(
+          localAudio.status ?? remoteAudio.status,
+          localAudio.asset_ref || remoteAudio.asset_ref ? "ready" : "missing"
+        )
+      },
+      image: {
+        ...remoteImage,
+        ...localImage,
+        status: normalizeAssetStatus(
+          localImage.status ?? remoteImage.status,
+          localImage.asset_ref || remoteImage.asset_ref ? "ready" : "missing"
+        )
+      }
+    }
+  }
+}
+
+export const buildPresentationStudioPatchPayloadFromRecord = (
+  project: Pick<PresentationStudioRecord, "title" | "description" | "theme" | "studio_data" | "slides">
+): PresentationStudioPatchPayload =>
+  buildPatchPayloadFromSlides({
+    title: project.title,
+    description: project.description,
+    theme: project.theme,
+    studio_data: project.studio_data ?? null,
+    slides: project.slides
+  })
+
+export const mergePresentationStudioDraftWithRemote = (
+  latest: PresentationStudioRecord,
+  localDraft: PresentationStudioPatchPayload
+): PresentationStudioRecord => {
+  const remoteSlides = (latest.slides || []).map((slide, index) => normalizeSlide(slide, index))
+  const localSlides = (localDraft.slides || []).map((slide, index) => normalizeSlide(slide, index))
+  const remoteBySlideId = new Map(
+    remoteSlides.map((slide) => [slide.metadata.studio.slideId, slide] as const)
+  )
+
+  const mergedSlides: PresentationStudioSlide[] = []
+  for (const localSlide of localSlides) {
+    const slideId = localSlide.metadata.studio.slideId
+    const remoteSlide = remoteBySlideId.get(slideId)
+    if (remoteSlide) {
+      remoteBySlideId.delete(slideId)
+    }
+    mergedSlides.push({
+      order: mergedSlides.length,
+      layout: localSlide.layout,
+      title: localSlide.title ?? remoteSlide?.title ?? "",
+      content: localSlide.content ?? remoteSlide?.content ?? "",
+      speaker_notes: localSlide.speaker_notes ?? remoteSlide?.speaker_notes ?? "",
+      metadata: mergeSlideMetadata(remoteSlide?.metadata, localSlide.metadata)
+    })
+  }
+
+  for (const remoteSlide of remoteSlides) {
+    if (!remoteBySlideId.has(remoteSlide.metadata.studio.slideId)) {
+      continue
+    }
+    mergedSlides.push({
+      order: mergedSlides.length,
+      layout: remoteSlide.layout,
+      title: remoteSlide.title ?? "",
+      content: remoteSlide.content,
+      speaker_notes: remoteSlide.speaker_notes ?? "",
+      metadata: remoteSlide.metadata
+    })
+  }
+
+  return {
+    ...latest,
+    title: localDraft.title,
+    description: localDraft.description,
+    theme: localDraft.theme,
+    studio_data: localDraft.studio_data,
+    slides: mergedSlides
+  }
+}
+
 const createBlankSlide = (order: number): PresentationStudioEditorSlide =>
   normalizeSlide(
     {
@@ -186,9 +344,15 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
       })
     },
 
-    loadProject: (project, options) => {
+    loadProject: (project, options) =>
+      set((state) => {
       const slides = (project.slides || []).map((slide, index) => normalizeSlide(slide, index))
-      set({
+      const previousSelected = state.selectedSlideId
+      const selectedSlideId =
+        slides.find((slide) => slide.metadata.studio.slideId === previousSelected)?.metadata.studio.slideId ||
+        slides[0]?.metadata.studio.slideId ||
+        null
+      return {
         projectId: project.id,
         title: project.title || "Untitled Presentation",
         description: project.description || "",
@@ -198,13 +362,13 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
             ? { ...project.studio_data }
             : null,
         slides,
-        selectedSlideId: slides[0]?.metadata.studio.slideId || null,
+        selectedSlideId,
         etag: options?.etag ?? `W/"v${project.version}"`,
-        isDirty: false,
-        autosaveState: "idle",
-        autosaveError: null
-      })
-    },
+        isDirty: Boolean(options?.preserveDirty),
+        autosaveState: options?.preserveDirty ? state.autosaveState : "idle",
+        autosaveError: options?.preserveDirty ? state.autosaveError : null
+      }
+    }),
 
     updateProjectMeta: (updates) =>
       set((state) => ({
@@ -293,20 +457,13 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
 
     buildPatchPayload: () => {
       const state = get()
-      return {
+      return buildPatchPayloadFromSlides({
         title: state.title,
-        description: state.description || null,
+        description: state.description,
         theme: state.theme,
         studio_data: state.studioData,
-        slides: state.slides.map((slide, index) => ({
-          order: index,
-          layout: slide.layout,
-          title: slide.title ?? "",
-          content: slide.content,
-          speaker_notes: slide.speaker_notes ?? "",
-          metadata: slide.metadata
-        }))
-      }
+        slides: state.slides
+      })
     }
   })
 )

@@ -1,20 +1,78 @@
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageChops
 
 from tldw_Server_API.app.core.Slides.presentation_rendering import (
     PresentationRenderError,
+    _render_slide_frame,
     render_presentation_video,
 )
 
 
-def test_render_presentation_video_writes_mp4_output(tmp_path, monkeypatch):
+def test_render_slide_frame_draws_slide_text_content(tmp_path):
+    output_path = tmp_path / "slide.png"
+
+    _render_slide_frame(
+        {
+            "order": 0,
+            "layout": "content",
+            "title": "Deck title",
+            "content": "Line one\nLine two",
+            "speaker_notes": "Narration",
+            "metadata": {},
+        },
+        output_path=output_path,
+        collections_db=None,
+        user_id=None,
+    )
+
+    rendered = Image.open(output_path).convert("RGB")
+    background = Image.new("RGB", rendered.size, "#0f172a")
+
+    assert ImageChops.difference(rendered, background).getbbox() is not None
+
+
+def test_render_presentation_video_builds_slide_segments_from_visuals_and_audio(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Slides.presentation_rendering._resolve_ffmpeg_path",
         lambda: "/usr/bin/ffmpeg",
     )
+    captured_commands: list[list[str]] = []
+    segment_outputs: list[Path] = []
+    slide_frame_calls: list[dict[str, object]] = []
+    audio_path = tmp_path / "slide-0.wav"
+    audio_path.write_bytes(b"audio-bytes")
+
+    def _fake_render_slide_frame(slide, *, output_path, collections_db, user_id):
+        slide_frame_calls.append(
+            {
+                "title": slide.get("title"),
+                "content": slide.get("content"),
+                "user_id": user_id,
+                "has_collections": collections_db is not None,
+            }
+        )
+        output_path.write_bytes(b"png-bytes")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._render_slide_frame",
+        _fake_render_slide_frame,
+    )
+
+    def _fake_materialize_slide_audio(slide, *, temp_dir, slide_index, collections_db, user_id):
+        assert collections_db is not None
+        assert user_id == 7
+        return audio_path if slide_index == 0 else None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._materialize_slide_audio",
+        _fake_materialize_slide_audio,
+    )
 
     def _fake_run_ffmpeg(command: list[str], *, output_path: Path) -> None:
+        captured_commands.append(command)
+        segment_outputs.append(output_path)
         assert command[0] == "/usr/bin/ffmpeg"
         output_path.write_bytes(b"video-bytes")
 
@@ -32,15 +90,32 @@ def test_render_presentation_video_writes_mp4_output(tmp_path, monkeypatch):
                 "order": 0,
                 "layout": "title",
                 "title": "Deck",
-                "content": "",
+                "content": "Opening slide",
                 "speaker_notes": "Intro",
+                "metadata": {},
+            },
+            {
+                "order": 1,
+                "layout": "content",
+                "title": "Agenda",
+                "content": "Point A\nPoint B",
+                "speaker_notes": "Longer narration for the second slide",
                 "metadata": {},
             }
         ],
         output_format="mp4",
         output_dir=tmp_path,
+        collections_db=object(),
+        user_id=7,
     )
 
+    assert [call["title"] for call in slide_frame_calls] == ["Deck", "Agenda"]
+    assert [call["content"] for call in slide_frame_calls] == ["Opening slide", "Point A\nPoint B"]
+    assert len(captured_commands) == 3
+    assert str(audio_path) in captured_commands[0]
+    assert "anullsrc=r=48000:cl=stereo" in captured_commands[1]
+    assert "-f" in captured_commands[2]
+    assert "concat" in captured_commands[2]
     assert result.output_format == "mp4"
     assert result.storage_path.endswith(".mp4")
     assert result.output_path.exists()

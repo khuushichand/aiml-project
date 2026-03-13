@@ -151,6 +151,7 @@ async def process_presentation_render_job(
             slides=snapshot.slides,
             output_format=output_format,
             output_dir=outputs_dir,
+            user_id=user_id,
         )
     except PresentationRenderError as exc:
         raise PresentationRenderJobError(exc.code, retryable=getattr(exc, "retryable", False)) from exc
