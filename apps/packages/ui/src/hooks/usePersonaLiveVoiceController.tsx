@@ -26,6 +26,7 @@ type UsePersonaLiveVoiceControllerArgs = {
 type PersonaLiveVoicePayload = Record<string, unknown> | null | undefined
 
 const LISTENING_RECOVERY_TIMEOUT_MS = 4_000
+const THINKING_RECOVERY_TIMEOUT_MS = 8_000
 
 const normalizeTtsProvider = (provider: string): string =>
   String(provider || "").trim().toLowerCase()
@@ -52,6 +53,8 @@ export const usePersonaLiveVoiceController = ({
   const [recoveryMode, setRecoveryMode] =
     React.useState<PersonaLiveVoiceRecoveryMode>("none")
   const [listeningRecoveryRestartKey, setListeningRecoveryRestartKey] = React.useState(0)
+  const [thinkingRecoveryArmed, setThinkingRecoveryArmed] = React.useState(false)
+  const [thinkingRecoveryRestartKey, setThinkingRecoveryRestartKey] = React.useState(0)
 
   const heardTranscriptRef = React.useRef("")
   const manualModeRequiredRef = React.useRef(false)
@@ -62,6 +65,7 @@ export const usePersonaLiveVoiceController = ({
   const browserUtteranceActiveRef = React.useRef(false)
   const resumeListeningRef = React.useRef<() => void>(() => {})
   const listeningRecoveryTimeoutRef = React.useRef<number | null>(null)
+  const thinkingRecoveryTimeoutRef = React.useRef<number | null>(null)
 
   const activeProvider = React.useMemo(
     () => normalizeTtsProvider(resolvedDefaults.ttsProvider),
@@ -87,6 +91,26 @@ export const usePersonaLiveVoiceController = ({
     }
     listeningRecoveryTimeoutRef.current = null
   }, [])
+
+  const clearThinkingRecoveryTimeout = React.useCallback(() => {
+    if (thinkingRecoveryTimeoutRef.current != null && typeof window !== "undefined") {
+      window.clearTimeout(thinkingRecoveryTimeoutRef.current)
+    }
+    thinkingRecoveryTimeoutRef.current = null
+  }, [])
+
+  const armThinkingRecovery = React.useCallback(() => {
+    clearThinkingRecoveryTimeout()
+    setRecoveryMode((current) => (current === "thinking_stuck" ? "none" : current))
+    setThinkingRecoveryArmed(true)
+    setThinkingRecoveryRestartKey((current) => current + 1)
+  }, [clearThinkingRecoveryTimeout])
+
+  const clearThinkingRecovery = React.useCallback(() => {
+    clearThinkingRecoveryTimeout()
+    setThinkingRecoveryArmed(false)
+    setRecoveryMode((current) => (current === "thinking_stuck" ? "none" : current))
+  }, [clearThinkingRecoveryTimeout])
 
   const {
     start: audioStart,
@@ -156,12 +180,13 @@ export const usePersonaLiveVoiceController = ({
           })
         )
         clearTransientWarning()
+        armThinkingRecovery()
         setState("thinking")
       } catch (error) {
         handleVoiceError(error)
       }
     },
-    [clearTransientWarning, connected, handleVoiceError, sessionId, ws]
+    [armThinkingRecovery, clearTransientWarning, connected, handleVoiceError, sessionId, ws]
   )
 
   const { start: startMicStream, stop: stopMicStream, active: micActive } = useMicStream(
@@ -184,6 +209,7 @@ export const usePersonaLiveVoiceController = ({
 
   const resetTurn = React.useCallback(() => {
     clearListeningRecoveryTimeout()
+    clearThinkingRecovery()
     if (micActive) {
       stopMicStream()
     }
@@ -195,7 +221,7 @@ export const usePersonaLiveVoiceController = ({
       setWarning(null)
     }
     setState("idle")
-  }, [clearListeningRecoveryTimeout, micActive, stopMicStream])
+  }, [clearListeningRecoveryTimeout, clearThinkingRecovery, micActive, stopMicStream])
 
   const keepListening = React.useCallback(() => {
     clearListeningRecoveryTimeout()
@@ -221,6 +247,7 @@ export const usePersonaLiveVoiceController = ({
       setHeardText("")
       heardTranscriptRef.current = ""
       setRecoveryMode("none")
+      clearThinkingRecovery()
       void startMicStream()
         .then(() => {
           setState("listening")
@@ -231,6 +258,7 @@ export const usePersonaLiveVoiceController = ({
     }
   }, [
     canUseServerStt,
+    clearThinkingRecovery,
     connected,
     clearTransientWarning,
     handleVoiceError,
@@ -261,6 +289,7 @@ export const usePersonaLiveVoiceController = ({
     setHeardText("")
     heardTranscriptRef.current = ""
     setRecoveryMode("none")
+    clearThinkingRecovery()
     setState("listening")
     try {
       await startMicStream()
@@ -269,6 +298,7 @@ export const usePersonaLiveVoiceController = ({
     }
   }, [
     canUseServerStt,
+    clearThinkingRecovery,
     clearTransientWarning,
     connected,
     handleVoiceError,
@@ -283,10 +313,11 @@ export const usePersonaLiveVoiceController = ({
   const stopListening = React.useCallback(() => {
     if (!micActive) return
     clearListeningRecoveryTimeout()
+    clearThinkingRecovery()
     setRecoveryMode("none")
     stopMicStream()
     setState("idle")
-  }, [clearListeningRecoveryTimeout, micActive, stopMicStream])
+  }, [clearListeningRecoveryTimeout, clearThinkingRecovery, micActive, stopMicStream])
 
   const sendCurrentTranscriptNow = React.useCallback(() => {
     if (micActive) {
@@ -369,9 +400,12 @@ export const usePersonaLiveVoiceController = ({
     setLastCommittedText("")
     setRecoveryMode("none")
     setListeningRecoveryRestartKey(0)
+    setThinkingRecoveryArmed(false)
+    setThinkingRecoveryRestartKey(0)
     setState("idle")
     clearAwaitingTtsTimeout()
     clearListeningRecoveryTimeout()
+    clearThinkingRecoveryTimeout()
     pendingBinaryFinishRef.current = false
     pendingResumeRef.current = false
     stopMicStream()
@@ -379,6 +413,7 @@ export const usePersonaLiveVoiceController = ({
   }, [
     clearAwaitingTtsTimeout,
     clearListeningRecoveryTimeout,
+    clearThinkingRecoveryTimeout,
     personaId,
     resolvedDefaults.autoResume,
     resolvedDefaults.bargeIn,
@@ -393,15 +428,18 @@ export const usePersonaLiveVoiceController = ({
       setManualModeRequired(false)
       setRecoveryMode("none")
       setListeningRecoveryRestartKey(0)
+      setThinkingRecoveryArmed(false)
+      setThinkingRecoveryRestartKey(0)
       setState("idle")
       pendingBinaryFinishRef.current = false
       pendingResumeRef.current = false
       clearAwaitingTtsTimeout()
       clearListeningRecoveryTimeout()
+      clearThinkingRecoveryTimeout()
       stopMicStream()
       stopCurrentPlayback()
     }
-  }, [clearAwaitingTtsTimeout, clearListeningRecoveryTimeout, connected, stopMicStream, stopCurrentPlayback])
+  }, [clearAwaitingTtsTimeout, clearListeningRecoveryTimeout, clearThinkingRecoveryTimeout, connected, stopMicStream, stopCurrentPlayback])
 
   React.useEffect(() => {
     const normalizedHeardText = String(heardText || "").trim()
@@ -420,6 +458,27 @@ export const usePersonaLiveVoiceController = ({
       clearListeningRecoveryTimeout()
     }
   }, [clearListeningRecoveryTimeout, heardText, listeningRecoveryRestartKey, state])
+
+  React.useEffect(() => {
+    if (state !== "thinking") {
+      clearThinkingRecoveryTimeout()
+      setRecoveryMode((current) => (current === "thinking_stuck" ? "none" : current))
+      return
+    }
+    if (!thinkingRecoveryArmed) {
+      clearThinkingRecoveryTimeout()
+      return
+    }
+    clearThinkingRecoveryTimeout()
+    if (typeof window === "undefined") return
+    thinkingRecoveryTimeoutRef.current = window.setTimeout(() => {
+      setRecoveryMode("thinking_stuck")
+      setThinkingRecoveryArmed(false)
+    }, THINKING_RECOVERY_TIMEOUT_MS)
+    return () => {
+      clearThinkingRecoveryTimeout()
+    }
+  }, [clearThinkingRecoveryTimeout, state, thinkingRecoveryArmed, thinkingRecoveryRestartKey])
 
   React.useEffect(() => {
     if (!connected || !sessionId || !ws || ws.readyState !== WebSocket.OPEN) return
@@ -471,10 +530,11 @@ export const usePersonaLiveVoiceController = ({
     return () => {
       clearAwaitingTtsTimeout()
       clearListeningRecoveryTimeout()
+      clearThinkingRecoveryTimeout()
       stopMicStream()
       stopCurrentPlayback()
     }
-  }, [clearAwaitingTtsTimeout, clearListeningRecoveryTimeout, stopMicStream, stopCurrentPlayback])
+  }, [clearAwaitingTtsTimeout, clearListeningRecoveryTimeout, clearThinkingRecoveryTimeout, stopMicStream, stopCurrentPlayback])
 
   const handlePayload = React.useCallback(
     (payload: PersonaLiveVoicePayload) => {
@@ -485,6 +545,7 @@ export const usePersonaLiveVoiceController = ({
         const text = String(payload?.text_delta || "").trim()
         if (!text) return
         clearAwaitingTtsTimeout()
+        clearThinkingRecovery()
         if (textOnlyDueToTtsFailure) {
           finishVoiceTurn()
           return
@@ -513,8 +574,14 @@ export const usePersonaLiveVoiceController = ({
         return
       }
 
+      if (eventType === "tool_plan" || eventType === "tool_call" || eventType === "tool_result") {
+        clearThinkingRecovery()
+        return
+      }
+
       if (eventType === "tts_audio") {
         clearAwaitingTtsTimeout()
+        clearThinkingRecovery()
         const chunkIndex =
           typeof payload?.chunk_index === "number"
             ? payload.chunk_index
@@ -536,6 +603,7 @@ export const usePersonaLiveVoiceController = ({
         const reasonCode = String(payload?.reason_code || "").trim().toUpperCase()
         if (reasonCode === "TTS_UNAVAILABLE_TEXT_ONLY") {
           clearAwaitingTtsTimeout()
+          clearThinkingRecovery()
           textOnlyDueToTtsFailureRef.current = true
           setTextOnlyDueToTtsFailure(true)
           setWarning(
@@ -569,6 +637,7 @@ export const usePersonaLiveVoiceController = ({
             setWarning(null)
           }
           setRecoveryMode("none")
+          armThinkingRecovery()
           setState("thinking")
           return
         }
@@ -606,8 +675,10 @@ export const usePersonaLiveVoiceController = ({
     },
     [
       activeProvider,
+      armThinkingRecovery,
       audioStart,
       clearAwaitingTtsTimeout,
+      clearThinkingRecovery,
       clearListeningRecoveryTimeout,
       finishVoiceTurn,
       micActive,

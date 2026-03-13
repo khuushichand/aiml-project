@@ -430,6 +430,158 @@ describe("usePersonaLiveVoiceController", () => {
     expect(result.current.heardText).toBe("hey helper search my notes")
   })
 
+  it("shows thinking recovery after 8 seconds after commit with no assistant progress", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("thinking_stuck")
+  })
+
+  it("assistant progress clears thinking recovery", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("thinking_stuck")
+
+    act(() => {
+      result.current.handlePayload({
+        event: "assistant_delta",
+        text_delta: "Working on it"
+      })
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+  })
+
+  it("tool and approval progress clear thinking recovery", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("thinking_stuck")
+
+    act(() => {
+      result.current.handlePayload({
+        event: "tool_plan",
+        steps: []
+      })
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("thinking_stuck")
+
+    act(() => {
+      result.current.handlePayload({
+        event: "tool_result",
+        approval: {
+          tool_name: "search_notes",
+          context_key: "ctx",
+          scope_key: "once",
+          duration_options: ["once"]
+        }
+      })
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+  })
+
   it("enters manual mode when the server cannot auto-commit and sends the current transcript on demand", async () => {
     const ws = {
       readyState: WebSocket.OPEN,
