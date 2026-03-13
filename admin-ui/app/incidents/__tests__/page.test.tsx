@@ -129,6 +129,10 @@ describe('IncidentsPage Stage 3 workflows', () => {
     const user = userEvent.setup();
     render(<IncidentsPage />);
 
+    await waitFor(() => {
+      expect(apiMock.getUsers).toHaveBeenCalledWith({ limit: '100', admin_capable: 'true' });
+    });
+
     const assigneeSelect = await screen.findByTestId('incident-assigned-to-inc-1');
     await user.selectOptions(assigneeSelect, '2');
 
