@@ -37,9 +37,10 @@ vi.mock("@/store/connection", () => ({
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     initialize: () => initializeMock(),
-    listChatsWithMeta: (params?: unknown) => listChatsWithMetaMock(params),
-    searchConversationsWithMeta: (query?: unknown, params?: unknown) =>
-      searchConversationsWithMetaMock(query, params)
+    listChatsWithMeta: (params?: unknown, options?: unknown) =>
+      listChatsWithMetaMock(params, options),
+    searchConversationsWithMeta: (params?: unknown, options?: unknown) =>
+      searchConversationsWithMetaMock(params, options)
   }
 }))
 
@@ -432,6 +433,69 @@ describe("useServerChatHistory", () => {
       expect(result.current.hasUsableData).toBe(true)
       expect(result.current.isShowingStaleData).toBe(true)
     })
+
+    queryClient.clear()
+  })
+})
+
+describe("useServerChatHistory scope forwarding", () => {
+  it("passes workspace scope through to listChatsWithMeta", async () => {
+    listChatsWithMetaMock.mockResolvedValueOnce({
+      chats: [createChat(1)],
+      total: 1
+    })
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(
+      () =>
+        useServerChatHistory("", {
+          scope: { type: "workspace", workspaceId: "workspace-a" }
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() => expect(result.current.data).toHaveLength(1))
+
+    expect(listChatsWithMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: expect.any(Number),
+        offset: expect.any(Number)
+      }),
+      expect.objectContaining({
+        scope: { type: "workspace", workspaceId: "workspace-a" }
+      })
+    )
+
+    queryClient.clear()
+  })
+
+  it("passes workspace scope through to searchConversationsWithMeta", async () => {
+    searchConversationsWithMetaMock.mockResolvedValueOnce({
+      chats: [createChat(2, { title: "Scoped quota" })],
+      total: 1
+    })
+
+    const { queryClient, wrapper } = createWrapper()
+    const { result } = renderHook(
+      () =>
+        useServerChatHistory("quota", {
+          mode: "search",
+          scope: { type: "workspace", workspaceId: "workspace-a" }
+        }),
+      { wrapper }
+    )
+
+    await waitFor(() => expect(result.current.data).toHaveLength(1))
+
+    expect(searchConversationsWithMetaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "quota",
+        order_by: "recency"
+      }),
+      expect.objectContaining({
+        scope: { type: "workspace", workspaceId: "workspace-a" }
+      })
+    )
 
     queryClient.clear()
   })

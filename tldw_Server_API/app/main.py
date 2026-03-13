@@ -894,6 +894,9 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
 
+    # Workspace Endpoints
+    from tldw_Server_API.app.api.v1.endpoints.workspaces import router as workspaces_router
+
     # Character Endpoints
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
     from tldw_Server_API.app.api.v1.endpoints.chat import (
@@ -1145,6 +1148,7 @@ elif _MINIMAL_TEST_APP:
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
+    from tldw_Server_API.app.api.v1.endpoints.workspaces import router as workspaces_router
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
     from tldw_Server_API.app.api.v1.endpoints.chat import (
         conversations_alias_router,
@@ -5436,6 +5440,7 @@ elif _MINIMAL_TEST_APP:
         app, character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
     )
     include_router_idempotent(app, character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    include_router_idempotent(app, workspaces_router, prefix=f"{API_V1_PREFIX}/workspaces", tags=["workspaces"])
     # Include audio endpoints (REST + WebSocket) only when enabled by route policy.
     # In pytest + MINIMAL_TEST_APP, default to skipping audio router imports unless
     # explicitly requested. This avoids importing heavy optional transcriber deps
@@ -6184,6 +6189,10 @@ else:
         _include_if_enabled("acp", acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    if "workspaces_router" in locals():
+        _include_if_enabled(
+            "workspaces", workspaces_router, prefix=f"{API_V1_PREFIX}/workspaces", tags=["workspaces"]
+        )
     if "character_chat_sessions_router" in locals():
         _include_if_enabled(
             "character-chat-sessions",
