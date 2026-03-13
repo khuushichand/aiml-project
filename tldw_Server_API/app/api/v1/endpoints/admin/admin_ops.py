@@ -188,12 +188,23 @@ async def get_admin_maintenance_rotation_service(
     return AdminMaintenanceRotationService(repo=repo)
 
 
+def get_maintenance_rotation_job_enqueuer():
+    """Return the callable used to enqueue maintenance rotation Jobs."""
+    from tldw_Server_API.app.services.admin_maintenance_rotation_jobs_worker import (
+        enqueue_maintenance_rotation_run,
+    )
+
+    return enqueue_maintenance_rotation_run
+
+
 @router.post("/maintenance/rotation-runs", response_model=MaintenanceRotationRunCreateResponse)
 async def create_maintenance_rotation_run(
     payload: MaintenanceRotationRunCreateRequest,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    repo=Depends(_get_maintenance_rotation_runs_repo),
     service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
+    enqueue_run=Depends(get_maintenance_rotation_job_enqueuer),
 ) -> MaintenanceRotationRunCreateResponse:
     _enforce_domain_scope_unified(principal, payload.domain)
     actor_label = principal.email or principal.username or (
@@ -210,6 +221,11 @@ async def create_maintenance_rotation_run(
         requested_by_user_id=principal.user_id,
         requested_by_label=actor_label,
     )
+    try:
+        await enqueue_run(item)
+    except _OPS_NONCRITICAL_EXCEPTIONS:
+        await repo.mark_failed(item["id"], error_message="enqueue_failed")
+        raise HTTPException(status_code=503, detail="maintenance_rotation_enqueue_failed")
     await _emit_admin_audit_event(
         request,
         principal,

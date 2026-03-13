@@ -108,6 +108,10 @@ class _FakeRotationService:
         }
 
 
+async def _noop_enqueue_run(item):
+    return None
+
+
 @pytest.mark.asyncio
 async def test_maintenance_rotation_create_list_and_detail_roundtrip(monkeypatch, tmp_path) -> None:
     _setup_env(monkeypatch, user_db_base=str(tmp_path / "user_dbs"))
@@ -116,6 +120,7 @@ async def test_maintenance_rotation_create_list_and_detail_roundtrip(monkeypatch
 
     service = _FakeRotationService()
     app.dependency_overrides[admin_ops.get_admin_maintenance_rotation_service] = lambda: service
+    app.dependency_overrides[admin_ops.get_maintenance_rotation_job_enqueuer] = lambda: _noop_enqueue_run
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
 
@@ -160,6 +165,7 @@ async def test_maintenance_rotation_execute_create_requires_confirmation(monkeyp
 
     service = _FakeRotationService()
     app.dependency_overrides[admin_ops.get_admin_maintenance_rotation_service] = lambda: service
+    app.dependency_overrides[admin_ops.get_maintenance_rotation_job_enqueuer] = lambda: _noop_enqueue_run
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
 
@@ -206,6 +212,7 @@ async def test_maintenance_rotation_create_preserves_domain_scope_enforcement(
     service = _FakeRotationService()
     app.dependency_overrides[get_auth_principal] = lambda: principal
     app.dependency_overrides[admin_ops.get_admin_maintenance_rotation_service] = lambda: service
+    app.dependency_overrides[admin_ops.get_maintenance_rotation_job_enqueuer] = lambda: _noop_enqueue_run
     monkeypatch.setattr(
         "tldw_Server_API.app.api.v1.endpoints.admin.admin_ops._enforce_domain_scope_unified",
         _fake_scope_check,
