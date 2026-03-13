@@ -22,10 +22,19 @@ _OCR_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _describe_mineru_backend() -> dict[str, Any]:
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
+        describe_mineru_backend,
+    )
+
+    return describe_mineru_backend()
+
+
 @router.get("/backends")
 def list_ocr_backends() -> dict[str, Any]:
     """List available OCR backends with lightweight health information."""
     out = _list_backends()
+    out["mineru"] = _describe_mineru_backend()
 
     # Enrich with backend-specific details without heavy loading
     try:
