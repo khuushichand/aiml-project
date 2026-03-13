@@ -59,6 +59,8 @@ import { SourceAdvancedControls } from "./SourceAdvancedControls"
 import {
   buildSourceFilterSummary,
   DEFAULT_SOURCE_LIST_VIEW_STATE,
+  filterSources as applyAdvancedSourceFilters,
+  sortSources as applySourceSort,
   type SourceListViewState
 } from "./source-list-view"
 
@@ -348,8 +350,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     [activeFolderId, organizationIndex]
   )
 
-  // Filter sources based on search query
-  const filteredSources = React.useMemo(() => {
+  const searchedSources = React.useMemo(() => {
     const scopedSources = activeFolderSourceIds
       ? sources.filter((source) => activeFolderSourceIds.has(source.id))
       : sources
@@ -359,6 +360,14 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
       source.title.toLowerCase().includes(query)
     )
   }, [activeFolderSourceIds, sourceSearchQuery, sources])
+  const filteredSources = React.useMemo(
+    () =>
+      applySourceSort(
+        applyAdvancedSourceFilters(searchedSources, sourceListViewState),
+        sourceListViewState.sort
+      ),
+    [searchedSources, sourceListViewState]
+  )
 
   const useVirtualizedSources =
     filteredSources.length > SOURCE_VIRTUALIZATION_THRESHOLD

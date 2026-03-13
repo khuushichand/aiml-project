@@ -128,6 +128,11 @@ const ControlledSourcesPane = () => {
   )
 }
 
+const getRenderedSourceTitles = (): string[] =>
+  Array.from(document.querySelectorAll("[data-source-id]"))
+    .map((element) => element.querySelector("p")?.textContent?.trim() || "")
+    .filter(Boolean)
+
 describe("SourcesPane stage 4 filters and sort", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -160,6 +165,76 @@ describe("SourcesPane stage 4 filters and sort", () => {
 
     expect(screen.getByText(/Status=Ready/)).toBeInTheDocument()
     expect(screen.getByText(/Sort: Added date/)).toBeInTheDocument()
+  })
+
+  it("applies advanced filters after search narrowing", () => {
+    workspaceStoreState.sources = [
+      {
+        id: "s1",
+        mediaId: 101,
+        title: "Alpha Ready",
+        type: "pdf",
+        status: "ready",
+        addedAt: new Date("2026-03-11T00:00:00.000Z")
+      },
+      {
+        id: "s2",
+        mediaId: 102,
+        title: "Alpha Error",
+        type: "website",
+        status: "error",
+        addedAt: new Date("2026-03-12T00:00:00.000Z")
+      }
+    ]
+
+    const { rerender } = render(<ControlledSourcesPane />)
+
+    fireEvent.change(screen.getByPlaceholderText("Search sources..."), {
+      target: { value: "Alpha" }
+    })
+    rerender(<ControlledSourcesPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "Status Ready" }))
+
+    expect(screen.getByText("Alpha Ready")).toBeInTheDocument()
+    expect(screen.queryByText("Alpha Error")).not.toBeInTheDocument()
+  })
+
+  it("restores manual order when returning from a temporary sort", () => {
+    workspaceStoreState.sources = [
+      {
+        id: "s1",
+        mediaId: 101,
+        title: "Zulu Ready",
+        type: "pdf",
+        status: "ready",
+        addedAt: new Date("2026-03-11T00:00:00.000Z")
+      },
+      {
+        id: "s2",
+        mediaId: 102,
+        title: "Alpha Error",
+        type: "website",
+        status: "error",
+        addedAt: new Date("2026-03-12T00:00:00.000Z")
+      }
+    ]
+
+    render(<ControlledSourcesPane />)
+
+    expect(getRenderedSourceTitles()).toEqual(["Zulu Ready", "Alpha Error"])
+
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }))
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort by" }), {
+      target: { value: "name_asc" }
+    })
+    expect(getRenderedSourceTitles()).toEqual(["Alpha Error", "Zulu Ready"])
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort by" }), {
+      target: { value: "manual" }
+    })
+    expect(getRenderedSourceTitles()).toEqual(["Zulu Ready", "Alpha Error"])
   })
 
   it("hides metadata-specific controls when no source exposes that field", () => {
