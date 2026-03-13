@@ -175,6 +175,7 @@ describe("TestLabPanel", () => {
       />
     )
 
+    expect(screen.getByText("Rerunning last phrase...")).toBeInTheDocument()
     await waitFor(() =>
       expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
         "/api/v1/persona/profiles/persona-1/voice-commands/test",
@@ -186,6 +187,11 @@ describe("TestLabPanel", () => {
     )
     expect(screen.getByTestId("persona-test-lab-heard-input")).toHaveValue(
       "send alert for model drift"
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Rerunning last phrase...")
+      ).not.toBeInTheDocument()
     )
   })
 })
