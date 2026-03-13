@@ -12,7 +12,7 @@ In scope:
 
 - client-side stuck-turn detection for `listening` and `thinking`
 - a dedicated recovery panel in the Assistant Voice card
-- explicit recovery actions for `Send now`, `Keep listening`, `Wait`, `Reset turn`, `Reconnect voice session`, and `Send text manually`
+- explicit recovery actions for `Send now`, `Keep listening`, `Wait`, `Reset turn`, `Reconnect Persona session`, and `Copy last command to composer`
 - route wiring so reconnect can refresh only the persona live voice transport/session path
 - regression coverage for hook, component, and route behavior
 
@@ -82,14 +82,14 @@ For `listening_stuck`:
 - `Send now`
 - `Keep listening`
 - `Reset turn`
-- `Reconnect voice session`
+- `Reconnect Persona session`
 
 For `thinking_stuck`:
 
 - `Wait`
-- `Send text manually`
+- `Copy last command to composer`
 - `Reset turn`
-- `Reconnect voice session`
+- `Reconnect Persona session`
 
 No automatic send/reset behavior should be added in this slice.
 
@@ -100,11 +100,13 @@ No automatic send/reset behavior should be added in this slice.
 - `recoveryMode`
 - `recoveryReason`
 - `recoveryStartedAt`
-- an active local voice-turn token or monotonic counter
+- the last recovery trigger type
 
 ### Listening Recovery
 
 When the controller enters `listening` and transcript text becomes non-empty, it should start a 4-second timer.
+
+That timer should restart on each new `partial_transcript` delta so long utterances do not look stuck while the user is still speaking.
 
 That timer must clear when:
 
@@ -125,6 +127,10 @@ That timer must clear when:
 
 - `assistant_delta` arrives
 - `tts_audio` arrives
+- `tool_plan` arrives
+- `tool_call` arrives
+- `tool_result` arrives
+- a runtime approval request arrives
 - a text-only TTS degradation notice completes the turn
 - the user chooses a recovery action
 - persona changes
@@ -132,11 +138,17 @@ That timer must clear when:
 
 If the timer fires, the controller should expose `recoveryMode="thinking_stuck"`.
 
-### Turn Fencing
+### Stale Events
 
-The controller should fence recovery against stale late events by associating recovery state with one active local voice-turn token.
+This slice should not promise strict stale-event fencing for delayed assistant output. The current live websocket events do not expose a turn identifier, so the client cannot prove which turn a late `assistant_delta` or `tts_audio` belongs to.
 
-This prevents delayed assistant output from a prior turn from mutating the UI after the user has already chosen `Reset turn` or `Send text manually`.
+The first pass should use best-effort client behavior only:
+
+- clear recovery state on explicit progress events
+- clear recovery state on `Reset turn`
+- clear recovery state before reconnecting
+
+If stale late events become a real product problem, the follow-up slice should add server-side turn correlation metadata.
 
 ## UI Design
 
@@ -150,7 +162,7 @@ This prevents delayed assistant output from a prior turn from mutating the UI af
   - `Send now`
   - `Keep listening`
   - `Reset turn`
-  - `Reconnect voice session`
+  - `Reconnect Persona session`
 
 ### Thinking-Stuck Copy
 
@@ -158,9 +170,9 @@ This prevents delayed assistant output from a prior turn from mutating the UI af
 - body: `This voice turn was sent, but the assistant has not responded yet.`
 - actions:
   - `Wait`
-  - `Send text manually`
+  - `Copy last command to composer`
   - `Reset turn`
-  - `Reconnect voice session`
+  - `Reconnect Persona session`
 
 The recovery panel should be visually distinct from generic warnings so users understand they have explicit choices, not just passive notices.
 
@@ -168,17 +180,15 @@ The recovery panel should be visually distinct from generic warnings so users un
 
 `sidepanel-persona.tsx` should remain responsible for websocket/session ownership.
 
-The hook should expose a reconnect callback trigger, but the route should perform the actual persona live reconnect so:
+The hook should expose a reconnect callback trigger, but the route should perform the actual Persona reconnect through the existing session/websocket flow.
 
-- the current persona selection remains intact
-- the broader Persona Garden state is preserved
-- command/profile/test-lab surfaces are unaffected
+This slice should be explicit that reconnect is route-scoped, not a separate voice-only transport reset. The goal is to preserve the selected persona and active route tab while honestly allowing the existing session-scoped state refreshes that `connect()` / `disconnect()` already perform.
 
-`Reconnect voice session` should clear the current recovery state before reconnecting.
+`Reconnect Persona session` should clear the current recovery state before reconnecting.
 
 ## Edge Cases
 
-`Send text manually` in `thinking_stuck` should use `lastCommittedText`, not the raw heard transcript. That preserves whatever trigger stripping or normalization the server already applied.
+`Copy last command to composer` in `thinking_stuck` should use `lastCommittedText`, not the raw heard transcript. That preserves whatever trigger stripping or normalization the server already applied without creating a duplicate backend turn.
 
 `Reset turn` should:
 
@@ -198,11 +208,12 @@ Manual-mode and text-only mode should coexist with recovery:
 Hook coverage in `apps/packages/ui/src/hooks/__tests__/usePersonaLiveVoiceController.test.tsx` should prove:
 
 - listening recovery appears after 4 seconds with transcript present and no commit
+- listening recovery timer restarts on each new transcript delta
 - `Keep listening` dismisses recovery and restarts the listening timer
 - `Reset turn` clears transcript and returns to `idle`
 - thinking recovery appears after 8 seconds after commit with no assistant progress
-- `assistant_delta` clears thinking recovery
-- `Send text manually` uses `lastCommittedText`
+- `assistant_delta`, `tool_plan`, and approval progress clear thinking recovery
+- `Copy last command to composer` uses `lastCommittedText`
 
 Component coverage in `apps/packages/ui/src/components/PersonaGarden/__tests__/LiveSessionPanel.test.tsx` should prove:
 
@@ -210,7 +221,7 @@ Component coverage in `apps/packages/ui/src/components/PersonaGarden/__tests__/L
 
 Route coverage in `apps/packages/ui/src/routes/__tests__/sidepanel-persona.test.tsx` should prove:
 
-- reconnect action routes through the Persona Garden websocket/session logic without dropping persona state
+- reconnect action routes through the existing Persona reconnect path while preserving the selected persona and active tab
 
 ## Future Follow-Up
 

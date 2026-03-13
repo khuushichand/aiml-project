@@ -4,7 +4,7 @@
 
 **Goal:** Add Persona Garden-only recovery handling for stuck live voice turns, with explicit recovery actions for listening and thinking states.
 
-**Architecture:** Extend the existing `usePersonaLiveVoiceController` with timer-driven recovery sub-state and action handlers, surface that state in `AssistantVoiceCard`, and wire reconnect behavior through `sidepanel-persona` so only the live voice transport/session is refreshed. Keep the first slice client-side and leave the persona websocket contract unchanged.
+**Architecture:** Extend the existing `usePersonaLiveVoiceController` with timer-driven recovery sub-state and action handlers, surface that state in `AssistantVoiceCard`, and wire reconnect behavior through `sidepanel-persona` using the existing Persona session/websocket reconnect path. Keep the first slice client-side, broaden progress detection beyond assistant text/audio, and avoid any action that would duplicate an already-committed backend turn.
 
 **Tech Stack:** React hooks, Ant Design UI, Persona Garden route state, Vitest, Testing Library.
 
@@ -22,6 +22,7 @@ Add focused hook tests for:
 
 ```tsx
 it("shows listening recovery after 4 seconds with transcript but no commit")
+it("restarts listening recovery when new transcript deltas arrive")
 it("keep listening dismisses and restarts listening recovery")
 it("reset turn clears heard transcript and returns to idle")
 ```
@@ -45,6 +46,8 @@ In `usePersonaLiveVoiceController.tsx`, add:
 - `recoveryMode`
 - timer refs for listening recovery
 - handlers for `keepListening()` and `resetTurn()`
+
+Make listening recovery restart on each new `partial_transcript` delta.
 
 Make `resetTurn()` stop the mic, clear transcript state, clear timers, and return to `idle`.
 
@@ -77,8 +80,8 @@ Add focused hook tests for:
 
 ```tsx
 it("shows thinking recovery after 8 seconds after commit with no assistant progress")
-it("assistant progress clears thinking recovery")
-it("send text manually uses lastCommittedText")
+it("tool and approval progress clear thinking recovery")
+it("copy last command uses lastCommittedText without sending a second turn")
 ```
 
 The tests should drive the controller with:
@@ -86,6 +89,7 @@ The tests should drive the controller with:
 - `VOICE_TURN_COMMITTED`
 - timer advancement
 - `assistant_delta`
+- `tool_plan` or approval-style `tool_result`
 
 **Step 2: Run test to verify it fails**
 
@@ -95,16 +99,16 @@ Run:
 cd apps/packages/ui && bunx vitest run src/hooks/__tests__/usePersonaLiveVoiceController.test.tsx
 ```
 
-Expected: failures because thinking recovery and `sendTextManually()` do not exist yet.
+Expected: failures because thinking recovery and `copyLastCommandToComposer()` do not exist yet.
 
 **Step 3: Write minimal implementation**
 
 Update `usePersonaLiveVoiceController.tsx` to:
 
 - start an 8-second recovery timer on `VOICE_TURN_COMMITTED`
-- clear that timer on `assistant_delta`, `tts_audio`, and text-only completion notices
-- add `waitOnRecovery()` and `sendTextManually()` handlers
-- use `lastCommittedText` as the source for `sendTextManually()`
+- clear that timer on `assistant_delta`, `tts_audio`, `tool_plan`, `tool_call`, `tool_result`, approval progress, and text-only completion notices
+- add `waitOnRecovery()` and `copyLastCommandToComposer()` handlers
+- use `lastCommittedText` as the source for `copyLastCommandToComposer()`
 
 **Step 4: Run test to verify it passes**
 
@@ -164,8 +168,8 @@ Thread the new hook state/handlers through `sidepanel-persona.tsx`:
 - `onKeepListening`
 - `onResetTurn`
 - `onWaitOnRecovery`
-- `onSendTextManually`
-- `onReconnectVoiceSession`
+- `onCopyLastCommandToComposer`
+- `onReconnectPersonaSession`
 
 **Step 4: Run test to verify it passes**
 
@@ -195,10 +199,10 @@ git commit -m "feat: add persona live voice recovery panel"
 Add a route test for:
 
 ```tsx
-it("reconnects only the live voice session when recovery requests reconnect")
+it("reconnects the current Persona session from recovery while preserving selected persona and active tab")
 ```
 
-The test should prove persona selection and the rest of Persona Garden state remain intact while the live websocket/session path reconnects.
+The test should prove selected persona and active tab remain intact while the route uses the existing Persona reconnect path.
 
 **Step 2: Run test to verify it fails**
 
@@ -208,15 +212,16 @@ Run:
 cd apps/packages/ui && bunx vitest run src/routes/__tests__/sidepanel-persona.test.tsx
 ```
 
-Expected: failure because the route does not yet expose a dedicated recovery reconnect action.
+Expected: failure because the route does not yet expose a dedicated recovery reconnect action with the revised semantics.
 
 **Step 3: Write minimal implementation**
 
 Add a route-level handler in `sidepanel-persona.tsx` that:
 
 - clears live recovery UI state through the hook callback path
-- refreshes only the persona live websocket/session connection
-- preserves the selected persona and broader tab state
+- copies `lastCommittedText` into the composer when requested
+- reconnects through the existing Persona session/websocket path
+- preserves the selected persona and active tab
 
 **Step 4: Run test to verify it passes**
 
@@ -232,7 +237,7 @@ Expected: reconnect coverage passes and existing live-session behavior remains g
 
 ```bash
 git add apps/packages/ui/src/routes/sidepanel-persona.tsx apps/packages/ui/src/routes/__tests__/sidepanel-persona.test.tsx
-git commit -m "feat: reconnect persona live voice from recovery panel"
+git commit -m "feat: add persona live recovery reconnect actions"
 ```
 
 ### Task 5: Verification And Final Commit
