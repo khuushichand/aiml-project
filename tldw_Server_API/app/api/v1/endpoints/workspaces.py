@@ -4,7 +4,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.schemas.workspace_schemas import (
     StatusResponse,
     WorkspaceArtifactCreateRequest,
@@ -23,10 +22,15 @@ from tldw_Server_API.app.api.v1.schemas.workspace_schemas import (
     WorkspaceSourceUpdateRequest,
     WorkspaceUpsertRequest,
 )
+from tldw_Server_API.app.api.v1.endpoints.workspaces_rate_limit_policy import (
+    WORKSPACES_DELETE_RATE_LIMIT,
+    WORKSPACES_READ_RATE_LIMIT,
+    WORKSPACES_WRITE_RATE_LIMIT,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 
-router = APIRouter(dependencies=[Depends(check_rate_limit)])
+router = APIRouter()
 
 
 def _ws_to_response(ws: dict) -> WorkspaceResponse:
@@ -109,6 +113,7 @@ def _require_workspace(db: CharactersRAGDB, workspace_id: str) -> dict:
 @router.get(
     "/",
     response_model=WorkspaceListResponse,
+    dependencies=[Depends(WORKSPACES_READ_RATE_LIMIT)],
     summary="List workspaces",
 )
 async def list_workspaces(
@@ -126,6 +131,7 @@ async def list_workspaces(
 @router.get(
     "/{workspace_id}",
     response_model=WorkspaceResponse,
+    dependencies=[Depends(WORKSPACES_READ_RATE_LIMIT)],
     summary="Get workspace",
 )
 async def get_workspace(
@@ -141,6 +147,7 @@ async def get_workspace(
 @router.put(
     "/{workspace_id}",
     response_model=WorkspaceResponse,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Create or update workspace",
 )
 async def upsert_workspace(
@@ -157,6 +164,7 @@ async def upsert_workspace(
 @router.patch(
     "/{workspace_id}",
     response_model=WorkspaceResponse,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Update workspace",
 )
 async def patch_workspace(
@@ -182,6 +190,7 @@ async def patch_workspace(
 @router.delete(
     "/{workspace_id}",
     status_code=204,
+    dependencies=[Depends(WORKSPACES_DELETE_RATE_LIMIT)],
     summary="Delete workspace",
 )
 async def delete_workspace(
@@ -202,6 +211,7 @@ async def delete_workspace(
 @router.get(
     "/{workspace_id}/sources",
     response_model=list[WorkspaceSourceResponse],
+    dependencies=[Depends(WORKSPACES_READ_RATE_LIMIT)],
     summary="List workspace sources",
 )
 async def list_sources(
@@ -218,6 +228,7 @@ async def list_sources(
     "/{workspace_id}/sources",
     response_model=WorkspaceSourceResponse,
     status_code=201,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Add source to workspace",
 )
 async def add_source(
@@ -235,6 +246,7 @@ async def add_source(
 @router.put(
     "/{workspace_id}/sources/{source_id}",
     response_model=WorkspaceSourceResponse,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Update workspace source",
 )
 async def update_source(
@@ -257,6 +269,7 @@ async def update_source(
 @router.delete(
     "/{workspace_id}/sources/{source_id}",
     status_code=204,
+    dependencies=[Depends(WORKSPACES_DELETE_RATE_LIMIT)],
     summary="Delete workspace source",
 )
 async def delete_source(
@@ -273,6 +286,7 @@ async def delete_source(
 @router.put(
     "/{workspace_id}/sources/selection",
     response_model=StatusResponse,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Batch-update source selection",
 )
 async def update_source_selection(
@@ -290,6 +304,7 @@ async def update_source_selection(
 @router.put(
     "/{workspace_id}/sources/reorder",
     response_model=StatusResponse,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Reorder workspace sources",
 )
 async def reorder_sources(
@@ -309,6 +324,7 @@ async def reorder_sources(
 @router.get(
     "/{workspace_id}/artifacts",
     response_model=list[WorkspaceArtifactResponse],
+    dependencies=[Depends(WORKSPACES_READ_RATE_LIMIT)],
     summary="List workspace artifacts",
 )
 async def list_artifacts(
@@ -325,6 +341,7 @@ async def list_artifacts(
     "/{workspace_id}/artifacts",
     response_model=WorkspaceArtifactResponse,
     status_code=201,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Add artifact to workspace",
 )
 async def add_artifact(
@@ -342,6 +359,7 @@ async def add_artifact(
 @router.put(
     "/{workspace_id}/artifacts/{artifact_id}",
     response_model=WorkspaceArtifactResponse,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Update workspace artifact",
 )
 async def update_artifact(
@@ -364,6 +382,7 @@ async def update_artifact(
 @router.delete(
     "/{workspace_id}/artifacts/{artifact_id}",
     status_code=204,
+    dependencies=[Depends(WORKSPACES_DELETE_RATE_LIMIT)],
     summary="Delete workspace artifact",
 )
 async def delete_artifact(
@@ -382,6 +401,7 @@ async def delete_artifact(
 @router.get(
     "/{workspace_id}/notes",
     response_model=list[WorkspaceNoteResponse],
+    dependencies=[Depends(WORKSPACES_READ_RATE_LIMIT)],
     summary="List workspace notes",
 )
 async def list_notes(
@@ -398,6 +418,7 @@ async def list_notes(
     "/{workspace_id}/notes",
     response_model=WorkspaceNoteResponse,
     status_code=201,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Add note to workspace",
 )
 async def add_note(
@@ -415,6 +436,7 @@ async def add_note(
 @router.put(
     "/{workspace_id}/notes/{note_id}",
     response_model=WorkspaceNoteResponse,
+    dependencies=[Depends(WORKSPACES_WRITE_RATE_LIMIT)],
     summary="Update workspace note",
 )
 async def update_note(
@@ -437,6 +459,7 @@ async def update_note(
 @router.delete(
     "/{workspace_id}/notes/{note_id}",
     status_code=204,
+    dependencies=[Depends(WORKSPACES_DELETE_RATE_LIMIT)],
     summary="Delete workspace note",
 )
 async def delete_note(

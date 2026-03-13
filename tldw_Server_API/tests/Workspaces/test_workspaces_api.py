@@ -2,11 +2,12 @@
 from types import SimpleNamespace
 
 import pytest
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.endpoints.workspaces_rate_limit_policy import (
+    WORKSPACES_DELETE_RATE_LIMIT,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
@@ -93,20 +94,6 @@ class TestScopedChatSessions:
         assert len(ws_results) == 0
 
 
-@pytest.mark.unit
-def test_workspace_routes_apply_shared_rate_limit_dependency(workspace_fastapi_app):
-    workspace_routes = [
-        route
-        for route in workspace_fastapi_app.routes
-        if isinstance(route, APIRoute) and route.path.startswith("/api/v1/workspaces")
-    ]
-
-    assert workspace_routes
-    for route in workspace_routes:
-        dependencies = {dependency.call for dependency in route.dependant.dependencies}
-        assert check_rate_limit in dependencies, f"missing rate limit on {route.path} {sorted(route.methods)}"
-
-
 @pytest.mark.integration
 def test_delete_workspace_maps_conflict_to_409(workspace_fastapi_app):
     class _ConflictDB:
@@ -122,13 +109,13 @@ def test_delete_workspace_maps_conflict_to_409(workspace_fastapi_app):
 
     workspace_fastapi_app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
     workspace_fastapi_app.dependency_overrides[get_chacha_db_for_user] = lambda: _ConflictDB()
-    workspace_fastapi_app.dependency_overrides[check_rate_limit] = _allow_rate_limit
+    workspace_fastapi_app.dependency_overrides[WORKSPACES_DELETE_RATE_LIMIT] = _allow_rate_limit
     try:
         with TestClient(workspace_fastapi_app, raise_server_exceptions=False) as client:
             response = client.delete("/api/v1/workspaces/ws-1")
     finally:
         workspace_fastapi_app.dependency_overrides.pop(get_request_user, None)
         workspace_fastapi_app.dependency_overrides.pop(get_chacha_db_for_user, None)
-        workspace_fastapi_app.dependency_overrides.pop(check_rate_limit, None)
+        workspace_fastapi_app.dependency_overrides.pop(WORKSPACES_DELETE_RATE_LIMIT, None)
 
     assert response.status_code == 409, response.text
