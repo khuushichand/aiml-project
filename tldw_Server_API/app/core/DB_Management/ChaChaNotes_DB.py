@@ -544,6 +544,8 @@ class CharactersRAGDB:
         ("quizzes", "id"),
         ("quiz_questions", "id"),
         ("quiz_attempts", "id"),
+        ("study_assistant_threads", "id"),
+        ("study_assistant_messages", "id"),
         ("writing_templates", "id"),
         ("writing_themes", "id"),
         ("voice_command_events", "id"),
@@ -5030,6 +5032,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._verify_required_fts_tables_sqlite(conn)
                     self._ensure_flashcard_asset_schema_sqlite(conn)
                     self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                    self._ensure_study_assistant_schema_sqlite(conn)
                     self._ensure_flashcard_fts_triggers_sqlite(conn)
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
                     self._ensure_notes_fts_triggers_sqlite(conn)
@@ -5571,6 +5574,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._verify_required_fts_tables_sqlite(conn)
                 self._ensure_flashcard_asset_schema_sqlite(conn)
                 self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                self._ensure_study_assistant_schema_sqlite(conn)
                 self._ensure_flashcard_fts_triggers_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
                 self._ensure_notes_fts_triggers_sqlite(conn)
@@ -6262,6 +6266,144 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise SchemaError(f"Failed ensuring PostgreSQL flashcard scheduler schema: {exc}") from exc  # noqa: TRY003
 
+    def _ensure_study_assistant_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure study assistant thread/message tables exist for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_assistant_threads(
+                  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                  context_type     TEXT NOT NULL CHECK(context_type IN ('flashcard', 'quiz_attempt_question')),
+                  flashcard_uuid   TEXT REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  quiz_attempt_id  INTEGER REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                  question_id      INTEGER REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                  last_message_at  DATETIME,
+                  message_count    INTEGER NOT NULL DEFAULT 0,
+                  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted          BOOLEAN NOT NULL DEFAULT 0,
+                  client_id        TEXT NOT NULL DEFAULT 'unknown',
+                  version          INTEGER NOT NULL DEFAULT 1,
+                  CHECK(
+                    (context_type = 'flashcard' AND flashcard_uuid IS NOT NULL AND quiz_attempt_id IS NULL AND question_id IS NULL) OR
+                    (context_type = 'quiz_attempt_question' AND flashcard_uuid IS NULL AND quiz_attempt_id IS NOT NULL AND question_id IS NOT NULL)
+                  )
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_assistant_messages(
+                  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                  thread_id               INTEGER NOT NULL REFERENCES study_assistant_threads(id) ON DELETE CASCADE,
+                  role                    TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                  action_type             TEXT NOT NULL CHECK(action_type IN ('explain', 'mnemonic', 'follow_up', 'fact_check', 'freeform')),
+                  input_modality          TEXT NOT NULL CHECK(input_modality IN ('text', 'voice_transcript')),
+                  content                 TEXT NOT NULL,
+                  structured_payload_json TEXT,
+                  context_snapshot_json   TEXT,
+                  provider                TEXT,
+                  model                   TEXT,
+                  created_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  client_id               TEXT NOT NULL DEFAULT 'unknown'
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_assistant_threads_flashcard_active
+                    ON study_assistant_threads(context_type, flashcard_uuid)
+                 WHERE deleted = 0 AND flashcard_uuid IS NOT NULL
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_assistant_threads_quiz_question_active
+                    ON study_assistant_threads(context_type, quiz_attempt_id, question_id)
+                 WHERE deleted = 0 AND quiz_attempt_id IS NOT NULL AND question_id IS NOT NULL
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_study_assistant_threads_last_message_at ON study_assistant_threads(last_message_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_study_assistant_messages_thread_id ON study_assistant_messages(thread_id, id)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite study assistant schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_study_assistant_schema_postgres(self, conn) -> None:
+        """Ensure study assistant thread/message tables exist for PostgreSQL."""
+        try:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_assistant_threads(
+                  id BIGSERIAL PRIMARY KEY,
+                  context_type TEXT NOT NULL CHECK(context_type IN ('flashcard', 'quiz_attempt_question')),
+                  flashcard_uuid TEXT REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  quiz_attempt_id INTEGER REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                  question_id INTEGER REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                  last_message_at TIMESTAMPTZ,
+                  message_count INTEGER NOT NULL DEFAULT 0,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1,
+                  CHECK(
+                    (context_type = 'flashcard' AND flashcard_uuid IS NOT NULL AND quiz_attempt_id IS NULL AND question_id IS NULL) OR
+                    (context_type = 'quiz_attempt_question' AND flashcard_uuid IS NULL AND quiz_attempt_id IS NOT NULL AND question_id IS NOT NULL)
+                  )
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_assistant_messages(
+                  id BIGSERIAL PRIMARY KEY,
+                  thread_id INTEGER NOT NULL REFERENCES study_assistant_threads(id) ON DELETE CASCADE,
+                  role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                  action_type TEXT NOT NULL CHECK(action_type IN ('explain', 'mnemonic', 'follow_up', 'fact_check', 'freeform')),
+                  input_modality TEXT NOT NULL CHECK(input_modality IN ('text', 'voice_transcript')),
+                  content TEXT NOT NULL,
+                  structured_payload_json TEXT,
+                  context_snapshot_json TEXT,
+                  provider TEXT,
+                  model TEXT,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  client_id TEXT NOT NULL DEFAULT 'unknown'
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_assistant_threads_flashcard_active
+                    ON study_assistant_threads(context_type, flashcard_uuid)
+                 WHERE deleted = FALSE AND flashcard_uuid IS NOT NULL
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_assistant_threads_quiz_question_active
+                    ON study_assistant_threads(context_type, quiz_attempt_id, question_id)
+                 WHERE deleted = FALSE AND quiz_attempt_id IS NOT NULL AND question_id IS NOT NULL
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_study_assistant_threads_last_message_at ON study_assistant_threads(last_message_at)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_study_assistant_messages_thread_id ON study_assistant_messages(thread_id, id)",
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL study assistant schema: {exc}") from exc  # noqa: TRY003
+
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
 
@@ -6447,6 +6589,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
             self._ensure_flashcard_asset_schema_postgres(conn)
             self._ensure_flashcard_scheduler_schema_postgres(conn)
+            self._ensure_study_assistant_schema_postgres(conn)
             self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
 
@@ -19302,6 +19445,241 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return {"items": items, "count": total}  # noqa: TRY300
         except CharactersRAGDBError:  # noqa: TRY203
             raise
+
+    def get_or_create_study_assistant_thread(
+        self,
+        *,
+        context_type: str,
+        flashcard_uuid: str | None = None,
+        quiz_attempt_id: int | None = None,
+        question_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Return an active study-assistant thread for the provided context, creating one if needed."""
+        normalized_context = str(context_type or "").strip().lower()
+        if normalized_context == "flashcard":
+            if not flashcard_uuid:
+                raise InputError("flashcard_uuid is required for flashcard study assistant threads.")  # noqa: TRY003
+            where_clause = "context_type = ? AND flashcard_uuid = ? AND deleted = 0"
+            where_params: tuple[Any, ...] = (normalized_context, flashcard_uuid)
+            insert_params: tuple[Any, ...] = (
+                normalized_context,
+                flashcard_uuid,
+                None,
+                None,
+            )
+        elif normalized_context == "quiz_attempt_question":
+            if quiz_attempt_id is None or question_id is None:
+                raise InputError(  # noqa: TRY003
+                    "quiz_attempt_id and question_id are required for quiz attempt study assistant threads."
+                )
+            where_clause = "context_type = ? AND quiz_attempt_id = ? AND question_id = ? AND deleted = 0"
+            where_params = (normalized_context, int(quiz_attempt_id), int(question_id))
+            insert_params = (
+                normalized_context,
+                None,
+                int(quiz_attempt_id),
+                int(question_id),
+            )
+        else:
+            raise InputError("context_type must be 'flashcard' or 'quiz_attempt_question'.")  # noqa: TRY003
+
+        query = (
+            "SELECT id, context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
+            "created_at, last_modified, deleted, client_id, version "
+            f"FROM study_assistant_threads WHERE {where_clause}"
+        )
+        existing = self.execute_query(query, where_params).fetchone()
+        if existing:
+            item = dict(existing)
+            item["deleted"] = bool(item.get("deleted"))
+            return item
+
+        now = self._get_current_utc_timestamp_iso()
+        insert_sql = (
+            "INSERT INTO study_assistant_threads("
+            "context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
+            "created_at, last_modified, deleted, client_id, version"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = insert_params + (
+            None,
+            0,
+            now,
+            now,
+            False,
+            self.client_id,
+            1,
+        )
+
+        try:
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    thread_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    thread_id = int(cursor.lastrowid)
+                if thread_id is None:
+                    raise CharactersRAGDBError("Failed to determine study assistant thread ID after insert")  # noqa: TRY003
+        except sqlite3.IntegrityError as exc:
+            if not self._is_unique_violation(exc):
+                raise CharactersRAGDBError(f"Failed to create study assistant thread: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if not self._is_unique_violation(exc):
+                raise CharactersRAGDBError(f"Failed to create study assistant thread: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create study assistant thread: {exc}") from exc  # noqa: TRY003
+
+        created = self.execute_query(query, where_params).fetchone()
+        if not created:
+            raise CharactersRAGDBError("Study assistant thread was not readable after create")  # noqa: TRY003
+        item = dict(created)
+        item["deleted"] = bool(item.get("deleted"))
+        return item
+
+    def get_study_assistant_thread(self, thread_id: int) -> dict[str, Any] | None:
+        """Fetch an active study-assistant thread by ID."""
+        query = (
+            "SELECT id, context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
+            "created_at, last_modified, deleted, client_id, version "
+            "FROM study_assistant_threads WHERE id = ? AND deleted = 0"
+        )
+        row = self.execute_query(query, (thread_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["deleted"] = bool(item.get("deleted"))
+        return item
+
+    def list_study_assistant_messages(
+        self,
+        thread_id: int,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List study-assistant messages for a thread in ascending order."""
+        query = (
+            "SELECT id, thread_id, role, action_type, input_modality, content, structured_payload_json, "
+            "context_snapshot_json, provider, model, created_at, client_id "
+            "FROM study_assistant_messages WHERE thread_id = ? ORDER BY id ASC LIMIT ? OFFSET ?"
+        )
+        cursor = self.execute_query(query, (thread_id, int(limit), int(offset)))
+        items: list[dict[str, Any]] = []
+        for row in cursor.fetchall():
+            item = self._deserialize_row_fields(row, ["structured_payload_json", "context_snapshot_json"])
+            if not item:
+                continue
+            item["structured_payload"] = item.pop("structured_payload_json", {}) or {}
+            item["context_snapshot"] = item.pop("context_snapshot_json", {}) or {}
+            items.append(item)
+        return items
+
+    def append_study_assistant_message(
+        self,
+        *,
+        thread_id: int,
+        role: str,
+        action_type: str,
+        input_modality: str,
+        content: str,
+        structured_payload: dict[str, Any] | None = None,
+        context_snapshot: dict[str, Any] | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a study-assistant message and update thread counters/versioning."""
+        normalized_role = str(role or "").strip().lower()
+        if normalized_role not in {"user", "assistant"}:
+            raise InputError("role must be 'user' or 'assistant'.")  # noqa: TRY003
+
+        normalized_action = str(action_type or "").strip().lower()
+        if normalized_action not in {"explain", "mnemonic", "follow_up", "fact_check", "freeform"}:
+            raise InputError(  # noqa: TRY003
+                "action_type must be one of explain, mnemonic, follow_up, fact_check, or freeform."
+            )
+
+        normalized_modality = str(input_modality or "").strip().lower()
+        if normalized_modality not in {"text", "voice_transcript"}:
+            raise InputError("input_modality must be 'text' or 'voice_transcript'.")  # noqa: TRY003
+
+        normalized_content = str(content or "").strip()
+        if not normalized_content:
+            raise InputError("content is required for study assistant messages.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        structured_payload_json = self._ensure_json_string(structured_payload or {})
+        context_snapshot_json = self._ensure_json_string(context_snapshot or {})
+        insert_sql = (
+            "INSERT INTO study_assistant_messages("
+            "thread_id, role, action_type, input_modality, content, structured_payload_json, context_snapshot_json, "
+            "provider, model, created_at, client_id"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        insert_params = (
+            int(thread_id),
+            normalized_role,
+            normalized_action,
+            normalized_modality,
+            normalized_content,
+            structured_payload_json,
+            context_snapshot_json,
+            provider,
+            model,
+            now,
+            self.client_id,
+        )
+
+        try:
+            with self.transaction() as conn:
+                thread_row = conn.execute(
+                    "SELECT id FROM study_assistant_threads WHERE id = ? AND deleted = 0",
+                    (int(thread_id),),
+                ).fetchone()
+                if not thread_row:
+                    raise ConflictError(  # noqa: TRY003
+                        "Study assistant thread not found",
+                        entity="study_assistant_threads",
+                        identifier=thread_id,
+                    )
+
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", insert_params)
+                    row = cursor.fetchone()
+                    message_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, insert_params)
+                    message_id = int(cursor.lastrowid)
+
+                if message_id is None:
+                    raise CharactersRAGDBError("Failed to determine study assistant message ID after insert")  # noqa: TRY003
+
+                conn.execute(
+                    "UPDATE study_assistant_threads "
+                    "SET last_message_at = ?, message_count = message_count + 1, last_modified = ?, "
+                    "version = version + 1, client_id = ? "
+                    "WHERE id = ? AND deleted = 0",
+                    (now, now, self.client_id, int(thread_id)),
+                )
+
+                message_row = conn.execute(
+                    "SELECT id, thread_id, role, action_type, input_modality, content, structured_payload_json, "
+                    "context_snapshot_json, provider, model, created_at, client_id "
+                    "FROM study_assistant_messages WHERE id = ?",
+                    (message_id,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to append study assistant message: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to append study assistant message: {exc}") from exc  # noqa: TRY003
+
+        item = self._deserialize_row_fields(message_row, ["structured_payload_json", "context_snapshot_json"])
+        if not item:
+            raise CharactersRAGDBError("Study assistant message was not readable after insert")  # noqa: TRY003
+        item["structured_payload"] = item.pop("structured_payload_json", {}) or {}
+        item["context_snapshot"] = item.pop("context_snapshot_json", {}) or {}
+        return item
 
     def _check_answer(self, question: dict[str, Any], user_answer: Any) -> bool:
         """Grade a single answer based on question type."""

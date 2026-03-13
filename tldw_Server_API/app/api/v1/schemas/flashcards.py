@@ -1,5 +1,5 @@
 import json
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -259,6 +259,69 @@ class FlashcardAssetMetadata(BaseModel):
 
 class FlashcardResetSchedulingRequest(BaseModel):
     expected_version: int = Field(..., ge=1)
+
+
+class StudyAssistantThreadSummary(BaseModel):
+    id: int
+    context_type: Literal["flashcard", "quiz_attempt_question"]
+    flashcard_uuid: Optional[str] = None
+    quiz_attempt_id: Optional[int] = None
+    question_id: Optional[int] = None
+    last_message_at: Optional[str] = None
+    message_count: int = 0
+    deleted: bool
+    client_id: str
+    version: int
+    created_at: Optional[str] = None
+    last_modified: Optional[str] = None
+
+
+class StudyAssistantMessage(BaseModel):
+    id: int
+    thread_id: int
+    role: Literal["user", "assistant"]
+    action_type: Literal["explain", "mnemonic", "follow_up", "fact_check", "freeform"]
+    input_modality: Literal["text", "voice_transcript"]
+    content: str
+    structured_payload: dict[str, Any] = Field(default_factory=dict)
+    context_snapshot: dict[str, Any] = Field(default_factory=dict)
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    created_at: Optional[str] = None
+    client_id: str
+
+    @model_validator(mode="before")
+    def _populate_json_fields(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        for source_field, target_field in (
+            ("structured_payload_json", "structured_payload"),
+            ("context_snapshot_json", "context_snapshot"),
+        ):
+            if data.get(target_field) is not None:
+                continue
+            raw = data.get(source_field)
+            if isinstance(raw, dict):
+                data[target_field] = raw
+                continue
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    parsed = {}
+                data[target_field] = parsed if isinstance(parsed, dict) else {}
+
+        if data.get("structured_payload") is None:
+            data["structured_payload"] = {}
+        if data.get("context_snapshot") is None:
+            data["context_snapshot"] = {}
+        return data
+
+
+class StudyAssistantHistoryResponse(BaseModel):
+    thread: StudyAssistantThreadSummary
+    messages: list[StudyAssistantMessage] = Field(default_factory=list)
 
 
 class FlashcardTagsUpdate(BaseModel):
