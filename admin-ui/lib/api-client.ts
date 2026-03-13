@@ -11,6 +11,7 @@ import type {
   BackupsResponse,
   EffectivePermissionsResponse,
   FeatureRegistryEntry,
+  IncidentItem,
   IncidentsResponse,
   Invoice,
   OrgMember,
@@ -549,17 +550,17 @@ export const api = {
       options
     );
   },
-  createIncident: (data: Record<string, unknown>) => requestJson('/admin/incidents', {
+  createIncident: (data: Record<string, unknown>) => requestJson<IncidentItem>('/admin/incidents', {
     method: 'POST',
     body: JSON.stringify(data),
   }),
   updateIncident: (incidentId: string, data: Record<string, unknown>) =>
-    requestJson(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
+    requestJson<IncidentItem>(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
   addIncidentEvent: (incidentId: string, data: Record<string, unknown>) =>
-    requestJson(`/admin/incidents/${encodeURIComponent(incidentId)}/events`, {
+    requestJson<IncidentItem>(`/admin/incidents/${encodeURIComponent(incidentId)}/events`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),

@@ -1007,6 +1007,15 @@ class IncidentEvent(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class IncidentActionItem(BaseModel):
+    """Structured incident action item."""
+    id: str
+    text: str
+    done: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class IncidentItem(BaseModel):
     """Incident summary with timeline."""
     id: str
@@ -1021,6 +1030,11 @@ class IncidentItem(BaseModel):
     created_by: str | None = None
     updated_by: str | None = None
     timeline: list[IncidentEvent] = []
+    assigned_to_user_id: int | None = None
+    assigned_to_label: str | None = None
+    root_cause: str | None = None
+    impact: str | None = None
+    action_items: list[IncidentActionItem] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1047,12 +1061,24 @@ class IncidentCreateRequest(BaseModel):
 
 
 class IncidentUpdateRequest(BaseModel):
-    """Request to update an incident."""
+    """Request to update an incident.
+
+    Partial-update contract for workflow fields:
+    - omitted means unchanged
+    - explicit ``null`` means clear
+
+    Callers must preserve that distinction via ``model_fields_set`` or
+    ``model_dump(exclude_unset=True)`` when invoking the service layer.
+    """
     title: str | None = None
     status: Literal["open", "investigating", "mitigating", "resolved"] | None = None
     severity: Literal["low", "medium", "high", "critical"] | None = None
     summary: str | None = None
     tags: list[str] | None = None
+    assigned_to_user_id: int | None = None
+    root_cause: str | None = None
+    impact: str | None = None
+    action_items: list[IncidentActionItem] | None = None
     update_message: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
