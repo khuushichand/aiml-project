@@ -239,7 +239,7 @@ describe("TestLabPanel", () => {
     )
     expect(
       screen.getByText(
-        "No direct command matched. Open this phrase in Commands to register it as a saved shortcut."
+        "No direct command matched. Open this phrase in Commands to register it as a saved shortcut and add placeholders if needed."
       )
     ).toBeInTheDocument()
 

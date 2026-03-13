@@ -2,6 +2,10 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import {
+  buildDraftAssistSuggestions,
+  type DraftAssistSuggestion
+} from "@/utils/persona-command-drafts"
 
 import { McpToolPicker } from "./McpToolPicker"
 
@@ -314,6 +318,14 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     if (!formState.connectionId.trim()) return false
     return !connections.some((connection) => connection.id === formState.connectionId.trim())
   }, [connections, formState.connectionId])
+  const draftAssistSuggestions = React.useMemo(
+    () =>
+      draftSourcePhrase &&
+      (formState.actionType === "mcp_tool" || formState.actionType === "custom")
+        ? buildDraftAssistSuggestions(draftSourcePhrase)
+        : [],
+    [draftSourcePhrase, formState.actionType]
+  )
 
   React.useEffect(() => {
     let cancelled = false
@@ -426,6 +438,18 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     setValidationError(null)
     setError(null)
   }, [])
+
+  const applyDraftAssistSuggestion = React.useCallback(
+    (suggestion: DraftAssistSuggestion) => {
+      setFormState((current) => ({
+        ...current,
+        phrasesText: suggestion.suggestedPhrase,
+        slotMapText: stringifyJson(suggestion.suggestedSlotMap)
+      }))
+      setValidationError(null)
+    },
+    []
+  )
 
   React.useEffect(() => {
     const normalizedDraftPhrase = String(draftCommandPhrase || "")
@@ -922,14 +946,40 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
 
                 <div className="mt-3 space-y-3">
                   {draftSourcePhrase && !formState.commandId ? (
-                    <div
-                      data-testid="persona-commands-draft-banner"
-                      className="rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-900"
-                    >
-                      {t("sidepanel:personaGarden.commands.draftFromTestLab", {
-                        defaultValue:
-                          "Drafted from Test Lab. Adjust the phrase, add placeholders like {topic} if needed, then choose a target."
-                      })}
+                    <div className="space-y-2">
+                      <div
+                        data-testid="persona-commands-draft-banner"
+                        className="rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-900"
+                      >
+                        {t("sidepanel:personaGarden.commands.draftFromTestLab", {
+                          defaultValue:
+                            "Drafted from Test Lab. Adjust the phrase, add placeholders like {topic} if needed, then choose a target."
+                        })}
+                      </div>
+                      {draftAssistSuggestions.length > 0 ? (
+                        <div className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-text-muted">
+                          <div className="font-medium text-text">
+                            {t("sidepanel:personaGarden.commands.draftAssistHeading", {
+                              defaultValue: "Suggested placeholders"
+                            })}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {draftAssistSuggestions.map((suggestion) => (
+                              <button
+                                key={`${suggestion.id}-${suggestion.suggestedPhrase}`}
+                                type="button"
+                                data-testid={`persona-commands-draft-assist-chip-${suggestion.id}`}
+                                className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-medium text-sky-800 transition hover:bg-sky-500/20"
+                                onClick={() =>
+                                  applyDraftAssistSuggestion(suggestion)
+                                }
+                              >
+                                {suggestion.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
 

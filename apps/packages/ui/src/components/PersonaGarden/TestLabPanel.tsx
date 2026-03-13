@@ -326,7 +326,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                     <div>
                       {t("sidepanel:personaGarden.testLab.createCommandHint", {
                         defaultValue:
-                          "No direct command matched. Open this phrase in Commands to register it as a saved shortcut."
+                          "No direct command matched. Open this phrase in Commands to register it as a saved shortcut and add placeholders if needed."
                       })}
                     </div>
                     <button

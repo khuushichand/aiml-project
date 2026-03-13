@@ -573,6 +573,31 @@ describe("CommandsPanel", () => {
     )
   })
 
+  it("applies phrase-to-slot assist suggestions for drafted commands", async () => {
+    renderWithQueryClient(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        draftCommandPhrase="search notes for model context protocol"
+      />
+    )
+
+    await screen.findByText("Search Notes")
+    expect(
+      screen.getByTestId("persona-commands-draft-assist-chip-topic")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("persona-commands-draft-assist-chip-topic"))
+
+    expect(screen.getByTestId("persona-commands-phrases-input")).toHaveValue(
+      "search notes for {topic}"
+    )
+    expect(screen.getByTestId("persona-commands-slot-map-input")).toHaveValue(
+      '{\n  "query": "topic"\n}'
+    )
+  })
+
   it("requests a test-lab rerun after saving a repaired command", async () => {
     const onOpenCommandHandled = vi.fn()
     const onRerunAfterSave = vi.fn()
