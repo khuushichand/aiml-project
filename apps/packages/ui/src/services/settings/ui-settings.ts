@@ -350,6 +350,7 @@ export const HEADER_SHORTCUT_IDS = [
   "kanban-playground",
   "data-tables",
   "audiobook-studio",
+  "presentation-studio",
   "acp-playground",
   "workflows",
   "admin-server",

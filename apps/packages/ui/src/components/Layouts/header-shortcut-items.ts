@@ -248,6 +248,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: Headphones,
         labelKey: "option:header.audiobookStudio",
         labelDefault: "Audiobook Studio"
+      },
+      {
+        id: "presentation-studio",
+        to: "/presentation-studio",
+        icon: FileText,
+        labelKey: "option:header.presentationStudio",
+        labelDefault: "Presentation Studio"
       }
     ]
   },

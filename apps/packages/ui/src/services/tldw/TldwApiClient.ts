@@ -7089,23 +7089,8 @@ export class TldwApiClient {
     })
   }
 
-  async getPresentation(presentationId: string): Promise<{
-    id: string
-    title: string
-    description?: string
-    theme: string
-    slides: Array<{
-      order: number
-      layout: string
-      title?: string
-      content: string
-      speaker_notes?: string
-    }>
-    version: number
-    created_at: string
-    last_modified: string
-  }> {
-    return await this.request<any>({
+  async getPresentation(presentationId: string): Promise<PresentationStudioRecord> {
+    return await this.request<PresentationStudioRecord>({
       path: `/api/v1/slides/presentations/${encodeURIComponent(presentationId)}`,
       method: "GET"
     })
