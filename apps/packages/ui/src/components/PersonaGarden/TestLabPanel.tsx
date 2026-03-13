@@ -53,6 +53,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
   const [error, setError] = React.useState<string | null>(null)
   const [result, setResult] = React.useState<PersonaCommandDryRunResult | null>(null)
   const [rerunNoticeVisible, setRerunNoticeVisible] = React.useState(false)
+  const [repairConfirmedVisible, setRepairConfirmedVisible] = React.useState(false)
   const hasMissingConnection = Boolean(
     result &&
       (result.connection_status === "missing" ||
@@ -70,9 +71,16 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
     )
   }, [initialHeardText])
 
-  const runDryRun = React.useCallback(async (nextHeardText: string) => {
+  const runDryRun = React.useCallback(async (
+    nextHeardText: string,
+    options?: { source?: "manual" | "rerun" }
+  ) => {
     const trimmed = nextHeardText.trim()
     if (!selectedPersonaId || !trimmed) return
+    const source = options?.source || "manual"
+    if (source !== "rerun") {
+      setRepairConfirmedVisible(false)
+    }
     setLoading(true)
     setError(null)
     try {
@@ -88,8 +96,19 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
       }
       const payload = (await response.json()) as PersonaCommandDryRunResult
       setResult(payload)
+      if (
+        source === "rerun" &&
+        payload.matched &&
+        payload.connection_status !== "missing" &&
+        payload.failure_phase !== "missing_connection"
+      ) {
+        setRepairConfirmedVisible(true)
+      } else {
+        setRepairConfirmedVisible(false)
+      }
     } catch (runError) {
       setResult(null)
+      setRepairConfirmedVisible(false)
       setError(
         runError instanceof Error
           ? runError.message
@@ -107,7 +126,8 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
     if (!nextHeardText) return
     setHeardText(nextHeardText)
     setRerunNoticeVisible(true)
-    void runDryRun(nextHeardText)
+    setRepairConfirmedVisible(false)
+    void runDryRun(nextHeardText, { source: "rerun" })
   }, [
     heardText,
     initialHeardText,
@@ -155,6 +175,13 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
             })}
           </div>
         ) : null}
+        {repairConfirmedVisible ? (
+          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700">
+            {t("sidepanel:personaGarden.testLab.repairConfirmedNotice", {
+              defaultValue: "Repair confirmed. The last phrase now resolves cleanly."
+            })}
+          </div>
+        ) : null}
 
         {selectedPersonaId ? (
           <>
@@ -166,7 +193,10 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                 data-testid="persona-test-lab-heard-input"
                 className="mt-1 min-h-[88px] w-full rounded-md border border-border bg-bg px-2 py-1 text-sm text-text"
                 value={heardText}
-                onChange={(event) => setHeardText(event.target.value)}
+                onChange={(event) => {
+                  setHeardText(event.target.value)
+                  setRepairConfirmedVisible(false)
+                }}
                 placeholder="search notes for model context protocol"
               />
             </label>
@@ -178,7 +208,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                 className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={loading || heardText.trim().length === 0}
                 onClick={() => {
-                  void runDryRun(heardText)
+                  void runDryRun(heardText, { source: "manual" })
                 }}
               >
                 {loading
@@ -196,6 +226,8 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                   setHeardText("")
                   setResult(null)
                   setError(null)
+                  setRerunNoticeVisible(false)
+                  setRepairConfirmedVisible(false)
                 }}
               >
                 {t("common:clear", "Clear")}

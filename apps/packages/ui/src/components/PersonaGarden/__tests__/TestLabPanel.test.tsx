@@ -40,6 +40,34 @@ describe("TestLabPanel", () => {
         path === "/api/v1/persona/profiles/persona-1/voice-commands/test" &&
         init?.method === "POST"
       ) {
+        if (init.body.heard_text === "send alert repaired") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              heard_text: init.body.heard_text,
+              matched: true,
+              match_reason: "phrase_pattern",
+              command_id: "cmd-alert",
+              command_name: "Send Alert",
+              connection_id: "conn-1",
+              connection_status: "ok",
+              connection_name: "Slack Alerts",
+              extracted_params: { query: "repaired" },
+              planned_action: {
+                target_type: "custom",
+                target_name: "external_request",
+                payload_preview: { query: "repaired" }
+              },
+              safety_gate: {
+                classification: "write_external",
+                requires_confirmation: true,
+                reason: "command_requires_confirmation"
+              },
+              fallback_to_persona_planner: false,
+              failure_phase: null
+            })
+          })
+        }
         if (init.body.heard_text === "send alert for model drift") {
           return Promise.resolve({
             ok: true,
@@ -170,7 +198,7 @@ describe("TestLabPanel", () => {
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
         isActive
-        initialHeardText="send alert for model drift"
+        initialHeardText="send alert repaired"
         rerunRequestToken={1}
       />
     )
@@ -181,17 +209,20 @@ describe("TestLabPanel", () => {
         "/api/v1/persona/profiles/persona-1/voice-commands/test",
         expect.objectContaining({
           method: "POST",
-          body: { heard_text: "send alert for model drift" }
+          body: { heard_text: "send alert repaired" }
         })
       )
     )
     expect(screen.getByTestId("persona-test-lab-heard-input")).toHaveValue(
-      "send alert for model drift"
+      "send alert repaired"
     )
     await waitFor(() =>
       expect(
         screen.queryByText("Rerunning last phrase...")
       ).not.toBeInTheDocument()
     )
+    expect(
+      screen.getByText("Repair confirmed. The last phrase now resolves cleanly.")
+    ).toBeInTheDocument()
   })
 })
