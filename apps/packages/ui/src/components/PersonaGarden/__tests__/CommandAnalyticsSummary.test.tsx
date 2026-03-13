@@ -18,6 +18,14 @@ describe("CommandAnalyticsSummary", () => {
             fallback_rate: 25,
             avg_response_time_ms: 180
           },
+          live_voice: {
+            total_committed_turns: 5,
+            vad_auto_commit_count: 3,
+            manual_commit_count: 2,
+            vad_auto_rate: 60,
+            manual_commit_rate: 40,
+            degraded_session_count: 1
+          },
           commands: [],
           fallbacks: {
             total_invocations: 2,
@@ -42,6 +50,15 @@ describe("CommandAnalyticsSummary", () => {
     )
     expect(screen.getByTestId("persona-command-analytics-fallback-note")).toHaveTextContent(
       "2 planner fallbacks"
+    )
+    expect(screen.getByTestId("persona-command-analytics-live-auto-rate")).toHaveTextContent(
+      "60%"
+    )
+    expect(screen.getByTestId("persona-command-analytics-live-manual-rate")).toHaveTextContent(
+      "40%"
+    )
+    expect(screen.getByTestId("persona-command-analytics-live-degraded-note")).toHaveTextContent(
+      "1 degraded live session"
     )
   })
 })

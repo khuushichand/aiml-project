@@ -56,6 +56,7 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaSessionRequest,
     PersonaSessionResponse,
     PersonaSessionSummary,
+    PersonaLiveVoiceAnalyticsSummary,
     PersonaScopeRulesReplaceRequest,
     PersonaScopeRulesResponse,
     PersonaVoiceAnalyticsResponse,
@@ -137,6 +138,7 @@ from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.VoiceAssistant import (
     ActionType as VoiceActionTypeInternal,
     VoiceCommand,
+    get_persona_live_voice_summary,
     delete_voice_command as delete_voice_command_db,
     get_voice_analytics_summary_stats,
     get_user_voice_commands,
@@ -145,6 +147,7 @@ from tldw_Server_API.app.core.VoiceAssistant import (
     get_voice_command_router,
     get_voice_resolution_stats,
     get_voice_top_commands,
+    record_persona_live_voice_event,
     save_voice_command,
 )
 
@@ -3438,6 +3441,12 @@ async def get_persona_voice_analytics(
             persona_id=persona_id,
             resolution_type="direct_command",
         )
+        live_voice_stats = get_persona_live_voice_summary(
+            db,
+            user_id=int(user_id),
+            days=days,
+            persona_id=persona_id,
+        )
 
         total_events = int(summary_stats.get("total_commands") or 0)
         planner_fallback_count = int(fallback_stats.get("total_invocations") or 0)
@@ -3457,6 +3466,14 @@ async def get_persona_voice_analytics(
                 avg_response_time_ms=float(
                     summary_stats.get("avg_response_time_ms") or 0.0
                 ),
+            ),
+            live_voice=PersonaLiveVoiceAnalyticsSummary(
+                total_committed_turns=int(live_voice_stats.get("total_committed_turns") or 0),
+                vad_auto_commit_count=int(live_voice_stats.get("vad_auto_commit_count") or 0),
+                manual_commit_count=int(live_voice_stats.get("manual_commit_count") or 0),
+                vad_auto_rate=float(live_voice_stats.get("vad_auto_rate") or 0.0),
+                manual_commit_rate=float(live_voice_stats.get("manual_commit_rate") or 0.0),
+                degraded_session_count=int(live_voice_stats.get("degraded_session_count") or 0),
             ),
             commands=[
                 PersonaVoiceCommandAnalyticsItem(
@@ -4841,6 +4858,56 @@ async def persona_stream(
                 return str(transcriber.get_full_transcript() or "").strip()
             return ""
 
+        def _resolve_persona_live_event_persona_id(session_id: str) -> str | None:
+            if persona_scope_db is None or not authenticated_user_id:
+                return None
+            try:
+                runtime_context = _load_persona_policy_rules_for_session(
+                    persona_scope_db,
+                    session_id=session_id,
+                    user_id=authenticated_user_id,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "persona live analytics persona resolution failed for session {}: {}",
+                    session_id,
+                    exc,
+                )
+                return None
+            normalized_persona_id = str(runtime_context.get("persona_id") or "").strip()
+            return normalized_persona_id or None
+
+        def _record_persona_live_voice_event_safe(
+            *,
+            session_id: str,
+            event_type: str,
+            commit_source: str | None = None,
+        ) -> None:
+            if persona_scope_db is None or not authenticated_user_id:
+                return
+            try:
+                user_id_int = int(str(authenticated_user_id))
+            except (TypeError, ValueError):
+                return
+            persona_id_value = _resolve_persona_live_event_persona_id(session_id)
+            if not persona_id_value:
+                return
+            try:
+                record_persona_live_voice_event(
+                    persona_scope_db,
+                    user_id=user_id_int,
+                    persona_id=persona_id_value,
+                    session_id=session_id,
+                    event_type=event_type,
+                    commit_source=commit_source,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "persona live analytics event skipped for session {}: {}",
+                    session_id,
+                    exc,
+                )
+
         async def _ensure_persona_live_manual_mode_notice(
             session_id: str,
             state: dict[str, Any],
@@ -4854,6 +4921,10 @@ async def persona_stream(
                 reason_code="VOICE_MANUAL_MODE_REQUIRED",
                 message="Server VAD unavailable for this live session. Use Send now to commit heard speech manually.",
                 details=str(state.get("manual_mode_reason") or "vad_unavailable"),
+            )
+            _record_persona_live_voice_event_safe(
+                session_id=session_id,
+                event_type="manual_mode_required",
             )
 
         async def _commit_persona_live_turn(
@@ -4914,6 +4985,11 @@ async def persona_stream(
                 message="Voice turn committed.",
                 commit_source=commit_source,
                 transcript=cleaned_transcript,
+            )
+            _record_persona_live_voice_event_safe(
+                session_id=session_id,
+                event_type="commit",
+                commit_source=commit_source,
             )
             _reset_persona_live_active_turn(session_id)
             await _handle_persona_live_turn(

@@ -186,6 +186,14 @@ async def test_persona_voice_analytics_tracks_live_events_for_selected_persona(
         assert payload["summary"]["planner_fallback_count"] == 1
         assert payload["summary"]["success_rate"] == 1.0
         assert payload["summary"]["fallback_rate"] == 0.5
+        assert payload["live_voice"] == {
+            "total_committed_turns": 0,
+            "vad_auto_commit_count": 0,
+            "manual_commit_count": 0,
+            "vad_auto_rate": 0.0,
+            "manual_commit_rate": 0.0,
+            "degraded_session_count": 0,
+        }
         assert payload["commands"] == [
             {
                 "command_id": command_a_id,
@@ -240,7 +248,67 @@ def test_persona_command_dry_run_does_not_increment_voice_analytics(
         assert payload["summary"]["total_events"] == 0
         assert payload["summary"]["direct_command_count"] == 0
         assert payload["summary"]["planner_fallback_count"] == 0
+        assert payload["live_voice"] == {
+            "total_committed_turns": 0,
+            "vad_auto_commit_count": 0,
+            "manual_commit_count": 0,
+            "vad_auto_rate": 0.0,
+            "manual_commit_rate": 0.0,
+            "degraded_session_count": 0,
+        }
         assert payload["commands"] == []
         assert payload["fallbacks"]["total_invocations"] == 0
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_voice_analytics_includes_live_voice_commit_and_degraded_metrics(
+    persona_db: CharactersRAGDB,
+):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Live Voice Metrics Persona")
+
+        persona_db.execute_query(
+            """
+            INSERT INTO persona_live_voice_events (
+                user_id, persona_id, session_id, event_type, commit_source
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (1, persona_id, "sess-auto", "commit", "vad_auto"),
+            commit=True,
+        )
+        persona_db.execute_query(
+            """
+            INSERT INTO persona_live_voice_events (
+                user_id, persona_id, session_id, event_type, commit_source
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (1, persona_id, "sess-manual", "commit", "manual"),
+            commit=True,
+        )
+        persona_db.execute_query(
+            """
+            INSERT INTO persona_live_voice_events (
+                user_id, persona_id, session_id, event_type, commit_source
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (1, persona_id, "sess-manual", "manual_mode_required", None),
+            commit=True,
+        )
+
+        analytics = client.get(
+            f"/api/v1/persona/profiles/{persona_id}/voice-analytics",
+            params={"days": 7},
+        )
+        assert analytics.status_code == 200, analytics.text
+        payload = analytics.json()
+        assert payload["live_voice"] == {
+            "total_committed_turns": 2,
+            "vad_auto_commit_count": 1,
+            "manual_commit_count": 1,
+            "vad_auto_rate": 0.5,
+            "manual_commit_rate": 0.5,
+            "degraded_session_count": 1,
+        }
 
     fastapi_app.dependency_overrides.clear()

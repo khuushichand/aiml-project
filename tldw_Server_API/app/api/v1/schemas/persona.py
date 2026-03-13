@@ -408,9 +408,21 @@ class PersonaVoiceAnalyticsSummary(BaseModel):
     avg_response_time_ms: float = 0.0
 
 
+class PersonaLiveVoiceAnalyticsSummary(BaseModel):
+    total_committed_turns: int = 0
+    vad_auto_commit_count: int = 0
+    manual_commit_count: int = 0
+    vad_auto_rate: float = 0.0
+    manual_commit_rate: float = 0.0
+    degraded_session_count: int = 0
+
+
 class PersonaVoiceAnalyticsResponse(BaseModel):
     persona_id: str
     summary: PersonaVoiceAnalyticsSummary
+    live_voice: PersonaLiveVoiceAnalyticsSummary = Field(
+        default_factory=PersonaLiveVoiceAnalyticsSummary
+    )
     commands: list[PersonaVoiceCommandAnalyticsItem] = Field(default_factory=list)
     fallbacks: PersonaVoiceFallbackAnalytics = Field(
         default_factory=PersonaVoiceFallbackAnalytics

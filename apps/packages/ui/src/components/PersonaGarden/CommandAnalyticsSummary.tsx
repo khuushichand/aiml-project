@@ -27,9 +27,19 @@ export type PersonaVoiceAnalyticsSummaryData = {
   avg_response_time_ms: number
 }
 
+export type PersonaLiveVoiceAnalyticsSummaryData = {
+  total_committed_turns: number
+  vad_auto_commit_count: number
+  manual_commit_count: number
+  vad_auto_rate: number
+  manual_commit_rate: number
+  degraded_session_count: number
+}
+
 export type PersonaVoiceAnalytics = {
   persona_id: string
   summary: PersonaVoiceAnalyticsSummaryData
+  live_voice: PersonaLiveVoiceAnalyticsSummaryData
   commands: PersonaVoiceCommandAnalyticsItem[]
   fallbacks: PersonaVoiceFallbackAnalytics
 }
@@ -74,6 +84,7 @@ export const CommandAnalyticsSummary: React.FC<CommandAnalyticsSummaryProps> = (
 
   const summary = analytics?.summary
   const fallbackCount = analytics?.fallbacks?.total_invocations || 0
+  const liveVoice = analytics?.live_voice
 
   return (
     <div
@@ -127,6 +138,52 @@ export const CommandAnalyticsSummary: React.FC<CommandAnalyticsSummaryProps> = (
             {fallbackCount > 0
               ? `${fallbackCount} planner fallbacks in the last 7 days`
               : "No planner fallbacks recorded in the last 7 days"}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded-md border border-border bg-surface px-3 py-2">
+              <div className="text-[11px] uppercase tracking-wide text-text-subtle">
+                Auto-commit
+              </div>
+              <div
+                data-testid="persona-command-analytics-live-auto-rate"
+                className="mt-1 text-lg font-semibold text-text"
+              >
+                {formatPercent(liveVoice?.vad_auto_rate ?? 0)}
+              </div>
+              <div className="mt-1 text-[11px] text-text-muted">
+                {formatRunLabel(liveVoice?.vad_auto_commit_count ?? 0)}
+              </div>
+            </div>
+            <div className="rounded-md border border-border bg-surface px-3 py-2">
+              <div className="text-[11px] uppercase tracking-wide text-text-subtle">
+                Manual send
+              </div>
+              <div
+                data-testid="persona-command-analytics-live-manual-rate"
+                className="mt-1 text-lg font-semibold text-text"
+              >
+                {formatPercent(liveVoice?.manual_commit_rate ?? 0)}
+              </div>
+              <div className="mt-1 text-[11px] text-text-muted">
+                {formatRunLabel(liveVoice?.manual_commit_count ?? 0)}
+              </div>
+            </div>
+            <div className="rounded-md border border-border bg-surface px-3 py-2">
+              <div className="text-[11px] uppercase tracking-wide text-text-subtle">
+                Degraded sessions
+              </div>
+              <div className="mt-1 text-lg font-semibold text-text">
+                {liveVoice?.degraded_session_count ?? 0}
+              </div>
+              <div
+                data-testid="persona-command-analytics-live-degraded-note"
+                className="mt-1 text-[11px] text-text-muted"
+              >
+                {(liveVoice?.degraded_session_count ?? 0) === 1
+                  ? "1 degraded live session in the last 7 days"
+                  : `${liveVoice?.degraded_session_count ?? 0} degraded live sessions in the last 7 days`}
+              </div>
+            </div>
           </div>
         </div>
       )}

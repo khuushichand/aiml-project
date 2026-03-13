@@ -435,7 +435,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 38  # Schema v38 adds persona voice analytics scope
+    _CURRENT_SCHEMA_VERSION = 39  # Schema v39 adds persona live voice analytics events
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -2408,6 +2408,21 @@ CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time
     ON voice_command_events(persona_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time
     ON voice_command_events(persona_id, resolution_type, created_at);
+
+CREATE TABLE IF NOT EXISTS persona_live_voice_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    persona_id TEXT,
+    session_id TEXT,
+    event_type TEXT NOT NULL,
+    commit_source TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time
+    ON persona_live_voice_events(persona_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time
+    ON persona_live_voice_events(persona_id, event_type, created_at);
 
 UPDATE db_schema_version
    SET version = 19
@@ -4824,6 +4839,56 @@ UPDATE db_schema_version
    AND version < 38;
 """
 
+    _MIGRATION_SQL_V38_TO_V39 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 39 - Persona live voice analytics events (2026-03-12)
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS persona_live_voice_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    persona_id TEXT,
+    session_id TEXT,
+    event_type TEXT NOT NULL,
+    commit_source TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time
+    ON persona_live_voice_events(persona_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time
+    ON persona_live_voice_events(persona_id, event_type, created_at);
+
+UPDATE db_schema_version
+   SET version = 39
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 39;
+"""
+
+    _MIGRATION_SQL_V38_TO_V39_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 39 - Persona live voice analytics events (2026-03-12)
+───────────────────────────────────────────────────────────────*/
+CREATE TABLE IF NOT EXISTS persona_live_voice_events (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    persona_id TEXT,
+    session_id TEXT,
+    event_type TEXT NOT NULL,
+    commit_source TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time
+    ON persona_live_voice_events(persona_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time
+    ON persona_live_voice_events(persona_id, event_type, created_at);
+
+UPDATE db_schema_version
+   SET version = 39
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 39;
+"""
+
     def _migrate_from_v37_to_v38(self, conn: sqlite3.Connection) -> None:
         """Migrates schema from V37 to V38 (persona voice analytics scope)."""
         logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V37 to V38 for DB: {self.db_path_str}...")
@@ -4865,6 +4930,54 @@ UPDATE db_schema_version
         except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V37->V38: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V38 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v38_to_v39(self, conn: sqlite3.Connection) -> None:
+        """Migrates schema from V38 to V39 (persona live voice analytics events)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V38 to V39 for DB: {self.db_path_str}...")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS persona_live_voice_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    persona_id TEXT,
+                    session_id TEXT,
+                    event_type TEXT NOT NULL,
+                    commit_source TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time "
+                "ON persona_live_voice_events(persona_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time "
+                "ON persona_live_voice_events(persona_id, event_type, created_at)"
+            )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 39
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 39
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 39:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V38->V39 failed version check. Expected 39, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V39 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V38->V39 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V38->V39 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V38->V39: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V39 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
@@ -4956,6 +5069,27 @@ UPDATE db_schema_version
                 "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time "
                 "ON voice_command_events(persona_id, resolution_type, created_at)"
             )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS persona_live_voice_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                persona_id TEXT,
+                session_id TEXT,
+                event_type TEXT NOT NULL,
+                commit_source TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time "
+            "ON persona_live_voice_events(persona_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time "
+            "ON persona_live_voice_events(persona_id, event_type, created_at)"
+        )
 
         conn.executescript(
             """
@@ -5080,6 +5214,24 @@ UPDATE db_schema_version
             (
                 "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time "
                 "ON voice_command_events(persona_id, resolution_type, created_at)"
+            ),
+            (
+                "CREATE TABLE IF NOT EXISTS persona_live_voice_events ("
+                "id BIGSERIAL PRIMARY KEY, "
+                "user_id BIGINT NOT NULL, "
+                "persona_id TEXT, "
+                "session_id TEXT, "
+                "event_type TEXT NOT NULL, "
+                "commit_source TEXT, "
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time "
+                "ON persona_live_voice_events(persona_id, created_at)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time "
+                "ON persona_live_voice_events(persona_id, event_type, created_at)"
             ),
         ]
         for statement in statements:
@@ -5351,6 +5503,9 @@ UPDATE db_schema_version
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 38 and current_db_version == 37:
                         self._migrate_from_v37_to_v38(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 39 and current_db_version == 38:
+                        self._migrate_from_v38_to_v39(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -5768,6 +5923,9 @@ UPDATE db_schema_version
                     if target_version >= 38 and current_db_version == 37:
                         self._migrate_from_v37_to_v38(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 39 and current_db_version == 38:
+                        self._migrate_from_v38_to_v39(conn)
+                        current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
                 self._ensure_recent_voice_command_schema_sqlite(conn)
@@ -6124,6 +6282,13 @@ UPDATE db_schema_version
             if current_version < 38:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V37_TO_V38, conn, expected_version=38)
                 current_version = 38
+            if current_version < 39:
+                self._apply_postgres_migration_script(
+                    self._MIGRATION_SQL_V38_TO_V39_POSTGRES,
+                    conn,
+                    expected_version=39,
+                )
+                current_version = 39
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003

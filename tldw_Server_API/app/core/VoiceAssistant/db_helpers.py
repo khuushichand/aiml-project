@@ -13,6 +13,8 @@ from .schemas import ActionType, VoiceCommand, VoiceSessionContext, VoiceSession
 
 VOICE_EVENT_RESOLUTION_DIRECT = "direct_command"
 VOICE_EVENT_RESOLUTION_FALLBACK = "planner_fallback"
+PERSONA_LIVE_VOICE_EVENT_COMMIT = "commit"
+PERSONA_LIVE_VOICE_EVENT_MANUAL_MODE_REQUIRED = "manual_mode_required"
 
 
 def save_voice_command(
@@ -416,6 +418,32 @@ def record_voice_command_event(
         )
 
 
+def record_persona_live_voice_event(
+    db,
+    *,
+    user_id: int,
+    persona_id: Optional[str],
+    session_id: Optional[str],
+    event_type: str,
+    commit_source: Optional[str] = None,
+) -> None:
+    with db.transaction():
+        db.execute_query(
+            """
+            INSERT INTO persona_live_voice_events (
+                user_id, persona_id, session_id, event_type, commit_source
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                persona_id,
+                session_id,
+                event_type,
+                commit_source,
+            ),
+        )
+
+
 def _build_voice_event_filters(
     *,
     user_id: Optional[int] = None,
@@ -738,6 +766,76 @@ def get_voice_resolution_stats(
         "error_count": row.get("error_count") or 0,
         "avg_response_time_ms": row.get("avg_response_time_ms") or 0.0,
         "last_used": row.get("last_used"),
+    }
+
+
+def get_persona_live_voice_summary(
+    db,
+    *,
+    user_id: Optional[int] = None,
+    days: int = 7,
+    persona_id: Optional[str] = None,
+) -> dict[str, Any]:
+    clauses = ["created_at >= datetime('now', ?)"]
+    params: list[Any] = [f"-{days} days"]
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if persona_id is not None:
+        clauses.append("persona_id = ?")
+        params.append(persona_id)
+
+    where_clause = " WHERE " + " AND ".join(clauses)
+
+    commit_sql_template = """
+        SELECT
+            COUNT(*) AS total_committed_turns,
+            SUM(CASE WHEN commit_source = 'vad_auto' THEN 1 ELSE 0 END) AS vad_auto_commit_count,
+            SUM(CASE WHEN commit_source = 'manual' THEN 1 ELSE 0 END) AS manual_commit_count
+        FROM persona_live_voice_events
+        {where_clause}
+          AND event_type = ?
+        """
+    commit_sql = commit_sql_template.format_map(locals())  # nosec B608
+    commit_rows = db.execute_query(
+        commit_sql,
+        tuple([*params, PERSONA_LIVE_VOICE_EVENT_COMMIT]),
+    ).fetchall()
+    commit_row = dict(commit_rows[0]) if commit_rows else {}
+
+    degraded_sql_template = """
+        SELECT
+            COUNT(DISTINCT session_id) AS degraded_session_count
+        FROM persona_live_voice_events
+        {where_clause}
+          AND event_type = ?
+        """
+    degraded_sql = degraded_sql_template.format_map(locals())  # nosec B608
+    degraded_rows = db.execute_query(
+        degraded_sql,
+        tuple([*params, PERSONA_LIVE_VOICE_EVENT_MANUAL_MODE_REQUIRED]),
+    ).fetchall()
+    degraded_row = dict(degraded_rows[0]) if degraded_rows else {}
+
+    total_committed_turns = int(commit_row.get("total_committed_turns") or 0)
+    vad_auto_commit_count = int(commit_row.get("vad_auto_commit_count") or 0)
+    manual_commit_count = int(commit_row.get("manual_commit_count") or 0)
+
+    return {
+        "total_committed_turns": total_committed_turns,
+        "vad_auto_commit_count": vad_auto_commit_count,
+        "manual_commit_count": manual_commit_count,
+        "vad_auto_rate": (
+            float(vad_auto_commit_count) / float(total_committed_turns)
+            if total_committed_turns
+            else 0.0
+        ),
+        "manual_commit_rate": (
+            float(manual_commit_count) / float(total_committed_turns)
+            if total_committed_turns
+            else 0.0
+        ),
+        "degraded_session_count": int(degraded_row.get("degraded_session_count") or 0),
     }
 
 

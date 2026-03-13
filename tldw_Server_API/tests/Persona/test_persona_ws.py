@@ -1998,6 +1998,129 @@ def test_persona_audio_chunk_vad_auto_commit_routes_stripped_transcript_to_plan(
             assert len(fake_turn_detector.observed_chunks[0]) == 12
 
 
+def test_persona_audio_chunk_records_live_voice_commit_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    class _FakePersonaTranscriber:
+        def initialize(self):
+            return None
+
+        async def process_audio_chunk(self, audio_data: bytes):
+            return {
+                "type": "partial",
+                "text": "hey helper search my notes",
+                "is_final": False,
+            }
+
+        def get_full_transcript(self) -> str:
+            return "hey helper search my notes"
+
+        def reset(self):
+            return None
+
+        def cleanup(self):
+            return None
+
+    class _FakeTurnDetector:
+        def __init__(self):
+            self.available = True
+            self.unavailable_reason = None
+            self._triggered = False
+
+        def observe(self, audio_data: bytes) -> bool:
+            if self._triggered:
+                return False
+            self._triggered = True
+            return True
+
+        def reset(self):
+            self._triggered = False
+
+    manager = SessionManager()
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_live_voice_metrics",
+        mode="persistent_scoped",
+    )
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_stt_transcriber",
+        lambda *args, **kwargs: _FakePersonaTranscriber(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_turn_detector",
+        lambda *args, **kwargs: _FakeTurnDetector(),
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            audio_payload = base64.b64encode(b"\x00\x00\xff\x7f\x00\x80").decode("ascii")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_live_voice_metrics",
+                        "voice": {"trigger_phrases": ["hey helper"]},
+                        "stt": {"model": "whisper-1", "language": "en-US"},
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_live_voice_metrics",
+                        "audio_format": "pcm16",
+                        "bytes_base64": audio_payload,
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_TURN_COMMITTED",
+            )
+
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-live-voice-metrics-check")
+    try:
+        rows = db.execute_query(
+            """
+            SELECT event_type, commit_source, session_id, persona_id
+            FROM persona_live_voice_events
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        normalized_rows = [dict(row) for row in rows]
+        assert normalized_rows == [
+            {
+                "event_type": "commit",
+                "commit_source": "vad_auto",
+                "session_id": "sess_live_voice_metrics",
+                "persona_id": "research_assistant",
+            }
+        ]
+    finally:
+        db.close_connection()
+
+
 def test_persona_audio_chunk_vad_auto_commit_ignores_missing_trigger_phrase(monkeypatch):
     class _FakePersonaTranscriber:
         def initialize(self):
@@ -2087,7 +2210,12 @@ def test_persona_audio_chunk_vad_auto_commit_ignores_missing_trigger_phrase(monk
             assert ignored_notice.get("session_id") == "sess_audio_trigger_gate"
 
 
-def test_persona_audio_chunk_warns_and_keeps_manual_mode_when_vad_unavailable(monkeypatch):
+def test_persona_audio_chunk_warns_and_keeps_manual_mode_when_vad_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
     class _FakePersonaTranscriber:
         def initialize(self):
             return None
@@ -2120,6 +2248,13 @@ def test_persona_audio_chunk_warns_and_keeps_manual_mode_when_vad_unavailable(mo
         def reset(self):
             return None
 
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_audio_manual_mode",
+        mode="persistent_scoped",
+    )
     monkeypatch.setattr(
         persona_ep,
         "_create_persona_live_stt_transcriber",
@@ -2173,6 +2308,28 @@ def test_persona_audio_chunk_warns_and_keeps_manual_mode_when_vad_unavailable(mo
             partial = _recv_until(ws, lambda d: d.get("event") == "partial_transcript")
             assert partial.get("session_id") == "sess_audio_manual_mode"
             assert partial.get("text_delta") == "hey helper search my notes"
+
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-live-voice-manual-mode-check")
+    try:
+        rows = db.execute_query(
+            """
+            SELECT event_type, commit_source, session_id, persona_id
+            FROM persona_live_voice_events
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        normalized_rows = [dict(row) for row in rows]
+        assert normalized_rows == [
+            {
+                "event_type": "manual_mode_required",
+                "commit_source": None,
+                "session_id": "sess_audio_manual_mode",
+                "persona_id": "research_assistant",
+            }
+        ]
+    finally:
+        db.close_connection()
 
 
 def test_persona_voice_commit_is_ignored_after_vad_auto_commit(monkeypatch):
