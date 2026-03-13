@@ -18,6 +18,7 @@ def _setup_env(monkeypatch, *, user_db_base: str) -> None:
     auth_db_path = Path(user_db_base).parent / "users_test_byok_validation_api.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{auth_db_path}")
     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("ADMIN_BYOK_VALIDATION_JOBS_WORKER_ENABLED", "true")
 
 
 @dataclass
@@ -105,6 +106,10 @@ class _ConflictByokValidationService(_FakeByokValidationService):
         raise HTTPException(status_code=409, detail="active_validation_run_exists")
 
 
+async def _noop_enqueue_run(item):
+    return "job-1"
+
+
 @pytest.mark.asyncio
 async def test_admin_byok_validation_create_list_and_detail_roundtrip(monkeypatch, tmp_path) -> None:
     _setup_env(monkeypatch, user_db_base=str(tmp_path / "user_dbs"))
@@ -113,6 +118,7 @@ async def test_admin_byok_validation_create_list_and_detail_roundtrip(monkeypatc
 
     service = _FakeByokValidationService()
     app.dependency_overrides[admin_byok.get_admin_byok_validation_service] = lambda: service
+    app.dependency_overrides[admin_byok.get_byok_validation_job_enqueuer] = lambda: _noop_enqueue_run
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
 
@@ -151,6 +157,7 @@ async def test_admin_byok_validation_create_maps_active_run_conflict(monkeypatch
     app.dependency_overrides[admin_byok.get_admin_byok_validation_service] = (
         lambda: _ConflictByokValidationService()
     )
+    app.dependency_overrides[admin_byok.get_byok_validation_job_enqueuer] = lambda: _noop_enqueue_run
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
 
@@ -175,6 +182,7 @@ async def test_admin_byok_validation_detail_returns_not_found(monkeypatch, tmp_p
     app.dependency_overrides[admin_byok.get_admin_byok_validation_service] = (
         lambda: _FakeByokValidationService()
     )
+    app.dependency_overrides[admin_byok.get_byok_validation_job_enqueuer] = lambda: _noop_enqueue_run
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
 
@@ -183,5 +191,31 @@ async def test_admin_byok_validation_detail_returns_not_found(monkeypatch, tmp_p
             response = client.get("/api/v1/admin/byok/validation-runs/missing")
             assert response.status_code == 404, response.text
             assert response.json()["detail"] == "byok_validation_run_not_found"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_admin_byok_validation_create_fails_closed_when_worker_is_disabled(monkeypatch, tmp_path) -> None:
+    _setup_env(monkeypatch, user_db_base=str(tmp_path / "user_dbs"))
+    monkeypatch.delenv("ADMIN_BYOK_VALIDATION_JOBS_WORKER_ENABLED", raising=False)
+
+    from tldw_Server_API.app.api.v1.endpoints.admin import admin_byok
+
+    service = _FakeByokValidationService()
+    app.dependency_overrides[admin_byok.get_admin_byok_validation_service] = lambda: service
+    app.dependency_overrides[admin_byok.get_byok_validation_job_enqueuer] = lambda: _noop_enqueue_run
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+
+    try:
+        with TestClient(app, headers=headers) as client:
+            response = client.post(
+                "/api/v1/admin/byok/validation-runs",
+                json={"org_id": 42, "provider": "openai"},
+            )
+            assert response.status_code == 503, response.text
+            assert response.json()["detail"] == "byok_validation_worker_unavailable"
+            assert service.created_calls == []
     finally:
         app.dependency_overrides.clear()

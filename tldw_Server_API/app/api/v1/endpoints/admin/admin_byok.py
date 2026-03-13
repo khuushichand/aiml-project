@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_rate_limit,
@@ -75,6 +75,15 @@ async def get_admin_byok_validation_service(
 ) -> AdminByokValidationServiceProtocol:
     """Build the admin BYOK validation service for dependency injection."""
     return AdminByokValidationService(repo=repo)
+
+
+def get_byok_validation_job_enqueuer() -> Callable[[dict[str, Any]], Awaitable[str]]:
+    """Return the callable used to enqueue BYOK validation Jobs."""
+    from tldw_Server_API.app.services.admin_byok_validation_jobs_worker import (
+        enqueue_byok_validation_run,
+    )
+
+    return enqueue_byok_validation_run
 
 
 @router.get(
@@ -177,15 +186,28 @@ async def admin_delete_shared_byok_key(
 async def admin_create_byok_validation_run(
     payload: ByokValidationRunCreateRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    repo: AuthnzByokValidationRunsRepo = Depends(_get_byok_validation_runs_repo),
     service: AdminByokValidationServiceProtocol = Depends(get_admin_byok_validation_service),
+    enqueue_run: Callable[[dict[str, Any]], Awaitable[str]] = Depends(get_byok_validation_job_enqueuer),
 ) -> ByokValidationRunItem:
     """Create an authoritative BYOK validation run."""
+    from tldw_Server_API.app.services.admin_byok_validation_jobs_worker import (
+        byok_validation_worker_enabled,
+    )
+
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
+    if not byok_validation_worker_enabled():
+        raise HTTPException(status_code=503, detail="byok_validation_worker_unavailable")
     item = await service.create_run(
         principal,
         org_id=payload.org_id,
         provider=payload.provider,
     )
+    try:
+        await enqueue_run(item)
+    except Exception as exc:
+        await repo.mark_failed(str(item["id"]), error_message="enqueue_failed")
+        raise HTTPException(status_code=503, detail="byok_validation_enqueue_failed") from exc
     return ByokValidationRunItem(**item)
 
 
