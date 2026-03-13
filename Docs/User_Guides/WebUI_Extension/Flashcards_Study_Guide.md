@@ -1,6 +1,6 @@
 # Flashcards Study Guide
 
-_Last updated: 2026-02-18_
+_Last updated: 2026-03-12_
 
 This guide explains the Flashcards flow in `Study`, `Manage`, and `Transfer`, including scheduling basics, cloze syntax, and import/export formats.
 
@@ -71,6 +71,23 @@ Accepted payload forms:
 - JSON array of items
 - JSON object containing `items`
 - JSONL (`.jsonl` / `.ndjson`) with one object per line
+
+### Structured Q And A Preview
+
+Use `Transfer` → `Structured Q&A` when you already wrote your own questions and answers and only want the app to convert them into flashcards without LLM rewriting.
+
+Accepted label pairs:
+
+- `Q:` with `A:`
+- `Question:` with `Answer:`
+
+Preview rules:
+
+- Each labeled block becomes an editable draft before anything is saved.
+- Continuation lines stay attached to the current question or answer until the next labeled block.
+- Blank lines are allowed.
+- Saving selected drafts writes standard `basic` flashcards into the chosen deck.
+- Unlabeled freeform notes are not inferred into cards in v1.
 
 ### APKG Export
 

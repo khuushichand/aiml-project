@@ -148,6 +148,10 @@ export type FlashcardsImportApkgRequest = {
   filename?: string | null
 }
 
+export type StructuredQaImportPreviewRequest = {
+  content: string
+}
+
 export type FlashcardsImportError = {
   line?: number | null
   index?: number | null
@@ -161,6 +165,23 @@ export type FlashcardsImportResponse = {
     deck_id: number
   }>
   errors: FlashcardsImportError[]
+}
+
+export type StructuredQaImportPreviewDraft = {
+  front: string
+  back: string
+  line_start: number
+  line_end: number
+  notes?: string | null
+  extra?: string | null
+  tags?: string[] | null
+}
+
+export type StructuredQaImportPreviewResponse = {
+  drafts: StructuredQaImportPreviewDraft[]
+  errors: Array<{ line?: number | null; error: string }>
+  detected_format: "qa_labels"
+  skipped_blocks: number
 }
 
 export type FlashcardsExportParams = {
@@ -240,6 +261,17 @@ export async function createFlashcard(
   })
 }
 
+export async function createFlashcardsBulk(
+  input: FlashcardCreate[]
+): Promise<FlashcardListResponse> {
+  return await bgRequest<FlashcardListResponse, AllowedPath, "POST">({
+    path: "/api/v1/flashcards/bulk",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
 export async function getFlashcard(card_uuid: string): Promise<Flashcard> {
   return await flashcardsClient.get<Flashcard>(card_uuid)
 }
@@ -307,6 +339,28 @@ export async function importFlashcards(payload: FlashcardsImportRequest, overrid
   })
   const path = `/api/v1/flashcards/import${query}` as AllowedPath
   return await bgRequest<FlashcardsImportResponse, AllowedPath, "POST">({
+    path,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: payload
+  })
+}
+
+export async function previewStructuredQaImport(
+  payload: StructuredQaImportPreviewRequest,
+  overrides?: {
+    max_lines?: number | null
+    max_line_length?: number | null
+    max_field_length?: number | null
+  }
+): Promise<StructuredQaImportPreviewResponse> {
+  const query = buildQuery({
+    max_lines: overrides?.max_lines,
+    max_line_length: overrides?.max_line_length,
+    max_field_length: overrides?.max_field_length
+  })
+  const path = `/api/v1/flashcards/import/structured/preview${query}` as AllowedPath
+  return await bgRequest<StructuredQaImportPreviewResponse, AllowedPath, "POST">({
     path,
     method: "POST",
     headers: { "Content-Type": "application/json" },

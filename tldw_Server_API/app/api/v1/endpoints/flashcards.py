@@ -26,6 +26,8 @@ from tldw_Server_API.app.api.v1.schemas.flashcards import (
     FlashcardResetSchedulingRequest,
     FlashcardsImportRequest,
     FlashcardTagsUpdate,
+    StructuredQaImportPreviewRequest,
+    StructuredQaImportPreviewResponse,
     FlashcardUpdate,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import FLASHCARDS_ADMIN
@@ -40,6 +42,7 @@ from tldw_Server_API.app.core.Flashcards.apkg_importer import (
     APKGImportError,
     import_rows_from_apkg_bytes,
 )
+from tldw_Server_API.app.core.Flashcards.structured_qa_import import parse_structured_qa_preview
 from tldw_Server_API.app.core.Workflows.adapters.content import run_flashcard_generate_adapter
 
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
@@ -59,6 +62,14 @@ _FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     json.JSONDecodeError,
 )
 _ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        return max(1, value)
+    except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
+        return default
 
 
 def _fetch_flashcard_or_404(card_uuid: str, db: CharactersRAGDB) -> dict:
@@ -454,6 +465,62 @@ def get_flashcard_tags(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_
         raise HTTPException(status_code=500, detail="Failed to get flashcard tags") from e
 
 
+@router.post(
+    "/import/structured/preview",
+    response_model=StructuredQaImportPreviewResponse,
+)
+def preview_structured_qa_import(
+    payload: StructuredQaImportPreviewRequest,
+    max_lines: Optional[int] = Query(
+        None,
+        ge=1,
+        description="Admin override: max preview lines to parse (cannot exceed env cap)",
+    ),
+    max_line_length: Optional[int] = Query(
+        None,
+        ge=1,
+        description="Admin override: max preview line length in bytes (cannot exceed env cap)",
+    ),
+    max_field_length: Optional[int] = Query(
+        None,
+        ge=1,
+        description="Admin override: max preview field length in bytes (cannot exceed env cap)",
+    ),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    env_max_lines = _int_env("FLASHCARDS_IMPORT_MAX_LINES", 10000)
+    env_max_line_length = _int_env("FLASHCARDS_IMPORT_MAX_LINE_LENGTH", 32768)
+    env_max_field_length = _int_env("FLASHCARDS_IMPORT_MAX_FIELD_LENGTH", 8192)
+
+    if any(p is not None for p in (max_lines, max_line_length, max_field_length)):
+        _require_flashcards_admin(principal)
+
+    effective_max_lines = min(env_max_lines, max_lines) if max_lines else env_max_lines
+    effective_max_line_length = (
+        min(env_max_line_length, max_line_length)
+        if max_line_length
+        else env_max_line_length
+    )
+    effective_max_field_length = (
+        min(env_max_field_length, max_field_length)
+        if max_field_length
+        else env_max_field_length
+    )
+
+    result = parse_structured_qa_preview(
+        payload.content,
+        max_lines=effective_max_lines,
+        max_line_length=effective_max_line_length,
+        max_field_length=effective_max_field_length,
+    )
+    return {
+        "drafts": [draft.__dict__ for draft in result.drafts],
+        "errors": [error.__dict__ for error in result.errors],
+        "detected_format": result.detected_format,
+        "skipped_blocks": result.skipped_blocks,
+    }
+
+
 @router.post("/import")
 def import_flashcards(
     payload: FlashcardsImportRequest,
@@ -471,12 +538,6 @@ def import_flashcards(
         errors: list[dict] = []
         # Abuse caps
         # Configurable caps via environment
-        def _int_env(name: str, default: int) -> int:
-            try:
-                v = int(os.getenv(name, str(default)))
-                return max(1, v)
-            except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
-                return default
         ENV_MAX_LINES = _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000)
         ENV_MAX_LINE_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_LINE_LENGTH', 32768)
         ENV_MAX_FIELD_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192)
@@ -669,11 +730,6 @@ async def import_flashcards_json(
     try:
         raw = await file.read()
         # Caps via env
-        def _int_env(name: str, default: int) -> int:
-            try:
-                return max(1, int(os.getenv(name, str(default))))
-            except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
-                return default
         ENV_MAX_ITEMS = _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000)
         ENV_MAX_FIELD_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192)
         if any(p is not None for p in (max_items, max_field_length)):
@@ -830,12 +886,6 @@ async def import_flashcards_apkg(
 ):
     try:
         raw = await file.read()
-
-        def _int_env(name: str, default: int) -> int:
-            try:
-                return max(1, int(os.getenv(name, str(default))))
-            except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
-                return default
 
         env_max_items = _int_env("FLASHCARDS_IMPORT_MAX_LINES", 10000)
         env_max_field_length = _int_env("FLASHCARDS_IMPORT_MAX_FIELD_LENGTH", 8192)

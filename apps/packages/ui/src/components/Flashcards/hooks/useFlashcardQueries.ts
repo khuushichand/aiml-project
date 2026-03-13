@@ -3,6 +3,7 @@ import {
   listDecks,
   listFlashcards,
   createFlashcard,
+  createFlashcardsBulk,
   createDeck,
   updateFlashcard,
   deleteFlashcard,
@@ -11,6 +12,7 @@ import {
   generateFlashcards,
   getFlashcard,
   importFlashcards,
+  previewStructuredQaImport,
   importFlashcardsJson,
   importFlashcardsApkg,
   getFlashcardsAnalyticsSummary,
@@ -430,6 +432,24 @@ export function useCreateFlashcardMutation() {
 }
 
 /**
+ * Hook for creating multiple flashcards in a single batch.
+ */
+export function useCreateFlashcardsBulkMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:create:bulk"],
+    mutationFn: (payload: FlashcardCreate[]) => createFlashcardsBulk(payload),
+    onSuccess: () => {
+      invalidateFlashcardsQueries(qc)
+    },
+    onError: (error) => {
+      console.error("Failed to bulk create flashcards:", error)
+    }
+  })
+}
+
+/**
  * Hook for creating a deck
  */
 export function useCreateDeckMutation() {
@@ -579,6 +599,34 @@ export function useImportFlashcardsMutation() {
     },
     onError: (error) => {
       console.error("Failed to import flashcards:", error)
+    }
+  })
+}
+
+/**
+ * Hook for previewing deterministic structured Q&A imports without saving.
+ */
+export function usePreviewStructuredQaImportMutation() {
+  return useMutation({
+    mutationKey: ["flashcards:import:structured:preview"],
+    mutationFn: (params: {
+      content: string
+      maxLines?: number
+      maxLineLength?: number
+      maxFieldLength?: number
+    }) =>
+      previewStructuredQaImport(
+        {
+          content: params.content
+        },
+        {
+          max_lines: params.maxLines,
+          max_line_length: params.maxLineLength,
+          max_field_length: params.maxFieldLength
+        }
+      ),
+    onError: (error) => {
+      console.error("Failed to preview structured Q&A import:", error)
     }
   })
 }

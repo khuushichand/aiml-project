@@ -5,12 +5,14 @@ import { FLASHCARDS_HELP_LINKS, FLASHCARDS_LAYOUT_GUARDRAILS } from "../../const
 import {
   useCreateDeckMutation,
   useCreateFlashcardMutation,
+  useCreateFlashcardsBulkMutation,
   useDecksQuery,
   useGenerateFlashcardsMutation,
   useImportFlashcardsMutation,
   useImportFlashcardsApkgMutation,
   useImportFlashcardsJsonMutation,
-  useImportLimitsQuery
+  useImportLimitsQuery,
+  usePreviewStructuredQaImportMutation
 } from "../../hooks"
 import {
   deleteFlashcard,
@@ -82,12 +84,14 @@ vi.mock("react-i18next", () => ({
 vi.mock("../../hooks", () => ({
   useCreateDeckMutation: vi.fn(),
   useCreateFlashcardMutation: vi.fn(),
+  useCreateFlashcardsBulkMutation: vi.fn(),
   useDecksQuery: vi.fn(),
   useGenerateFlashcardsMutation: vi.fn(),
   useImportFlashcardsMutation: vi.fn(),
   useImportFlashcardsApkgMutation: vi.fn(),
   useImportFlashcardsJsonMutation: vi.fn(),
-  useImportLimitsQuery: vi.fn()
+  useImportLimitsQuery: vi.fn(),
+  usePreviewStructuredQaImportMutation: vi.fn()
 }))
 
 vi.mock("@/services/flashcards", async () => {
@@ -142,6 +146,14 @@ describe("ImportExportTab import result details", () => {
       mutateAsync: vi.fn(),
       isPending: false
     } as any)
+    vi.mocked(useCreateFlashcardsBulkMutation).mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({
+        items: [],
+        count: 0,
+        total: 0
+      }),
+      isPending: false
+    } as any)
     vi.mocked(useCreateDeckMutation).mockReturnValue({
       mutateAsync: vi.fn().mockResolvedValue({
         id: 999,
@@ -162,6 +174,10 @@ describe("ImportExportTab import result details", () => {
       isPending: false
     } as any)
     vi.mocked(useImportFlashcardsApkgMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(usePreviewStructuredQaImportMutation).mockReturnValue({
       mutateAsync: vi.fn(),
       isPending: false
     } as any)
@@ -439,6 +455,77 @@ describe("ImportExportTab import result details", () => {
     expect(jsonMutateAsync).not.toHaveBeenCalled()
   })
 
+  it("previews structured q and a drafts and saves only selected cards", async () => {
+    const previewMutateAsync = vi.fn().mockResolvedValue({
+      detected_format: "qa_labels",
+      skipped_blocks: 0,
+      errors: [],
+      drafts: [
+        {
+          front: "What is ATP?",
+          back: "Primary energy currency.",
+          line_start: 1,
+          line_end: 2,
+          tags: []
+        },
+        {
+          front: "What is glycolysis?",
+          back: "Cytosolic glucose breakdown.",
+          line_start: 4,
+          line_end: 5,
+          tags: []
+        }
+      ]
+    })
+    const createBulkMutateAsync = vi.fn().mockResolvedValue({
+      items: [{ uuid: "card-1", version: 1 }],
+      count: 1,
+      total: 1
+    })
+    vi.mocked(usePreviewStructuredQaImportMutation).mockReturnValue({
+      mutateAsync: previewMutateAsync,
+      isPending: false
+    } as any)
+    vi.mocked(useCreateFlashcardsBulkMutation).mockReturnValue({
+      mutateAsync: createBulkMutateAsync,
+      isPending: false
+    } as any)
+
+    render(<ImportExportTab />)
+
+    const formatSelect = screen.getByTestId("flashcards-import-format")
+    fireEvent.mouseDown(
+      formatSelect.querySelector(".ant-select-selector") ?? formatSelect
+    )
+    fireEvent.click(screen.getByText("Structured Q&A"))
+
+    fireEvent.change(screen.getByTestId("flashcards-import-textarea"), {
+      target: { value: "Q: What is ATP?\nA: Primary energy currency." }
+    })
+    fireEvent.click(screen.getByTestId("flashcards-structured-preview-button"))
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("What is ATP?")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("flashcards-structured-draft-selected-1"))
+    fireEvent.click(screen.getByTestId("flashcards-structured-save-button"))
+
+    await waitFor(() => {
+      expect(createBulkMutateAsync).toHaveBeenCalledTimes(1)
+    })
+    expect(createBulkMutateAsync).toHaveBeenCalledWith([
+      expect.objectContaining({
+        deck_id: 999,
+        front: "What is ATP?",
+        back: "Primary energy currency.",
+        model_type: "basic",
+        is_cloze: false,
+        reverse: false
+      })
+    ])
+  })
+
   it("requires confirmation before importing large APKG files", async () => {
     const apkgMutateAsync = vi.fn().mockResolvedValue({
       imported: 2,
@@ -591,7 +678,7 @@ describe("ImportExportTab import result details", () => {
 
     expect(screen.getByTestId("flashcards-transfer-summary")).toBeInTheDocument()
     expect(screen.getByTestId("flashcards-transfer-summary-formats")).toHaveTextContent(
-      "Import: CSV, TSV, JSON, JSONL, APKG · Export: TSV, CSV, APKG"
+      "Import: CSV, TSV, JSON, JSONL, Structured Q&A, APKG · Export: TSV, CSV, APKG"
     )
     expect(screen.getByTestId("flashcards-transfer-summary-limits")).toHaveTextContent(
       "500 cards · 1048576 bytes"

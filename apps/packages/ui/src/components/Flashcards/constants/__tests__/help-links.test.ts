@@ -8,7 +8,7 @@ import {
 
 const DOC_PATH = path.resolve(
   process.cwd(),
-  "../../../Docs/User_Guides/Flashcards_Study_Guide.md"
+  "../../../Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md"
 )
 
 const toAnchorSlug = (heading: string): string =>
@@ -34,7 +34,13 @@ describe("flashcards help links", () => {
   it("uses versioned guide URLs", () => {
     expect(FLASHCARDS_HELP_DOC_BASE_URL).toContain("/blob/HEAD/")
     expect(FLASHCARDS_HELP_DOC_BASE_URL).toContain(
-      "Docs/User_Guides/Flashcards_Study_Guide.md"
+      "Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md"
+    )
+  })
+
+  it("includes a structured import guide anchor", () => {
+    expect(FLASHCARDS_HELP_LINKS.structuredImport).toContain(
+      "#structured-q-and-a-preview"
     )
   })
 

@@ -1122,6 +1122,50 @@ def test_config_endpoint_flashcards_import_limits(client_with_flashcards_db: Tes
     assert 'query_params' in data.get('overrides', {})
 
 
+def test_structured_preview_endpoint_returns_drafts(client_with_flashcards_db: TestClient):
+    payload = {
+        "content": "Q: What is ATP?\nA: Primary energy currency.\n"
+    }
+
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/import/structured/preview",
+        json=payload,
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["detected_format"] == "qa_labels"
+    assert data["drafts"][0]["front"] == "What is ATP?"
+    assert data["drafts"][0]["back"] == "Primary energy currency."
+    assert data["errors"] == []
+
+
+def test_structured_preview_respects_line_caps(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    monkeypatch.setenv("FLASHCARDS_IMPORT_MAX_LINES", "2")
+
+    payload = {
+        "content": "Q: One\nA: First\nQ: Two\nA: Second\n"
+    }
+
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/import/structured/preview",
+        json=payload,
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["drafts"]) == 1
+    assert any(
+        "Maximum preview line limit" in error["error"]
+        for error in data["errors"]
+    )
+
+
 def test_import_json_file_basic(client_with_flashcards_db: TestClient):
     import json as _json
     payload = [

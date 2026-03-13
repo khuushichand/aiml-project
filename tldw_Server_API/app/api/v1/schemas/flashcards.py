@@ -188,3 +188,29 @@ class FlashcardsImportRequest(BaseModel):
     content: str = Field(..., description="TSV content: Deck, Front, Back, Tags, Notes per line")
     delimiter: Optional[str] = Field('\t', description="Field delimiter; default tab")
     has_header: Optional[bool] = Field(False, description="Whether the first line is a header")
+
+
+class StructuredQaImportPreviewRequest(BaseModel):
+    content: str = Field(..., min_length=1, description="Labeled Q&A content for preview parsing")
+
+
+class StructuredQaImportPreviewDraft(BaseModel):
+    front: str
+    back: str
+    line_start: int
+    line_end: int
+    notes: Optional[str] = None
+    extra: Optional[str] = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class StructuredQaImportPreviewError(BaseModel):
+    line: Optional[int] = None
+    error: str
+
+
+class StructuredQaImportPreviewResponse(BaseModel):
+    drafts: list[StructuredQaImportPreviewDraft] = Field(default_factory=list)
+    errors: list[StructuredQaImportPreviewError] = Field(default_factory=list)
+    detected_format: Literal["qa_labels"] = "qa_labels"
+    skipped_blocks: int = 0
