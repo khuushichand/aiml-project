@@ -165,3 +165,34 @@ class OpenAICredentialSourceSwitchResponse(BaseModel):
     provider: Literal["openai"] = "openai"
     auth_source: Literal["api_key", "oauth"]
     updated_at: datetime
+
+
+class ByokValidationRunCreateRequest(BaseModel):
+    org_id: int | None = None
+    provider: str | None = None
+
+
+class ByokValidationRunItem(BaseModel):
+    id: str
+    status: Literal["queued", "running", "complete", "failed"]
+    org_id: int | None = None
+    provider: str | None = None
+    keys_checked: int | None = None
+    valid_count: int | None = None
+    invalid_count: int | None = None
+    error_count: int | None = None
+    requested_by_user_id: int | None = None
+    requested_by_label: str | None = None
+    job_id: str | None = None
+    scope_summary: str
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class ByokValidationRunListResponse(BaseModel):
+    items: list[ByokValidationRunItem]
+    total: int
+    limit: int
+    offset: int
