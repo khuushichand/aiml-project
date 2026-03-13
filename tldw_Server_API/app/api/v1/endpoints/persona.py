@@ -172,6 +172,7 @@ _EXPLICIT_SCOPE_RULE_TYPES = {"conversation_id", "character_id", "media_id", "no
 _PERSONA_RUNTIME_MODES = {"session_scoped", "persistent_scoped"}
 _PERSONA_WS_REQUIRED_NOTICE_LEVELS = {"info", "warning", "error"}
 _PERSONA_WS_ALLOWED_STEP_TYPES = {"mcp_tool", "skill", "rag_query", "final_answer"}
+_PERSONA_LIVE_PROCESSING_NOTICE_DELAY_S = 2.0
 _PERSONA_CONNECTION_MEMORY_TYPE = "persona_connection"
 _PERSONA_CONNECTION_ALLOWED_AUTH_TYPES = {"none", "bearer", "api_key", "basic", "custom_header"}
 _PERSONA_CONNECTION_STATUS_FIELD = "secret_configured"
@@ -4507,6 +4508,7 @@ async def persona_stream(
             text_delta: str,
             **extra: Any,
         ) -> None:
+            _mark_persona_live_processing_progress(session_id)
             payload: dict[str, Any] = {
                 "event": "assistant_delta",
                 **_next_ws_event_meta(session_id),
@@ -4524,6 +4526,7 @@ async def persona_stream(
             companion: dict[str, Any],
             persona_id_value: str,
         ) -> None:
+            _mark_persona_live_processing_progress(session_id)
             payload: dict[str, Any] = {
                 "event": "tool_plan",
                 **_next_ws_event_meta(session_id),
@@ -4546,6 +4549,7 @@ async def persona_stream(
             policy: dict[str, Any],
             why: str | None = None,
         ) -> None:
+            _mark_persona_live_processing_progress(session_id)
             payload: dict[str, Any] = {
                 "event": "tool_call",
                 **_next_ws_event_meta(session_id),
@@ -4568,6 +4572,7 @@ async def persona_stream(
             tool: str,
             result: dict[str, Any],
         ) -> None:
+            _mark_persona_live_processing_progress(session_id)
             payload: dict[str, Any] = {
                 "event": "tool_result",
                 **_next_ws_event_meta(session_id),
@@ -4582,6 +4587,53 @@ async def persona_stream(
             payload.setdefault("result", payload.get("output"))
             payload.setdefault("reason_code", None)
             await stream.send_json(payload)
+
+        def _cancel_persona_live_processing_notice(session_id: str) -> None:
+            task = persona_live_processing_notice_tasks_by_session.pop(session_id, None)
+            if task is None:
+                return
+            with contextlib.suppress(Exception):
+                task.cancel()
+
+        def _mark_persona_live_processing_progress(session_id: str) -> None:
+            _cancel_persona_live_processing_notice(session_id)
+
+        def _schedule_persona_live_processing_notice(session_id: str) -> None:
+            _cancel_persona_live_processing_notice(session_id)
+
+            async def _emit_after_delay() -> None:
+                current_task = asyncio.current_task()
+                try:
+                    await asyncio.sleep(_PERSONA_LIVE_PROCESSING_NOTICE_DELAY_S)
+                    if (
+                        persona_live_processing_notice_tasks_by_session.get(session_id)
+                        is not current_task
+                    ):
+                        return
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="VOICE_TURN_PROCESSING",
+                        message="Still processing this voice turn.",
+                    )
+                except asyncio.CancelledError:
+                    return
+                except Exception as exc:
+                    logger.debug(
+                        "persona live processing notice skipped for session {}: {}",
+                        session_id,
+                        exc,
+                    )
+                finally:
+                    if (
+                        persona_live_processing_notice_tasks_by_session.get(session_id)
+                        is current_task
+                    ):
+                        persona_live_processing_notice_tasks_by_session.pop(session_id, None)
+
+            persona_live_processing_notice_tasks_by_session[session_id] = (
+                asyncio.create_task(_emit_after_delay())
+            )
 
         await _emit_notice(
             session_id=default_session_id,
@@ -4607,6 +4659,7 @@ async def persona_stream(
         voice_transcript_buffer_by_session: dict[str, str] = defaultdict(str)
         tts_seq_by_session: dict[str, int] = defaultdict(int)
         tts_in_flight_by_session: dict[str, int] = defaultdict(int)
+        persona_live_processing_notice_tasks_by_session: dict[str, asyncio.Task[Any]] = {}
 
         async def _record_turn(
             *,
@@ -4698,6 +4751,7 @@ async def persona_stream(
                         preferences={"voice_runtime": updated_voice_runtime},
                     )
                 logger.debug(f"persona live TTS unavailable for session {session_id}: {exc}")
+                _mark_persona_live_processing_progress(session_id)
                 await _emit_notice(
                     session_id=session_id,
                     level="warning",
@@ -4757,6 +4811,7 @@ async def persona_stream(
                 )
 
         def _cleanup_persona_live_stt_state(session_id: str) -> None:
+            _cancel_persona_live_processing_notice(session_id)
             state = persona_live_stt_state_by_session.pop(session_id, None)
             transcriber = state.get("transcriber") if isinstance(state, dict) else None
             turn_detector = state.get("turn_detector") if isinstance(state, dict) else None
@@ -4992,6 +5047,7 @@ async def persona_stream(
                 commit_source=commit_source,
             )
             _reset_persona_live_active_turn(session_id)
+            _schedule_persona_live_processing_notice(session_id)
             await _handle_persona_live_turn(
                 msg={
                     "session_id": session_id,
@@ -5916,6 +5972,7 @@ async def persona_stream(
                     steps=proposed_steps,
                 )
             except ValueError as exc:
+                _cancel_persona_live_processing_notice(session_id)
                 await _emit_notice(
                     session_id=session_id,
                     level="error",
@@ -6023,6 +6080,9 @@ async def persona_stream(
 
             mtype = msg.get("type") or msg.get("event") or "unknown"
             if mtype == "user_message":
+                _cancel_persona_live_processing_notice(
+                    _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
+                )
                 await _handle_persona_live_turn(
                     msg=msg,
                     text=msg.get("text") or msg.get("message") or "",
@@ -6082,6 +6142,7 @@ async def persona_stream(
                         reason_code="SESSION_ID_REQUIRED",
                     )
                     continue
+                _cancel_persona_live_processing_notice(session_id)
                 state = persona_live_stt_state_by_session.get(session_id) or {}
                 if bool(state.get("current_utterance_committed")) and not _current_persona_live_transcript(
                     session_id
@@ -6667,6 +6728,7 @@ async def persona_stream(
             elif mtype == "cancel":
                 session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
                 reason = str(msg.get("reason") or "user_cancelled")
+                _cancel_persona_live_processing_notice(session_id)
                 cleared = session_manager.clear_plans(session_id=session_id, user_id=connection_user_id)
                 await _emit_notice(
                     session_id=session_id,

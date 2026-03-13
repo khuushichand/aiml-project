@@ -609,6 +609,12 @@ export const usePersonaLiveVoiceController = ({
 
       if (eventType === "notice") {
         const reasonCode = String(payload?.reason_code || "").trim().toUpperCase()
+        if (reasonCode === "VOICE_TURN_PROCESSING") {
+          if (state === "thinking") {
+            armThinkingRecovery()
+          }
+          return
+        }
         if (reasonCode === "TTS_UNAVAILABLE_TEXT_ONLY") {
           clearAwaitingTtsTimeout()
           clearThinkingRecovery()
@@ -691,6 +697,7 @@ export const usePersonaLiveVoiceController = ({
       finishVoiceTurn,
       micActive,
       playBrowserSpeech,
+      state,
       stopMicStream,
       textOnlyDueToTtsFailure
     ]

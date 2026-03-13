@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import queue
@@ -2539,6 +2540,116 @@ def test_persona_voice_commit_reuses_persona_tool_plan_flow(monkeypatch):
         and t["metadata"].get("source") == "persona_live_voice"
         for t in turns
     )
+
+
+def test_persona_voice_commit_emits_processing_notice_after_quiet_delay(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    manager = SessionManager()
+
+    async def _slow_resolve_persona_exemplar_runtime_context(
+        **kwargs: object,
+    ) -> PersonaExemplarRuntimeContext:
+        await asyncio.sleep(0.03)
+        return PersonaExemplarRuntimeContext(
+            assembly=PersonaExemplarPromptAssembly(
+                sections=[],
+                selected_exemplars=[],
+                rejected_exemplars=[],
+            ),
+            selection_metadata={},
+        )
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(
+        persona_ep,
+        "resolve_persona_exemplar_runtime_context",
+        _slow_resolve_persona_exemplar_runtime_context,
+    )
+    monkeypatch.setattr(
+        persona_ep,
+        "_PERSONA_LIVE_PROCESSING_NOTICE_DELAY_S",
+        0.01,
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            session_id = "sess_voice_processing_notice"
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_commit",
+                        "session_id": session_id,
+                        "transcript": "https://example.com",
+                        "source": "persona_live_voice",
+                    }
+                )
+            )
+
+            commit_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_TURN_COMMITTED",
+            )
+            assert commit_notice.get("session_id") == session_id
+
+            processing_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_TURN_PROCESSING",
+                timeout=0.5,
+            )
+            assert processing_notice.get("session_id") == session_id
+
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            assert plan.get("session_id") == session_id
+
+
+def test_persona_voice_processing_notice_is_suppressed_by_tool_plan_progress(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    manager = SessionManager()
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(
+        persona_ep,
+        "_PERSONA_LIVE_PROCESSING_NOTICE_DELAY_S",
+        0.05,
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            session_id = "sess_voice_processing_suppressed"
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_commit",
+                        "session_id": session_id,
+                        "transcript": "https://example.com",
+                        "source": "persona_live_voice",
+                    }
+                )
+            )
+
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_TURN_COMMITTED",
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            assert plan.get("session_id") == session_id
+
+            with pytest.raises(AssertionError):
+                _recv_until(
+                    ws,
+                    lambda d: d.get("event") == "notice"
+                    and d.get("reason_code") == "VOICE_TURN_PROCESSING",
+                    timeout=0.1,
+                )
 
 
 def test_persona_voice_confirm_plan_tts_failure_degrades_to_text_only(

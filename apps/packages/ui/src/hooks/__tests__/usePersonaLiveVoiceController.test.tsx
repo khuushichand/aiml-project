@@ -509,6 +509,98 @@ describe("usePersonaLiveVoiceController", () => {
     expect((result.current as any).recoveryMode).toBe("none")
   })
 
+  it("re-arms thinking recovery when VOICE_TURN_PROCESSING arrives", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(7000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_PROCESSING",
+        message: "Still processing this voice turn."
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+  })
+
+  it("still enters thinking_stuck after a renewed quiet window", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_PROCESSING",
+        message: "Still processing this voice turn."
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("thinking_stuck")
+  })
+
   it("tool and approval progress clear thinking recovery", async () => {
     vi.useFakeTimers()
 

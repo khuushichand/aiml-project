@@ -891,6 +891,10 @@ const SidepanelPersona = ({
       }
 
       if (eventType === "notice") {
+        const reasonCode = String(payload?.reason_code || "").trim().toUpperCase()
+        if (reasonCode === "VOICE_TURN_PROCESSING") {
+          return
+        }
         appendLog("notice", String(payload?.message || "notice"))
         return
       }

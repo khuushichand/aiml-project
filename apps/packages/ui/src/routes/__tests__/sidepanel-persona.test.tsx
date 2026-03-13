@@ -2145,6 +2145,92 @@ describe("SidepanelPersona", () => {
     })
   })
 
+  it("does not append VOICE_TURN_PROCESSING into the visible persona log", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-processing-notice",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    act(() => {
+      ws.emitMessage(
+        JSON.stringify({
+          event: "notice",
+          reason_code: "VOICE_TURN_PROCESSING",
+          message: "Still processing this voice turn."
+        })
+      )
+    })
+
+    expect(
+      screen.queryByText("Still processing this voice turn.")
+    ).not.toBeInTheDocument()
+  })
+
   it("copies the last committed voice command into the composer and reconnects the persona session from recovery", async () => {
     mocks.capabilitiesState.capabilities = {
       hasPersona: true,
