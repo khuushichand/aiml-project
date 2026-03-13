@@ -3,6 +3,13 @@ import { useTranslation } from "react-i18next"
 
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 
+import {
+  formatFailureLabel,
+  formatLastUsedLabel,
+  formatRunLabel,
+  type PersonaVoiceAnalytics
+} from "./CommandAnalyticsSummary"
+
 type PersonaCommandDryRunResult = {
   heard_text: string
   matched: boolean
@@ -31,6 +38,7 @@ type TestLabPanelProps = {
   selectedPersonaId: string
   selectedPersonaName: string
   isActive?: boolean
+  analytics?: PersonaVoiceAnalytics | null
   onOpenCommand?: (commandId: string, heardText: string) => void
   onCreateCommandDraft?: (heardText: string) => void
   initialHeardText?: string
@@ -44,6 +52,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
   selectedPersonaId,
   selectedPersonaName,
   isActive = false,
+  analytics = null,
   onOpenCommand,
   onCreateCommandDraft,
   initialHeardText = "",
@@ -60,6 +69,19 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
     result &&
       (result.connection_status === "missing" ||
         result.failure_phase === "missing_connection")
+  )
+  const matchedCommandAnalytics = React.useMemo(() => {
+    const commandId = String(result?.command_id || "").trim()
+    if (!commandId) return null
+    return (
+      analytics?.commands.find(
+        (item) => String(item.command_id || "").trim() === commandId
+      ) || null
+    )
+  }, [analytics, result?.command_id])
+  const fallbackUsageCount = analytics?.fallbacks?.total_invocations || 0
+  const matchedCommandLastUsedLabel = formatLastUsedLabel(
+    matchedCommandAnalytics?.last_used
   )
 
   React.useEffect(() => {
@@ -343,6 +365,33 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                         defaultValue: "Create command from this phrase"
                       })}
                     </button>
+                  </div>
+                ) : null}
+                {!result.matched && fallbackUsageCount > 0 ? (
+                  <div
+                    data-testid="persona-test-lab-fallback-health"
+                    className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-text-muted"
+                  >
+                    {`${fallbackUsageCount} planner fallbacks in the last 7 days`}
+                  </div>
+                ) : null}
+                {result.matched && matchedCommandAnalytics ? (
+                  <div
+                    data-testid="persona-test-lab-command-health"
+                    className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-text-muted"
+                  >
+                    <div className="font-medium text-text">Recent health</div>
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      <span>{formatRunLabel(matchedCommandAnalytics.total_invocations)}</span>
+                      {matchedCommandAnalytics.error_count > 0 ? (
+                        <span>{formatFailureLabel(matchedCommandAnalytics.error_count)}</span>
+                      ) : (
+                        <span>healthy</span>
+                      )}
+                      {matchedCommandLastUsedLabel ? (
+                        <span>{matchedCommandLastUsedLabel}</span>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
 

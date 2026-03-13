@@ -137,6 +137,45 @@ const connections = [
   }
 ]
 
+const analytics = {
+  persona_id: "persona-1",
+  summary: {
+    total_events: 8,
+    direct_command_count: 6,
+    planner_fallback_count: 2,
+    success_rate: 75,
+    fallback_rate: 25,
+    avg_response_time_ms: 180
+  },
+  commands: [
+    {
+      command_id: "cmd-search",
+      command_name: "Search Notes",
+      total_invocations: 6,
+      success_count: 4,
+      error_count: 2,
+      avg_response_time_ms: 150,
+      last_used: "2026-03-12T18:00:00Z"
+    },
+    {
+      command_id: "cmd-external",
+      command_name: "Search Slack Alerts",
+      total_invocations: 1,
+      success_count: 1,
+      error_count: 0,
+      avg_response_time_ms: 220,
+      last_used: "2026-03-12T17:30:00Z"
+    }
+  ],
+  fallbacks: {
+    total_invocations: 2,
+    success_count: 2,
+    error_count: 0,
+    avg_response_time_ms: 240,
+    last_used: "2026-03-12T18:15:00Z"
+  }
+}
+
 describe("CommandsPanel", () => {
   beforeEach(() => {
     mocks.fetchWithAuth.mockReset()
@@ -700,6 +739,40 @@ describe("CommandsPanel", () => {
     )
     expect(screen.getByTestId("persona-mcp-tool-picker-module-select")).toHaveValue(
       "notes"
+    )
+  })
+
+  it("shows persona voice analytics summary and per-command health badges", async () => {
+    renderWithQueryClient(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        analytics={analytics}
+      />
+    )
+
+    await screen.findByText("Search Notes")
+
+    expect(screen.getByTestId("persona-command-analytics-summary")).toBeInTheDocument()
+    expect(screen.getByTestId("persona-command-analytics-total-events")).toHaveTextContent(
+      "8"
+    )
+    expect(screen.getByTestId("persona-command-analytics-success-rate")).toHaveTextContent(
+      "75%"
+    )
+    expect(screen.getByTestId("persona-command-analytics-fallback-rate")).toHaveTextContent(
+      "25%"
+    )
+
+    expect(screen.getByTestId("persona-commands-analytics-cmd-search")).toHaveTextContent(
+      "6 runs"
+    )
+    expect(screen.getByTestId("persona-commands-analytics-cmd-search")).toHaveTextContent(
+      "2 failures"
+    )
+    expect(screen.getByTestId("persona-commands-analytics-cmd-external")).toHaveTextContent(
+      "1 run"
     )
   })
 })

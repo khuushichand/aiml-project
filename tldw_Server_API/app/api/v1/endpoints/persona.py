@@ -57,6 +57,10 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaSessionSummary,
     PersonaScopeRulesReplaceRequest,
     PersonaScopeRulesResponse,
+    PersonaVoiceAnalyticsResponse,
+    PersonaVoiceAnalyticsSummary,
+    PersonaVoiceCommandAnalyticsItem,
+    PersonaVoiceFallbackAnalytics,
 )
 from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
     VoiceCommandDefinition,
@@ -133,10 +137,13 @@ from tldw_Server_API.app.core.VoiceAssistant import (
     ActionType as VoiceActionTypeInternal,
     VoiceCommand,
     delete_voice_command as delete_voice_command_db,
+    get_voice_analytics_summary_stats,
     get_user_voice_commands,
     get_voice_command as get_voice_command_db,
     get_voice_command_registry,
     get_voice_command_router,
+    get_voice_resolution_stats,
+    get_voice_top_commands,
     save_voice_command,
 )
 
@@ -3137,6 +3144,109 @@ async def replace_persona_policy_rules(
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="replace persona policy rules") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/voice-analytics",
+    response_model=PersonaVoiceAnalyticsResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def get_persona_voice_analytics(
+    persona_id: str,
+    days: int = Query(7, ge=1, le=365),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaVoiceAnalyticsResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        summary_stats = get_voice_analytics_summary_stats(
+            db,
+            user_id=int(user_id),
+            days=days,
+            persona_id=persona_id,
+        )
+        direct_command_stats = get_voice_resolution_stats(
+            db,
+            user_id=int(user_id),
+            days=days,
+            persona_id=persona_id,
+            resolution_type="direct_command",
+        )
+        fallback_stats = get_voice_resolution_stats(
+            db,
+            user_id=int(user_id),
+            days=days,
+            persona_id=persona_id,
+            resolution_type="planner_fallback",
+        )
+        command_rows = get_voice_top_commands(
+            db,
+            user_id=int(user_id),
+            days=days,
+            limit=50,
+            persona_id=persona_id,
+            resolution_type="direct_command",
+        )
+
+        total_events = int(summary_stats.get("total_commands") or 0)
+        planner_fallback_count = int(fallback_stats.get("total_invocations") or 0)
+
+        return PersonaVoiceAnalyticsResponse(
+            persona_id=persona_id,
+            summary=PersonaVoiceAnalyticsSummary(
+                total_events=total_events,
+                direct_command_count=int(direct_command_stats.get("total_invocations") or 0),
+                planner_fallback_count=planner_fallback_count,
+                success_rate=float(summary_stats.get("success_rate") or 0.0),
+                fallback_rate=(
+                    float(planner_fallback_count) / float(total_events)
+                    if total_events
+                    else 0.0
+                ),
+                avg_response_time_ms=float(
+                    summary_stats.get("avg_response_time_ms") or 0.0
+                ),
+            ),
+            commands=[
+                PersonaVoiceCommandAnalyticsItem(
+                    command_id=str(item.get("command_id") or ""),
+                    command_name=item.get("command_name"),
+                    total_invocations=int(item.get("total_invocations") or 0),
+                    success_count=int(item.get("success_count") or 0),
+                    error_count=int(item.get("error_count") or 0),
+                    avg_response_time_ms=float(
+                        item.get("avg_response_time_ms") or 0.0
+                    ),
+                    last_used=(
+                        str(item.get("last_used") or "").strip() or None
+                    ),
+                )
+                for item in command_rows
+                if str(item.get("command_id") or "").strip()
+            ],
+            fallbacks=PersonaVoiceFallbackAnalytics(
+                total_invocations=int(fallback_stats.get("total_invocations") or 0),
+                success_count=int(fallback_stats.get("success_count") or 0),
+                error_count=int(fallback_stats.get("error_count") or 0),
+                avg_response_time_ms=float(
+                    fallback_stats.get("avg_response_time_ms") or 0.0
+                ),
+                last_used=str(fallback_stats.get("last_used") or "").strip() or None,
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="get persona voice analytics") from exc
 
 
 @router.get(

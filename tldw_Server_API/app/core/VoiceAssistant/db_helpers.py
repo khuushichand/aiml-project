@@ -11,6 +11,9 @@ from loguru import logger
 
 from .schemas import ActionType, VoiceCommand, VoiceSessionContext, VoiceSessionState
 
+VOICE_EVENT_RESOLUTION_DIRECT = "direct_command"
+VOICE_EVENT_RESOLUTION_FALLBACK = "planner_fallback"
+
 
 def save_voice_command(
     db,
@@ -375,6 +378,8 @@ def record_voice_command_event(
     success: bool,
     response_time_ms: Optional[float] = None,
     session_id: Optional[str] = None,
+    persona_id: Optional[str] = None,
+    resolution_type: str = VOICE_EVENT_RESOLUTION_DIRECT,
 ) -> None:
     """
     Record a voice command execution event for analytics.
@@ -393,20 +398,54 @@ def record_voice_command_event(
         db.execute_query(
             """
             INSERT INTO voice_command_events (
-                command_id, command_name, user_id, action_type,
-                success, response_time_ms, session_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                command_id, command_name, user_id, persona_id, action_type,
+                success, response_time_ms, session_id, resolution_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 command_id,
                 command_name,
                 user_id,
+                persona_id,
                 action_type.value,
                 1 if success else 0,
                 response_time_ms,
                 session_id,
+                resolution_type,
             ),
         )
+
+
+def _build_voice_event_filters(
+    *,
+    user_id: Optional[int] = None,
+    command_id: Optional[str] = None,
+    days: Optional[int] = None,
+    persona_id: Optional[str] = None,
+    resolution_type: Optional[str] = None,
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if command_id is not None:
+        clauses.append("command_id = ?")
+        params.append(command_id)
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if days is not None:
+        clauses.append("created_at >= datetime('now', ?)")
+        params.append(f"-{days} days")
+    if persona_id is not None:
+        clauses.append("persona_id = ?")
+        params.append(persona_id)
+    if resolution_type is not None:
+        clauses.append("resolution_type = ?")
+        params.append(resolution_type)
+
+    if not clauses:
+        return "", params
+    return " WHERE " + " AND ".join(clauses), params
 
 
 def get_voice_command_usage_stats(
@@ -477,6 +516,8 @@ def get_voice_top_commands(
     user_id: int,
     days: Optional[int] = None,
     limit: int = 10,
+    persona_id: Optional[str] = None,
+    resolution_type: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """
     Get top voice commands by usage.
@@ -490,12 +531,12 @@ def get_voice_top_commands(
     Returns:
         List of usage stats for top commands
     """
-    params: list[Any] = [user_id]
-    date_filter = ""
-    if days is not None:
-        date_filter = " AND created_at >= datetime('now', ?)"
-        params.append(f"-{days} days")
-
+    where_clause, params = _build_voice_event_filters(
+        user_id=user_id,
+        days=days,
+        persona_id=persona_id,
+        resolution_type=resolution_type,
+    )
     params.append(limit)
 
     top_commands_sql_template = """
@@ -508,7 +549,7 @@ def get_voice_top_commands(
             AVG(response_time_ms) AS avg_response_time_ms,
             MAX(created_at) AS last_used
         FROM voice_command_events
-        WHERE user_id = ?{date_filter}
+        {where_clause}
         GROUP BY command_id
         ORDER BY total_invocations DESC
         LIMIT ?
@@ -601,6 +642,8 @@ def get_voice_analytics_summary_stats(
     *,
     user_id: Optional[int] = None,
     days: int = 7,
+    persona_id: Optional[str] = None,
+    resolution_type: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Get aggregate voice analytics stats.
@@ -613,11 +656,12 @@ def get_voice_analytics_summary_stats(
     Returns:
         Dict with total, success_rate, avg_response_time_ms
     """
-    params: list[Any] = [f"-{days} days"]
-    user_filter = ""
-    if user_id is not None:
-        user_filter = " AND user_id = ?"
-        params.append(user_id)
+    where_clause, params = _build_voice_event_filters(
+        user_id=user_id,
+        days=days,
+        persona_id=persona_id,
+        resolution_type=resolution_type,
+    )
 
     aggregate_stats_sql_template = """
         SELECT
@@ -625,7 +669,7 @@ def get_voice_analytics_summary_stats(
             COALESCE(SUM(success) * 1.0 / NULLIF(COUNT(*), 0), 0.0) AS success_rate,
             AVG(response_time_ms) AS avg_response_time_ms
         FROM voice_command_events
-        WHERE created_at >= datetime('now', ?){user_filter}
+        {where_clause}
         """
     aggregate_stats_sql = aggregate_stats_sql_template.format_map(locals())  # nosec B608
     result = db.execute_query(
@@ -643,6 +687,57 @@ def get_voice_analytics_summary_stats(
         "total_commands": row.get("total_commands") or 0,
         "success_rate": row.get("success_rate") or 0.0,
         "avg_response_time_ms": row.get("avg_response_time_ms") or 0.0,
+    }
+
+
+def get_voice_resolution_stats(
+    db,
+    *,
+    user_id: Optional[int] = None,
+    days: int = 7,
+    persona_id: Optional[str] = None,
+    resolution_type: str,
+) -> dict[str, Any]:
+    where_clause, params = _build_voice_event_filters(
+        user_id=user_id,
+        days=days,
+        persona_id=persona_id,
+        resolution_type=resolution_type,
+    )
+    resolution_stats_sql_template = """
+        SELECT
+            COUNT(*) AS total_invocations,
+            SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS success_count,
+            SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS error_count,
+            AVG(response_time_ms) AS avg_response_time_ms,
+            MAX(created_at) AS last_used
+        FROM voice_command_events
+        {where_clause}
+        """
+    resolution_stats_sql = resolution_stats_sql_template.format_map(locals())  # nosec B608
+    result = db.execute_query(
+        resolution_stats_sql,
+        tuple(params),
+    )
+    rows = result.fetchall() if hasattr(result, 'fetchall') else list(result)
+    if not rows:
+        return {
+            "total_invocations": 0,
+            "success_count": 0,
+            "error_count": 0,
+            "avg_response_time_ms": 0.0,
+            "last_used": None,
+        }
+
+    row = rows[0]
+    if not isinstance(row, dict):
+        row = dict(row)
+    return {
+        "total_invocations": row.get("total_invocations") or 0,
+        "success_count": row.get("success_count") or 0,
+        "error_count": row.get("error_count") or 0,
+        "avg_response_time_ms": row.get("avg_response_time_ms") or 0.0,
+        "last_used": row.get("last_used"),
     }
 
 

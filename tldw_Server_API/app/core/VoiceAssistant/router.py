@@ -348,10 +348,16 @@ class VoiceCommandRouter:
                         command_id=parsed.intent.command_id,
                         command_name=command_name,
                         user_id=user_id,
+                        persona_id=persona_id,
                         action_type=result.action_type,
                         success=result.success,
                         response_time_ms=result.execution_time_ms,
                         session_id=session.session_id,
+                        resolution_type=(
+                            "direct_command"
+                            if parsed.intent.command_id
+                            else "planner_fallback"
+                        ),
                     )
                     save_voice_session(db, session)
                 except Exception as e:

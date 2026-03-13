@@ -32,6 +32,36 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 
 import { TestLabPanel } from "../TestLabPanel"
 
+const analytics = {
+  persona_id: "persona-1",
+  summary: {
+    total_events: 8,
+    direct_command_count: 6,
+    planner_fallback_count: 2,
+    success_rate: 75,
+    fallback_rate: 25,
+    avg_response_time_ms: 180
+  },
+  commands: [
+    {
+      command_id: "cmd-alert",
+      command_name: "Send Alert",
+      total_invocations: 6,
+      success_count: 4,
+      error_count: 2,
+      avg_response_time_ms: 210,
+      last_used: "2026-03-12T18:00:00Z"
+    }
+  ],
+  fallbacks: {
+    total_invocations: 2,
+    success_count: 2,
+    error_count: 0,
+    avg_response_time_ms: 240,
+    last_used: "2026-03-12T18:15:00Z"
+  }
+}
+
 describe("TestLabPanel", () => {
   beforeEach(() => {
     mocks.fetchWithAuth.mockReset()
@@ -156,6 +186,7 @@ describe("TestLabPanel", () => {
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
         isActive
+        analytics={analytics}
       />
     )
 
@@ -226,6 +257,7 @@ describe("TestLabPanel", () => {
         selectedPersonaName="Garden Helper"
         isActive
         onCreateCommandDraft={onCreateCommandDraft}
+        analytics={analytics}
       />
     )
 
@@ -242,10 +274,39 @@ describe("TestLabPanel", () => {
         "No direct command matched. Open this phrase in Commands to register it as a saved shortcut and add placeholders if needed."
       )
     ).toBeInTheDocument()
+    expect(screen.getByTestId("persona-test-lab-fallback-health")).toHaveTextContent(
+      "2 planner fallbacks"
+    )
 
     fireEvent.click(screen.getByTestId("persona-test-lab-create-command"))
     expect(onCreateCommandDraft).toHaveBeenCalledWith(
       "start a focused research sprint"
+    )
+  })
+
+  it("shows recent health for the matched command from live analytics", async () => {
+    render(
+      <TestLabPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        analytics={analytics}
+      />
+    )
+
+    fireEvent.change(screen.getByTestId("persona-test-lab-heard-input"), {
+      target: { value: "send alert repaired" }
+    })
+    fireEvent.click(screen.getByTestId("persona-test-lab-run"))
+
+    expect(await screen.findByTestId("persona-test-lab-match-status")).toHaveTextContent(
+      "direct command"
+    )
+    expect(screen.getByTestId("persona-test-lab-command-health")).toHaveTextContent(
+      "6 runs"
+    )
+    expect(screen.getByTestId("persona-test-lab-command-health")).toHaveTextContent(
+      "2 failures"
     )
   })
 

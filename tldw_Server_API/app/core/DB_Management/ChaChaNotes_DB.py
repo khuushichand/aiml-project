@@ -435,7 +435,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 37  # Schema v37 adds persona voice defaults
+    _CURRENT_SCHEMA_VERSION = 38  # Schema v38 adds persona voice analytics scope
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -2391,10 +2391,12 @@ CREATE TABLE IF NOT EXISTS voice_command_events (
     command_id TEXT,
     command_name TEXT,
     user_id INTEGER NOT NULL,
+    persona_id TEXT,
     action_type TEXT NOT NULL,
     success INTEGER DEFAULT 1,
     response_time_ms REAL,
     session_id TEXT,
+    resolution_type TEXT NOT NULL DEFAULT 'direct_command',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -2402,6 +2404,10 @@ CREATE INDEX IF NOT EXISTS idx_voice_command_events_user_time
     ON voice_command_events(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_voice_command_events_command_time
     ON voice_command_events(command_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time
+    ON voice_command_events(persona_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time
+    ON voice_command_events(persona_id, resolution_type, created_at);
 
 UPDATE db_schema_version
    SET version = 19
@@ -4801,6 +4807,65 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V36->V37: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V37 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    _MIGRATION_SQL_V37_TO_V38 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 38 - Persona voice analytics scope (2026-03-12)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE voice_command_events ADD COLUMN persona_id TEXT;
+ALTER TABLE voice_command_events ADD COLUMN resolution_type TEXT NOT NULL DEFAULT 'direct_command';
+CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time
+    ON voice_command_events(persona_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time
+    ON voice_command_events(persona_id, resolution_type, created_at);
+
+UPDATE db_schema_version
+   SET version = 38
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 38;
+"""
+
+    def _migrate_from_v37_to_v38(self, conn: sqlite3.Connection) -> None:
+        """Migrates schema from V37 to V38 (persona voice analytics scope)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V37 to V38 for DB: {self.db_path_str}...")
+        try:
+            event_cols = {row[1] for row in conn.execute("PRAGMA table_info('voice_command_events')").fetchall()}
+            if "persona_id" not in event_cols:
+                conn.execute("ALTER TABLE voice_command_events ADD COLUMN persona_id TEXT")
+            if "resolution_type" not in event_cols:
+                conn.execute(
+                    "ALTER TABLE voice_command_events ADD COLUMN resolution_type TEXT NOT NULL DEFAULT 'direct_command'"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time "
+                "ON voice_command_events(persona_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time "
+                "ON voice_command_events(persona_id, resolution_type, created_at)"
+            )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 38
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 38
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 38:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V37->V38 failed version check. Expected 38, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V38 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V37->V38 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V37->V38 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V37->V38: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V38 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -4869,6 +4934,28 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "CREATE INDEX IF NOT EXISTS idx_voice_commands_user_persona_enabled "
             "ON voice_commands(user_id, persona_id, enabled, deleted)"
         )
+
+        analytics_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'voice_command_events'"
+        ).fetchone()
+        if analytics_table_exists:
+            analytics_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info('voice_command_events')").fetchall()
+            }
+            if "persona_id" not in analytics_cols:
+                conn.execute("ALTER TABLE voice_command_events ADD COLUMN persona_id TEXT")
+            if "resolution_type" not in analytics_cols:
+                conn.execute(
+                    "ALTER TABLE voice_command_events ADD COLUMN resolution_type TEXT NOT NULL DEFAULT 'direct_command'"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time "
+                "ON voice_command_events(persona_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time "
+                "ON voice_command_events(persona_id, resolution_type, created_at)"
+            )
 
         conn.executescript(
             """
@@ -4977,9 +5064,22 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         statements = [
             "ALTER TABLE IF EXISTS voice_commands ADD COLUMN IF NOT EXISTS persona_id TEXT",
             "ALTER TABLE IF EXISTS voice_commands ADD COLUMN IF NOT EXISTS connection_id TEXT",
+            "ALTER TABLE IF EXISTS voice_command_events ADD COLUMN IF NOT EXISTS persona_id TEXT",
+            (
+                "ALTER TABLE IF EXISTS voice_command_events "
+                "ADD COLUMN IF NOT EXISTS resolution_type TEXT NOT NULL DEFAULT 'direct_command'"
+            ),
             (
                 "CREATE INDEX IF NOT EXISTS idx_voice_commands_user_persona_enabled "
                 "ON voice_commands(user_id, persona_id, enabled, deleted)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time "
+                "ON voice_command_events(persona_id, created_at)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time "
+                "ON voice_command_events(persona_id, resolution_type, created_at)"
             ),
         ]
         for statement in statements:
@@ -5245,6 +5345,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 36 and current_db_version == 35:
                         self._migrate_from_v35_to_v36(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 37 and current_db_version == 36:
+                        self._migrate_from_v36_to_v37(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 38 and current_db_version == 37:
+                        self._migrate_from_v37_to_v38(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -5653,12 +5759,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 35 and current_db_version == 34:
                     self._migrate_from_v34_to_v35(conn)
                     current_db_version = self._get_db_version(conn)
-                if target_version >= 36 and current_db_version == 35:
-                    self._migrate_from_v35_to_v36(conn)
-                    current_db_version = self._get_db_version(conn)
-                if target_version >= 37 and current_db_version == 36:
-                    self._migrate_from_v36_to_v37(conn)
-                    current_db_version = self._get_db_version(conn)
+                    if target_version >= 36 and current_db_version == 35:
+                        self._migrate_from_v35_to_v36(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 37 and current_db_version == 36:
+                        self._migrate_from_v36_to_v37(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 38 and current_db_version == 37:
+                        self._migrate_from_v37_to_v38(conn)
+                        current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
                 self._ensure_recent_voice_command_schema_sqlite(conn)
@@ -6012,6 +6121,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 37:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V36_TO_V37, conn, expected_version=37)
                 current_version = 37
+            if current_version < 38:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V37_TO_V38, conn, expected_version=38)
+                current_version = 38
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003

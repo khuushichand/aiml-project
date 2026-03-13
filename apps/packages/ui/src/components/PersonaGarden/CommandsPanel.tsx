@@ -7,6 +7,14 @@ import {
   type DraftAssistSuggestion
 } from "@/utils/persona-command-drafts"
 
+import {
+  CommandAnalyticsSummary,
+  formatFailureLabel,
+  formatLastUsedLabel,
+  formatRunLabel,
+  type PersonaVoiceAnalytics,
+  type PersonaVoiceCommandAnalyticsItem
+} from "./CommandAnalyticsSummary"
 import { McpToolPicker } from "./McpToolPicker"
 
 type VoiceCommandActionType = "mcp_tool" | "workflow" | "custom" | "llm_chat"
@@ -67,6 +75,8 @@ type CommandsPanelProps = {
   selectedPersonaId: string
   selectedPersonaName: string
   isActive?: boolean
+  analytics?: PersonaVoiceAnalytics | null
+  analyticsLoading?: boolean
   openCommandId?: string | null
   onOpenCommandHandled?: (commandId: string) => void
   draftCommandPhrase?: string | null
@@ -289,6 +299,8 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   selectedPersonaId,
   selectedPersonaName,
   isActive = false,
+  analytics = null,
+  analyticsLoading = false,
   openCommandId = null,
   onOpenCommandHandled,
   draftCommandPhrase = null,
@@ -326,6 +338,12 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
         : [],
     [draftSourcePhrase, formState.actionType]
   )
+  const analyticsByCommandId = React.useMemo(() => {
+    const entries = Array.isArray(analytics?.commands) ? analytics.commands : []
+    return new Map<string, PersonaVoiceCommandAnalyticsItem>(
+      entries.map((item) => [String(item.command_id || "").trim(), item])
+    )
+  }, [analytics])
 
   React.useEffect(() => {
     let cancelled = false
@@ -737,6 +755,10 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                   "Select a persona to manage its voice command registry."
               })}
         </p>
+        <CommandAnalyticsSummary
+          analytics={analytics}
+          loading={Boolean(selectedPersonaId) && analyticsLoading}
+        />
 
         {error ? (
           <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700">
@@ -792,118 +814,147 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                   ) : null}
                 </div>
                 {commands.length > 0 ? (
-                  commands.map((command) => (
-                    <div
-                      key={command.id}
-                      data-testid={`persona-commands-row-${command.id}`}
-                      data-selected={formState.commandId === command.id ? "true" : "false"}
-                      className={`rounded-md border bg-bg p-3 transition ${
-                        formState.commandId === command.id
-                          ? "border-primary bg-primary/5 shadow-sm ring-1 ring-primary/20"
-                          : "border-border"
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div>
-                          <div className="font-medium text-text">
-                            {command.name}
+                  commands.map((command) => {
+                    const commandAnalytics = analyticsByCommandId.get(command.id)
+                    const lastUsedLabel = formatLastUsedLabel(commandAnalytics?.last_used)
+
+                    return (
+                      <div
+                        key={command.id}
+                        data-testid={`persona-commands-row-${command.id}`}
+                        data-selected={formState.commandId === command.id ? "true" : "false"}
+                        className={`rounded-md border bg-bg p-3 transition ${
+                          formState.commandId === command.id
+                            ? "border-primary bg-primary/5 shadow-sm ring-1 ring-primary/20"
+                            : "border-border"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <div className="font-medium text-text">
+                              {command.name}
+                            </div>
+                            <div className="text-xs text-text-muted">
+                              {toCommandTargetLabel(command)}
+                            </div>
                           </div>
-                          <div className="text-xs text-text-muted">
-                            {toCommandTargetLabel(command)}
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2 text-[11px]">
-                          <span className="rounded-full border border-border px-2 py-0.5 text-text-muted">
-                            {command.action_type}
-                          </span>
-                          {command.enabled ? (
-                            <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-700">
-                              enabled
-                            </span>
-                          ) : (
-                            <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-amber-700">
-                              disabled
-                            </span>
-                          )}
-                          {command.requires_confirmation ? (
+                          <div className="flex flex-wrap gap-2 text-[11px]">
                             <span className="rounded-full border border-border px-2 py-0.5 text-text-muted">
-                              confirm
+                              {command.action_type}
                             </span>
-                          ) : null}
-                          {command.connection_id ? (
-                            resolveCommandConnectionStatus(command, connections) === "missing" ? (
-                              <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-700">
-                                missing connection
+                            {command.enabled ? (
+                              <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-700">
+                                enabled
                               </span>
                             ) : (
-                              <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-sky-700">
-                                connection
+                              <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-amber-700">
+                                disabled
                               </span>
-                            )
-                          ) : null}
+                            )}
+                            {command.requires_confirmation ? (
+                              <span className="rounded-full border border-border px-2 py-0.5 text-text-muted">
+                                confirm
+                              </span>
+                            ) : null}
+                            {command.connection_id ? (
+                              resolveCommandConnectionStatus(command, connections) === "missing" ? (
+                                <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-700">
+                                  missing connection
+                                </span>
+                              ) : (
+                                <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-sky-700">
+                                  connection
+                                </span>
+                              )
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                      {command.description ? (
-                        <p className="mt-2 text-xs text-text-muted">
-                          {command.description}
-                        </p>
-                      ) : null}
-                      {resolveCommandConnectionStatus(command, connections) === "missing" ? (
-                        <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700">
-                          {t("sidepanel:personaGarden.commands.missingConnectionHint", {
-                            defaultValue:
-                              "The saved connection for this command was deleted. Edit the command to choose a replacement connection."
-                          })}
-                        </div>
-                      ) : null}
-                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-text-muted">
-                        {command.phrases.map((phrase) => (
-                          <span
-                            key={`${command.id}-${phrase}`}
-                            className="rounded-full border border-border px-2 py-0.5"
+                        {command.description ? (
+                          <p className="mt-2 text-xs text-text-muted">
+                            {command.description}
+                          </p>
+                        ) : null}
+                        {resolveCommandConnectionStatus(command, connections) === "missing" ? (
+                          <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700">
+                            {t("sidepanel:personaGarden.commands.missingConnectionHint", {
+                              defaultValue:
+                                "The saved connection for this command was deleted. Edit the command to choose a replacement connection."
+                            })}
+                          </div>
+                        ) : null}
+                        {commandAnalytics ? (
+                          <div
+                            data-testid={`persona-commands-analytics-${command.id}`}
+                            className="mt-2 flex flex-wrap gap-2 text-[11px]"
                           >
-                            {phrase}
-                          </span>
-                        ))}
+                            <span className="rounded-full border border-border px-2 py-0.5 text-text-muted">
+                              {formatRunLabel(commandAnalytics.total_invocations)}
+                            </span>
+                            {commandAnalytics.error_count > 0 ? (
+                              <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-amber-800">
+                                {formatFailureLabel(commandAnalytics.error_count)}
+                              </span>
+                            ) : (
+                              <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-700">
+                                healthy
+                              </span>
+                            )}
+                            {lastUsedLabel ? (
+                              <span className="rounded-full border border-border px-2 py-0.5 text-text-muted">
+                                {lastUsedLabel}
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-text-muted">
+                          {command.phrases.map((phrase) => (
+                            <span
+                              key={`${command.id}-${phrase}`}
+                              className="rounded-full border border-border px-2 py-0.5"
+                            >
+                              {phrase}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            data-testid={`persona-commands-edit-${command.id}`}
+                            className="rounded-md border border-border px-2 py-1 text-xs text-text transition hover:bg-surface2"
+                            onClick={() => handleEdit(command)}
+                          >
+                            {t("common:edit", "Edit")}
+                          </button>
+                          <button
+                            type="button"
+                            data-testid={`persona-commands-toggle-${command.id}`}
+                            className="rounded-md border border-border px-2 py-1 text-xs text-text transition hover:bg-surface2"
+                            onClick={() => {
+                              void handleToggle(command)
+                            }}
+                          >
+                            {command.enabled
+                              ? t("sidepanel:personaGarden.commands.disable", {
+                                  defaultValue: "Disable"
+                                })
+                              : t("sidepanel:personaGarden.commands.enable", {
+                                  defaultValue: "Enable"
+                                })}
+                          </button>
+                          <button
+                            type="button"
+                            data-testid={`persona-commands-delete-${command.id}`}
+                            className="rounded-md border border-red-500/40 px-2 py-1 text-xs text-red-700 transition hover:bg-red-500/10"
+                            onClick={() => {
+                              void handleDelete(command.id)
+                            }}
+                          >
+                            {t("common:delete", "Delete")}
+                          </button>
+                        </div>
                       </div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          data-testid={`persona-commands-edit-${command.id}`}
-                          className="rounded-md border border-border px-2 py-1 text-xs text-text transition hover:bg-surface2"
-                          onClick={() => handleEdit(command)}
-                        >
-                          {t("common:edit", "Edit")}
-                        </button>
-                        <button
-                          type="button"
-                          data-testid={`persona-commands-toggle-${command.id}`}
-                          className="rounded-md border border-border px-2 py-1 text-xs text-text transition hover:bg-surface2"
-                          onClick={() => {
-                            void handleToggle(command)
-                          }}
-                        >
-                          {command.enabled
-                            ? t("sidepanel:personaGarden.commands.disable", {
-                                defaultValue: "Disable"
-                              })
-                            : t("sidepanel:personaGarden.commands.enable", {
-                                defaultValue: "Enable"
-                              })}
-                        </button>
-                        <button
-                          type="button"
-                          data-testid={`persona-commands-delete-${command.id}`}
-                          className="rounded-md border border-red-500/40 px-2 py-1 text-xs text-red-700 transition hover:bg-red-500/10"
-                          onClick={() => {
-                            void handleDelete(command.id)
-                          }}
-                        >
-                          {t("common:delete", "Delete")}
-                        </button>
-                      </div>
-                    </div>
-                  ))
+                    )
+                  })
                 ) : (
                   <div
                     data-testid="persona-commands-empty"

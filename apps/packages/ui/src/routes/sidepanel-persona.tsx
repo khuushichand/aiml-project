@@ -11,6 +11,9 @@ import { useTranslation } from "react-i18next"
 
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { PersonaPolicySummary } from "@/components/Option/MCPHub"
+import {
+  type PersonaVoiceAnalytics
+} from "@/components/PersonaGarden/CommandAnalyticsSummary"
 import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
 import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
 import { LiveSessionPanel } from "@/components/PersonaGarden/LiveSessionPanel"
@@ -329,6 +332,10 @@ const SidepanelPersona = ({
     React.useState<string | null>(null)
   const [lastTestLabPhrase, setLastTestLabPhrase] = React.useState("")
   const [testLabRerunToken, setTestLabRerunToken] = React.useState(0)
+  const [voiceAnalytics, setVoiceAnalytics] = React.useState<PersonaVoiceAnalytics | null>(
+    null
+  )
+  const [voiceAnalyticsLoading, setVoiceAnalyticsLoading] = React.useState(false)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
   const [sessionHistory, setSessionHistory] = React.useState<PersonaSessionSummary[]>([])
   const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
@@ -451,6 +458,55 @@ const SidepanelPersona = ({
     }
     setRerunAfterSaveCommandId(null)
   }, [lastTestLabPhrase, rerunAfterSaveCommandId])
+
+  React.useEffect(() => {
+    let cancelled = false
+    const normalizedPersonaId = String(selectedPersonaId || "").trim()
+    const shouldLoad =
+      normalizedPersonaId.length > 0 &&
+      (activeTab === "commands" || activeTab === "test-lab")
+
+    if (!normalizedPersonaId) {
+      setVoiceAnalytics(null)
+      setVoiceAnalyticsLoading(false)
+      return
+    }
+    if (!shouldLoad) return
+
+    if (voiceAnalytics?.persona_id !== normalizedPersonaId) {
+      setVoiceAnalytics(null)
+    }
+    setVoiceAnalyticsLoading(true)
+
+    const loadVoiceAnalytics = async () => {
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(normalizedPersonaId)}/voice-analytics?days=7` as any,
+          { method: "GET" }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to load persona voice analytics.")
+        }
+        const payload = (await response.json()) as PersonaVoiceAnalytics
+        if (!cancelled) {
+          setVoiceAnalytics(payload)
+        }
+      } catch {
+        if (!cancelled) {
+          setVoiceAnalytics(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setVoiceAnalyticsLoading(false)
+        }
+      }
+    }
+
+    void loadVoiceAnalytics()
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, selectedPersonaId])
 
   React.useEffect(() => {
     if (!isCompanionMode || capsLoading || !capabilities?.hasPersonalization) {
@@ -2150,6 +2206,8 @@ const SidepanelPersona = ({
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "commands"}
+          analytics={voiceAnalytics}
+          analyticsLoading={voiceAnalyticsLoading}
           openCommandId={openCommandId}
           onOpenCommandHandled={handleOpenCommandHandled}
           draftCommandPhrase={draftCommandPhrase}
@@ -2167,6 +2225,7 @@ const SidepanelPersona = ({
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "test-lab"}
+          analytics={voiceAnalytics}
           initialHeardText={lastTestLabPhrase}
           rerunRequestToken={testLabRerunToken}
           onOpenCommand={handleOpenCommandFromTestLab}

@@ -379,3 +379,39 @@ class PersonaCommandDryRunResponse(BaseModel):
     safety_gate: PersonaCommandSafetyGateResponse | None = None
     fallback_to_persona_planner: bool = False
     failure_phase: str | None = None
+
+
+class PersonaVoiceCommandAnalyticsItem(BaseModel):
+    command_id: str
+    command_name: str | None = None
+    total_invocations: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    avg_response_time_ms: float = 0.0
+    last_used: str | None = None
+
+
+class PersonaVoiceFallbackAnalytics(BaseModel):
+    total_invocations: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    avg_response_time_ms: float = 0.0
+    last_used: str | None = None
+
+
+class PersonaVoiceAnalyticsSummary(BaseModel):
+    total_events: int = 0
+    direct_command_count: int = 0
+    planner_fallback_count: int = 0
+    success_rate: float = 0.0
+    fallback_rate: float = 0.0
+    avg_response_time_ms: float = 0.0
+
+
+class PersonaVoiceAnalyticsResponse(BaseModel):
+    persona_id: str
+    summary: PersonaVoiceAnalyticsSummary
+    commands: list[PersonaVoiceCommandAnalyticsItem] = Field(default_factory=list)
+    fallbacks: PersonaVoiceFallbackAnalytics = Field(
+        default_factory=PersonaVoiceFallbackAnalytics
+    )
