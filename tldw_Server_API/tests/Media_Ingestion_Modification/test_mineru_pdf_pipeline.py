@@ -93,3 +93,41 @@ async def test_process_pdf_mineru_fallback_preserves_parser_text_on_failure(monk
 
     assert res["content"] == "parser text"
     assert any("OCR" in warning or "MinerU" in warning for warning in res["warnings"])
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_process_pdf_mineru_fallback_skips_ocr_when_parser_text_is_sufficient(monkeypatch):
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF import PDF_Processing_Lib as pdf_lib
+    except Exception as exc:
+        pytest.skip(f"Dependencies not available: {exc}")
+
+    mineru_calls = {"count": 0}
+
+    def _fake_mineru(**kwargs):
+        mineru_calls["count"] += 1
+        return {"text": "unexpected mineru text", "structured": {}, "details": {}, "warnings": []}
+
+    monkeypatch.setattr(pdf_lib, "pymupdf4llm_parse_pdf", lambda path: "parser text is already long enough")
+    monkeypatch.setattr(
+        pdf_lib,
+        "_run_mineru_document_ocr",
+        _fake_mineru,
+        raising=False,
+    )
+
+    res = await pdf_lib.process_pdf_task(
+        file_bytes=_build_minimal_pdf_bytes(),
+        filename="mineru.pdf",
+        parser="pymupdf4llm",
+        perform_chunking=False,
+        perform_analysis=False,
+        enable_ocr=True,
+        ocr_backend="mineru",
+        ocr_mode="fallback",
+        ocr_min_page_text_chars=5,
+    )
+
+    assert mineru_calls["count"] == 0
+    assert res["content"] == "parser text is already long enough"

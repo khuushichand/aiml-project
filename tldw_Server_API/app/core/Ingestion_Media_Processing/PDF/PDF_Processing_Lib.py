@@ -1612,6 +1612,7 @@ def _run_mineru_document_ocr(
     requested_lang: str | None = None,
     requested_dpi: int | None = None,
 ) -> dict[str, Any]:
+    """Run the optional MinerU adapter with a local import boundary for PDF OCR."""
     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
         run_mineru_document_ocr,
     )

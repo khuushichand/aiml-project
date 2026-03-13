@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,16 @@ _MINERU_SEMAPHORE_LOCK = threading.Lock()
 _MINERU_SEMAPHORE_LIMIT = _DEFAULT_MINERU_MAX_CONCURRENCY
 _MINERU_SEMAPHORE = threading.BoundedSemaphore(_DEFAULT_MINERU_MAX_CONCURRENCY)
 _MINERU_TEXT_MARKDOWN_FILES = ("document.md", "output.md", "result.md")
+
+
+@dataclass(frozen=True)
+class MinerUConfig:
+    """Resolved MinerU CLI settings derived from environment variables."""
+    command: list[str]
+    timeout_sec: int
+    max_concurrency: int
+    tmp_root: Path | None
+    debug_save_raw: bool
 
 
 def _coerce_positive_int(raw_value: str | None, default: int) -> int:
@@ -43,31 +54,38 @@ def _coerce_bool(raw_value: str | None, default: bool = False) -> bool:
     return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _get_timeout_sec() -> int:
-    return _coerce_positive_int(os.getenv("MINERU_TIMEOUT_SEC"), _DEFAULT_MINERU_TIMEOUT_SEC)
-
-
-def _get_max_concurrency() -> int:
-    return _coerce_positive_int(os.getenv("MINERU_MAX_CONCURRENCY"), _DEFAULT_MINERU_MAX_CONCURRENCY)
-
-
-def _get_tmp_root() -> Path | None:
-    raw = (os.getenv("MINERU_TMP_ROOT") or "").strip()
-    return Path(raw).expanduser() if raw else None
-
-
-def _debug_save_raw() -> bool:
-    return _coerce_bool(os.getenv("MINERU_DEBUG_SAVE_RAW"), default=False)
-
-
 def _mineru_command_tokens() -> list[str]:
     raw = os.getenv("MINERU_CMD", "mineru").strip() or "mineru"
-    return shlex.split(raw)
+    tokens = shlex.split(raw)
+    return tokens or ["mineru"]
 
 
-def _build_mineru_command(*, pdf_path: Path, output_dir: Path) -> list[str]:
+def load_mineru_config() -> MinerUConfig:
+    """Load MinerU CLI configuration from environment variables."""
+    raw_tmp_root = (os.getenv("MINERU_TMP_ROOT") or "").strip()
+    tmp_root = Path(raw_tmp_root).expanduser() if raw_tmp_root else None
+    return MinerUConfig(
+        command=_mineru_command_tokens(),
+        timeout_sec=_coerce_positive_int(os.getenv("MINERU_TIMEOUT_SEC"), _DEFAULT_MINERU_TIMEOUT_SEC),
+        max_concurrency=_coerce_positive_int(
+            os.getenv("MINERU_MAX_CONCURRENCY"),
+            _DEFAULT_MINERU_MAX_CONCURRENCY,
+        ),
+        tmp_root=tmp_root,
+        debug_save_raw=_coerce_bool(os.getenv("MINERU_DEBUG_SAVE_RAW"), default=False),
+    )
+
+
+def _build_mineru_command(
+    *,
+    pdf_path: Path,
+    output_dir: Path,
+    config: MinerUConfig | None = None,
+) -> list[str]:
+    """Build the argv-safe MinerU command for a single PDF run."""
+    resolved_config = config or load_mineru_config()
     return [
-        *_mineru_command_tokens(),
+        *resolved_config.command,
         "-p",
         str(pdf_path),
         "-o",
@@ -75,16 +93,16 @@ def _build_mineru_command(*, pdf_path: Path, output_dir: Path) -> list[str]:
     ]
 
 
-def _mineru_available() -> bool:
-    cmd = _mineru_command_tokens()
-    executable = cmd[0] if cmd else "mineru"
+def _mineru_available(config: MinerUConfig | None = None) -> bool:
+    """Check whether the configured MinerU executable is present on PATH."""
+    resolved_config = config or load_mineru_config()
+    executable = resolved_config.command[0] if resolved_config.command else "mineru"
     return shutil.which(executable) is not None
 
 
-def _get_mineru_semaphore() -> threading.BoundedSemaphore:
+def _get_mineru_semaphore(limit: int) -> threading.BoundedSemaphore:
     global _MINERU_SEMAPHORE, _MINERU_SEMAPHORE_LIMIT
 
-    limit = _get_max_concurrency()
     with _MINERU_SEMAPHORE_LOCK:
         if limit != _MINERU_SEMAPHORE_LIMIT:
             _MINERU_SEMAPHORE = threading.BoundedSemaphore(limit)
@@ -242,8 +260,14 @@ def _bounded_middle_excerpt(middle: Any) -> dict[str, Any]:
     return excerpt
 
 
-def _include_raw_artifacts(artifacts: dict[str, Any], *, content_list: Any, middle: Any) -> dict[str, Any]:
-    if not _debug_save_raw():
+def _include_raw_artifacts(
+    artifacts: dict[str, Any],
+    *,
+    content_list: Any,
+    middle: Any,
+    debug_save_raw: bool,
+) -> dict[str, Any]:
+    if not debug_save_raw:
         return artifacts
 
     artifacts = dict(artifacts)
@@ -317,6 +341,7 @@ def _normalize_mineru_output_dir(
     output_format: str | None,
     prompt_preset: str | None,
     source_pdf_path: Path | None = None,
+    debug_save_raw: bool = False,
 ) -> dict[str, Any]:
     primary_output_dir = _resolve_primary_output_dir(output_dir)
     markdown_text = _read_first_existing(primary_output_dir, _MINERU_TEXT_MARKDOWN_FILES)
@@ -335,7 +360,12 @@ def _normalize_mineru_output_dir(
         "content_list_excerpt": content_list[:10] if isinstance(content_list, list) else [],
         "middle_json_excerpt": _bounded_middle_excerpt(middle),
     }
-    artifacts = _include_raw_artifacts(artifacts, content_list=content_list, middle=middle)
+    artifacts = _include_raw_artifacts(
+        artifacts,
+        content_list=content_list,
+        middle=middle,
+        debug_save_raw=debug_save_raw,
+    )
 
     structured = {
         "schema_version": 1,
@@ -377,9 +407,10 @@ def run_mineru_document_ocr(
     if not pdf_path.exists():
         raise FileNotFoundError(f"MinerU input PDF not found: {pdf_path}")
 
-    timeout_sec = _get_timeout_sec()
-    max_concurrency = _get_max_concurrency()
-    tmp_root = _get_tmp_root()
+    config = load_mineru_config()
+    timeout_sec = config.timeout_sec
+    max_concurrency = config.max_concurrency
+    tmp_root = config.tmp_root
     if tmp_root is not None:
         tmp_root.mkdir(parents=True, exist_ok=True)
 
@@ -390,8 +421,8 @@ def run_mineru_document_ocr(
 
     with tempfile.TemporaryDirectory(**temp_dir_kwargs) as tmp_dir:
         output_dir = Path(tmp_dir)
-        command = _build_mineru_command(pdf_path=pdf_path, output_dir=output_dir)
-        semaphore = _get_mineru_semaphore()
+        command = _build_mineru_command(pdf_path=pdf_path, output_dir=output_dir, config=config)
+        semaphore = _get_mineru_semaphore(max_concurrency)
 
         try:
             with semaphore:
@@ -422,6 +453,7 @@ def run_mineru_document_ocr(
             output_format=output_format,
             prompt_preset=prompt_preset,
             source_pdf_path=pdf_path,
+            debug_save_raw=config.debug_save_raw,
         )
         structured = normalized["structured"]
         pages = structured.get("pages") if isinstance(structured, dict) else []
@@ -462,15 +494,16 @@ def run_mineru_document_ocr(
 
 
 def describe_mineru_backend() -> dict[str, Any]:
+    config = load_mineru_config()
     return {
-        "available": _mineru_available(),
+        "available": _mineru_available(config),
         "pdf_only": True,
         "document_level": True,
         "opt_in_only": True,
         "supports_per_page_metrics": True,
         "mode": "cli",
-        "timeout_sec": _get_timeout_sec(),
-        "max_concurrency": _get_max_concurrency(),
-        "tmp_root": str(_get_tmp_root()) if _get_tmp_root() is not None else None,
-        "debug_save_raw": _debug_save_raw(),
+        "timeout_sec": config.timeout_sec,
+        "max_concurrency": config.max_concurrency,
+        "tmp_root": str(config.tmp_root) if config.tmp_root is not None else None,
+        "debug_save_raw": config.debug_save_raw,
     }

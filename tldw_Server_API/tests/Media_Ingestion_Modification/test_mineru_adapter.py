@@ -8,6 +8,7 @@ import pytest
 
 def test_build_mineru_command_returns_argv_tokens(monkeypatch, tmp_path):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
+        load_mineru_config,
         _build_mineru_command,
     )
 
@@ -15,13 +16,37 @@ def test_build_mineru_command_returns_argv_tokens(monkeypatch, tmp_path):
     out_dir = tmp_path / "out"
     monkeypatch.setenv("MINERU_CMD", "mineru")
 
-    cmd = _build_mineru_command(pdf_path=pdf_path, output_dir=out_dir)
+    cmd = _build_mineru_command(
+        pdf_path=pdf_path,
+        output_dir=out_dir,
+        config=load_mineru_config(),
+    )
 
     assert isinstance(cmd, list)
     assert all(isinstance(part, str) for part in cmd)
     assert cmd[0] == "mineru"
     assert str(pdf_path) in cmd
     assert str(out_dir) in cmd
+
+
+def test_load_mineru_config_reads_environment(monkeypatch, tmp_path):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
+        load_mineru_config,
+    )
+
+    monkeypatch.setenv("MINERU_CMD", f"{sys.executable} -m mineru_cli")
+    monkeypatch.setenv("MINERU_TIMEOUT_SEC", "45")
+    monkeypatch.setenv("MINERU_MAX_CONCURRENCY", "3")
+    monkeypatch.setenv("MINERU_TMP_ROOT", str(tmp_path))
+    monkeypatch.setenv("MINERU_DEBUG_SAVE_RAW", "true")
+
+    config = load_mineru_config()
+
+    assert config.command == [sys.executable, "-m", "mineru_cli"]
+    assert config.timeout_sec == 45
+    assert config.max_concurrency == 3
+    assert config.tmp_root == tmp_path
+    assert config.debug_save_raw is True
 
 
 def test_normalize_mineru_output_returns_versioned_bounded_payload(tmp_path):

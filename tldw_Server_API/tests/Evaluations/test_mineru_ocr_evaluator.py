@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 
@@ -94,3 +96,52 @@ async def test_ocr_evaluator_warns_when_mineru_has_no_page_slices(monkeypatch):
     assert "per_page_metrics" not in item
     assert item["ocr_details"]["supports_per_page_metrics"] is False
     assert item["ocr_details"]["warnings"] == ["MinerU output did not include page slices"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_ocr_evaluator_offloads_process_pdf_for_mineru(monkeypatch):
+    from tldw_Server_API.app.core.Evaluations.ocr_evaluator import OCREvaluator
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF import PDF_Processing_Lib as pdf_lib
+
+    seen: dict[str, int] = {}
+
+    def _fake_process_pdf(**kwargs):
+        seen["thread_id"] = threading.get_ident()
+        return {
+            "content": "page one",
+            "analysis_details": {
+                "ocr": {
+                    "backend": "mineru",
+                    "total_pages": 1,
+                    "ocr_pages": 1,
+                    "structured": {
+                        "schema_version": 1,
+                        "pages": [{"page": 1, "text": "page one"}],
+                        "meta": {"supports_per_page_metrics": True},
+                    },
+                }
+            },
+        }
+
+    monkeypatch.setattr(pdf_lib, "process_pdf", _fake_process_pdf)
+
+    evaluator = OCREvaluator()
+    event_loop_thread_id = threading.get_ident()
+
+    result = await evaluator.evaluate(
+        items=[
+            {
+                "id": "mineru-doc",
+                "pdf_bytes": b"%PDF-1.4",
+                "ground_truth_text": "page one",
+                "ground_truth_pages": ["page one"],
+            }
+        ],
+        ocr_options={"ocr_backend": "mineru"},
+    )
+
+    item = result["results"][0]
+    assert seen["thread_id"] != event_loop_thread_id
+    assert item["page_coverage"] == 1.0
+    assert item["per_page_metrics"][0]["page"] == 1

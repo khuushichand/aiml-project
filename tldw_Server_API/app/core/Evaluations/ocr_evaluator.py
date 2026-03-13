@@ -64,6 +64,79 @@ class OCREvalItem:
     ground_truth_text: str | None = None
 
 
+def _build_process_pdf_kwargs(
+    *,
+    item: OCREvalItem,
+    lang: str,
+    dpi: int,
+    output_format: str | None,
+    prompt_preset: str | None,
+    ocr_options: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Assemble consistent ``process_pdf`` kwargs for evaluator fallback paths."""
+    return {
+        "file_input": item.pdf_bytes if item.pdf_bytes is not None else item.pdf_path,
+        "filename": item.id + (".pdf" if not str(item.id).endswith(".pdf") else ""),
+        "parser": "pymupdf4llm",
+        "enable_ocr": True,
+        "ocr_backend": (ocr_options or {}).get("ocr_backend"),
+        "ocr_lang": lang,
+        "ocr_dpi": dpi,
+        "ocr_mode": (ocr_options or {}).get("ocr_mode", "fallback"),
+        "ocr_min_page_text_chars": int((ocr_options or {}).get("ocr_min_page_text_chars", 40)),
+        "ocr_output_format": output_format,
+        "ocr_prompt_preset": prompt_preset,
+        "perform_chunking": False,
+        "perform_analysis": False,
+        "keywords": [],
+    }
+
+
+async def _run_process_pdf_fallback(
+    *,
+    process_pdf: Any,
+    item: OCREvalItem,
+    lang: str,
+    dpi: int,
+    output_format: str | None,
+    prompt_preset: str | None,
+    ocr_options: dict[str, Any] | None,
+    require_page_slices: bool = False,
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Run ``process_pdf`` off-thread and normalize OCR details for evaluation."""
+    out = await _asyncio.to_thread(
+        process_pdf,
+        **_build_process_pdf_kwargs(
+            item=item,
+            lang=lang,
+            dpi=dpi,
+            output_format=output_format,
+            prompt_preset=prompt_preset,
+            ocr_options=ocr_options,
+        ),
+    )
+    hyp_text = str((out or {}).get("content") or "")
+    ocr_details = (out or {}).get("analysis_details", {}).get("ocr") or {}
+    normalized_ocr_details = dict(ocr_details) if isinstance(ocr_details, dict) else {}
+    page_texts: list[str] = []
+    structured = normalized_ocr_details.get("structured")
+    pages = structured.get("pages") if isinstance(structured, dict) else None
+
+    if isinstance(pages, list) and pages:
+        page_texts = [
+            str(page.get("text") or "")
+            for page in pages
+            if isinstance(page, dict)
+        ]
+    elif require_page_slices:
+        normalized_ocr_details["supports_per_page_metrics"] = False
+        warnings = list(normalized_ocr_details.get("warnings") or [])
+        warnings.append("MinerU output did not include page slices")
+        normalized_ocr_details["warnings"] = warnings
+
+    return hyp_text, normalized_ocr_details, page_texts
+
+
 class OCREvaluator:
     """
     Evaluate OCR effectiveness by comparing extracted text to ground-truth.
@@ -145,63 +218,31 @@ class OCREvaluator:
                         prompt_preset = (ocr_options or {}).get("ocr_prompt_preset")
                         requested_backend = str((ocr_options or {}).get("ocr_backend") or "").strip().lower()
                         if requested_backend == "mineru":
-                            out = process_pdf(
-                                file_input=item.pdf_bytes if item.pdf_bytes is not None else item.pdf_path,
-                                filename=item.id + (".pdf" if not str(item.id).endswith(".pdf") else ""),
-                                parser="pymupdf4llm",
-                                enable_ocr=True,
-                                ocr_backend=(ocr_options or {}).get("ocr_backend"),
-                                ocr_lang=lang,
-                                ocr_dpi=dpi,
-                                ocr_mode=(ocr_options or {}).get("ocr_mode", "fallback"),
-                                ocr_min_page_text_chars=int((ocr_options or {}).get("ocr_min_page_text_chars", 40)),
-                                ocr_output_format=output_format,
-                                ocr_prompt_preset=prompt_preset,
-                                perform_chunking=False,
-                                perform_analysis=False,
-                                keywords=[],
+                            hyp_text, ocr_details, page_texts = await _run_process_pdf_fallback(
+                                process_pdf=process_pdf,
+                                item=item,
+                                lang=lang,
+                                dpi=dpi,
+                                output_format=output_format,
+                                prompt_preset=prompt_preset,
+                                ocr_options=ocr_options,
+                                require_page_slices=True,
                             )
-                            hyp_text = (out or {}).get("content") or ""
-                            ocr_details = (out or {}).get("analysis_details", {}).get("ocr") or {}
-                            structured = ocr_details.get("structured") if isinstance(ocr_details, dict) else None
-                            pages = structured.get("pages") if isinstance(structured, dict) else None
-                            if isinstance(pages, list) and pages:
-                                page_texts = [
-                                    str(page.get("text") or "")
-                                    for page in pages
-                                    if isinstance(page, dict)
-                                ]
-                            else:
-                                ocr_details = dict(ocr_details)
-                                ocr_details["supports_per_page_metrics"] = False
-                                warnings = list(ocr_details.get("warnings") or [])
-                                warnings.append("MinerU output did not include page slices")
-                                ocr_details["warnings"] = warnings
                             if ocr_details:
                                 ocr_info.update(ocr_details)
                         else:
                             backend = get_ocr_backend((ocr_options or {}).get("ocr_backend"))
                             if backend is None:
                                 logger.warning("No OCR backend available; falling back to PDF processor content")
-                                # Fallback: use process_pdf
-                                out = process_pdf(
-                                    file_input=item.pdf_bytes if item.pdf_bytes is not None else item.pdf_path,
-                                    filename=item.id + (".pdf" if not str(item.id).endswith(".pdf") else ""),
-                                    parser="pymupdf4llm",
-                                    enable_ocr=True,
-                                    ocr_backend=(ocr_options or {}).get("ocr_backend"),
-                                    ocr_lang=lang,
-                                    ocr_dpi=dpi,
-                                    ocr_mode=(ocr_options or {}).get("ocr_mode", "fallback"),
-                                    ocr_min_page_text_chars=int((ocr_options or {}).get("ocr_min_page_text_chars", 40)),
-                                    ocr_output_format=output_format,
-                                    ocr_prompt_preset=prompt_preset,
-                                    perform_chunking=False,
-                                    perform_analysis=False,
-                                    keywords=[],
+                                hyp_text, ocr_details, _ = await _run_process_pdf_fallback(
+                                    process_pdf=process_pdf,
+                                    item=item,
+                                    lang=lang,
+                                    dpi=dpi,
+                                    output_format=output_format,
+                                    prompt_preset=prompt_preset,
+                                    ocr_options=ocr_options,
                                 )
-                                hyp_text = (out or {}).get("content") or ""
-                                ocr_details = (out or {}).get("analysis_details", {}).get("ocr") or {}
                                 if ocr_details:
                                     ocr_info.update(ocr_details)
                             else:
