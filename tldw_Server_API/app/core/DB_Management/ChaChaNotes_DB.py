@@ -84,6 +84,7 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (  # noq
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths  # noqa: E402
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import begin_immediate_if_needed  # noqa: E402
 
 #
 ########################################################################################################################
@@ -20169,8 +20170,7 @@ class TransactionContextManager:
         self.db._ensure_sqlite_backend()
         self.conn = self.db.get_connection()
         if not self.conn.in_transaction:
-            # Using deferred transaction by default. Could be "IMMEDIATE" or "EXCLUSIVE" if needed.
-            self.conn.execute("BEGIN")
+            begin_immediate_if_needed(self.conn)
             self.is_outermost_transaction = True
             logger.debug(f"Transaction started (outermost) on thread {threading.get_ident()}.")
         else:

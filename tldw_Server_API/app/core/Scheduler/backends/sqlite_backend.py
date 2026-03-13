@@ -115,6 +115,7 @@ class SQLiteBackend(QueueBackend):
             for conn in all_conns:
                 await conn.execute("PRAGMA journal_mode=WAL")  # Write-ahead logging
                 await conn.execute("PRAGMA synchronous=NORMAL")  # Balance safety/speed
+                await conn.execute("PRAGMA foreign_keys=ON")  # Enforce FK constraints
                 await conn.execute("PRAGMA cache_size=10000")  # Larger cache
                 await conn.execute("PRAGMA temp_store=MEMORY")  # Temp tables in memory
                 await conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
@@ -714,7 +715,7 @@ class SQLiteBackend(QueueBackend):
     async def transaction(self):
         """Transaction context manager"""
         async with self._lock:
-            await self._connection.execute("BEGIN")
+            await self._connection.execute("BEGIN IMMEDIATE")
             try:
                 yield self
                 await self._connection.commit()

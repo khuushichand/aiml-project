@@ -10,6 +10,10 @@ from typing import Any, Mapping, Sequence
 
 from loguru import logger
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    begin_immediate_if_needed,
+    configure_sqlite_connection,
+)
 
 _SCHEMA_VERSION = 1
 
@@ -91,8 +95,7 @@ class VoiceRegistryDB:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=10, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        configure_sqlite_connection(conn)
         return conn
 
     def _initialize_schema(self) -> None:
@@ -234,7 +237,7 @@ class VoiceRegistryDB:
 
         with self._lock:
             with self._connect() as conn:
-                conn.execute("BEGIN")
+                begin_immediate_if_needed(conn)
                 for record in normalized_records:
                     conn.execute(self._upsert_stmt(), self._params(user_id, record))
 

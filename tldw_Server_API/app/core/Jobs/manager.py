@@ -17,6 +17,9 @@ from typing import Any, ClassVar
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
 from tldw_Server_API.app.core.exceptions import BadRequestError
 from tldw_Server_API.app.core.Security.crypto import (
     decrypt_json_blob,
@@ -258,14 +261,7 @@ class JobManager:
         conn = sqlite3.connect(self.db_path)
         # Apply pragmatic SQLite settings for concurrent read/write under tests and dev
         with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
-            conn.execute("PRAGMA journal_mode=WAL;")
-        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
-            conn.execute("PRAGMA synchronous=NORMAL;")
-        try:  # noqa: SIM105
-            # Ensure reads wait briefly instead of raising 'database is locked'
-            conn.execute("PRAGMA busy_timeout=5000;")
-        except _JOB_NONCRITICAL_EXCEPTIONS:
-            pass
+            configure_sqlite_connection(conn)
         conn.row_factory = sqlite3.Row
         return conn
 

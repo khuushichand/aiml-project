@@ -177,6 +177,73 @@ class TestDatabaseInitialization:
         for table in expected_fts:
             assert table in fts_tables, f"FTS table {table} not found"
 
+    def test_wal_mode_defaults_outside_test_context(self, temp_db_path: Path, monkeypatch):
+        """Prompt Studio should default to WAL for normal runtime SQLite usage."""
+        monkeypatch.setenv("TEST_MODE", "false")
+        monkeypatch.delenv("TLDW_TEST_MODE", raising=False)
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        monkeypatch.delenv("TLDW_PS_SQLITE_WAL", raising=False)
+
+        db = PromptStudioDatabase(temp_db_path, "test_client")
+        try:
+            conn = db.get_connection()
+            row = conn.execute("PRAGMA journal_mode").fetchone()
+            assert str(row[0]).lower() == "wal"
+        finally:
+            db.close()
+
+    def test_wal_mode_defaults_to_delete_in_ci(self, temp_db_path: Path, monkeypatch):
+        """CI and test contexts should keep Prompt Studio on DELETE unless overridden."""
+        monkeypatch.setenv("TEST_MODE", "false")
+        monkeypatch.delenv("TLDW_TEST_MODE", raising=False)
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.delenv("TLDW_PS_SQLITE_WAL", raising=False)
+
+        db = PromptStudioDatabase(temp_db_path, "test_client")
+        try:
+            conn = db.get_connection()
+            row = conn.execute("PRAGMA journal_mode").fetchone()
+            assert str(row[0]).lower() == "delete"
+        finally:
+            db.close()
+
+    def test_wal_mode_override_beats_ci_default(self, temp_db_path: Path, monkeypatch):
+        """Explicit WAL override should win even under CI markers."""
+        monkeypatch.setenv("TEST_MODE", "false")
+        monkeypatch.delenv("TLDW_TEST_MODE", raising=False)
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("TLDW_PS_SQLITE_WAL", "1")
+
+        db = PromptStudioDatabase(temp_db_path, "test_client")
+        try:
+            conn = db.get_connection()
+            row = conn.execute("PRAGMA journal_mode").fetchone()
+            assert str(row[0]).lower() == "wal"
+        finally:
+            db.close()
+
+    def test_reopened_connections_keep_ci_delete_mode(self, temp_db_path: Path, monkeypatch):
+        """Prompt Studio reopened SQLite connections should preserve the local WAL decision."""
+        monkeypatch.setenv("TEST_MODE", "false")
+        monkeypatch.delenv("TLDW_TEST_MODE", raising=False)
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        monkeypatch.delenv("TLDW_PS_SQLITE_WAL", raising=False)
+
+        db = PromptStudioDatabase(temp_db_path, "test_client")
+        try:
+            db.close_connection()
+            conn = db.get_connection()
+            row = conn.execute("PRAGMA journal_mode").fetchone()
+            assert str(row[0]).lower() == "delete"
+        finally:
+            db.close()
+
 ########################################################################################################################
 # Project CRUD Tests
 
