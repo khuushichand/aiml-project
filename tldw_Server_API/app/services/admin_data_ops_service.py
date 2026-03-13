@@ -27,6 +27,9 @@ from tldw_Server_API.app.core.AuthNZ.retention_policies import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.admin_retention_preview_counts import (
+    count_retention_window,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Backups import (
     create_backup,
     create_incremental_backup,
@@ -449,50 +452,6 @@ async def verify_retention_preview_signature(
         raise InvalidRetentionRangeError("invalid_preview_signature")
 
 
-async def _count_retention_window(
-    *,
-    table: str,
-    column: str,
-    older_than: datetime | str,
-    not_older_than: datetime | str,
-    is_date_column: bool = False,
-) -> int:
-    db_pool = await get_db_pool()
-    is_postgres = bool(getattr(db_pool, "pool", None))
-
-    if isinstance(older_than, datetime):
-        older_than_param: Any = older_than.replace(tzinfo=None) if is_postgres else older_than.isoformat()
-    else:
-        older_than_param = older_than
-    if isinstance(not_older_than, datetime):
-        not_older_than_param: Any = (
-            not_older_than.replace(tzinfo=None) if is_postgres else not_older_than.isoformat()
-        )
-    else:
-        not_older_than_param = not_older_than
-
-    if is_postgres:
-        cast = "::date" if is_date_column else ""
-        query = (
-            f"SELECT COUNT(*) FROM {table} "  # nosec B608
-            f"WHERE {column}{cast} < $1 AND {column}{cast} >= $2"  # nosec B608
-        )
-        total = await db_pool.fetchval(query, older_than_param, not_older_than_param)
-    else:
-        comparator = f"DATE({column})" if is_date_column else f"datetime({column})"
-        query = (
-            f"SELECT COUNT(*) FROM {table} "  # nosec B608
-            f"WHERE {comparator} < datetime(?) AND {comparator} >= datetime(?)"  # nosec B608
-        )
-        if is_date_column:
-            query = (
-                f"SELECT COUNT(*) FROM {table} "  # nosec B608
-                f"WHERE DATE({column}) < DATE(?) AND DATE({column}) >= DATE(?)"  # nosec B608
-            )
-        total = await db_pool.fetchval(query, older_than_param, not_older_than_param)
-    return int(total or 0)
-
-
 async def preview_retention_policy(
     *,
     policy_key: str,
@@ -516,28 +475,28 @@ async def preview_retention_policy(
         older_than = datetime.now(timezone.utc) - timedelta(days=effective_days)
         not_older_than = datetime.now(timezone.utc) - timedelta(days=actual_current_days)
         if policy_key == "audit_logs":
-            counts["audit_log_entries"] = await _count_retention_window(
+            counts["audit_log_entries"] = await count_retention_window(
                 table="audit_logs",
                 column="created_at",
                 older_than=older_than,
                 not_older_than=not_older_than,
             )
         elif policy_key == "usage_logs":
-            counts["job_records"] = await _count_retention_window(
+            counts["job_records"] = await count_retention_window(
                 table="usage_log",
                 column="ts",
                 older_than=older_than,
                 not_older_than=not_older_than,
             )
         elif policy_key == "llm_usage_logs":
-            counts["job_records"] = await _count_retention_window(
+            counts["job_records"] = await count_retention_window(
                 table="llm_usage_log",
                 column="ts",
                 older_than=older_than,
                 not_older_than=not_older_than,
             )
         elif policy_key == "usage_daily":
-            counts["job_records"] = await _count_retention_window(
+            counts["job_records"] = await count_retention_window(
                 table="usage_daily",
                 column="day",
                 older_than=(datetime.now(timezone.utc) - timedelta(days=effective_days)).date().isoformat(),
@@ -545,7 +504,7 @@ async def preview_retention_policy(
                 is_date_column=True,
             )
         elif policy_key == "llm_usage_daily":
-            counts["job_records"] = await _count_retention_window(
+            counts["job_records"] = await count_retention_window(
                 table="llm_usage_daily",
                 column="day",
                 older_than=(datetime.now(timezone.utc) - timedelta(days=effective_days)).date().isoformat(),
@@ -553,7 +512,7 @@ async def preview_retention_policy(
                 is_date_column=True,
             )
         elif policy_key in {"privilege_snapshots", "privilege_snapshots_weekly"}:
-            counts["job_records"] = await _count_retention_window(
+            counts["job_records"] = await count_retention_window(
                 table="privilege_snapshots",
                 column="generated_at",
                 older_than=older_than,

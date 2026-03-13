@@ -64,6 +64,7 @@ class _FakeValidationRunsRepo:
 @pytest.mark.asyncio
 async def test_handle_byok_validation_job_marks_running_and_complete() -> None:
     from tldw_Server_API.app.services.admin_byok_validation_jobs_worker import (
+        CandidateLoadResult,
         handle_byok_validation_job,
     )
 
@@ -76,13 +77,16 @@ async def test_handle_byok_validation_job_marks_running_and_complete() -> None:
         }
     )
 
-    async def _load_candidates(run: dict[str, object]) -> list[dict[str, object]]:
+    async def _load_candidates(run: dict[str, object]) -> CandidateLoadResult:
         assert run["id"] == "run-1"
-        return [
-            {"provider": "openai", "api_key": "valid-openai-1", "credential_fields": None},
-            {"provider": "openai", "api_key": "invalid-openai-2", "credential_fields": None},
-            {"provider": "anthropic", "api_key": "valid-anthropic-1", "credential_fields": None},
-        ]
+        return CandidateLoadResult(
+            candidates=[
+                {"provider": "openai", "api_key": "valid-openai-1", "credential_fields": None},
+                {"provider": "openai", "api_key": "invalid-openai-2", "credential_fields": None},
+                {"provider": "anthropic", "api_key": "valid-anthropic-1", "credential_fields": None},
+            ],
+            error_count=1,
+        )
 
     async def _validate(*, provider: str, api_key: str, credential_fields=None, model=None):
         if api_key.startswith("invalid-"):
@@ -102,13 +106,14 @@ async def test_handle_byok_validation_job_marks_running_and_complete() -> None:
             "keys_checked": 3,
             "valid_count": 2,
             "invalid_count": 1,
-            "error_count": 0,
+            "error_count": 1,
         }
     ]
     assert repo.failed_calls == []
     assert result["status"] == "complete"
     assert result["keys_checked"] == 3
     assert result["valid_count"] == 2
+    assert result["error_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -176,6 +181,68 @@ async def test_run_validation_scan_uses_bounded_per_provider_concurrency() -> No
     assert summary["invalid_count"] == 0
     assert summary["error_count"] == 0
     assert max_by_provider["openai"] <= 2
+
+
+@pytest.mark.asyncio
+async def test_load_default_validation_candidates_skips_unreadable_secrets(monkeypatch) -> None:
+    from tldw_Server_API.app.services.admin_byok_validation_jobs_worker import (
+        load_default_validation_candidates,
+    )
+
+    class _SharedRepo:
+        async def list_secrets(self, **kwargs):
+            return [
+                {"scope_type": "org", "scope_id": 42, "provider": "openai"},
+            ]
+
+        async def fetch_secret(self, scope_type: str, scope_id: int, provider: str):
+            return {"encrypted_blob": "broken"}
+
+    class _UserRepo:
+        async def list_secrets_for_user(self, user_id: int):
+            return []
+
+        async def fetch_secret_for_user(self, user_id: int, provider: str):
+            return None
+
+    class _UsersRepo:
+        async def list_users(self, *, offset: int, limit: int, org_ids=None):
+            return [], 0
+
+    async def _get_shared_repo():
+        return _SharedRepo()
+
+    async def _get_user_repo():
+        return _UserRepo()
+
+    async def _from_pool():
+        return _UsersRepo()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.admin_byok_validation_jobs_worker.admin_byok_service.get_shared_byok_repo",
+        _get_shared_repo,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.admin_byok_validation_jobs_worker.admin_byok_service.get_user_byok_repo",
+        _get_user_repo,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.admin_byok_validation_jobs_worker.AuthnzUsersRepo.from_pool",
+        _from_pool,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.admin_byok_validation_jobs_worker.loads_envelope",
+        lambda encrypted_blob: encrypted_blob,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.services.admin_byok_validation_jobs_worker.decrypt_byok_payload",
+        lambda envelope: (_ for _ in ()).throw(ValueError("broken secret")),
+    )
+
+    result = await load_default_validation_candidates({"org_id": None, "provider": None})
+
+    assert result.candidates == []
+    assert result.error_count == 1
 
 
 @pytest.mark.asyncio

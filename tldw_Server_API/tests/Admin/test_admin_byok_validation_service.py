@@ -4,9 +4,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pytest
-from fastapi import HTTPException
-
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.exceptions import (
+    ByokValidationActiveRunError,
+    ByokValidationDisabledError,
+    ByokValidationRunNotFoundError,
+)
 
 
 @dataclass
@@ -111,11 +114,10 @@ async def test_create_validation_run_rejects_when_byok_disabled(monkeypatch) -> 
         lambda: False,
     )
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ByokValidationDisabledError) as exc_info:
         await service.create_run(_platform_admin_principal(), org_id=42, provider="openai")
 
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "BYOK is disabled in this deployment"
+    assert str(exc_info.value) == "BYOK is disabled in this deployment"
 
 
 @pytest.mark.asyncio
@@ -158,11 +160,10 @@ async def test_create_validation_run_rejects_when_another_run_is_active(monkeypa
 
     service = AdminByokValidationService(repo=_ActiveRunRepo())
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ByokValidationActiveRunError) as exc_info:
         await service.create_run(_platform_admin_principal(), org_id=42, provider="openai")
 
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "active_validation_run_exists"
+    assert str(exc_info.value) == "active_validation_run_exists"
 
 
 @pytest.mark.asyncio
@@ -178,8 +179,21 @@ async def test_create_validation_run_maps_unique_index_race_to_conflict(monkeypa
 
     service = AdminByokValidationService(repo=_DuplicateRunRepo())
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ByokValidationActiveRunError) as exc_info:
         await service.create_run(_platform_admin_principal(), org_id=42, provider="openai")
 
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "active_validation_run_exists"
+    assert str(exc_info.value) == "active_validation_run_exists"
+
+
+@pytest.mark.asyncio
+async def test_get_run_raises_not_found_when_missing() -> None:
+    from tldw_Server_API.app.services.admin_byok_validation_service import (
+        AdminByokValidationService,
+    )
+
+    service = AdminByokValidationService(repo=_RecordingRepo())
+
+    with pytest.raises(ByokValidationRunNotFoundError) as exc_info:
+        await service.get_run("missing-run")
+
+    assert str(exc_info.value) == "byok_validation_run_not_found"

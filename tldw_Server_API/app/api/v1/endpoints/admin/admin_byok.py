@@ -28,6 +28,11 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.byok_validation_runs_repo import (
     AuthnzByokValidationRunsRepo,
 )
+from tldw_Server_API.app.core.exceptions import (
+    ByokValidationActiveRunError,
+    ByokValidationDisabledError,
+    ByokValidationRunNotFoundError,
+)
 from tldw_Server_API.app.services import admin_byok_service
 from tldw_Server_API.app.services.admin_byok_validation_service import (
     AdminByokValidationService,
@@ -198,11 +203,16 @@ async def admin_create_byok_validation_run(
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
     if not byok_validation_worker_enabled():
         raise HTTPException(status_code=503, detail="byok_validation_worker_unavailable")
-    item = await service.create_run(
-        principal,
-        org_id=payload.org_id,
-        provider=payload.provider,
-    )
+    try:
+        item = await service.create_run(
+            principal,
+            org_id=payload.org_id,
+            provider=payload.provider,
+        )
+    except ByokValidationDisabledError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ByokValidationActiveRunError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     try:
         await enqueue_run(item)
     except Exception as exc:
@@ -243,5 +253,8 @@ async def admin_get_byok_validation_run(
 ) -> ByokValidationRunItem:
     """Return one authoritative BYOK validation run by id."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
-    item = await service.get_run(run_id)
+    try:
+        item = await service.get_run(run_id)
+    except ByokValidationRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ByokValidationRunItem(**item)

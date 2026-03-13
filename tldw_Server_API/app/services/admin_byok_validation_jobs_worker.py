@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
+from json import JSONDecodeError
 import os
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Protocol, TypedDict
 
 from loguru import logger
 
@@ -21,13 +23,85 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.services import admin_byok_service, admin_orgs_service
-from tldw_Server_API.app.services.admin_byok_validation_service import (
-    AdminByokValidationService,
-)
 
 
 BYOK_VALIDATION_DOMAIN = "byok"
 BYOK_VALIDATION_JOB_TYPE = "validation_sweep"
+
+
+class ByokValidationCandidate(TypedDict, total=False):
+    """One concrete BYOK credential candidate to validate."""
+
+    provider: str
+    api_key: str
+    credential_fields: dict[str, Any] | None
+    source: str
+    scope_type: str
+    scope_id: int
+    user_id: int
+
+
+@dataclass(frozen=True)
+class CandidateLoadResult:
+    """Candidates plus the number of skipped records encountered while loading."""
+
+    candidates: list[ByokValidationCandidate]
+    error_count: int = 0
+
+
+class SharedByokRepoProtocol(Protocol):
+    """Subset of shared BYOK repo behavior used by validation loading."""
+
+    async def list_secrets(
+        self,
+        *,
+        scope_type: str | None = None,
+        scope_id: int | None = None,
+        provider: str | None = None,
+    ) -> list[dict[str, Any]]:
+        ...
+
+    async def fetch_secret(
+        self,
+        scope_type: str,
+        scope_id: int,
+        provider: str,
+    ) -> dict[str, Any] | None:
+        ...
+
+
+class UserByokRepoProtocol(Protocol):
+    """Subset of per-user BYOK repo behavior used by validation loading."""
+
+    async def list_secrets_for_user(self, user_id: int) -> list[dict[str, Any]]:
+        ...
+
+    async def fetch_secret_for_user(self, user_id: int, provider: str) -> dict[str, Any] | None:
+        ...
+
+
+class ValidationRunsRepoProtocol(Protocol):
+    """Subset of run-repo behavior required by the Jobs worker."""
+
+    async def get_run(self, run_id: str) -> dict[str, Any] | None:
+        ...
+
+    async def mark_running(self, run_id: str, *, job_id: str | None) -> dict[str, Any]:
+        ...
+
+    async def mark_complete(
+        self,
+        run_id: str,
+        *,
+        keys_checked: int,
+        valid_count: int,
+        invalid_count: int,
+        error_count: int,
+    ) -> dict[str, Any]:
+        ...
+
+    async def mark_failed(self, run_id: str, *, error_message: str) -> dict[str, Any]:
+        ...
 
 
 def byok_validation_queue() -> str:
@@ -50,7 +124,7 @@ def build_byok_validation_idempotency_key(*, run_id: str) -> str:
     return f"byok-validation:{run_id}"
 
 
-async def _get_repo():
+async def _get_repo() -> ValidationRunsRepoProtocol:
     """Build the BYOK validation run repository for worker execution."""
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     from tldw_Server_API.app.core.AuthNZ.repos.byok_validation_runs_repo import (
@@ -105,10 +179,11 @@ async def _load_team_scoped_shared_candidates(
     *,
     org_id: int,
     provider: str | None,
-    shared_repo,
-) -> list[dict[str, Any]]:
+    shared_repo: SharedByokRepoProtocol,
+) -> CandidateLoadResult:
     """Load team-scoped shared key candidates for one organization."""
-    items: list[dict[str, Any]] = []
+    items: list[ByokValidationCandidate] = []
+    error_count = 0
     offset = 0
     limit = 200
     while True:
@@ -126,7 +201,17 @@ async def _load_team_scoped_shared_candidates(
                 full_row = await shared_repo.fetch_secret("team", team_id, str(row["provider"]))
                 if not full_row or not full_row.get("encrypted_blob"):
                     continue
-                payload = decrypt_byok_payload(loads_envelope(str(full_row["encrypted_blob"])))
+                try:
+                    payload = decrypt_byok_payload(loads_envelope(str(full_row["encrypted_blob"])))
+                except (JSONDecodeError, TypeError, ValueError) as exc:
+                    error_count += 1
+                    logger.warning(
+                        "Skipping unreadable BYOK validation candidate: provider={} source=shared scope_type=team scope_id={} error_type={}",
+                        row["provider"],
+                        team_id,
+                        type(exc).__name__,
+                    )
+                    continue
                 items.append(
                     {
                         "provider": str(row["provider"]),
@@ -140,19 +225,20 @@ async def _load_team_scoped_shared_candidates(
         if len(teams) < limit:
             break
         offset += limit
-    return items
+    return CandidateLoadResult(candidates=items, error_count=error_count)
 
 
-async def load_default_validation_candidates(run: dict[str, Any]) -> list[dict[str, Any]]:
+async def load_default_validation_candidates(run: dict[str, Any]) -> CandidateLoadResult:
     """Load shared and per-user BYOK validation candidates for one run scope."""
     provider = str(run.get("provider") or "").strip() or None
     org_id = int(run["org_id"]) if run.get("org_id") is not None else None
 
-    shared_repo = await admin_byok_service.get_shared_byok_repo()
-    user_repo = await admin_byok_service.get_user_byok_repo()
+    shared_repo: SharedByokRepoProtocol = await admin_byok_service.get_shared_byok_repo()
+    user_repo: UserByokRepoProtocol = await admin_byok_service.get_user_byok_repo()
     users_repo = await AuthnzUsersRepo.from_pool()
 
-    candidates: list[dict[str, Any]] = []
+    candidates: list[ByokValidationCandidate] = []
+    error_count = 0
 
     if org_id is not None:
         shared_rows = await shared_repo.list_secrets(
@@ -160,14 +246,14 @@ async def load_default_validation_candidates(run: dict[str, Any]) -> list[dict[s
             scope_id=org_id,
             provider=provider,
         )
-        team_rows = await _load_team_scoped_shared_candidates(
+        team_load_result = await _load_team_scoped_shared_candidates(
             org_id=org_id,
             provider=provider,
             shared_repo=shared_repo,
         )
     else:
         shared_rows = await shared_repo.list_secrets(provider=provider)
-        team_rows = []
+        team_load_result = CandidateLoadResult(candidates=[], error_count=0)
 
     for row in shared_rows:
         scope_type = str(row["scope_type"])
@@ -175,7 +261,18 @@ async def load_default_validation_candidates(run: dict[str, Any]) -> list[dict[s
         full_row = await shared_repo.fetch_secret(scope_type, scope_id, str(row["provider"]))
         if not full_row or not full_row.get("encrypted_blob"):
             continue
-        payload = decrypt_byok_payload(loads_envelope(str(full_row["encrypted_blob"])))
+        try:
+            payload = decrypt_byok_payload(loads_envelope(str(full_row["encrypted_blob"])))
+        except (JSONDecodeError, TypeError, ValueError) as exc:
+            error_count += 1
+            logger.warning(
+                "Skipping unreadable BYOK validation candidate: provider={} source=shared scope_type={} scope_id={} error_type={}",
+                row["provider"],
+                scope_type,
+                scope_id,
+                type(exc).__name__,
+            )
+            continue
         candidates.append(
             {
                 "provider": str(row["provider"]),
@@ -186,7 +283,8 @@ async def load_default_validation_candidates(run: dict[str, Any]) -> list[dict[s
                 "scope_id": scope_id,
             }
         )
-    candidates.extend(team_rows)
+    candidates.extend(team_load_result.candidates)
+    error_count += team_load_result.error_count
 
     offset = 0
     limit = 200
@@ -208,7 +306,17 @@ async def load_default_validation_candidates(run: dict[str, Any]) -> list[dict[s
                 full_row = await user_repo.fetch_secret_for_user(user_id, row_provider)
                 if not full_row or not full_row.get("encrypted_blob"):
                     continue
-                payload = decrypt_byok_payload(loads_envelope(str(full_row["encrypted_blob"])))
+                try:
+                    payload = decrypt_byok_payload(loads_envelope(str(full_row["encrypted_blob"])))
+                except (JSONDecodeError, TypeError, ValueError) as exc:
+                    error_count += 1
+                    logger.warning(
+                        "Skipping unreadable BYOK validation candidate: provider={} source=user user_id={} error_type={}",
+                        row_provider,
+                        user_id,
+                        type(exc).__name__,
+                    )
+                    continue
                 candidates.append(
                     {
                         "provider": row_provider,
@@ -222,20 +330,45 @@ async def load_default_validation_candidates(run: dict[str, Any]) -> list[dict[s
         if offset >= total:
             break
 
-    return candidates
+    return CandidateLoadResult(candidates=candidates, error_count=error_count)
+
+
+def _normalize_candidate_load_result(
+    load_result: CandidateLoadResult | list[ByokValidationCandidate],
+) -> CandidateLoadResult:
+    """Normalize legacy loader outputs into the worker's structured load result."""
+    if isinstance(load_result, CandidateLoadResult):
+        return load_result
+    return CandidateLoadResult(candidates=load_result, error_count=0)
 
 
 async def _run_validation_scan(
-    candidates: list[dict[str, Any]],
+    candidates: list[ByokValidationCandidate],
     *,
     test_provider_credentials_fn: Callable[..., Awaitable[Any]],
+    initial_error_count: int = 0,
+    max_workers: int | None = None,
     per_provider_limit: int | None = None,
 ) -> dict[str, int]:
     """Validate candidate credentials with bounded concurrency per provider."""
+    if not candidates:
+        return {
+            "keys_checked": 0,
+            "valid_count": 0,
+            "invalid_count": 0,
+            "error_count": initial_error_count,
+        }
+
     provider_limit = per_provider_limit or _per_provider_limit()
     semaphores: dict[str, asyncio.Semaphore] = {}
+    counts = {
+        "keys_checked": len(candidates),
+        "valid_count": 0,
+        "invalid_count": 0,
+        "error_count": initial_error_count,
+    }
 
-    async def _validate_candidate(candidate: dict[str, Any]) -> str:
+    async def _validate_candidate(candidate: ByokValidationCandidate) -> str:
         provider = str(candidate["provider"])
         semaphore = semaphores.setdefault(provider, asyncio.Semaphore(provider_limit))
         async with semaphore:
@@ -250,20 +383,53 @@ async def _run_validation_scan(
             except (ChatAuthenticationError, ChatBadRequestError):
                 return "invalid"
 
-    results = await asyncio.gather(*[_validate_candidate(candidate) for candidate in candidates])
-    return {
-        "keys_checked": len(candidates),
-        "valid_count": sum(1 for status in results if status == "valid"),
-        "invalid_count": sum(1 for status in results if status == "invalid"),
-        "error_count": 0,
-    }
+    queue: asyncio.Queue[ByokValidationCandidate | None] = asyncio.Queue()
+    for candidate in candidates:
+        queue.put_nowait(candidate)
+
+    provider_count = len({str(candidate["provider"]) for candidate in candidates})
+    worker_count = min(
+        len(candidates),
+        max(1, max_workers or (provider_limit * max(1, provider_count))),
+    )
+    for _ in range(worker_count):
+        queue.put_nowait(None)
+
+    async def _worker() -> None:
+        while True:
+            candidate = await queue.get()
+            try:
+                if candidate is None:
+                    return
+                status = await _validate_candidate(candidate)
+                if status == "valid":
+                    counts["valid_count"] += 1
+                else:
+                    counts["invalid_count"] += 1
+            finally:
+                queue.task_done()
+
+    tasks = [asyncio.create_task(_worker()) for _ in range(worker_count)]
+    try:
+        await asyncio.gather(*tasks)
+    except Exception:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+    return counts
 
 
 async def handle_byok_validation_job(
     job: dict[str, Any],
     *,
-    repo=None,
-    candidate_loader: Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]] | None = None,
+    repo: ValidationRunsRepoProtocol | None = None,
+    candidate_loader: Callable[
+        [dict[str, Any]],
+        Awaitable[CandidateLoadResult | list[ByokValidationCandidate]],
+    ]
+    | None = None,
     test_provider_credentials_fn: Callable[..., Awaitable[Any]] | None = None,
 ) -> dict[str, Any]:
     """Execute one authoritative BYOK validation run from the Jobs queue."""
@@ -286,10 +452,11 @@ async def handle_byok_validation_job(
     validator = test_provider_credentials_fn or test_provider_credentials
 
     try:
-        candidates = await loader(run)
+        load_result = _normalize_candidate_load_result(await loader(run))
         summary = await _run_validation_scan(
-            candidates,
+            load_result.candidates,
             test_provider_credentials_fn=validator,
+            initial_error_count=load_result.error_count,
         )
     except Exception as exc:
         await repo.mark_failed(run_id, error_message=_redact_validation_failure(exc))

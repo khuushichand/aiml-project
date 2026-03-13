@@ -168,11 +168,15 @@ class OpenAICredentialSourceSwitchResponse(BaseModel):
 
 
 class ByokValidationRunCreateRequest(BaseModel):
+    """Request to create a shared authoritative BYOK validation run."""
+
     org_id: int | None = None
     provider: str | None = None
 
 
 class ByokValidationRunItem(BaseModel):
+    """Persisted BYOK validation run item returned to the admin UI."""
+
     id: str
     status: Literal["queued", "running", "complete", "failed"]
     org_id: int | None = None
@@ -192,6 +196,8 @@ class ByokValidationRunItem(BaseModel):
 
 
 class ByokValidationRunListResponse(BaseModel):
+    """Paginated list response for authoritative BYOK validation runs."""
+
     items: list[ByokValidationRunItem]
     total: int
     limit: int

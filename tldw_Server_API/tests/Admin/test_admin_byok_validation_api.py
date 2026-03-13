@@ -5,10 +5,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.core.exceptions import (
+    ByokValidationActiveRunError,
+    ByokValidationRunNotFoundError,
+)
 
 
 def _setup_env(monkeypatch, *, user_db_base: str) -> None:
@@ -79,7 +82,7 @@ class _FakeByokValidationService:
 
     async def get_run(self, run_id: str):
         if run_id != "run-1":
-            raise HTTPException(status_code=404, detail="byok_validation_run_not_found")
+            raise ByokValidationRunNotFoundError("byok_validation_run_not_found")
         return {
             "id": "run-1",
             "status": "complete",
@@ -103,7 +106,7 @@ class _FakeByokValidationService:
 @dataclass
 class _ConflictByokValidationService(_FakeByokValidationService):
     async def create_run(self, principal, *, org_id: int | None, provider: str | None):
-        raise HTTPException(status_code=409, detail="active_validation_run_exists")
+        raise ByokValidationActiveRunError("active_validation_run_exists")
 
 
 async def _noop_enqueue_run(item):

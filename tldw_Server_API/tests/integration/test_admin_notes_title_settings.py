@@ -8,6 +8,7 @@ def test_get_and_set_notes_title_settings(client_user_only: TestClient):
     data = r.json()
     assert "llm_enabled" in data
     assert data["default_strategy"] in ["heuristic", "llm", "llm_fallback"]
+    assert data["effective_strategy"] in ["heuristic", "llm", "llm_fallback"]
 
     # Toggle values
     r2 = client_user_only.post(
@@ -18,6 +19,7 @@ def test_get_and_set_notes_title_settings(client_user_only: TestClient):
     new = r2.json()
     assert new["llm_enabled"] is True
     assert new["default_strategy"] == "llm_fallback"
+    assert new["effective_strategy"] == "llm_fallback"
 
     # Invalid strategy
     r3 = client_user_only.post(

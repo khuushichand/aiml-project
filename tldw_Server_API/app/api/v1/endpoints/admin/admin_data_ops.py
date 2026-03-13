@@ -739,7 +739,12 @@ async def preview_retention_policy(
             raise HTTPException(status_code=409, detail="stale_current_days") from exc
         raise HTTPException(status_code=400, detail="invalid_retention_preview") from exc
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Failed to preview retention policy: {exc}")
+        logger.error(
+            "Failed to preview retention policy: policy_key={} principal_id={} error={}",
+            policy_key,
+            principal.principal_id,
+            exc,
+        )
         raise HTTPException(status_code=500, detail="Failed to preview retention policy") from exc
 
 

@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fastapi import HTTPException, status
-
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import is_byok_enabled
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.byok_validation_runs_repo import (
     AuthnzByokValidationRunsRepo,
 )
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import normalize_provider_name
+from tldw_Server_API.app.core.exceptions import (
+    ByokValidationActiveRunError,
+    ByokValidationDisabledError,
+    ByokValidationRunNotFoundError,
+)
 from tldw_Server_API.app.services import admin_scope_service
 
 
@@ -33,10 +36,7 @@ class AdminByokValidationService:
     ) -> dict[str, object]:
         """Validate create inputs, enforce scope, and persist a queued validation run."""
         if not is_byok_enabled():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="BYOK is disabled in this deployment",
-            )
+            raise ByokValidationDisabledError("BYOK is disabled in this deployment")
 
         if org_id is not None:
             await admin_scope_service.enforce_admin_org_access(principal, org_id, require_admin=True)
@@ -44,10 +44,7 @@ class AdminByokValidationService:
         provider_norm = normalize_provider_name(provider) if provider else None
 
         if await self.repo.has_active_run():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="active_validation_run_exists",
-            )
+            raise ByokValidationActiveRunError("active_validation_run_exists")
 
         try:
             return await self.repo.create_run(
@@ -59,10 +56,7 @@ class AdminByokValidationService:
             )
         except Exception as exc:
             if "idx_byok_validation_runs_active" in str(exc):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="active_validation_run_exists",
-                ) from exc
+                raise ByokValidationActiveRunError("active_validation_run_exists") from exc
             raise
 
     async def list_runs(self, *, limit: int, offset: int) -> tuple[list[dict[str, object]], int]:
@@ -73,7 +67,7 @@ class AdminByokValidationService:
         """Return a BYOK validation run by id or raise 404 when absent."""
         item = await self.repo.get_run(run_id)
         if item is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="byok_validation_run_not_found")
+            raise ByokValidationRunNotFoundError("byok_validation_run_not_found")
         return item
 
     @staticmethod
