@@ -557,6 +557,34 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     consoleErrorSpy.mockRestore()
   })
 
+  it("fails non-browser audio overview generation when the script is an error response", async () => {
+    workspaceStoreState.audioSettings = {
+      ...baseAudioSettings,
+      provider: "tldw",
+      model: "kokoro"
+    }
+    mockRagSearch.mockResolvedValue({
+      generation: "Sorry, I encountered an error. Please try again."
+    })
+    mockSynthesizeSpeech.mockResolvedValue(new ArrayBuffer(8))
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Audio Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable audio")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+  })
+
   it("passes extended timeout to summary generation RAG request", async () => {
     renderStudioPane()
 

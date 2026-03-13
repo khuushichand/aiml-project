@@ -590,14 +590,16 @@ const finalizeGenerationResult = (
         return result
       }
       return requireUsableTextResult(type, result, "slide")
-    case "audio_overview":
+    case "audio_overview": {
+      const normalized = requireUsableTextResult(type, result, "audio")
       if (options?.audioProvider === "browser") {
-        return requireUsableTextResult(type, result, "audio")
+        return normalized
       }
       if (!result.audioUrl) {
         throw new Error("No usable audio output was returned.")
       }
-      return result
+      return normalized
+    }
     default:
       return result
   }
