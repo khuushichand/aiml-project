@@ -5,6 +5,9 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
@@ -21,9 +24,13 @@ def get_db_path(user_id: Optional[str]) -> Path:
 def _prime(conn: sqlite3.Connection) -> sqlite3.Connection:
     """Apply recommended SQLite PRAGMAs for concurrency and resilience."""
     with contextlib.suppress(Exception):
-        conn.execute("PRAGMA journal_mode=WAL;")
-    with contextlib.suppress(Exception):
-        conn.execute("PRAGMA busy_timeout=3000;")
+        configure_sqlite_connection(
+            conn,
+            busy_timeout_ms=3000,
+            temp_store=None,
+            synchronous=None,
+            foreign_keys=False,
+        )
     return conn
 
 

@@ -253,13 +253,84 @@ def test_media_database_transaction_uses_begin_immediate(tmp_path: Path):
     with db.transaction():
         pass
 
-    assert conn.statements[:3] == [
-        "PRAGMA foreign_keys = ON",
-        "PRAGMA busy_timeout = 10000",
-        "BEGIN IMMEDIATE",
-    ]
+    assert "BEGIN IMMEDIATE" in conn.statements
     assert conn.committed is True
     assert conn.closed is True
+
+
+def test_media_database_transaction_delegates_sqlite_bootstrap_to_helpers(tmp_path: Path, monkeypatch):
+
+    db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="txn-helpers")
+
+    class _RecordingConnection:
+        def __init__(self) -> None:
+            self.row_factory = None
+            self.statements: list[str] = []
+            self.committed = False
+            self.rolled_back = False
+            self.closed = False
+            self.in_transaction = False
+
+        def execute(self, sql: str, *args):
+            self.statements.append(sql)
+
+        def commit(self) -> None:
+            self.committed = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    conn = _RecordingConnection()
+    bootstrap_calls: list[object] = []
+    begin_calls: list[object] = []
+
+    db._persistent_conn = None
+    db.backend.connect = lambda: conn
+
+    def fake_apply(connection):
+        bootstrap_calls.append(connection)
+
+    def fake_begin(connection):
+        begin_calls.append(connection)
+        connection.in_transaction = True
+        return True
+
+    monkeypatch.setattr(db, "_apply_sqlite_connection_pragmas", fake_apply)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.DB_Management.Media_DB_v2.begin_immediate_if_needed",
+        fake_begin,
+        raising=False,
+    )
+
+    with db.transaction():
+        pass
+
+    assert bootstrap_calls == [conn]
+    assert begin_calls == [conn]
+    assert conn.statements == []
+    assert conn.committed is True
+    assert conn.closed is True
+
+
+def test_media_memory_persistent_connection_uses_sqlite_policy_helper(monkeypatch):
+
+    calls: list[object] = []
+
+    def fake_apply(self, connection):
+        calls.append(connection)
+
+    monkeypatch.setattr(MediaDatabase, "_apply_sqlite_connection_pragmas", fake_apply)
+
+    db = MediaDatabase(db_path=":memory:", client_id="memory-helper")
+    try:
+        assert db._persistent_conn is not None
+        assert db._persistent_conn in calls
+    finally:
+        if db._persistent_conn is not None:
+            db._persistent_conn.close()
 
 
 def test_media_database_connection_pragmas_delegate_to_sqlite_policy(tmp_path: Path, monkeypatch):

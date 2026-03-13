@@ -172,3 +172,31 @@ def test_slides_db_version_snapshots(tmp_path):
     assert total == 2
     assert versions[0].version == updated.version
     db.close_connection()
+
+
+def test_slides_db_runtime_connections_use_full_shared_policy_after_schema_init(tmp_path):
+    db_path = tmp_path / "Slides.db"
+
+    first = SlidesDatabase(db_path=db_path, client_id="first")
+    first.close_connection()
+
+    second = SlidesDatabase(db_path=db_path, client_id="second")
+    try:
+        conn = second.get_connection()
+        pragmas = {
+            "journal_mode": str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower(),
+            "synchronous": int(conn.execute("PRAGMA synchronous").fetchone()[0]),
+            "foreign_keys": int(conn.execute("PRAGMA foreign_keys").fetchone()[0]),
+            "busy_timeout": int(conn.execute("PRAGMA busy_timeout").fetchone()[0]),
+            "temp_store": int(conn.execute("PRAGMA temp_store").fetchone()[0]),
+        }
+    finally:
+        second.close_connection()
+
+    assert pragmas == {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "foreign_keys": 1,
+        "busy_timeout": 5000,
+        "temp_store": 2,
+    }

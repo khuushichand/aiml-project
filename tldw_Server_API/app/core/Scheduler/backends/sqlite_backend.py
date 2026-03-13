@@ -14,6 +14,7 @@ from typing import Any, Optional
 import aiosqlite
 from loguru import logger
 
+from ...DB_Management.sqlite_policy import configure_sqlite_connection_async
 from ..base import ConnectionError, QueueBackend, Task, TaskStatus, TransactionError
 from ..config import SchedulerConfig
 
@@ -113,12 +114,12 @@ class SQLiteBackend(QueueBackend):
             # Apply optimizations to all connections
             all_conns = [self._connection, self._write_conn] + self._read_pool
             for conn in all_conns:
-                await conn.execute("PRAGMA journal_mode=WAL")  # Write-ahead logging
-                await conn.execute("PRAGMA synchronous=NORMAL")  # Balance safety/speed
-                await conn.execute("PRAGMA foreign_keys=ON")  # Enforce FK constraints
-                await conn.execute("PRAGMA cache_size=10000")  # Larger cache
-                await conn.execute("PRAGMA temp_store=MEMORY")  # Temp tables in memory
-                await conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
+                await configure_sqlite_connection_async(
+                    conn,
+                    busy_timeout_ms=5000,
+                    cache_size=10000,
+                    temp_store="MEMORY",
+                )
 
             # Create schema using write connection
             await self.create_schema()

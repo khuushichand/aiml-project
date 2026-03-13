@@ -1,7 +1,9 @@
+import importlib
 from pathlib import Path
 
 import pytest
 
+from tldw_Server_API.app.core.DB_Management import sqlite_policy
 from tldw_Server_API.app.core.Scheduler.backends.sqlite_backend import SQLiteBackend
 from tldw_Server_API.app.core.Scheduler.config import SchedulerConfig
 
@@ -54,3 +56,40 @@ async def test_sqlite_backend_transaction_uses_begin_immediate():
 
     assert backend._connection.statements == ["BEGIN IMMEDIATE"]
     assert backend._connection.committed is True
+
+
+@pytest.mark.asyncio
+async def test_sqlite_backend_uses_shared_async_sqlite_policy_helper(tmp_path: Path):
+    scheduler_module = importlib.import_module(
+        "tldw_Server_API.app.core.Scheduler.backends.sqlite_backend"
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_configure(conn, **kwargs):
+        calls.append(kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sqlite_policy, "configure_sqlite_connection_async", fake_configure)
+        scheduler_module = importlib.reload(scheduler_module)
+
+        config = SchedulerConfig(
+            database_url=f"sqlite:///{tmp_path / 'scheduler.db'}",
+            base_path=tmp_path / "scheduler-data",
+        )
+        config.sqlite_pool_size = 2
+
+        backend = scheduler_module.SQLiteBackend(config)
+        await backend.connect()
+        await backend.disconnect()
+
+    importlib.reload(scheduler_module)
+
+    assert calls
+    assert all(
+        call == {
+            "busy_timeout_ms": 5000,
+            "cache_size": 10000,
+            "temp_store": "MEMORY",
+        }
+        for call in calls
+    )

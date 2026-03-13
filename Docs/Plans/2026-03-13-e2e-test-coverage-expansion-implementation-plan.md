@@ -339,36 +339,42 @@ git commit -m "feat(e2e): add network assertion layer for API call verification"
 
 Read `apps/tldw-frontend/e2e/utils/fixtures.ts` to understand the current fixture structure.
 
-**Step 2: Add API capture to the `authedPage` fixture**
+**IMPORTANT:** The current `authedPage` fixture has NO teardown code — it's just:
+```typescript
+authedPage: async ({ page }, use) => {
+  await seedAuth(page)
+  await use(page)
+}
+```
 
-Add imports at the top:
+**Step 2: Add API capture with teardown to the `authedPage` fixture**
+
+Add imports at the top of `fixtures.ts`:
 ```typescript
 import { startApiCapture, getCapturedApiCalls } from "./api-assertions"
 ```
 
-In the `authedPage` fixture setup (after `seedAuth(page)` call), add:
-```typescript
-startApiCapture(page)
-```
-
-**Step 3: Add API call log attachment on failure**
-
-Find the existing `diagnostics` fixture teardown or the test `afterEach` handler. Add after the existing failure artifact collection:
+Replace the `authedPage` fixture definition with this version that adds both setup AND teardown (Playwright runs code after `await use()` as teardown):
 
 ```typescript
-// In the test.afterEach or diagnostics teardown:
-if (testInfo.status !== "passed") {
-  const apiLog = getCapturedApiCalls(page)
-  if (apiLog.length > 0) {
-    await testInfo.attach("api-calls.json", {
-      body: JSON.stringify(apiLog, null, 2),
-      contentType: "application/json",
-    })
+authedPage: async ({ page }, use, testInfo) => {
+  await seedAuth(page)
+  startApiCapture(page)
+  await use(page)
+  // Teardown: attach API call log on test failure for debugging
+  if (testInfo.status !== "passed") {
+    const apiLog = getCapturedApiCalls(page)
+    if (apiLog.length > 0) {
+      await testInfo.attach("api-calls.json", {
+        body: JSON.stringify(apiLog, null, 2),
+        contentType: "application/json",
+      })
+    }
   }
 }
 ```
 
-If there's no existing `afterEach`, add one in the fixture definition.
+**NOTE:** The `testInfo` parameter is the third arg to Playwright fixture functions. This is a standard Playwright pattern for fixture teardown — no separate `afterEach` needed.
 
 **Step 4: Verify existing tests still pass**
 
@@ -732,15 +738,22 @@ git commit -m "feat(e2e): add shared journey helpers for cross-feature tests"
 
 Read `apps/tldw-frontend/playwright.config.ts`.
 
-**Step 2: Add tiered project definitions**
+**CRITICAL FIX — Double-execution prevention:**
+The existing config has `testDir: 'e2e'` at the **global** level. If we add project-level `testDir` values pointing to subdirectories of `e2e/`, Playwright will discover and run tests from BOTH the global and project-level paths, causing every test to run twice.
 
-Keep all existing config. Add new projects alongside the existing `chromium` project. The existing `chromium` project should remain as-is for backward compatibility. Add new projects:
+**Fix:** Remove the global `testDir: 'e2e'` line and give EVERY project (including the existing `chromium`) an explicit `testDir`.
+
+**Step 2: Replace test directory and project config**
+
+Remove the global `testDir: 'e2e'` line from the top-level config. Then replace the `projects` array with:
 
 ```typescript
 projects: [
-  // Existing project — keep for backward compat with existing scripts
+  // Existing smoke/workflow tests (previously discovered by global testDir)
   {
     name: 'chromium',
+    testDir: 'e2e',
+    testIgnore: ['**/workflows/tier-*/**', '**/workflows/journeys/**'],
     use: { ...devices['Desktop Chrome'] },
   },
   // New tiered projects
@@ -778,6 +791,12 @@ projects: [
   },
 ],
 ```
+
+**Key detail:** The existing `chromium` project gets `testDir: 'e2e'` (matching the old global setting) PLUS `testIgnore` to exclude the new tier directories. This ensures:
+- Running `playwright test` with no project filter runs ALL tests (existing + new tiers)
+- Running `playwright test --project=chromium` runs only the original tests
+- Running `playwright test --project=tier-1` runs only tier-1 tests
+- No test is ever discovered/run twice
 
 **Step 3: Create the directory structure**
 
@@ -1047,11 +1066,21 @@ import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from ".
 import { expectApiCall } from "../../utils/api-assertions"
 import { SettingsPage } from "../../utils/page-objects"
 
-const SETTINGS_SECTIONS = [
-  "tldw", "model", "chat", "ui", "splash", "rag", "speech",
-  "evaluations", "chatbooks", "world-books", "knowledge",
-  "prompt", "prompt-studio", "quick-ingest", "mcp-hub",
-  "image-gen", "family-guardrails", "health",
+// These are the ACTUAL section names accepted by SettingsPage.gotoSection().
+// Verified against the real SettingsPage.ts page object.
+// Sections NOT in this list (chatbooks, world-books, mcp-hub, family-guardrails, etc.)
+// are navigated via direct URL: `/settings/<section-name>`
+const SETTINGS_SECTIONS_VIA_PAGE_OBJECT = [
+  "tldw", "model", "chat", "ui", "splash", "quick-ingest",
+  "image-generation", "guardian", "prompt", "knowledge",
+  "rag", "speech", "evaluations", "characters", "health",
+] as const
+
+// These settings pages exist but are NOT wired into SettingsPage.gotoSection().
+// Test them via direct navigation only.
+const SETTINGS_SECTIONS_DIRECT_NAV = [
+  "chatbooks", "world-books", "prompt-studio", "mcp-hub",
+  "share", "about", "processed", "family-guardrails",
 ] as const
 
 test.describe("Settings", () => {
@@ -1062,7 +1091,8 @@ test.describe("Settings", () => {
     settings = new SettingsPage(authedPage)
   })
 
-  for (const section of SETTINGS_SECTIONS) {
+  const ALL_SECTIONS = [...SETTINGS_SECTIONS_VIA_PAGE_OBJECT, ...SETTINGS_SECTIONS_DIRECT_NAV]
+  for (const section of ALL_SECTIONS) {
     test(`settings/${section} loads without errors`, async ({ authedPage, diagnostics }) => {
       await authedPage.goto(`/settings/${section}`, { waitUntil: "domcontentloaded" })
       await authedPage.waitForLoadState("networkidle").catch(() => {})
@@ -1188,23 +1218,28 @@ Each task in this stage follows the same pattern:
 4. Run and fix selectors
 5. Commit
 
-### Task 3.1: Prompt Studio
+### Task 3.1: Prompts Workspace (includes Prompt Studio)
+
+**IMPORTANT ROUTE FIX:** Prompt Studio has been consolidated into the main Prompts workspace.
+The route is `/prompts` (NOT `/prompt-studio`). The studio tab is accessed via `/prompts?tab=studio`.
+The legacy `/prompt-studio` route redirects to `/prompts?tab=studio`.
 
 **Files:**
-- Create: `apps/tldw-frontend/e2e/utils/page-objects/PromptStudioPage.ts`
-- Create: `apps/tldw-frontend/e2e/workflows/tier-2-features/prompt-studio.spec.ts`
+- Create: `apps/tldw-frontend/e2e/utils/page-objects/PromptsWorkspacePage.ts`
+- Create: `apps/tldw-frontend/e2e/workflows/tier-2-features/prompts-workspace.spec.ts`
 
-**Step 1: Explore prompt studio**
+**Step 1: Explore prompts workspace**
 
-Read route files in `apps/packages/ui/src/routes/` matching `*prompt*studio*`. Check what components and API calls are used. Look for endpoints like `/api/v1/prompt-studio/` or `/api/v1/prompts/`.
+Read route files in `apps/packages/ui/src/routes/` matching `*prompt*`. The main route component is `PromptsWorkspace` in `option-prompts.tsx`. Check what tabs exist and what API calls are used. Backend endpoints are at `/api/v1/prompts/` (library CRUD) and `/api/v1/prompt-studio/` (studio features like execute, preview, test cases).
 
-**Step 2: Create PromptStudioPage**
+**Step 2: Create PromptsWorkspacePage**
 
 Follow the `NotesPage` pattern. Key methods:
-- `goto()` — navigate to `/prompt-studio`
+- `goto()` — navigate to `/prompts`
+- `gotoStudioTab()` — navigate to `/prompts?tab=studio` (or click the studio tab)
 - `assertPageReady()` — verify key elements
-- `createPrompt(opts: { name: string; template: string })` — create a prompt
-- `testPrompt(input: string)` — fill variable and run
+- `createPrompt(opts: { name: string; template: string })` — create a prompt (library)
+- `testPrompt(input: string)` — fill variable and run (studio)
 - `deletePrompt(name: string)` — delete
 
 **Step 3: Create spec**
@@ -1212,31 +1247,31 @@ Follow the `NotesPage` pattern. Key methods:
 ```typescript
 import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from "../../utils/fixtures"
 import { expectApiCall } from "../../utils/api-assertions"
-import { PromptStudioPage } from "../../utils/page-objects"
+import { PromptsWorkspacePage } from "../../utils/page-objects"
 import { generateTestId } from "../../utils/helpers"
 
-test.describe("Prompt Studio", () => {
+test.describe("Prompts Workspace", () => {
   test.beforeEach(async ({ authedPage, serverInfo }) => {
     skipIfServerUnavailable(serverInfo)
   })
 
   test("page loads with expected elements", async ({ authedPage, diagnostics }) => {
-    const ps = new PromptStudioPage(authedPage)
-    await ps.goto()
-    await ps.assertPageReady()
+    const pw = new PromptsWorkspacePage(authedPage)
+    await pw.goto()
+    await pw.assertPageReady()
     await assertNoCriticalErrors(diagnostics)
   })
 
   test("create prompt fires API", async ({ authedPage, diagnostics }) => {
-    const ps = new PromptStudioPage(authedPage)
-    await ps.goto()
+    const pw = new PromptsWorkspacePage(authedPage)
+    await pw.goto()
 
     const apiCall = expectApiCall(authedPage, {
       method: "POST",
-      url: "/api/v1/prompt",
+      url: "/api/v1/prompts",
     })
 
-    await ps.createPrompt({
+    await pw.createPrompt({
       name: `Test Prompt ${generateTestId()}`,
       template: "Summarize: {{text}}",
     })
@@ -1246,22 +1281,17 @@ test.describe("Prompt Studio", () => {
     await assertNoCriticalErrors(diagnostics)
   })
 
-  test("test prompt fires chat API", async ({ authedPage, diagnostics }) => {
-    const ps = new PromptStudioPage(authedPage)
-    await ps.goto()
+  test("prompt studio execute fires API", async ({ authedPage, diagnostics }) => {
+    const pw = new PromptsWorkspacePage(authedPage)
+    await pw.gotoStudioTab()
 
-    // Create then test
-    await ps.createPrompt({
-      name: `Testable ${generateTestId()}`,
-      template: "Say hello to {{name}}",
-    })
-
+    // Create a studio project then execute
     const apiCall = expectApiCall(authedPage, {
       method: "POST",
-      url: "/api/v1/chat/completions",
+      url: "/api/v1/prompt-studio/execute",
     })
 
-    await ps.testPrompt("World")
+    await pw.testPrompt("World")
 
     const { response } = await apiCall
     expect(response.status()).toBeLessThan(400)
@@ -1272,9 +1302,9 @@ test.describe("Prompt Studio", () => {
 
 **Step 4: Run, fix selectors, commit**
 
-### Task 3.2: Prompts Library
+### Task 3.2: (Merged into Task 3.1)
 
-Same pattern. Page Object: `PromptsLibraryPage`. Route: `/prompts`. Tests: CRUD operations on prompts with API assertions.
+Prompts Library is part of the Prompts Workspace (`/prompts`). Covered by `PromptsWorkspacePage` in Task 3.1.
 
 ### Task 3.3: Characters
 

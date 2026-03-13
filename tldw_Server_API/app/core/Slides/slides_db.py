@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
 
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
+
 
 class SlidesDatabaseError(Exception):
     """Base exception for SlidesDatabase."""
@@ -88,7 +92,6 @@ class SlidesDatabase:
             return
         conn = self.get_connection()
         try:
-            conn.execute("PRAGMA foreign_keys = ON")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS schema_version (
@@ -189,6 +192,7 @@ class SlidesDatabase:
         if conn is None:
             conn = sqlite3.connect(self._db_path_str, check_same_thread=False)
             conn.row_factory = sqlite3.Row
+            configure_sqlite_connection(conn)
             self._local.connection = conn
         return conn
 
