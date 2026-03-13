@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -53,6 +54,47 @@ def _build_flashcard_text(card: Mapping[str, Any]) -> str:
         parts.append(f"Notes: {notes}")
     if extra:
         parts.append(f"Extra: {extra}")
+    return "\n".join(parts).strip()
+
+
+def _parse_attempt_question_identifier(identifier: str) -> tuple[int, int]:
+    raw = str(identifier or "").strip()
+    if ":" not in raw:
+        raise ValueError("quiz_attempt_question source_id must be formatted as '<attempt_id>:<question_id>'")
+    attempt_part, question_part = raw.split(":", 1)
+    return (
+        _parse_positive_int(attempt_part, "quiz_attempt_question attempt_id"),
+        _parse_positive_int(question_part, "quiz_attempt_question question_id"),
+    )
+
+
+def _build_quiz_attempt_question_text(question: Mapping[str, Any], answer: Mapping[str, Any] | None) -> str:
+    parts: list[str] = []
+    question_text = str(question.get("question_text") or "").strip()
+    if question_text:
+        parts.append(f"Question: {question_text}")
+
+    user_answer = None if not answer else answer.get("user_answer")
+    if user_answer is not None:
+        parts.append(f"User answer: {user_answer}")
+
+    if answer and answer.get("is_correct") is not None:
+        parts.append(f"Is correct: {bool(answer.get('is_correct'))}")
+
+    correct_answer = answer.get("correct_answer") if answer else question.get("correct_answer")
+    if correct_answer is not None:
+        parts.append(f"Correct answer: {correct_answer}")
+
+    explanation = str((answer or {}).get("explanation") or question.get("explanation") or "").strip()
+    if explanation:
+        parts.append(f"Explanation: {explanation}")
+
+    citations = (answer or {}).get("source_citations") or question.get("source_citations") or []
+    if citations:
+        citation_text = "; ".join(json.dumps(citation, sort_keys=True) for citation in citations if isinstance(citation, Mapping))
+        if citation_text:
+            parts.append(f"Source citations: {citation_text}")
+
     return "\n".join(parts).strip()
 
 
@@ -180,6 +222,92 @@ def _resolve_flashcard_card_source(
     ]
 
 
+def _resolve_quiz_attempt_source(
+    source_id: str,
+    *,
+    db: CharactersRAGDB,
+    max_chars_per_item: int,
+) -> list[dict[str, Any]]:
+    attempt_id = _parse_positive_int(source_id, "quiz_attempt source_id")
+    attempt = db.get_attempt(attempt_id, include_questions=True, include_answers=True)
+    if not attempt:
+        raise ValueError(f"Quiz attempt {attempt_id} not found")
+
+    questions = attempt.get("questions") or []
+    answers = attempt.get("answers") or []
+    answers_by_question_id = {
+        int(item.get("question_id")): item
+        for item in answers
+        if item.get("question_id") is not None
+    }
+
+    question_rows: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+    for question in questions:
+        question_id = question.get("id")
+        if question_id is None:
+            continue
+        answer = answers_by_question_id.get(int(question_id))
+        if answer and answer.get("is_correct") is False:
+            question_rows.append((question, answer))
+
+    if not question_rows:
+        for question in questions:
+            question_id = question.get("id")
+            if question_id is None:
+                continue
+            question_rows.append((question, answers_by_question_id.get(int(question_id))))
+
+    if not question_rows:
+        raise ValueError(f"Quiz attempt {attempt_id} has no question evidence")
+
+    evidence: list[dict[str, Any]] = []
+    for question, answer in question_rows:
+        question_id = int(question.get("id"))
+        evidence.append(
+            {
+                "source_type": "quiz_attempt",
+                "source_id": str(attempt_id),
+                "chunk_id": f"{attempt_id}:{question_id}",
+                "label": f"Quiz Attempt {attempt_id}",
+                "text": _clip_text(_build_quiz_attempt_question_text(question, answer), max_chars_per_item),
+            }
+        )
+    return evidence
+
+
+def _resolve_quiz_attempt_question_source(
+    source_id: str,
+    *,
+    db: CharactersRAGDB,
+    max_chars_per_item: int,
+) -> list[dict[str, Any]]:
+    attempt_id, question_id = _parse_attempt_question_identifier(source_id)
+    attempt = db.get_attempt(attempt_id, include_questions=True, include_answers=True)
+    if not attempt:
+        raise ValueError(f"Quiz attempt {attempt_id} not found")
+
+    questions = attempt.get("questions") or []
+    question = next((item for item in questions if int(item.get("id")) == question_id), None)
+    if not question:
+        raise ValueError(f"Quiz attempt question {source_id} not found")
+
+    answers = attempt.get("answers") or []
+    answer = next((item for item in answers if int(item.get("question_id")) == question_id), None)
+    text = _build_quiz_attempt_question_text(question, answer)
+    if not text:
+        raise ValueError(f"Quiz attempt question {source_id} has no usable evidence")
+
+    return [
+        {
+            "source_type": "quiz_attempt_question",
+            "source_id": source_id,
+            "chunk_id": source_id,
+            "label": f"Quiz Attempt Question {source_id}",
+            "text": _clip_text(text, max_chars_per_item),
+        }
+    ]
+
+
 def resolve_quiz_sources(
     sources: Sequence[Any],
     *,
@@ -208,6 +336,10 @@ def resolve_quiz_sources(
             resolved = _resolve_flashcard_deck_source(source_id, db=db, max_chars_per_item=max_chars_per_item)
         elif source_type == "flashcard_card":
             resolved = _resolve_flashcard_card_source(source_id, db=db, max_chars_per_item=max_chars_per_item)
+        elif source_type == "quiz_attempt":
+            resolved = _resolve_quiz_attempt_source(source_id, db=db, max_chars_per_item=max_chars_per_item)
+        elif source_type == "quiz_attempt_question":
+            resolved = _resolve_quiz_attempt_question_source(source_id, db=db, max_chars_per_item=max_chars_per_item)
         else:
             raise ValueError(f"Unsupported source_type '{source_type}'")
 
