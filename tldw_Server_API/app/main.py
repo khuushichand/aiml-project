@@ -2670,6 +2670,26 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Admin backup Jobs worker: {e}")
 
+    # Admin maintenance rotation Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Admin maintenance rotation Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.services.admin_maintenance_rotation_jobs_worker import (
+                start_admin_maintenance_rotation_jobs_worker,
+            )
+
+            admin_maintenance_rotation_jobs_task = await start_admin_maintenance_rotation_jobs_worker()
+            if admin_maintenance_rotation_jobs_task:
+                logger.info("Admin maintenance rotation Jobs worker started")
+            else:
+                logger.info(
+                    "Admin maintenance rotation Jobs worker disabled "
+                    "(ADMIN_MAINTENANCE_ROTATION_JOBS_WORKER_ENABLED != true)"
+                )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Admin maintenance rotation Jobs worker: {e}")
+
     # Jobs notifications bridge worker
     try:
         if _sidecar_mode:

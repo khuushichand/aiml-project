@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import os
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
@@ -16,15 +17,25 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     IncidentItem,
     IncidentListResponse,
     IncidentUpdateRequest,
+    MaintenanceRotationRunCreateRequest,
+    MaintenanceRotationRunCreateResponse,
+    MaintenanceRotationRunItem,
+    MaintenanceRotationRunListResponse,
     MaintenanceState,
     MaintenanceUpdateRequest,
 )
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
+from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.Chat.chat_service import (
     invalidate_model_alias_caches,
 )
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
+from tldw_Server_API.app.services.admin_maintenance_rotation_service import (
+    AdminMaintenanceRotationService,
+)
 from tldw_Server_API.app.services.admin_system_ops_service import (
     add_incident_event as svc_add_incident_event,
 )
@@ -56,8 +67,14 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
     upsert_feature_flag as svc_upsert_feature_flag,
 )
 
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.AuthNZ.repos.maintenance_rotation_runs_repo import (
+        AuthnzMaintenanceRotationRunsRepo,
+    )
+
 router = APIRouter()
 
+_INCIDENT_ASSIGNABLE_ROLES = frozenset({"admin", "owner", "super_admin"})
 
 _OPS_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -84,6 +101,50 @@ def _require_platform_admin(principal: AuthPrincipal) -> None:
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
 
     return admin_mod._require_platform_admin(principal)
+
+
+def _enforce_domain_scope_unified(principal: AuthPrincipal, domain: str | None) -> Any:
+    """Delegate domain-scope enforcement to the shared jobs admin helper."""
+    from tldw_Server_API.app.api.v1.endpoints import jobs_admin as jobs_admin_mod
+
+    return jobs_admin_mod._enforce_domain_scope_unified(principal, domain)
+
+
+def _user_has_incident_admin_role(user: dict[str, Any], role_rows: list[dict[str, Any]]) -> bool:
+    """Return whether the user is eligible for incident assignment."""
+
+    role_names = {
+        str(role.get("name") or "").strip().lower() for role in role_rows if str(role.get("name") or "").strip()
+    }
+    legacy_role = str(user.get("role") or "").strip().lower()
+    if legacy_role:
+        role_names.add(legacy_role)
+    return bool(role_names & _INCIDENT_ASSIGNABLE_ROLES) or bool(user.get("is_superuser"))
+
+
+async def _resolve_incident_assignee(user_id: int) -> dict[str, Any]:
+    """Resolve persisted assignee fields for an incident update.
+
+    Raises:
+        ValueError: ``assignee_not_found`` when the user does not exist.
+        ValueError: ``incident_assignee_must_be_admin`` when the user is not admin-capable.
+    """
+
+    repo = await AuthnzUsersRepo.from_pool()
+    user = await repo.get_user_by_id(int(user_id))
+    if not user:
+        raise ValueError("assignee_not_found")
+
+    rbac_repo = AuthnzRbacRepo()
+    role_rows = await asyncio.to_thread(rbac_repo.get_user_roles, int(user_id))
+    if not _user_has_incident_admin_role(user, role_rows):
+        raise ValueError("incident_assignee_must_be_admin")
+
+    label = str(user.get("email") or "").strip() or str(user.get("username") or "").strip() or str(user["id"])
+    return {
+        "assigned_to_user_id": int(user["id"]),
+        "assigned_to_label": label,
+    }
 
 
 async def _get_admin_org_ids(principal: AuthPrincipal) -> list[int] | None:
@@ -115,6 +176,7 @@ async def _emit_admin_audit_event(
         action=action,
         metadata=metadata,
     )
+
 
 @router.get("/maintenance", response_model=MaintenanceState)
 async def get_maintenance_mode(
@@ -151,6 +213,141 @@ async def update_maintenance_mode(
         metadata={"enabled": payload.enabled},
     )
     return MaintenanceState(**state)
+
+
+async def _get_maintenance_rotation_runs_repo(
+    pool: DatabasePool = Depends(get_db_pool),
+) -> "AuthnzMaintenanceRotationRunsRepo":
+    """Build the maintenance rotation runs repository from the shared AuthNZ pool."""
+    from tldw_Server_API.app.core.AuthNZ.repos.maintenance_rotation_runs_repo import (
+        AuthnzMaintenanceRotationRunsRepo,
+    )
+
+    repo = AuthnzMaintenanceRotationRunsRepo(pool)
+    await repo.ensure_schema()
+    return repo
+
+
+async def get_admin_maintenance_rotation_service(
+    repo: "AuthnzMaintenanceRotationRunsRepo" = Depends(_get_maintenance_rotation_runs_repo),
+) -> AdminMaintenanceRotationService:
+    """Build the maintenance rotation service from the injected repository."""
+    return AdminMaintenanceRotationService(repo=repo)
+
+
+def get_maintenance_rotation_job_enqueuer() -> Callable[[dict[str, Any]], Awaitable[str]]:
+    """Return the callable used to enqueue maintenance rotation Jobs."""
+    from tldw_Server_API.app.services.admin_maintenance_rotation_jobs_worker import (
+        enqueue_maintenance_rotation_run,
+    )
+
+    return enqueue_maintenance_rotation_run
+
+
+def _get_maintenance_rotation_allowed_domains(principal: AuthPrincipal) -> list[str] | None:
+    """Return the effective domain allowlist for rotation-run history, or None when unrestricted."""
+    from tldw_Server_API.app.core.testing import env_flag_enabled
+
+    if not env_flag_enabled("JOBS_DOMAIN_SCOPED_RBAC"):
+        return None
+    if principal.user_id is None:
+        return None
+    raw_allowlist = os.getenv(f"JOBS_DOMAIN_ALLOWLIST_{principal.user_id}", "").strip()
+    if not raw_allowlist:
+        return None
+    allowed_domains = [entry.strip() for entry in raw_allowlist.split(",") if entry.strip()]
+    return sorted(set(allowed_domains))
+
+
+@router.post("/maintenance/rotation-runs", response_model=MaintenanceRotationRunCreateResponse)
+async def create_maintenance_rotation_run(
+    payload: MaintenanceRotationRunCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    repo: "AuthnzMaintenanceRotationRunsRepo" = Depends(_get_maintenance_rotation_runs_repo),
+    service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
+    enqueue_run: Callable[[dict[str, Any]], Awaitable[str]] = Depends(get_maintenance_rotation_job_enqueuer),
+) -> MaintenanceRotationRunCreateResponse:
+    """Create one authoritative maintenance rotation run and enqueue its Jobs execution."""
+    from tldw_Server_API.app.services.admin_maintenance_rotation_jobs_worker import (
+        maintenance_rotation_worker_enabled,
+    )
+
+    if not maintenance_rotation_worker_enabled():
+        raise HTTPException(status_code=503, detail="maintenance_rotation_worker_unavailable")
+    _enforce_domain_scope_unified(principal, payload.domain)
+    actor_label = principal.email or principal.username or (
+        str(principal.user_id) if principal.user_id is not None else None
+    )
+    item = await service.create_run(
+        mode=payload.mode,
+        domain=payload.domain,
+        queue=payload.queue,
+        job_type=payload.job_type,
+        fields=payload.fields,
+        limit=payload.limit,
+        confirmed=payload.confirmed,
+        requested_by_user_id=principal.user_id,
+        requested_by_label=actor_label,
+    )
+    try:
+        await enqueue_run(item)
+    except _OPS_NONCRITICAL_EXCEPTIONS:
+        await repo.mark_failed(item["id"], error_message="enqueue_failed")
+        raise HTTPException(status_code=503, detail="maintenance_rotation_enqueue_failed")
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="maintenance.rotation_requested",
+        category="system",
+        resource_type="maintenance_rotation_run",
+        resource_id=item["id"],
+        action="maintenance.rotation.create",
+        metadata={
+            "mode": item["mode"],
+            "domain": item.get("domain"),
+            "queue": item.get("queue"),
+            "job_type": item.get("job_type"),
+            "limit": item.get("limit"),
+            "confirmation_recorded": item["confirmation_recorded"],
+        },
+    )
+    return MaintenanceRotationRunCreateResponse(item=MaintenanceRotationRunItem(**item))
+
+
+@router.get("/maintenance/rotation-runs", response_model=MaintenanceRotationRunListResponse)
+async def list_maintenance_rotation_runs(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
+) -> MaintenanceRotationRunListResponse:
+    """List maintenance rotation runs visible to the caller with truthful pagination metadata."""
+    payload = await service.list_runs(
+        limit=limit,
+        offset=offset,
+        allowed_domains=_get_maintenance_rotation_allowed_domains(principal),
+    )
+    return MaintenanceRotationRunListResponse(
+        items=[MaintenanceRotationRunItem(**item) for item in payload["items"]],
+        total=payload["total"],
+        limit=payload["limit"],
+        offset=payload["offset"],
+    )
+
+
+@router.get("/maintenance/rotation-runs/{run_id}", response_model=MaintenanceRotationRunItem)
+async def get_maintenance_rotation_run(
+    run_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
+) -> MaintenanceRotationRunItem:
+    """Return one maintenance rotation run after enforcing the caller's domain scope."""
+    item = await service.get_run(run_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="maintenance_rotation_run_not_found")
+    _enforce_domain_scope_unified(principal, item.get("domain"))
+    return MaintenanceRotationRunItem(**item)
 
 
 @router.get("/feature-flags", response_model=FeatureFlagsResponse)
@@ -336,7 +533,23 @@ async def update_incident(
 ) -> IncidentItem:
     _require_platform_admin(principal)
     actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    update_fields = payload.model_dump(exclude_unset=True)
+    workflow_fields: dict[str, Any] = {}
+    for field_name in ("root_cause", "impact", "action_items"):
+        if field_name in payload.model_fields_set:
+            workflow_fields[field_name] = update_fields[field_name]
     try:
+        assignee_fields: dict[str, Any] = {}
+        if "assigned_to_user_id" in payload.model_fields_set:
+            assignee_user_id = payload.assigned_to_user_id
+            if assignee_user_id is None:
+                assignee_fields = {
+                    "assigned_to_user_id": None,
+                    "assigned_to_label": None,
+                }
+            else:
+                assignee_fields = await _resolve_incident_assignee(int(assignee_user_id))
+
         incident = svc_update_incident(
             incident_id=incident_id,
             title=payload.title,
@@ -344,6 +557,8 @@ async def update_incident(
             severity=payload.severity,
             summary=payload.summary,
             tags=payload.tags,
+            **assignee_fields,
+            **workflow_fields,
             update_message=payload.update_message,
             actor=actor,
         )
@@ -351,7 +566,9 @@ async def update_incident(
         detail = str(exc)
         if detail == "not_found":
             raise HTTPException(status_code=404, detail="incident_not_found") from exc
-        if detail in {"invalid_status", "invalid_severity"}:
+        if detail == "assignee_not_found":
+            raise HTTPException(status_code=404, detail=detail) from exc
+        if detail in {"invalid_status", "invalid_severity", "incident_assignee_must_be_admin"}:
             raise HTTPException(status_code=400, detail=detail) from exc
         raise HTTPException(status_code=400, detail="invalid_incident") from exc
     await _emit_admin_audit_event(
@@ -433,6 +650,7 @@ async def delete_incident(
 # Pricing Catalog Management
 # ---------------------------------------------
 
+
 @router.post("/llm-usage/pricing/reload", response_model=dict)
 async def reload_llm_pricing_catalog() -> dict:
     """Reload the LLM pricing catalog from environment and config file (admin-only).
@@ -451,6 +669,7 @@ async def reload_llm_pricing_catalog() -> dict:
 # ---------------------------------------------
 # Chat Model Alias Cache Management
 # ---------------------------------------------
+
 
 @router.post("/chat/model-aliases/reload", response_model=dict)
 async def reload_chat_model_alias_caches() -> dict:

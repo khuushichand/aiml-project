@@ -1848,6 +1848,53 @@ _CREATE_BACKUP_SCHEDULES_TABLES = [
     ("CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for ON backup_schedule_runs(scheduled_for)", ()),
 ]
 
+_CREATE_MAINTENANCE_ROTATION_RUNS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS maintenance_rotation_runs (
+            id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            domain TEXT NULL,
+            queue TEXT NULL,
+            job_type TEXT NULL,
+            fields_json TEXT NOT NULL,
+            "limit" INTEGER NULL,
+            affected_count INTEGER NULL,
+            requested_by_user_id INTEGER NULL,
+            requested_by_label TEXT NULL,
+            confirmation_recorded BOOLEAN NOT NULL DEFAULT FALSE,
+            job_id TEXT NULL,
+            scope_summary TEXT NOT NULL,
+            key_source TEXT NOT NULL,
+            error_message TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            started_at TIMESTAMPTZ NULL,
+            completed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_active_execute
+        ON maintenance_rotation_runs(mode)
+        WHERE mode = 'execute' AND status IN ('queued', 'running')
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_created_at "
+        "ON maintenance_rotation_runs(created_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_status "
+        "ON maintenance_rotation_runs(status)",
+        (),
+    ),
+]
+
 
 async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
@@ -1894,6 +1941,30 @@ async def ensure_backup_schedules_tables_pg(pool: DatabasePool | None = None) ->
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL backup schedule tables: {exc}")
+        return False
+
+
+async def ensure_maintenance_rotation_runs_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure maintenance rotation run tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(
+                f"PG ensure authnz core tables before maintenance rotation runs failed: {exc}"
+            )
+        for sql, params in _CREATE_MAINTENANCE_ROTATION_RUNS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure maintenance rotation run DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL maintenance rotation runs table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL maintenance rotation runs table: {exc}")
         return False
 
 
