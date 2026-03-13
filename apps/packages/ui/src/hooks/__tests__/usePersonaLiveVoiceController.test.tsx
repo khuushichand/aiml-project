@@ -105,7 +105,8 @@ describe("usePersonaLiveVoiceController", () => {
           },
           stt: {
             language: "en-US",
-            model: "whisper-1"
+            model: "whisper-1",
+            enable_vad: true
           },
           tts: {
             provider: "openai",
@@ -116,7 +117,7 @@ describe("usePersonaLiveVoiceController", () => {
     })
   })
 
-  it("streams persona audio chunks and commits a stripped transcript when listening stops", async () => {
+  it("streams persona audio chunks and does not send a routine manual commit when listening stops", async () => {
     const ws = {
       readyState: WebSocket.OPEN,
       send: vi.fn()
@@ -174,15 +175,118 @@ describe("usePersonaLiveVoiceController", () => {
     rerender()
 
     expect(hookMocks.micStop.mock.calls.length).toBe(stopCallsBeforeStop + 1)
+    expect(
+      getSentPayloads(ws as WebSocket & { send: ReturnType<typeof vi.fn> }).filter(
+        (payload) => payload.type === "voice_commit"
+      )
+    ).toEqual([])
+  })
+
+  it("switches to thinking and stops the mic when the server auto-commits a voice turn", async () => {
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+    rerender()
+
+    act(() => {
+      result.current.handlePayload({
+        event: "partial_transcript",
+        text_delta: "hey helper search my notes"
+      })
+    })
+
+    const stopCallsBeforeCommit = hookMocks.micStop.mock.calls.length
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+    rerender()
+
+    expect(hookMocks.micStop.mock.calls.length).toBe(stopCallsBeforeCommit + 1)
+    expect(result.current.state).toBe("thinking")
+    expect(result.current.lastCommittedText).toBe("search my notes")
+    expect(result.current.heardText).toBe("hey helper search my notes")
+  })
+
+  it("enters manual mode when the server cannot auto-commit and sends the current transcript on demand", async () => {
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+    rerender()
+
+    act(() => {
+      result.current.handlePayload({
+        event: "partial_transcript",
+        text_delta: "hey helper search my notes"
+      })
+    })
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_MANUAL_MODE_REQUIRED",
+        message:
+          "Server VAD unavailable for this live session. Use Send now to commit heard speech manually."
+      })
+    })
+
+    expect(result.current.manualModeRequired).toBe(true)
+    expect(result.current.canSendNow).toBe(true)
+    expect(result.current.warning).toContain("Use Send now")
+
+    const stopCallsBeforeSend = hookMocks.micStop.mock.calls.length
+
+    act(() => {
+      result.current.sendCurrentTranscriptNow()
+    })
+    rerender()
+
+    expect(hookMocks.micStop.mock.calls.length).toBe(stopCallsBeforeSend + 1)
     expect(ws.send).toHaveBeenLastCalledWith(
       JSON.stringify({
         type: "voice_commit",
         session_id: "sess-voice",
-        transcript: "search my notes",
-        source: "persona_live_voice"
+        transcript: "hey helper search my notes",
+        source: "persona_live_voice_manual"
       })
     )
-    expect(result.current.lastCommittedText).toBe("search my notes")
+    expect(result.current.state).toBe("thinking")
   })
 
   it("auto-resumes listening after a recoverable text-only tts warning", async () => {

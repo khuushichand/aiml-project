@@ -11,6 +11,7 @@ import contextlib
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -2172,6 +2173,97 @@ def _persona_live_forward_delta(previous_snapshot: str, next_snapshot: str) -> s
     if current.startswith(previous):
         return current[len(previous) :].strip()
     return ""
+
+
+def _clamp_persona_live_float(
+    value: Any,
+    *,
+    default: float,
+    min_value: float,
+    max_value: float,
+) -> float:
+    try:
+        return max(min_value, min(max_value, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp_persona_live_int(
+    value: Any,
+    *,
+    default: int,
+    min_value: int,
+    max_value: int,
+) -> int:
+    try:
+        return int(max(min_value, min(max_value, int(value))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _create_persona_live_turn_detector(*, voice_runtime: dict[str, Any] | None) -> Any:
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+        SileroTurnDetector,
+        UnifiedStreamingConfig,
+    )
+
+    config = UnifiedStreamingConfig()
+    runtime = dict(voice_runtime or {})
+    return SileroTurnDetector(
+        sample_rate=int(config.sample_rate or 16000),
+        enabled=_coerce_bool(runtime.get("enable_vad"), default=True),
+        vad_threshold=_clamp_persona_live_float(
+            runtime.get("vad_threshold"),
+            default=float(config.vad_threshold),
+            min_value=0.0,
+            max_value=1.0,
+        ),
+        min_silence_ms=_clamp_persona_live_int(
+            runtime.get("vad_min_silence_ms"),
+            default=int(config.vad_min_silence_ms),
+            min_value=50,
+            max_value=10_000,
+        ),
+        turn_stop_secs=_clamp_persona_live_float(
+            runtime.get("vad_turn_stop_secs"),
+            default=float(config.vad_turn_stop_secs),
+            min_value=0.05,
+            max_value=10.0,
+        ),
+        min_utterance_secs=_clamp_persona_live_float(
+            runtime.get("vad_min_utterance_secs"),
+            default=float(config.vad_min_utterance_secs),
+            min_value=0.0,
+            max_value=10.0,
+        ),
+    )
+
+
+def _apply_persona_live_trigger_phrases(
+    transcript: str,
+    *,
+    trigger_phrases: list[str] | None,
+) -> tuple[bool, str]:
+    normalized_transcript = str(transcript or "").strip()
+    normalized_phrases = [
+        str(phrase or "").strip()
+        for phrase in list(trigger_phrases or [])
+        if str(phrase or "").strip()
+    ]
+    if not normalized_phrases:
+        return True, normalized_transcript
+
+    lowered_transcript = normalized_transcript.lower()
+    matched = any(phrase.lower() in lowered_transcript for phrase in normalized_phrases)
+    if not matched:
+        return False, normalized_transcript
+
+    cleaned = normalized_transcript
+    for phrase in normalized_phrases:
+        pattern = re.compile(rf"\b{re.escape(phrase)}\b", re.IGNORECASE)
+        cleaned = pattern.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return True, cleaned
 
 
 async def _generate_tts_audio_chunks(
@@ -4650,17 +4742,30 @@ async def persona_stream(
         def _cleanup_persona_live_stt_state(session_id: str) -> None:
             state = persona_live_stt_state_by_session.pop(session_id, None)
             transcriber = state.get("transcriber") if isinstance(state, dict) else None
+            turn_detector = state.get("turn_detector") if isinstance(state, dict) else None
             if transcriber is not None:
                 with contextlib.suppress(Exception):
                     transcriber.cleanup()
+            if turn_detector is not None:
+                with contextlib.suppress(Exception):
+                    turn_detector.reset()
             voice_transcript_buffer_by_session.pop(session_id, None)
 
-        def _reset_persona_live_stt_session(session_id: str) -> None:
+        def _clear_persona_live_commit_state(state: dict[str, Any]) -> None:
+            state["current_utterance_committed"] = False
+            state["current_commit_source"] = None
+            state["committed_transcript"] = ""
+
+        def _reset_persona_live_active_turn(session_id: str) -> None:
             state = persona_live_stt_state_by_session.get(session_id) or {}
             transcriber = state.get("transcriber")
+            turn_detector = state.get("turn_detector")
             if transcriber is not None:
                 with contextlib.suppress(Exception):
                     transcriber.reset()
+            if turn_detector is not None:
+                with contextlib.suppress(Exception):
+                    turn_detector.reset()
             voice_transcript_buffer_by_session.pop(session_id, None)
 
         def _get_or_create_persona_live_stt_state(
@@ -4676,6 +4781,7 @@ async def persona_stream(
 
             existing_state = persona_live_stt_state_by_session.get(session_id)
             if isinstance(existing_state, dict):
+                existing_state["voice_runtime"] = voice_runtime
                 return existing_state, voice_runtime
 
             try:
@@ -4691,7 +4797,35 @@ async def persona_stream(
                 )
                 return None, voice_runtime
 
-            state = {"transcriber": transcriber}
+            turn_detector = None
+            manual_mode_reason: str | None = None
+            try:
+                turn_detector = _create_persona_live_turn_detector(
+                    voice_runtime=voice_runtime,
+                )
+                if turn_detector is not None and not bool(getattr(turn_detector, "available", False)):
+                    manual_mode_reason = str(
+                        getattr(turn_detector, "unavailable_reason", "") or "vad_unavailable"
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "persona live VAD initialization failed for session {}: {}",
+                    session_id,
+                    exc,
+                )
+                turn_detector = None
+                manual_mode_reason = str(exc)
+
+            state = {
+                "transcriber": transcriber,
+                "turn_detector": turn_detector,
+                "voice_runtime": voice_runtime,
+                "current_utterance_committed": False,
+                "current_commit_source": None,
+                "committed_transcript": "",
+                "manual_mode_notice_sent": False,
+                "manual_mode_reason": manual_mode_reason,
+            }
             persona_live_stt_state_by_session[session_id] = state
             return state, voice_runtime
 
@@ -4706,6 +4840,94 @@ async def persona_stream(
             with contextlib.suppress(Exception):
                 return str(transcriber.get_full_transcript() or "").strip()
             return ""
+
+        async def _ensure_persona_live_manual_mode_notice(
+            session_id: str,
+            state: dict[str, Any],
+        ) -> None:
+            if bool(state.get("manual_mode_notice_sent")):
+                return
+            state["manual_mode_notice_sent"] = True
+            await _emit_notice(
+                session_id=session_id,
+                level="warning",
+                reason_code="VOICE_MANUAL_MODE_REQUIRED",
+                message="Server VAD unavailable for this live session. Use Send now to commit heard speech manually.",
+                details=str(state.get("manual_mode_reason") or "vad_unavailable"),
+            )
+
+        async def _commit_persona_live_turn(
+            *,
+            session_id: str,
+            transcript: str,
+            commit_source: str,
+            source: str,
+        ) -> bool:
+            state = persona_live_stt_state_by_session.get(session_id) or {}
+            if bool(state.get("current_utterance_committed")):
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="VOICE_COMMIT_IGNORED_ALREADY_COMMITTED",
+                    message="This utterance was already committed.",
+                    commit_source=str(state.get("current_commit_source") or commit_source),
+                    transcript=str(state.get("committed_transcript") or "").strip() or None,
+                )
+                return False
+
+            voice_runtime = state.get("voice_runtime")
+            trigger_phrases = (
+                list(voice_runtime.get("trigger_phrases") or [])
+                if isinstance(voice_runtime, dict)
+                else []
+            )
+            trigger_matched, cleaned_transcript = _apply_persona_live_trigger_phrases(
+                transcript,
+                trigger_phrases=trigger_phrases,
+            )
+            if not trigger_matched:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="VOICE_TRIGGER_NOT_HEARD",
+                    message="No trigger phrase was heard, so the transcript was ignored.",
+                )
+                _reset_persona_live_active_turn(session_id)
+                return False
+            if not cleaned_transcript:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="VOICE_EMPTY_COMMAND_AFTER_TRIGGER",
+                    message="The trigger phrase was removed, but no spoken command remained.",
+                )
+                _reset_persona_live_active_turn(session_id)
+                return False
+
+            state["current_utterance_committed"] = True
+            state["current_commit_source"] = commit_source
+            state["committed_transcript"] = cleaned_transcript
+            await _emit_notice(
+                session_id=session_id,
+                level="info",
+                reason_code="VOICE_TURN_COMMITTED",
+                message="Voice turn committed.",
+                commit_source=commit_source,
+                transcript=cleaned_transcript,
+            )
+            _reset_persona_live_active_turn(session_id)
+            await _handle_persona_live_turn(
+                msg={
+                    "session_id": session_id,
+                    "transcript": cleaned_transcript,
+                    "source": source,
+                    "commit_source": commit_source,
+                },
+                text=cleaned_transcript,
+                turn_type="voice_commit",
+                source=source,
+            )
+            return True
 
         def _pending_retry_key(*, plan_id: str, step_idx: int, tool_name: str) -> str:
             """Return the stable storage key for a pending approval-backed retry."""
@@ -5686,6 +5908,31 @@ async def persona_stream(
                 "barge_in": _coerce_bool(voice_payload.get("barge_in"), default=False),
                 "stt_language": str(stt_payload.get("language") or "").strip() or None,
                 "stt_model": str(stt_payload.get("model") or "").strip() or None,
+                "enable_vad": _coerce_bool(stt_payload.get("enable_vad"), default=True),
+                "vad_threshold": _clamp_persona_live_float(
+                    stt_payload.get("vad_threshold"),
+                    default=0.5,
+                    min_value=0.0,
+                    max_value=1.0,
+                ),
+                "vad_min_silence_ms": _clamp_persona_live_int(
+                    stt_payload.get("min_silence_ms"),
+                    default=250,
+                    min_value=50,
+                    max_value=10_000,
+                ),
+                "vad_turn_stop_secs": _clamp_persona_live_float(
+                    stt_payload.get("turn_stop_secs"),
+                    default=0.2,
+                    min_value=0.05,
+                    max_value=10.0,
+                ),
+                "vad_min_utterance_secs": _clamp_persona_live_float(
+                    stt_payload.get("min_utterance_secs"),
+                    default=0.4,
+                    min_value=0.0,
+                    max_value=10.0,
+                ),
                 "tts_provider": str(tts_payload.get("provider") or "").strip() or None,
                 "tts_voice": str(tts_payload.get("voice") or "").strip() or None,
                 "text_only_due_to_tts_failure": False,
@@ -5759,6 +6006,19 @@ async def persona_stream(
                         reason_code="SESSION_ID_REQUIRED",
                     )
                     continue
+                state = persona_live_stt_state_by_session.get(session_id) or {}
+                if bool(state.get("current_utterance_committed")) and not _current_persona_live_transcript(
+                    session_id
+                ):
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="VOICE_COMMIT_IGNORED_ALREADY_COMMITTED",
+                        message="This utterance was already committed.",
+                        commit_source=str(state.get("current_commit_source") or "vad_auto"),
+                        transcript=str(state.get("committed_transcript") or "").strip() or None,
+                    )
+                    continue
                 transcript = str(msg.get("transcript") or msg.get("text") or "").strip()
                 if not transcript:
                     transcript = _current_persona_live_transcript(session_id)
@@ -5770,14 +6030,12 @@ async def persona_stream(
                         reason_code="TRANSCRIPT_REQUIRED",
                     )
                     continue
-                _reset_persona_live_stt_session(session_id)
-                voice_turn_payload = dict(msg)
-                voice_turn_payload["session_id"] = session_id
-                await _handle_persona_live_turn(
-                    msg=voice_turn_payload,
-                    text=transcript,
-                    turn_type="voice_commit",
-                    source=str(msg.get("source") or "persona_live_voice").strip() or "persona_live_voice",
+                await _commit_persona_live_turn(
+                    session_id=session_id,
+                    transcript=transcript,
+                    commit_source="manual",
+                    source=str(msg.get("source") or "persona_live_voice").strip()
+                    or "persona_live_voice",
                 )
             elif mtype == "audio_chunk":
                 session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
@@ -5849,16 +6107,21 @@ async def persona_stream(
 
                 timestamp_ms = int(time.time() * 1000)
                 transcript_delta = ""
+                auto_commit_triggered = False
                 should_fallback_to_scaffold = True
+                buffer_updated_from_snapshot = False
                 stt_state, _voice_runtime = _get_or_create_persona_live_stt_state(session_id)
                 if stt_state is not None:
                     should_fallback_to_scaffold = False
                     transcriber = stt_state.get("transcriber")
+                    turn_detector = stt_state.get("turn_detector")
                     try:
                         normalized_audio = _normalize_persona_live_stt_audio(
                             audio_bytes,
                             audio_format=audio_format,
                         )
+                        if turn_detector is None or not bool(getattr(turn_detector, "available", False)):
+                            await _ensure_persona_live_manual_mode_notice(session_id, stt_state)
                         previous_snapshot = str(
                             voice_transcript_buffer_by_session.get(session_id) or ""
                         ).strip()
@@ -5871,12 +6134,23 @@ async def persona_stream(
                         else:
                             next_snapshot = str(transcriber.get_full_transcript() or "").strip()
                         next_snapshot = str(next_snapshot or "").strip()
+                        if next_snapshot and bool(stt_state.get("current_utterance_committed")):
+                            _clear_persona_live_commit_state(stt_state)
                         if next_snapshot:
                             voice_transcript_buffer_by_session[session_id] = next_snapshot
+                            buffer_updated_from_snapshot = True
                         transcript_delta = _persona_live_forward_delta(
                             previous_snapshot,
                             next_snapshot,
                         )
+                        if turn_detector is not None and bool(getattr(turn_detector, "available", False)):
+                            auto_commit_triggered = bool(turn_detector.observe(normalized_audio))
+                            if not bool(getattr(turn_detector, "available", False)):
+                                stt_state["manual_mode_reason"] = str(
+                                    getattr(turn_detector, "unavailable_reason", "") or "vad_unavailable"
+                                )
+                                await _ensure_persona_live_manual_mode_notice(session_id, stt_state)
+                                auto_commit_triggered = False
                     except Exception as exc:
                         logger.debug(
                             "persona live STT processing failed for session {}: {}",
@@ -5894,12 +6168,15 @@ async def persona_stream(
                 if transcript_delta:
                     transcript_seq = transcript_seq_by_session[session_id]
                     transcript_seq_by_session[session_id] += 1
-                    existing_buffer = str(voice_transcript_buffer_by_session.get(session_id) or "").strip()
-                    voice_transcript_buffer_by_session[session_id] = (
-                        f"{existing_buffer} {transcript_delta}".strip()
-                        if existing_buffer
-                        else transcript_delta
-                    )
+                    if not buffer_updated_from_snapshot:
+                        existing_buffer = str(
+                            voice_transcript_buffer_by_session.get(session_id) or ""
+                        ).strip()
+                        voice_transcript_buffer_by_session[session_id] = (
+                            f"{existing_buffer} {transcript_delta}".strip()
+                            if existing_buffer
+                            else transcript_delta
+                        )
                     await stream.send_json(
                         {
                             "event": "partial_transcript",
@@ -5909,6 +6186,14 @@ async def persona_stream(
                             "seq": transcript_seq,
                             "timestamp_ms": timestamp_ms,
                         }
+                    )
+
+                if auto_commit_triggered:
+                    _ = await _commit_persona_live_turn(
+                        session_id=session_id,
+                        transcript=_current_persona_live_transcript(session_id),
+                        commit_source="vad_auto",
+                        source="persona_live_voice_auto",
                     )
 
                 if "tts_text" not in msg:

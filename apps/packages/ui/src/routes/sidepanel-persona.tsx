@@ -1798,10 +1798,13 @@ const SidepanelPersona = ({
       heardText={liveVoiceController.heardText}
       lastCommittedText={liveVoiceController.lastCommittedText}
       warning={liveVoiceController.warning}
+      manualModeRequired={liveVoiceController.manualModeRequired}
+      canSendNow={liveVoiceController.canSendNow}
       textOnlyDueToTtsFailure={liveVoiceController.textOnlyDueToTtsFailure}
       sessionAutoResume={liveVoiceController.sessionAutoResume}
       sessionBargeIn={liveVoiceController.sessionBargeIn}
       onToggleListening={liveVoiceController.toggleListening}
+      onSendNow={liveVoiceController.sendCurrentTranscriptNow}
       onSessionAutoResumeChange={liveVoiceController.setSessionAutoResume}
       onSessionBargeInChange={liveVoiceController.setSessionBargeIn}
     />

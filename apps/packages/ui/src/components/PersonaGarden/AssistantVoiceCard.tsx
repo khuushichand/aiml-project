@@ -12,10 +12,13 @@ type AssistantVoiceCardProps = {
   heardText: string
   lastCommittedText: string
   warning: string | null
+  manualModeRequired: boolean
+  canSendNow: boolean
   textOnlyDueToTtsFailure: boolean
   sessionAutoResume: boolean
   sessionBargeIn: boolean
   onToggleListening: () => void
+  onSendNow: () => void
   onSessionAutoResumeChange: (next: boolean) => void
   onSessionBargeInChange: (next: boolean) => void
 }
@@ -31,10 +34,13 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   heardText,
   lastCommittedText,
   warning,
+  manualModeRequired,
+  canSendNow,
   textOnlyDueToTtsFailure,
   sessionAutoResume,
   sessionBargeIn,
   onToggleListening,
+  onSendNow,
   onSessionAutoResumeChange,
   onSessionBargeInChange
 }) => {
@@ -50,6 +56,14 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Tag color={textOnlyDueToTtsFailure ? "orange" : "blue"}>{state}</Tag>
+          <Button
+            data-testid="live-voice-send-now"
+            size="small"
+            disabled={!canSendNow}
+            onClick={onSendNow}
+          >
+            Send now
+          </Button>
           <Button
             data-testid="live-voice-start-stop"
             size="small"
@@ -80,9 +94,11 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
         <div className="rounded border border-border bg-surface2 px-2 py-1.5">
           <div className="text-text-muted">Live status</div>
           <div className="mt-1">
-            {speechAvailable
-              ? "Server speech transcription ready."
-              : "Server speech transcription is unavailable for this connection."}
+            {!speechAvailable
+              ? "Server speech transcription is unavailable for this connection."
+              : manualModeRequired
+                ? "Server speech transcription is ready, but VAD auto-commit is unavailable. Use Send now."
+                : "Server speech transcription ready with VAD auto-commit."}
           </div>
         </div>
       </div>

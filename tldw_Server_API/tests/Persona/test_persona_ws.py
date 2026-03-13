@@ -1,5 +1,7 @@
 import base64
 import json
+import queue
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,12 +27,28 @@ _ORIGINAL_RESOLVE_AUTHENTICATED_USER_ID = persona_ep._resolve_authenticated_user
 
 
 def _recv_until(client, predicate, timeout=2.0):
-
     import time
 
     start = time.time()
     while time.time() - start < timeout:
-        msg = client.receive_text()
+        inbox: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+
+        def _reader() -> None:
+            try:
+                inbox.put(("ok", client.receive_text()))
+            except Exception as exc:  # pragma: no cover - test harness defensive path
+                inbox.put(("err", exc))
+
+        thread = threading.Thread(target=_reader, daemon=True)
+        thread.start()
+        remaining = max(0.01, min(0.1, timeout - (time.time() - start)))
+        try:
+            status, payload = inbox.get(timeout=remaining)
+        except queue.Empty:
+            continue
+        if status == "err":
+            raise payload  # type: ignore[misc]
+        msg = str(payload)
         try:
             data = json.loads(msg)
         except Exception:
@@ -1726,11 +1744,27 @@ def test_persona_audio_chunk_uses_streaming_transcriber_for_pcm16_partials(monke
         def cleanup(self):
             return None
 
+    class _FakeUnavailableTurnDetector:
+        available = False
+        unavailable_reason = "unit_test_disabled"
+
+        def observe(self, audio_data: bytes) -> bool:
+            return False
+
+        def reset(self):
+            return None
+
     fake_transcriber = _FakePersonaTranscriber()
     monkeypatch.setattr(
         persona_ep,
         "_create_persona_live_stt_transcriber",
         lambda *args, **kwargs: fake_transcriber,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_turn_detector",
+        lambda *args, **kwargs: _FakeUnavailableTurnDetector(),
         raising=False,
     )
 
@@ -1791,11 +1825,27 @@ def test_persona_voice_commit_uses_transcriber_snapshot_when_client_omits_transc
         def cleanup(self):
             return None
 
+    class _FakeUnavailableTurnDetector:
+        available = False
+        unavailable_reason = "unit_test_disabled"
+
+        def observe(self, audio_data: bytes) -> bool:
+            return False
+
+        def reset(self):
+            return None
+
     fake_transcriber = _FakePersonaTranscriber()
     monkeypatch.setattr(
         persona_ep,
         "_create_persona_live_stt_transcriber",
         lambda *args, **kwargs: fake_transcriber,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_turn_detector",
+        lambda *args, **kwargs: _FakeUnavailableTurnDetector(),
         raising=False,
     )
 
@@ -1844,6 +1894,394 @@ def test_persona_voice_commit_uses_transcriber_snapshot_when_client_omits_transc
             assert fake_transcriber.reset_called is True
 
 
+def test_persona_audio_chunk_vad_auto_commit_routes_stripped_transcript_to_plan(monkeypatch):
+    class _FakePersonaTranscriber:
+        def __init__(self):
+            self.initialize_called = False
+
+        def initialize(self):
+            self.initialize_called = True
+
+        async def process_audio_chunk(self, audio_data: bytes):
+            return {
+                "type": "partial",
+                "text": "hey helper search my notes",
+                "is_final": False,
+            }
+
+        def get_full_transcript(self) -> str:
+            return "hey helper search my notes"
+
+        def reset(self):
+            return None
+
+        def cleanup(self):
+            return None
+
+    class _FakeTurnDetector:
+        def __init__(self):
+            self.available = True
+            self.unavailable_reason = None
+            self.last_trigger_at = None
+            self.observed_chunks: list[bytes] = []
+            self._triggered = False
+
+        def observe(self, audio_data: bytes) -> bool:
+            self.observed_chunks.append(audio_data)
+            if self._triggered:
+                return False
+            self._triggered = True
+            self.last_trigger_at = 123.456
+            return True
+
+        def reset(self):
+            self._triggered = False
+
+    fake_transcriber = _FakePersonaTranscriber()
+    fake_turn_detector = _FakeTurnDetector()
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_stt_transcriber",
+        lambda *args, **kwargs: fake_transcriber,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_turn_detector",
+        lambda *args, **kwargs: fake_turn_detector,
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            audio_payload = base64.b64encode(b"\x00\x00\xff\x7f\x00\x80").decode("ascii")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_audio_auto_commit",
+                        "voice": {"trigger_phrases": ["hey helper"]},
+                        "stt": {"model": "whisper-1", "language": "en-US"},
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_audio_auto_commit",
+                        "audio_format": "pcm16",
+                        "bytes_base64": audio_payload,
+                    }
+                )
+            )
+
+            commit_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_TURN_COMMITTED",
+            )
+            assert commit_notice.get("commit_source") == "vad_auto"
+            assert commit_notice.get("transcript") == "search my notes"
+
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            assert plan.get("session_id") == "sess_audio_auto_commit"
+            assert plan.get("steps")
+            assert fake_transcriber.initialize_called is True
+            assert len(fake_turn_detector.observed_chunks) == 1
+            assert len(fake_turn_detector.observed_chunks[0]) == 12
+
+
+def test_persona_audio_chunk_vad_auto_commit_ignores_missing_trigger_phrase(monkeypatch):
+    class _FakePersonaTranscriber:
+        def initialize(self):
+            return None
+
+        async def process_audio_chunk(self, audio_data: bytes):
+            return {
+                "type": "partial",
+                "text": "search my notes",
+                "is_final": False,
+            }
+
+        def get_full_transcript(self) -> str:
+            return "search my notes"
+
+        def reset(self):
+            return None
+
+        def cleanup(self):
+            return None
+
+    class _FakeTurnDetector:
+        def __init__(self):
+            self.available = True
+            self.unavailable_reason = None
+            self.last_trigger_at = None
+            self._triggered = False
+
+        def observe(self, audio_data: bytes) -> bool:
+            if self._triggered:
+                return False
+            self._triggered = True
+            self.last_trigger_at = 987.0
+            return True
+
+        def reset(self):
+            self._triggered = False
+
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_stt_transcriber",
+        lambda *args, **kwargs: _FakePersonaTranscriber(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_turn_detector",
+        lambda *args, **kwargs: _FakeTurnDetector(),
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            audio_payload = base64.b64encode(b"\x00\x00\xff\x7f\x00\x80").decode("ascii")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_audio_trigger_gate",
+                        "voice": {"trigger_phrases": ["hey helper"]},
+                        "stt": {"model": "whisper-1", "language": "en-US"},
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_audio_trigger_gate",
+                        "audio_format": "pcm16",
+                        "bytes_base64": audio_payload,
+                    }
+                )
+            )
+
+            ignored_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_TRIGGER_NOT_HEARD",
+            )
+            assert ignored_notice.get("session_id") == "sess_audio_trigger_gate"
+
+
+def test_persona_audio_chunk_warns_and_keeps_manual_mode_when_vad_unavailable(monkeypatch):
+    class _FakePersonaTranscriber:
+        def initialize(self):
+            return None
+
+        async def process_audio_chunk(self, audio_data: bytes):
+            return {
+                "type": "partial",
+                "text": "hey helper search my notes",
+                "is_final": False,
+            }
+
+        def get_full_transcript(self) -> str:
+            return "hey helper search my notes"
+
+        def reset(self):
+            return None
+
+        def cleanup(self):
+            return None
+
+    class _FakeTurnDetector:
+        def __init__(self):
+            self.available = False
+            self.unavailable_reason = "silero missing"
+            self.last_trigger_at = None
+
+        def observe(self, audio_data: bytes) -> bool:
+            return False
+
+        def reset(self):
+            return None
+
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_stt_transcriber",
+        lambda *args, **kwargs: _FakePersonaTranscriber(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_turn_detector",
+        lambda *args, **kwargs: _FakeTurnDetector(),
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            audio_payload = base64.b64encode(b"\x00\x00\xff\x7f\x00\x80").decode("ascii")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_audio_manual_mode",
+                        "voice": {"trigger_phrases": ["hey helper"]},
+                        "stt": {"model": "whisper-1", "language": "en-US"},
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_audio_manual_mode",
+                        "audio_format": "pcm16",
+                        "bytes_base64": audio_payload,
+                    }
+                )
+            )
+
+            degraded_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_MANUAL_MODE_REQUIRED",
+            )
+            assert degraded_notice.get("level") == "warning"
+
+            partial = _recv_until(ws, lambda d: d.get("event") == "partial_transcript")
+            assert partial.get("session_id") == "sess_audio_manual_mode"
+            assert partial.get("text_delta") == "hey helper search my notes"
+
+
+def test_persona_voice_commit_is_ignored_after_vad_auto_commit(monkeypatch):
+    class _FakePersonaTranscriber:
+        def initialize(self):
+            return None
+
+        async def process_audio_chunk(self, audio_data: bytes):
+            return {
+                "type": "partial",
+                "text": "hey helper search my notes",
+                "is_final": False,
+            }
+
+        def get_full_transcript(self) -> str:
+            return "hey helper search my notes"
+
+        def reset(self):
+            return None
+
+        def cleanup(self):
+            return None
+
+    class _FakeTurnDetector:
+        def __init__(self):
+            self.available = True
+            self.unavailable_reason = None
+            self.last_trigger_at = None
+            self._triggered = False
+
+        def observe(self, audio_data: bytes) -> bool:
+            if self._triggered:
+                return False
+            self._triggered = True
+            self.last_trigger_at = 555.0
+            return True
+
+        def reset(self):
+            self._triggered = False
+
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_stt_transcriber",
+        lambda *args, **kwargs: _FakePersonaTranscriber(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_turn_detector",
+        lambda *args, **kwargs: _FakeTurnDetector(),
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            audio_payload = base64.b64encode(b"\x00\x00\xff\x7f\x00\x80").decode("ascii")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_audio_ignore_manual",
+                        "voice": {"trigger_phrases": ["hey helper"]},
+                        "stt": {"model": "whisper-1", "language": "en-US"},
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_audio_ignore_manual",
+                        "audio_format": "pcm16",
+                        "bytes_base64": audio_payload,
+                    }
+                )
+            )
+
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_TURN_COMMITTED",
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_commit",
+                        "session_id": "sess_audio_ignore_manual",
+                        "transcript": "search my notes",
+                        "source": "persona_live_voice"
+                    }
+                )
+            )
+
+            ignored_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_COMMIT_IGNORED_ALREADY_COMMITTED",
+            )
+            assert ignored_notice.get("session_id") == "sess_audio_ignore_manual"
+
+
 def test_persona_voice_config_stores_runtime_preferences(monkeypatch):
     from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 
@@ -1885,6 +2323,11 @@ def test_persona_voice_config_stores_runtime_preferences(monkeypatch):
         "barge_in": False,
         "stt_language": "en-US",
         "stt_model": "whisper-1",
+        "enable_vad": True,
+        "vad_threshold": 0.5,
+        "vad_min_silence_ms": 250,
+        "vad_turn_stop_secs": 0.2,
+        "vad_min_utterance_secs": 0.4,
         "tts_provider": "openai",
         "tts_voice": "alloy",
         "text_only_due_to_tts_failure": False,

@@ -26,6 +26,7 @@ describe("LiveSessionPanel", () => {
 describe("AssistantVoiceCard", () => {
   it("renders resolved defaults, session toggles, and warning state", () => {
     const onToggleListening = vi.fn()
+    const onSendNow = vi.fn()
     const onSessionAutoResumeChange = vi.fn()
     const onSessionBargeInChange = vi.fn()
 
@@ -48,9 +49,12 @@ describe("AssistantVoiceCard", () => {
         lastCommittedText="open notes"
         warning="Live TTS unavailable for this session. Continuing in text-only mode."
         textOnlyDueToTtsFailure
+        manualModeRequired
+        canSendNow
         sessionAutoResume={false}
         sessionBargeIn
         onToggleListening={onToggleListening}
+        onSendNow={onSendNow}
         onSessionAutoResumeChange={onSessionAutoResumeChange}
         onSessionBargeInChange={onSessionBargeInChange}
       />
@@ -70,6 +74,9 @@ describe("AssistantVoiceCard", () => {
 
     fireEvent.click(screen.getByTestId("live-voice-start-stop"))
     expect(onToggleListening).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId("live-voice-send-now"))
+    expect(onSendNow).toHaveBeenCalledTimes(1)
 
     fireEvent.click(screen.getByTestId("live-voice-auto-resume"))
     expect(onSessionAutoResumeChange).toHaveBeenCalledWith(true)

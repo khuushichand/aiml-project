@@ -23,27 +23,6 @@ type UsePersonaLiveVoiceControllerArgs = {
 
 type PersonaLiveVoicePayload = Record<string, unknown> | null | undefined
 
-const normalizeTriggerList = (phrases: string[]) =>
-  phrases.map((phrase) => phrase.trim()).filter(Boolean)
-
-const stripTriggerPhrases = (text: string, phrases: string[]): string => {
-  if (!phrases.length) return text.trim()
-  let next = text
-  for (const phrase of phrases) {
-    if (!phrase) continue
-    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    const pattern = new RegExp(`\\b${escaped}\\b`, "ig")
-    next = next.replace(pattern, " ")
-  }
-  return next.replace(/\s+/g, " ").trim()
-}
-
-const detectTriggerPhrase = (text: string, phrases: string[]): boolean => {
-  if (!phrases.length) return true
-  const lower = text.toLowerCase()
-  return phrases.some((phrase) => lower.includes(phrase.toLowerCase()))
-}
-
 const normalizeTtsProvider = (provider: string): string =>
   String(provider || "").trim().toLowerCase()
 
@@ -62,11 +41,13 @@ export const usePersonaLiveVoiceController = ({
   const [heardText, setHeardText] = React.useState("")
   const [lastCommittedText, setLastCommittedText] = React.useState("")
   const [warning, setWarning] = React.useState<string | null>(null)
+  const [manualModeRequired, setManualModeRequired] = React.useState(false)
   const [textOnlyDueToTtsFailure, setTextOnlyDueToTtsFailure] = React.useState(false)
   const [sessionAutoResume, setSessionAutoResume] = React.useState(resolvedDefaults.autoResume)
   const [sessionBargeIn, setSessionBargeIn] = React.useState(resolvedDefaults.bargeIn)
 
   const heardTranscriptRef = React.useRef("")
+  const manualModeRequiredRef = React.useRef(false)
   const textOnlyDueToTtsFailureRef = React.useRef(false)
   const pendingBinaryFinishRef = React.useRef(false)
   const pendingResumeRef = React.useRef(false)
@@ -74,10 +55,6 @@ export const usePersonaLiveVoiceController = ({
   const browserUtteranceActiveRef = React.useRef(false)
   const resumeListeningRef = React.useRef<() => void>(() => {})
 
-  const normalizedTriggers = React.useMemo(
-    () => normalizeTriggerList(resolvedDefaults.voiceChatTriggerPhrases),
-    [resolvedDefaults.voiceChatTriggerPhrases]
-  )
   const activeProvider = React.useMemo(
     () => normalizeTtsProvider(resolvedDefaults.ttsProvider),
     [resolvedDefaults.ttsProvider]
@@ -85,6 +62,7 @@ export const usePersonaLiveVoiceController = ({
 
   const clearTransientWarning = React.useCallback(() => {
     if (textOnlyDueToTtsFailureRef.current) return
+    if (manualModeRequiredRef.current) return
     setWarning(null)
   }, [])
 
@@ -139,7 +117,7 @@ export const usePersonaLiveVoiceController = ({
   }, [])
 
   const sendVoiceCommit = React.useCallback(
-    (transcript: string) => {
+    (transcript: string, source = "persona_live_voice_manual") => {
       if (!connected || !sessionId || !ws || ws.readyState !== WebSocket.OPEN) {
         setWarning("Live voice is disconnected. Reconnect Persona Garden to send spoken commands.")
         setState("error")
@@ -147,17 +125,8 @@ export const usePersonaLiveVoiceController = ({
       }
 
       const normalizedTranscript = String(transcript || "").trim()
-      if (normalizedTranscript && !detectTriggerPhrase(normalizedTranscript, normalizedTriggers)) {
-        setWarning("No trigger phrase was heard, so nothing was sent.")
-        setState("idle")
-        return
-      }
-
-      const cleanedTranscript = normalizedTranscript
-        ? stripTriggerPhrases(normalizedTranscript, normalizedTriggers)
-        : ""
-      if (normalizedTranscript && !cleanedTranscript) {
-        setWarning("The trigger phrase was removed, but no spoken command remained.")
+      if (!normalizedTranscript) {
+        setWarning("No speech transcript was captured for that live turn.")
         setState("idle")
         return
       }
@@ -167,24 +136,17 @@ export const usePersonaLiveVoiceController = ({
           JSON.stringify({
             type: "voice_commit",
             session_id: sessionId,
-            ...(cleanedTranscript ? { transcript: cleanedTranscript } : {}),
-            source: "persona_live_voice"
+            transcript: normalizedTranscript,
+            source
           })
         )
         clearTransientWarning()
-        setLastCommittedText(cleanedTranscript)
         setState("thinking")
       } catch (error) {
         handleVoiceError(error)
       }
     },
-    [
-      connected,
-      handleVoiceError,
-      normalizedTriggers,
-      sessionId,
-      ws
-    ]
+    [clearTransientWarning, connected, handleVoiceError, sessionId, ws]
   )
 
   const { start: startMicStream, stop: stopMicStream, active: micActive } = useMicStream(
@@ -204,6 +166,10 @@ export const usePersonaLiveVoiceController = ({
       }
     }
   )
+
+  React.useEffect(() => {
+    manualModeRequiredRef.current = manualModeRequired
+  }, [manualModeRequired])
 
   React.useEffect(() => {
     textOnlyDueToTtsFailureRef.current = textOnlyDueToTtsFailure
@@ -279,7 +245,14 @@ export const usePersonaLiveVoiceController = ({
   const stopListening = React.useCallback(() => {
     if (!micActive) return
     stopMicStream()
-    sendVoiceCommit(heardTranscriptRef.current)
+    setState("idle")
+  }, [micActive, stopMicStream])
+
+  const sendCurrentTranscriptNow = React.useCallback(() => {
+    if (micActive) {
+      stopMicStream()
+    }
+    sendVoiceCommit(heardTranscriptRef.current, "persona_live_voice_manual")
   }, [micActive, sendVoiceCommit, stopMicStream])
 
   const toggleListening = React.useCallback(() => {
@@ -346,6 +319,8 @@ export const usePersonaLiveVoiceController = ({
   React.useEffect(() => {
     setSessionAutoResume(resolvedDefaults.autoResume)
     setSessionBargeIn(resolvedDefaults.bargeIn)
+    manualModeRequiredRef.current = false
+    setManualModeRequired(false)
     textOnlyDueToTtsFailureRef.current = false
     setTextOnlyDueToTtsFailure(false)
     setWarning(null)
@@ -370,6 +345,8 @@ export const usePersonaLiveVoiceController = ({
 
   React.useEffect(() => {
     if (!connected) {
+      manualModeRequiredRef.current = false
+      setManualModeRequired(false)
       setState("idle")
       pendingBinaryFinishRef.current = false
       pendingResumeRef.current = false
@@ -393,7 +370,8 @@ export const usePersonaLiveVoiceController = ({
           },
           stt: {
             language: resolvedDefaults.sttLanguage,
-            model: resolvedDefaults.sttModel
+            model: resolvedDefaults.sttModel,
+            enable_vad: true
           },
           tts: {
             provider: resolvedDefaults.ttsProvider,
@@ -500,9 +478,61 @@ export const usePersonaLiveVoiceController = ({
           finishVoiceTurn()
           return
         }
+        if (reasonCode === "VOICE_MANUAL_MODE_REQUIRED") {
+          manualModeRequiredRef.current = true
+          setManualModeRequired(true)
+          setWarning(
+            String(
+              payload?.message ||
+                "Server VAD unavailable for this live session. Use Send now to commit heard speech manually."
+            )
+          )
+          return
+        }
+        if (reasonCode === "VOICE_TURN_COMMITTED") {
+          clearAwaitingTtsTimeout()
+          if (micActive) {
+            stopMicStream()
+          }
+          const committedTranscript = String(payload?.transcript || "").trim()
+          if (committedTranscript) {
+            setLastCommittedText(committedTranscript)
+          }
+          if (!manualModeRequiredRef.current && !textOnlyDueToTtsFailureRef.current) {
+            setWarning(null)
+          }
+          setState("thinking")
+          return
+        }
+        if (reasonCode === "VOICE_COMMIT_IGNORED_ALREADY_COMMITTED") {
+          setWarning(String(payload?.message || "This utterance was already committed."))
+          setState("thinking")
+          return
+        }
+        if (reasonCode === "VOICE_TRIGGER_NOT_HEARD") {
+          setHeardText("")
+          heardTranscriptRef.current = ""
+          setWarning(
+            String(payload?.message || "No trigger phrase was heard, so the transcript was ignored.")
+          )
+          setState(micActive ? "listening" : "idle")
+          return
+        }
+        if (reasonCode === "VOICE_EMPTY_COMMAND_AFTER_TRIGGER") {
+          setHeardText("")
+          heardTranscriptRef.current = ""
+          setWarning(
+            String(
+              payload?.message ||
+                "The trigger phrase was removed, but no spoken command remained."
+            )
+          )
+          setState(micActive ? "listening" : "idle")
+          return
+        }
         if (reasonCode === "TRANSCRIPT_REQUIRED") {
           setWarning("No speech transcript was captured for that live turn.")
-          setState("idle")
+          setState(micActive ? "listening" : "idle")
         }
       }
     },
@@ -511,7 +541,9 @@ export const usePersonaLiveVoiceController = ({
       audioStart,
       clearAwaitingTtsTimeout,
       finishVoiceTurn,
+      micActive,
       playBrowserSpeech,
+      stopMicStream,
       textOnlyDueToTtsFailure
     ]
   )
@@ -534,6 +566,8 @@ export const usePersonaLiveVoiceController = ({
     heardText,
     lastCommittedText,
     warning,
+    manualModeRequired,
+    canSendNow: Boolean(String(heardText || heardTranscriptRef.current || "").trim()),
     speechAvailable: canUseServerStt,
     isListening: micActive,
     sessionAutoResume,
@@ -542,6 +576,7 @@ export const usePersonaLiveVoiceController = ({
     startListening,
     stopListening,
     toggleListening,
+    sendCurrentTranscriptNow,
     setSessionAutoResume,
     setSessionBargeIn,
     handlePayload,
