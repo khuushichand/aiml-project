@@ -892,7 +892,10 @@ const SidepanelPersona = ({
 
       if (eventType === "notice") {
         const reasonCode = String(payload?.reason_code || "").trim().toUpperCase()
-        if (reasonCode === "VOICE_TURN_PROCESSING") {
+        if (
+          reasonCode === "VOICE_TURN_PROCESSING" ||
+          reasonCode === "VOICE_TOOL_EXECUTION_PROCESSING"
+        ) {
           return
         }
         appendLog("notice", String(payload?.message || "notice"))
@@ -1823,6 +1826,7 @@ const SidepanelPersona = ({
       isListening={liveVoiceController.isListening}
       heardText={liveVoiceController.heardText}
       lastCommittedText={liveVoiceController.lastCommittedText}
+      activeToolStatus={liveVoiceController.activeToolStatus}
       warning={liveVoiceController.warning}
       recoveryMode={liveVoiceController.recoveryMode}
       manualModeRequired={liveVoiceController.manualModeRequired}

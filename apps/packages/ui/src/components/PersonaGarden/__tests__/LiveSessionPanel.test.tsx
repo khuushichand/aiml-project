@@ -52,6 +52,7 @@ describe("AssistantVoiceCard", () => {
         isListening={false}
         heardText="hey helper open notes"
         lastCommittedText="open notes"
+        activeToolStatus=""
         warning="Live TTS unavailable for this session. Continuing in text-only mode."
         recoveryMode="none"
         textOnlyDueToTtsFailure
@@ -118,6 +119,7 @@ describe("AssistantVoiceCard", () => {
         isListening
         heardText="hey helper search my notes"
         lastCommittedText=""
+        activeToolStatus=""
         warning={null}
         recoveryMode="listening_stuck"
         textOnlyDueToTtsFailure={false}
@@ -175,6 +177,7 @@ describe("AssistantVoiceCard", () => {
         isListening={false}
         heardText="hey helper search my notes"
         lastCommittedText="search my notes"
+        activeToolStatus=""
         warning={null}
         recoveryMode="thinking_stuck"
         textOnlyDueToTtsFailure={false}
@@ -210,5 +213,90 @@ describe("AssistantVoiceCard", () => {
 
     fireEvent.click(screen.getByTestId("live-voice-recovery-reconnect"))
     expect(onReconnectPersonaSession).toHaveBeenCalledTimes(1)
+  })
+
+  it("renders the current action line while thinking with active tool status", () => {
+    render(
+      <AssistantVoiceCard
+        resolvedDefaults={{
+          sttLanguage: "en-US",
+          sttModel: "whisper-1",
+          ttsProvider: "openai",
+          ttsVoice: "alloy",
+          confirmationMode: "destructive_only",
+          voiceChatTriggerPhrases: ["hey helper"],
+          autoResume: true,
+          bargeIn: false
+        }}
+        state="thinking"
+        speechAvailable
+        isListening={false}
+        heardText=""
+        lastCommittedText="search my notes"
+        activeToolStatus="Running search_notes: Looking through your notes"
+        warning={null}
+        recoveryMode="none"
+        textOnlyDueToTtsFailure={false}
+        manualModeRequired={false}
+        canSendNow={false}
+        sessionAutoResume
+        sessionBargeIn={false}
+        onToggleListening={vi.fn()}
+        onSendNow={vi.fn()}
+        onSessionAutoResumeChange={vi.fn()}
+        onSessionBargeInChange={vi.fn()}
+        onKeepListening={vi.fn()}
+        onResetTurn={vi.fn()}
+        onWaitOnRecovery={vi.fn()}
+        onCopyLastCommandToComposer={vi.fn()}
+        onReconnectPersonaSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Current action")).toBeInTheDocument()
+    expect(
+      screen.getByText("Running search_notes: Looking through your notes")
+    ).toBeInTheDocument()
+  })
+
+  it("hides the current action line when active tool status is empty", () => {
+    render(
+      <AssistantVoiceCard
+        resolvedDefaults={{
+          sttLanguage: "en-US",
+          sttModel: "whisper-1",
+          ttsProvider: "openai",
+          ttsVoice: "alloy",
+          confirmationMode: "destructive_only",
+          voiceChatTriggerPhrases: ["hey helper"],
+          autoResume: true,
+          bargeIn: false
+        }}
+        state="thinking"
+        speechAvailable
+        isListening={false}
+        heardText=""
+        lastCommittedText="search my notes"
+        activeToolStatus=""
+        warning={null}
+        recoveryMode="none"
+        textOnlyDueToTtsFailure={false}
+        manualModeRequired={false}
+        canSendNow={false}
+        sessionAutoResume
+        sessionBargeIn={false}
+        onToggleListening={vi.fn()}
+        onSendNow={vi.fn()}
+        onSessionAutoResumeChange={vi.fn()}
+        onSessionBargeInChange={vi.fn()}
+        onKeepListening={vi.fn()}
+        onResetTurn={vi.fn()}
+        onWaitOnRecovery={vi.fn()}
+        onCopyLastCommandToComposer={vi.fn()}
+        onReconnectPersonaSession={vi.fn()}
+      />
+    )
+
+    expect(screen.queryByText("Current action")).not.toBeInTheDocument()
   })
 })

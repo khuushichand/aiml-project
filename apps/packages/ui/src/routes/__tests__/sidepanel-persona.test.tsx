@@ -2145,7 +2145,7 @@ describe("SidepanelPersona", () => {
     })
   })
 
-  it("does not append VOICE_TURN_PROCESSING into the visible persona log", async () => {
+  it("does not append tool processing notices into the visible persona log", async () => {
     mocks.capabilitiesState.capabilities = {
       hasPersona: true,
       hasPersonalization: true,
@@ -2228,6 +2228,22 @@ describe("SidepanelPersona", () => {
 
     expect(
       screen.queryByText("Still processing this voice turn.")
+    ).not.toBeInTheDocument()
+
+    act(() => {
+      ws.emitMessage(
+        JSON.stringify({
+          event: "notice",
+          reason_code: "VOICE_TOOL_EXECUTION_PROCESSING",
+          tool: "search_notes",
+          step_idx: 0,
+          message: "Tool execution is still in progress."
+        })
+      )
+    })
+
+    expect(
+      screen.queryByText("Tool execution is still in progress.")
     ).not.toBeInTheDocument()
   })
 

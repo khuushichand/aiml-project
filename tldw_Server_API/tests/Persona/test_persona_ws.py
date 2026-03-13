@@ -2652,6 +2652,217 @@ def test_persona_voice_processing_notice_is_suppressed_by_tool_plan_progress(mon
                 )
 
 
+def test_persona_tool_call_emits_tool_processing_notice_after_quiet_delay(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db_tool_processing_notice"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-ws-tool-processing-notice-test")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": "1",
+                "name": "Research Assistant",
+                "mode": "session_scoped",
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.replace_persona_policy_rules(
+            persona_id=persona_id,
+            user_id="1",
+            rules=[{"rule_kind": "mcp_tool", "rule_name": "knowledge.search", "allowed": True}],
+        )
+        _ = db.create_persona_session(
+            {
+                "id": "sess_tool_processing_notice",
+                "persona_id": persona_id,
+                "user_id": "1",
+                "mode": "session_scoped",
+                "reuse_allowed": False,
+                "status": "active",
+                "scope_snapshot_json": {},
+            }
+        )
+    finally:
+        db.close_connection()
+
+    manager = SessionManager()
+    manager.put_plan(
+        session_id="sess_tool_processing_notice",
+        user_id="1",
+        persona_id="research_assistant",
+        plan_id="plan_tool_processing_notice",
+        steps=[
+            {
+                "idx": 0,
+                "step_type": "mcp_tool",
+                "tool": "knowledge.search",
+                "args": {"query": "slow tool"},
+                "why": "Looking through your notes",
+            }
+        ],
+    )
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            await asyncio.sleep(0.03)
+            return SimpleNamespace(error=None, result={"ok": True, "slow": True})
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+    monkeypatch.setattr(
+        persona_ep,
+        "_PERSONA_LIVE_PROCESSING_NOTICE_DELAY_S",
+        0.01,
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": "sess_tool_processing_notice",
+                        "plan_id": "plan_tool_processing_notice",
+                        "approved_steps": [0],
+                    }
+                )
+            )
+
+            evt_call = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            assert evt_call.get("tool") == "knowledge.search"
+            assert evt_call.get("why") == "Looking through your notes"
+
+            processing_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_TOOL_EXECUTION_PROCESSING",
+                timeout=0.5,
+            )
+            assert processing_notice.get("session_id") == "sess_tool_processing_notice"
+            assert processing_notice.get("tool") == "knowledge.search"
+            assert processing_notice.get("step_idx") == 0
+            assert processing_notice.get("why") == "Looking through your notes"
+
+            evt_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            assert evt_result.get("ok") is True
+
+
+def test_persona_tool_processing_notice_is_suppressed_by_tool_result(tmp_path, monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db_tool_processing_suppressed"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-ws-tool-processing-suppressed-test")
+    try:
+        persona_id = db.create_persona_profile(
+            {
+                "id": "research_assistant",
+                "user_id": "1",
+                "name": "Research Assistant",
+                "mode": "session_scoped",
+                "system_prompt": "Helper",
+                "is_active": True,
+            }
+        )
+        _ = db.replace_persona_policy_rules(
+            persona_id=persona_id,
+            user_id="1",
+            rules=[{"rule_kind": "mcp_tool", "rule_name": "knowledge.search", "allowed": True}],
+        )
+        _ = db.create_persona_session(
+            {
+                "id": "sess_tool_processing_suppressed",
+                "persona_id": persona_id,
+                "user_id": "1",
+                "mode": "session_scoped",
+                "reuse_allowed": False,
+                "status": "active",
+                "scope_snapshot_json": {},
+            }
+        )
+    finally:
+        db.close_connection()
+
+    manager = SessionManager()
+    manager.put_plan(
+        session_id="sess_tool_processing_suppressed",
+        user_id="1",
+        persona_id="research_assistant",
+        plan_id="plan_tool_processing_suppressed",
+        steps=[
+            {
+                "idx": 0,
+                "step_type": "mcp_tool",
+                "tool": "knowledge.search",
+                "args": {"query": "fast tool"},
+                "why": "Checking your notes quickly",
+            }
+        ],
+    )
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(error=None, result={"ok": True, "fast": True})
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+    monkeypatch.setattr(
+        persona_ep,
+        "_PERSONA_LIVE_PROCESSING_NOTICE_DELAY_S",
+        0.05,
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": "sess_tool_processing_suppressed",
+                        "plan_id": "plan_tool_processing_suppressed",
+                        "approved_steps": [0],
+                    }
+                )
+            )
+
+            evt_call = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            assert evt_call.get("tool") == "knowledge.search"
+
+            evt_result = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+            assert evt_result.get("ok") is True
+
+            with pytest.raises(AssertionError):
+                _recv_until(
+                    ws,
+                    lambda d: d.get("event") == "notice"
+                    and d.get("reason_code") == "VOICE_TOOL_EXECUTION_PROCESSING",
+                    timeout=0.1,
+                )
+
+
 def test_persona_voice_confirm_plan_tts_failure_degrades_to_text_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -14,6 +14,7 @@ type AssistantVoiceCardProps = {
   isListening: boolean
   heardText: string
   lastCommittedText: string
+  activeToolStatus: string
   warning: string | null
   recoveryMode: PersonaLiveVoiceRecoveryMode
   manualModeRequired: boolean
@@ -42,6 +43,7 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   isListening,
   heardText,
   lastCommittedText,
+  activeToolStatus,
   warning,
   recoveryMode,
   manualModeRequired,
@@ -141,6 +143,16 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
           className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-warning"
         >
           {warning}
+        </div>
+      ) : null}
+
+      {state === "thinking" && String(activeToolStatus || "").trim() ? (
+        <div
+          data-testid="live-voice-current-action"
+          className="mt-3 rounded-md border border-border bg-surface2 p-2 text-xs text-text"
+        >
+          <div className="text-text-muted">Current action</div>
+          <div className="mt-1 whitespace-pre-wrap">{activeToolStatus}</div>
         </div>
       ) : null}
 

@@ -4562,6 +4562,14 @@ async def persona_stream(
                 "why": str(why or ""),
             }
             await stream.send_json(payload)
+            _schedule_persona_live_processing_notice(
+                session_id=session_id,
+                reason_code="VOICE_TOOL_EXECUTION_PROCESSING",
+                message="Tool execution is still in progress.",
+                tool=str(tool or ""),
+                step_idx=int(step_idx),
+                why=str(why or ""),
+            )
 
         async def _emit_tool_result(
             *,
@@ -4598,8 +4606,15 @@ async def persona_stream(
         def _mark_persona_live_processing_progress(session_id: str) -> None:
             _cancel_persona_live_processing_notice(session_id)
 
-        def _schedule_persona_live_processing_notice(session_id: str) -> None:
+        def _schedule_persona_live_processing_notice(
+            session_id: str,
+            *,
+            reason_code: str = "VOICE_TURN_PROCESSING",
+            message: str = "Still processing this voice turn.",
+            **extra: Any,
+        ) -> None:
             _cancel_persona_live_processing_notice(session_id)
+            notice_extra = dict(extra or {})
 
             async def _emit_after_delay() -> None:
                 current_task = asyncio.current_task()
@@ -4613,8 +4628,9 @@ async def persona_stream(
                     await _emit_notice(
                         session_id=session_id,
                         level="info",
-                        reason_code="VOICE_TURN_PROCESSING",
-                        message="Still processing this voice turn.",
+                        reason_code=reason_code,
+                        message=message,
+                        **notice_extra,
                     )
                 except asyncio.CancelledError:
                     return

@@ -34,6 +34,14 @@ const normalizeTtsProvider = (provider: string): string =>
 const browserSpeechSupported = (): boolean =>
   typeof window !== "undefined" && "speechSynthesis" in window
 
+const formatActiveToolStatus = (tool: unknown, why: unknown): string => {
+  const toolName = String(tool || "").trim()
+  const whyText = String(why || "").trim()
+  if (!toolName) return ""
+  if (!whyText) return `Running ${toolName}...`
+  return `Running ${toolName}: ${whyText}`
+}
+
 export const usePersonaLiveVoiceController = ({
   ws,
   connected,
@@ -45,6 +53,7 @@ export const usePersonaLiveVoiceController = ({
   const [state, setState] = React.useState<PersonaLiveVoiceState>("idle")
   const [heardText, setHeardText] = React.useState("")
   const [lastCommittedText, setLastCommittedText] = React.useState("")
+  const [activeToolStatus, setActiveToolStatus] = React.useState("")
   const [warning, setWarning] = React.useState<string | null>(null)
   const [manualModeRequired, setManualModeRequired] = React.useState(false)
   const [textOnlyDueToTtsFailure, setTextOnlyDueToTtsFailure] = React.useState(false)
@@ -217,6 +226,7 @@ export const usePersonaLiveVoiceController = ({
     setHeardText("")
     heardTranscriptRef.current = ""
     setLastCommittedText("")
+    setActiveToolStatus("")
     if (!manualModeRequiredRef.current && !textOnlyDueToTtsFailureRef.current) {
       setWarning(null)
     }
@@ -254,6 +264,7 @@ export const usePersonaLiveVoiceController = ({
       clearTransientWarning()
       setHeardText("")
       heardTranscriptRef.current = ""
+      setActiveToolStatus("")
       setRecoveryMode("none")
       clearThinkingRecovery()
       void startMicStream()
@@ -296,6 +307,7 @@ export const usePersonaLiveVoiceController = ({
     clearTransientWarning()
     setHeardText("")
     heardTranscriptRef.current = ""
+    setActiveToolStatus("")
     setRecoveryMode("none")
     clearThinkingRecovery()
     setState("listening")
@@ -406,6 +418,7 @@ export const usePersonaLiveVoiceController = ({
     setHeardText("")
     heardTranscriptRef.current = ""
     setLastCommittedText("")
+    setActiveToolStatus("")
     setRecoveryMode("none")
     setListeningRecoveryRestartKey(0)
     setThinkingRecoveryArmed(false)
@@ -435,6 +448,7 @@ export const usePersonaLiveVoiceController = ({
       manualModeRequiredRef.current = false
       setManualModeRequired(false)
       setRecoveryMode("none")
+      setActiveToolStatus("")
       setListeningRecoveryRestartKey(0)
       setThinkingRecoveryArmed(false)
       setThinkingRecoveryRestartKey(0)
@@ -553,6 +567,7 @@ export const usePersonaLiveVoiceController = ({
         const text = String(payload?.text_delta || "").trim()
         if (!text) return
         clearAwaitingTtsTimeout()
+        setActiveToolStatus("")
         clearThinkingRecovery()
         if (textOnlyDueToTtsFailure) {
           finishVoiceTurn()
@@ -582,13 +597,36 @@ export const usePersonaLiveVoiceController = ({
         return
       }
 
-      if (eventType === "tool_plan" || eventType === "tool_call" || eventType === "tool_result") {
+      if (eventType === "tool_plan") {
+        clearThinkingRecovery()
+        return
+      }
+
+      if (eventType === "tool_call") {
+        setActiveToolStatus(formatActiveToolStatus(payload?.tool, payload?.why))
+        if (state === "thinking") {
+          armThinkingRecovery()
+        }
+        return
+      }
+
+      if (eventType === "tool_result") {
+        setActiveToolStatus("")
+        if (payload?.approval && typeof payload.approval === "object") {
+          clearThinkingRecovery()
+          return
+        }
+        if (state === "thinking") {
+          armThinkingRecovery()
+          return
+        }
         clearThinkingRecovery()
         return
       }
 
       if (eventType === "tts_audio") {
         clearAwaitingTtsTimeout()
+        setActiveToolStatus("")
         clearThinkingRecovery()
         const chunkIndex =
           typeof payload?.chunk_index === "number"
@@ -615,8 +653,15 @@ export const usePersonaLiveVoiceController = ({
           }
           return
         }
+        if (reasonCode === "VOICE_TOOL_EXECUTION_PROCESSING") {
+          if (state === "thinking" && String(activeToolStatus || "").trim()) {
+            armThinkingRecovery()
+          }
+          return
+        }
         if (reasonCode === "TTS_UNAVAILABLE_TEXT_ONLY") {
           clearAwaitingTtsTimeout()
+          setActiveToolStatus("")
           clearThinkingRecovery()
           textOnlyDueToTtsFailureRef.current = true
           setTextOnlyDueToTtsFailure(true)
@@ -647,6 +692,7 @@ export const usePersonaLiveVoiceController = ({
           if (committedTranscript) {
             setLastCommittedText(committedTranscript)
           }
+          setActiveToolStatus("")
           if (!manualModeRequiredRef.current && !textOnlyDueToTtsFailureRef.current) {
             setWarning(null)
           }
@@ -656,11 +702,13 @@ export const usePersonaLiveVoiceController = ({
           return
         }
         if (reasonCode === "VOICE_COMMIT_IGNORED_ALREADY_COMMITTED") {
+          setActiveToolStatus("")
           setWarning(String(payload?.message || "This utterance was already committed."))
           setState("thinking")
           return
         }
         if (reasonCode === "VOICE_TRIGGER_NOT_HEARD") {
+          setActiveToolStatus("")
           setHeardText("")
           heardTranscriptRef.current = ""
           setWarning(
@@ -670,6 +718,7 @@ export const usePersonaLiveVoiceController = ({
           return
         }
         if (reasonCode === "VOICE_EMPTY_COMMAND_AFTER_TRIGGER") {
+          setActiveToolStatus("")
           setHeardText("")
           heardTranscriptRef.current = ""
           setWarning(
@@ -682,6 +731,7 @@ export const usePersonaLiveVoiceController = ({
           return
         }
         if (reasonCode === "TRANSCRIPT_REQUIRED") {
+          setActiveToolStatus("")
           setWarning("No speech transcript was captured for that live turn.")
           setState(micActive ? "listening" : "idle")
         }
@@ -697,6 +747,7 @@ export const usePersonaLiveVoiceController = ({
       finishVoiceTurn,
       micActive,
       playBrowserSpeech,
+      activeToolStatus,
       state,
       stopMicStream,
       textOnlyDueToTtsFailure
@@ -721,6 +772,7 @@ export const usePersonaLiveVoiceController = ({
     recoveryMode,
     heardText,
     lastCommittedText,
+    activeToolStatus,
     warning,
     manualModeRequired,
     canSendNow: Boolean(String(heardText || heardTranscriptRef.current || "").trim()),

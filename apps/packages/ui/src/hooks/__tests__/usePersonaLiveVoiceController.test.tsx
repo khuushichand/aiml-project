@@ -601,7 +601,7 @@ describe("usePersonaLiveVoiceController", () => {
     expect((result.current as any).recoveryMode).toBe("thinking_stuck")
   })
 
-  it("tool and approval progress clear thinking recovery", async () => {
+  it("sets activeToolStatus and re-arms thinking recovery on tool_call", async () => {
     vi.useFakeTimers()
 
     const ws = {
@@ -630,19 +630,108 @@ describe("usePersonaLiveVoiceController", () => {
     })
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(8000)
-    })
-
-    expect((result.current as any).recoveryMode).toBe("thinking_stuck")
-
-    act(() => {
-      result.current.handlePayload({
-        event: "tool_plan",
-        steps: []
-      })
+      await vi.advanceTimersByTimeAsync(7000)
     })
 
     expect((result.current as any).recoveryMode).toBe("none")
+
+    act(() => {
+      result.current.handlePayload({
+        event: "tool_call",
+        tool: "search_notes",
+        why: "Looking through your notes"
+      })
+    })
+
+    expect((result.current as any).activeToolStatus).toBe(
+      "Running search_notes: Looking through your notes"
+    )
+    expect((result.current as any).recoveryMode).toBe("none")
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+  })
+
+  it("re-arms thinking recovery when VOICE_TOOL_EXECUTION_PROCESSING arrives", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+
+    act(() => {
+      result.current.handlePayload({
+        event: "tool_call",
+        tool: "search_notes",
+        why: "Looking through your notes"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(7000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TOOL_EXECUTION_PROCESSING",
+        tool: "search_notes",
+        step_idx: 0,
+        why: "Looking through your notes"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+  })
+
+  it("clears activeToolStatus and re-arms recovery on tool_result", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
 
     act(() => {
       result.current.handlePayload({
@@ -653,11 +742,72 @@ describe("usePersonaLiveVoiceController", () => {
       })
     })
 
+    act(() => {
+      result.current.handlePayload({
+        event: "tool_call",
+        tool: "search_notes",
+        why: "Looking through your notes"
+      })
+    })
+
+    expect((result.current as any).activeToolStatus).toBeTruthy()
+
+    act(() => {
+      result.current.handlePayload({
+        event: "tool_result",
+        ok: true,
+        tool: "search_notes",
+        output: { ok: true }
+      })
+    })
+
+    expect((result.current as any).activeToolStatus).toBe("")
+    expect((result.current as any).recoveryMode).toBe("none")
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(8000)
     })
 
     expect((result.current as any).recoveryMode).toBe("thinking_stuck")
+  })
+
+  it("clears activeToolStatus and recovery on approval tool_result", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+
+    act(() => {
+      result.current.handlePayload({
+        event: "tool_call",
+        tool: "search_notes",
+        why: "Looking through your notes"
+      })
+    })
+
+    expect((result.current as any).activeToolStatus).toBeTruthy()
 
     act(() => {
       result.current.handlePayload({
@@ -671,6 +821,7 @@ describe("usePersonaLiveVoiceController", () => {
       })
     })
 
+    expect((result.current as any).activeToolStatus).toBe("")
     expect((result.current as any).recoveryMode).toBe("none")
   })
 
