@@ -1,6 +1,6 @@
 import React from "react"
 import { act, renderHook, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { usePersonaLiveVoiceController } from "../usePersonaLiveVoiceController"
 
@@ -60,6 +60,10 @@ describe("usePersonaLiveVoiceController", () => {
     hookMocks.micStop.mockImplementation(() => {
       hookMocks.micActive = false
     })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   const resolvedDefaults = {
@@ -180,6 +184,203 @@ describe("usePersonaLiveVoiceController", () => {
         (payload) => payload.type === "voice_commit"
       )
     ).toEqual([])
+  })
+
+  it("shows listening recovery after 4 seconds with transcript but no commit", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+    rerender()
+
+    act(() => {
+      result.current.handlePayload({
+        event: "partial_transcript",
+        text_delta: "hey helper"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("listening_stuck")
+  })
+
+  it("restarts listening recovery when new transcript deltas arrive", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+    rerender()
+
+    act(() => {
+      result.current.handlePayload({
+        event: "partial_transcript",
+        text_delta: "hey helper"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3500)
+    })
+
+    act(() => {
+      result.current.handlePayload({
+        event: "partial_transcript",
+        text_delta: "search my notes"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("listening_stuck")
+  })
+
+  it("keep listening dismisses and restarts listening recovery", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+    rerender()
+
+    act(() => {
+      result.current.handlePayload({
+        event: "partial_transcript",
+        text_delta: "hey helper search my notes"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("listening_stuck")
+
+    act(() => {
+      ;(result.current as any).keepListening()
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3999)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("none")
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+
+    expect((result.current as any).recoveryMode).toBe("listening_stuck")
+  })
+
+  it("reset turn clears heard transcript and returns to idle", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+    rerender()
+
+    act(() => {
+      result.current.handlePayload({
+        event: "partial_transcript",
+        text_delta: "hey helper search my notes"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+
+    const stopCallsBeforeReset = hookMocks.micStop.mock.calls.length
+
+    act(() => {
+      ;(result.current as any).resetTurn()
+    })
+    rerender()
+
+    expect(hookMocks.micStop.mock.calls.length).toBe(stopCallsBeforeReset + 1)
+    expect(result.current.heardText).toBe("")
+    expect(result.current.state).toBe("idle")
+    expect((result.current as any).recoveryMode).toBe("none")
   })
 
   it("switches to thinking and stops the mic when the server auto-commits a voice turn", async () => {
