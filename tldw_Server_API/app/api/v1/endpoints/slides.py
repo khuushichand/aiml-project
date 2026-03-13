@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -29,6 +30,12 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     GenerateFromPromptRequest,
     GenerateFromRagRequest,
     PresentationCreateRequest,
+    PresentationRenderArtifactInfo,
+    PresentationRenderArtifactListResponse,
+    PresentationRenderFormat,
+    PresentationRenderJobResponse,
+    PresentationRenderJobStatusResponse,
+    PresentationRenderRequest,
     PresentationListResponse,
     PresentationPatchRequest,
     PresentationReorderRequest,
@@ -43,10 +50,12 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     SlidesTemplateListResponse,
     SlidesTemplateResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, MEDIA_DELETE, MEDIA_READ, MEDIA_UPDATE
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase
@@ -79,6 +88,7 @@ from tldw_Server_API.app.core.Slides.slides_templates import (
     get_slide_template,
     list_slide_templates,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 
 router = APIRouter(prefix="/slides", tags=["slides"])
 
@@ -150,6 +160,18 @@ def _format_etag(version: int) -> str:
     return f'W/"v{version}"'
 
 
+def _slides_jobs_manager() -> JobManager:
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    if not db_url:
+        return JobManager()
+    backend = "postgres" if db_url.startswith("postgres") else None
+    return JobManager(backend=backend, db_url=db_url)
+
+
+def _render_enabled() -> bool:
+    return is_truthy(os.getenv("PRESENTATION_RENDER_ENABLED", "true"))
+
+
 def _normalize_dt(value: str) -> datetime:
     try:
         dt = datetime.fromisoformat(value)
@@ -209,6 +231,23 @@ def _flatten_slides_text(slides: list[Slide]) -> str:
             images = metadata.get("images")
             parts.extend(collect_image_alt_text(images if isinstance(images, list) else None))
     return "\n".join(parts)
+
+
+def _normalize_job_status(job_status: Any) -> str:
+    status_value = str(job_status or "").strip().lower()
+    return status_value or "queued"
+
+
+def _safe_json_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _validate_theme(theme: str) -> None:
@@ -1126,6 +1165,140 @@ async def restore_presentation_version(
     response.headers["ETag"] = _format_etag(row.version)
     response.headers["Last-Modified"] = row.last_modified
     return _build_presentation_response(row)
+
+
+@router.post(
+    "/presentations/{presentation_id}/render-jobs",
+    response_model=PresentationRenderJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Submit a presentation render job",
+    dependencies=[Depends(require_permissions(MEDIA_UPDATE)), Depends(rbac_rate_limit("slides.render.submit"))],
+)
+async def submit_presentation_render_job(
+    presentation_id: str,
+    request: PresentationRenderRequest,
+    if_match: str | None = Header(None, alias="If-Match"),
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+    current_user: User = Depends(get_request_user),
+    job_manager: JobManager = Depends(_slides_jobs_manager),
+) -> PresentationRenderJobResponse:
+    if not _render_enabled():
+        raise HTTPException(status_code=503, detail="presentation_render_unavailable")
+    expected_version = _parse_etag(if_match)
+    try:
+        row = db.get_presentation_by_id(presentation_id, include_deleted=False)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="presentation_not_found") from None
+    if int(row.version) != expected_version:
+        raise HTTPException(status_code=412, detail="precondition_failed")
+
+    render_format = str(request.format.value if hasattr(request.format, "value") else request.format)
+    payload = {
+        "user_id": int(current_user.id),
+        "presentation_id": presentation_id,
+        "presentation_version": int(row.version),
+        "format": render_format,
+        "theme": row.theme,
+        "title": row.title,
+    }
+    job = job_manager.create_job(
+        domain="presentation_render",
+        queue="default",
+        job_type="presentation_render",
+        payload=payload,
+        owner_user_id=str(current_user.id),
+        priority=5,
+        max_retries=2,
+    )
+    return PresentationRenderJobResponse(
+        job_id=int(job["id"]),
+        status=_normalize_job_status(job.get("status")),
+        job_type="presentation_render",
+        presentation_id=presentation_id,
+        presentation_version=int(row.version),
+        format=PresentationRenderFormat(render_format),
+    )
+
+
+@router.get(
+    "/render-jobs/{job_id}",
+    response_model=PresentationRenderJobStatusResponse,
+    summary="Get presentation render job status",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.render.status"))],
+)
+async def get_presentation_render_job_status(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+    job_manager: JobManager = Depends(_slides_jobs_manager),
+) -> PresentationRenderJobStatusResponse:
+    job = job_manager.get_job(int(job_id))
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    if str(job.get("owner_user_id") or "") != str(current_user.id):
+        raise HTTPException(status_code=404, detail="job_not_found")
+
+    payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    render_format = payload.get("format")
+    format_value = PresentationRenderFormat(render_format) if render_format in {"mp4", "webm"} else None
+    error_text = None
+    for key in ("last_error", "error_message", "error_code"):
+        if job.get(key):
+            error_text = str(job.get(key))
+            break
+
+    return PresentationRenderJobStatusResponse(
+        job_id=int(job["id"]),
+        status=_normalize_job_status(job.get("status")),
+        job_type=str(job.get("job_type") or "presentation_render"),
+        presentation_id=payload.get("presentation_id"),
+        presentation_version=payload.get("presentation_version"),
+        format=format_value,
+        output_id=result.get("output_id"),
+        download_url=result.get("download_url"),
+        error=error_text,
+    )
+
+
+@router.get(
+    "/presentations/{presentation_id}/render-artifacts",
+    response_model=PresentationRenderArtifactListResponse,
+    summary="List presentation render artifacts",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.render.artifacts"))],
+)
+async def list_presentation_render_artifacts(
+    presentation_id: str,
+    collections_db=Depends(get_collections_db_for_user),
+) -> PresentationRenderArtifactListResponse:
+    rows, _total = collections_db.list_output_artifacts(
+        limit=200,
+        offset=0,
+        type_="presentation_render",
+        metadata_origin="presentation_studio",
+    )
+    artifacts: list[PresentationRenderArtifactInfo] = []
+    for row in rows:
+        metadata = _safe_json_dict(getattr(row, "metadata_json", None))
+        if str(metadata.get("presentation_id") or "") != presentation_id:
+            continue
+        fmt = str(getattr(row, "format", "") or "").lower()
+        if fmt not in {"mp4", "webm"}:
+            continue
+        created_at = getattr(row, "created_at", None)
+        artifacts.append(
+            PresentationRenderArtifactInfo(
+                output_id=int(getattr(row, "id")),
+                format=PresentationRenderFormat(fmt),
+                title=getattr(row, "title", None),
+                download_url=f"/api/v1/outputs/{int(getattr(row, 'id'))}/download",
+                presentation_version=metadata.get("presentation_version"),
+                created_at=_normalize_dt(created_at) if isinstance(created_at, str) else None,
+            )
+        )
+    return PresentationRenderArtifactListResponse(
+        presentation_id=presentation_id,
+        artifacts=artifacts,
+    )
 
 
 @router.post(

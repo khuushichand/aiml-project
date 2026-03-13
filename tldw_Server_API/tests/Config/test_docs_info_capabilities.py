@@ -133,6 +133,8 @@ def test_docs_info_exposes_slides_and_presentation_studio_capabilities(
     assert safe_config["supported_features"]["hasSlides"] is True
     assert safe_config["capabilities"]["hasPresentationStudio"] is True
     assert safe_config["supported_features"]["hasPresentationStudio"] is True
+    assert safe_config["capabilities"]["hasPresentationRender"] is True
+    assert safe_config["supported_features"]["hasPresentationRender"] is True
 
 
 def test_docs_info_endpoint_returns_placeholder_api_key(monkeypatch, tmp_path: Path) -> None:

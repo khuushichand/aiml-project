@@ -114,6 +114,9 @@ def load_safe_config() -> dict:
         }
         caps["hasSlides"] = bool(config_mod.route_enabled("slides", default_stable=True))
         caps["hasPresentationStudio"] = bool(caps["hasSlides"])
+        caps["hasPresentationRender"] = bool(caps["hasPresentationStudio"]) and bool(
+            is_truthy(os.getenv("PRESENTATION_RENDER_ENABLED", "true"))
+        )
         # expose both for backward-compat and forward-looking UI
         safe_config["supported_features"] = caps
         safe_config["capabilities"] = caps

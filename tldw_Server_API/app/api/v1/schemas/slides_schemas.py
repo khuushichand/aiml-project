@@ -219,6 +219,62 @@ class ExportFormat(str, Enum):
     PDF = "pdf"
 
 
+class PresentationRenderFormat(str, Enum):
+    """Supported presentation video render formats."""
+
+    MP4 = "mp4"
+    WEBM = "webm"
+
+
+class PresentationRenderRequest(BaseModel):
+    """Request payload for starting a presentation render job."""
+
+    format: PresentationRenderFormat
+
+
+class PresentationRenderJobResponse(BaseModel):
+    """Render job creation response."""
+
+    job_id: int
+    status: str
+    job_type: str
+    presentation_id: str
+    presentation_version: int
+    format: PresentationRenderFormat
+
+
+class PresentationRenderJobStatusResponse(BaseModel):
+    """Render job status response."""
+
+    job_id: int
+    status: str
+    job_type: str
+    presentation_id: str | None = None
+    presentation_version: int | None = None
+    format: PresentationRenderFormat | None = None
+    output_id: int | None = None
+    download_url: str | None = None
+    error: str | None = None
+
+
+class PresentationRenderArtifactInfo(BaseModel):
+    """Output artifact summary for presentation renders."""
+
+    output_id: int
+    format: PresentationRenderFormat
+    title: str | None = None
+    download_url: str
+    presentation_version: int | None = None
+    created_at: datetime | None = None
+
+
+class PresentationRenderArtifactListResponse(BaseModel):
+    """List of render artifacts for a presentation."""
+
+    presentation_id: str
+    artifacts: list[PresentationRenderArtifactInfo]
+
+
 class SlidesHealthResponse(BaseModel):
     """Health status response for the slides service."""
 
