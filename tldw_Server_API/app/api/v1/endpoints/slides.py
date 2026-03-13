@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import os
 import re
@@ -11,13 +12,13 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user, get_chacha_db_for_user_id
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for_user
@@ -560,6 +561,18 @@ def _format_notes(notes: list[dict[str, Any]]) -> str:
         if content:
             parts.append(str(content))
     return "\n\n".join(parts).strip()
+
+
+async def _resolve_notes_db_for_request(http_request: Request, current_user: User) -> CharactersRAGDB:
+    """Resolve the per-user notes DB lazily while still honoring test/app dependency overrides."""
+
+    override_fn = http_request.app.dependency_overrides.get(get_chacha_db_for_user)
+    if override_fn is not None:
+        result = override_fn()
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+    return await get_chacha_db_for_user_id(current_user.id, str(current_user.id))
 
 
 def _format_rag_documents(documents: list[Any]) -> str:
@@ -1335,12 +1348,14 @@ async def generate_from_prompt(
 async def generate_from_chat(
     request: GenerateFromChatRequest,
     response: Response,
+    http_request: Request,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
 ) -> PresentationResponse:
     conversation_id = request.conversation_id.strip()
     if not conversation_id:
         raise HTTPException(status_code=422, detail="conversation_id_required")
+    notes_db = await _resolve_notes_db_for_request(http_request, current_user)
     conversation = notes_db.get_conversation_by_id(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="conversation_not_found")
@@ -1401,11 +1416,13 @@ async def generate_from_media(
 async def generate_from_notes(
     request: GenerateFromNotesRequest,
     response: Response,
+    http_request: Request,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
 ) -> PresentationResponse:
     if not request.note_ids:
         raise HTTPException(status_code=422, detail="note_ids_required")
+    notes_db = await _resolve_notes_db_for_request(http_request, current_user)
     notes: list[dict[str, Any]] = []
     missing: list[str] = []
     for note_id in request.note_ids:

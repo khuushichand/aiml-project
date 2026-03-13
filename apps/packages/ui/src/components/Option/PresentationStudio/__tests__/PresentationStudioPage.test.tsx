@@ -42,4 +42,45 @@ describe("PresentationStudioPage", () => {
     expect(screen.getByTestId("presentation-studio-slide-editor")).toBeInTheDocument()
     expect(screen.getByTestId("presentation-studio-media-rail")).toBeInTheDocument()
   })
+
+  it("shows stale audio and ready image badges for seeded slide media state", () => {
+    usePresentationStudioStore.getState().loadProject(
+      {
+        id: "presentation-1",
+        title: "Seeded deck",
+        description: null,
+        theme: "black",
+        slides: [
+          {
+            order: 0,
+            layout: "content",
+            title: "Opening",
+            content: "",
+            speaker_notes: "Narration seed",
+            metadata: {
+              studio: {
+                slideId: "slide-1",
+                audio: { status: "stale" },
+                image: { status: "ready", asset_ref: "output:123" }
+              }
+            }
+          }
+        ],
+        studio_data: { origin: "extension_capture" },
+        created_at: "2026-03-13T00:00:00Z",
+        last_modified: "2026-03-13T00:00:00Z",
+        deleted: false,
+        client_id: "1",
+        version: 2
+      },
+      { etag: 'W/"v2"' }
+    )
+
+    render(<PresentationStudioPage mode="detail" projectId="presentation-1" />)
+
+    expect(screen.getByText("Audio status")).toBeInTheDocument()
+    expect(screen.getByText("stale")).toBeInTheDocument()
+    expect(screen.getByText("Image status")).toBeInTheDocument()
+    expect(screen.getByText("ready")).toBeInTheDocument()
+  })
 })
