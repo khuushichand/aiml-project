@@ -2,7 +2,7 @@
  * Network assertion helpers for E2E tests.
  * Intercepts API calls and lets tests verify buttons fire correct endpoints.
  */
-import { type Page, type Request, type Response, expect } from "@playwright/test"
+import { type Page, type Request, type Response } from "@playwright/test"
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -93,7 +93,7 @@ export function expectApiCall(
  * await page.getByRole('button', { name: 'Broken' }).click();
  * await expectNoApiCall(page, { url: '/api/v1/' }, 3000);
  */
-export async function expectNoApiCall(
+export function expectNoApiCall(
   page: Page,
   matcher: ApiCallMatcher,
   timeoutMs = 3_000
@@ -285,7 +285,13 @@ function matchesRequest(request: Request, matcher: ApiCallMatcher): boolean {
 function partialMatch(actual: unknown, expected: Record<string, unknown>): boolean {
   if (typeof actual !== "object" || actual === null) return false
   for (const [key, value] of Object.entries(expected)) {
-    if ((actual as Record<string, unknown>)[key] !== value) return false
+    const actualValue = (actual as Record<string, unknown>)[key]
+    if (typeof value === "object" && value !== null) {
+      // Deep comparison for nested objects
+      if (JSON.stringify(actualValue) !== JSON.stringify(value)) return false
+    } else {
+      if (actualValue !== value) return false
+    }
   }
   return true
 }
