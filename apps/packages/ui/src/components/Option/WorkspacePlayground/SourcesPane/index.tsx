@@ -55,6 +55,7 @@ import {
   SourceFolderTree,
   type SourceFolderTreeNode
 } from "./SourceFolderTree"
+import type { SourceListViewState } from "./source-list-view"
 
 // Icon mapping for source types
 const SOURCE_TYPE_ICONS: Record<WorkspaceSourceType, React.ElementType> = {
@@ -107,6 +108,12 @@ interface SourcesPaneProps {
   onHide?: () => void
   /** Rollout gate for status/guardrails source handling. */
   statusGuardrailsEnabled?: boolean
+  /** Non-persisted session-local source list view state owned by the page. */
+  sourceListViewState?: SourceListViewState
+  /** Partial state patcher for source list view state. */
+  onPatchSourceListViewState?: (patch: Partial<SourceListViewState>) => void
+  /** Reset advanced controls without clearing search/folder state. */
+  onResetAdvancedSourceFilters?: () => void
 }
 
 /**
