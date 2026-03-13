@@ -23,6 +23,19 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   }
 }))
 
+vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
+  useResolvedPersonaVoiceDefaults: () => ({
+    sttLanguage: "en-US",
+    sttModel: "whisper-1",
+    ttsProvider: "tldw",
+    ttsVoice: "af_heart",
+    confirmationMode: "destructive_only",
+    voiceChatTriggerPhrases: [],
+    autoResume: true,
+    bargeIn: false
+  })
+}))
+
 import { CommandsPanel } from "../CommandsPanel"
 import { ConnectionsPanel } from "../ConnectionsPanel"
 import { PersonaGardenTabs } from "../PersonaGardenTabs"
@@ -37,11 +50,12 @@ describe("Persona Garden panel i18n", () => {
     render(
       <>
         <ProfilePanel
-          selectedPersonaId=""
-          selectedPersonaName=""
+          selectedPersonaId="persona-1"
+          selectedPersonaName="Persona One"
           personaCount={3}
           connected={false}
           sessionId={null}
+          isActive={false}
         />
         <CommandsPanel
           selectedPersonaId=""
@@ -72,7 +86,10 @@ describe("Persona Garden panel i18n", () => {
       screen.getByText("sidepanel:personaGarden.profile.heading")
     ).toBeInTheDocument()
     expect(
-      screen.getByText("sidepanel:personaGarden.profile.noneSelected")
+      screen.queryByText("sidepanel:personaGarden.profile.noneSelected")
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText("sidepanel:personaGarden.profile.assistantDefaultsHeading")
     ).toBeInTheDocument()
     expect(
       screen.getByText("sidepanel:personaGarden.commands.heading")

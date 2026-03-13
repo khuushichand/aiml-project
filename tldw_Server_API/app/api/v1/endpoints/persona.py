@@ -46,6 +46,7 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaProfileCreate,
     PersonaProfileResponse,
     PersonaProfileUpdate,
+    PersonaVoiceDefaults,
     PersonaStateHistoryResponse,
     PersonaStateRestoreRequest,
     PersonaStateResponse,
@@ -1586,6 +1587,15 @@ def _build_scope_snapshot(rules: list[dict[str, Any]]) -> tuple[dict[str, Any], 
 
 
 def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileResponse:
+    raw_voice_defaults = profile.get("voice_defaults")
+    try:
+        voice_defaults = (
+            PersonaVoiceDefaults.model_validate(raw_voice_defaults)
+            if isinstance(raw_voice_defaults, dict)
+            else PersonaVoiceDefaults()
+        )
+    except Exception:
+        voice_defaults = PersonaVoiceDefaults()
     return PersonaProfileResponse(
         id=str(profile.get("id") or ""),
         name=str(profile.get("name") or ""),
@@ -1600,6 +1610,7 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
             profile.get("use_persona_state_context_default"),
             default=True,
         ),
+        voice_defaults=voice_defaults,
         created_at=str(profile.get("created_at") or _utc_now_iso()),
         last_modified=str(profile.get("last_modified") or _utc_now_iso()),
         version=int(profile.get("version") or 1),

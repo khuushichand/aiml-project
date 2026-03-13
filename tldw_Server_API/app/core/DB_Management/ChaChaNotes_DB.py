@@ -435,7 +435,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 36  # Schema v36 adds lean chat overview list indexes
+    _CURRENT_SCHEMA_VERSION = 37  # Schema v37 adds persona voice defaults
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -2744,6 +2744,7 @@ CREATE TABLE IF NOT EXISTS persona_profiles(
     CHECK(mode IN ('session_scoped','persistent_scoped')),
   system_prompt TEXT,
   is_active BOOLEAN NOT NULL DEFAULT 1,
+  voice_defaults_json TEXT NOT NULL DEFAULT '{}',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted BOOLEAN NOT NULL DEFAULT 0,
@@ -3061,6 +3062,19 @@ UPDATE db_schema_version
    SET version = 36
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 36;
+"""
+
+    _MIGRATION_SQL_V36_TO_V37 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 37 - Persona voice defaults (2026-03-12)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_profiles
+  ADD COLUMN IF NOT EXISTS voice_defaults_json TEXT NOT NULL DEFAULT '{}';
+
+UPDATE db_schema_version
+   SET version = 37
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 37;
 """
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
@@ -4757,6 +4771,36 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V35->V36: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V36 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v36_to_v37(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V36 to V37 (persona voice defaults)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V36 to V37 for DB: {self.db_path_str}...")
+        try:
+            profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+            if "voice_defaults_json" not in profile_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN voice_defaults_json TEXT NOT NULL DEFAULT '{}'")
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 37
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 37
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 37:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V36->V37 failed version check. Expected 37, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V37 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V36->V37 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V36->V37 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V36->V37: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V37 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -4766,6 +4810,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_name TEXT")
         if "origin_character_snapshot_at" not in profile_cols:
             conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_snapshot_at TEXT")
+        if "voice_defaults_json" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN voice_defaults_json TEXT NOT NULL DEFAULT '{}'")
 
         conversation_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
         if "assistant_kind" not in conversation_cols:
@@ -4901,6 +4947,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_id INTEGER",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_name TEXT",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_snapshot_at TEXT",
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS voice_defaults_json TEXT NOT NULL DEFAULT '{}'",
             "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS assistant_kind TEXT CHECK (assistant_kind IN ('character', 'persona'))",
             "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS assistant_id TEXT",
             "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS persona_memory_mode TEXT CHECK (persona_memory_mode IN ('read_only', 'read_write'))",
@@ -5609,6 +5656,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 36 and current_db_version == 35:
                     self._migrate_from_v35_to_v36(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 37 and current_db_version == 36:
+                    self._migrate_from_v36_to_v37(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
                 self._ensure_recent_voice_command_schema_sqlite(conn)
@@ -5959,6 +6009,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 36:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36, conn, expected_version=36)
                 current_version = 36
+            if current_version < 37:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V36_TO_V37, conn, expected_version=37)
+                current_version = 37
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -7601,8 +7654,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         item["use_persona_state_context_default"] = self._as_bool(
             item.get("use_persona_state_context_default", True)
         )
+        raw_voice_defaults = item.get("voice_defaults_json")
+        if isinstance(raw_voice_defaults, str):
+            try:
+                decoded_voice_defaults = json.loads(raw_voice_defaults)
+            except json.JSONDecodeError:
+                decoded_voice_defaults = {}
+            item["voice_defaults"] = decoded_voice_defaults if isinstance(decoded_voice_defaults, dict) else {}
+        elif isinstance(raw_voice_defaults, dict):
+            item["voice_defaults"] = raw_voice_defaults
+        else:
+            item["voice_defaults"] = {}
         item["deleted"] = self._as_bool(item.get("deleted"))
         return item
+
+    def _normalize_persona_voice_defaults_json(self, value: Any) -> str:
+        if value is None:
+            return "{}"
+        payload = value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return "{}"
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise InputError("voice_defaults must be a JSON object.") from exc  # noqa: TRY003
+        if not isinstance(payload, dict):
+            raise InputError("voice_defaults must be a JSON object.")  # noqa: TRY003
+        return self._ensure_json_string(payload) or "{}"
 
     def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
         """Convert a scope rule DB `row: Any` to an API-safe dict.
@@ -8047,6 +8127,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         use_persona_state_context_default = self._as_bool(
             profile_data.get("use_persona_state_context_default", True)
         )
+        voice_defaults_json = self._normalize_persona_voice_defaults_json(
+            profile_data.get("voice_defaults")
+        )
         now = self._get_current_utc_timestamp_iso()
 
         character_card_id = profile_data.get("character_card_id")
@@ -8096,8 +8179,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "INSERT INTO persona_profiles("
             "id, user_id, name, character_card_id, origin_character_id, origin_character_name, "
             "origin_character_snapshot_at, mode, system_prompt, "
-            "is_active, use_persona_state_context_default, created_at, last_modified, deleted, version"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "is_active, use_persona_state_context_default, voice_defaults_json, created_at, last_modified, deleted, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             persona_id,
@@ -8111,6 +8194,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             system_prompt,
             is_active_db,
             use_persona_state_context_default_db,
+            voice_defaults_json,
             profile_data.get("created_at") or now,
             profile_data.get("last_modified") or now,
             deleted_db,
@@ -8204,6 +8288,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "system_prompt",
             "is_active",
             "use_persona_state_context_default",
+            "voice_defaults",
             "deleted",
         }
         set_parts: list[str] = []
@@ -8221,6 +8306,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 )
                 params.append(cast_value)
                 set_parts.append(f"{key} = ?")
+            elif key == "voice_defaults":
+                params.append(self._normalize_persona_voice_defaults_json(value))
+                set_parts.append("voice_defaults_json = ?")
             elif key == "character_card_id":
                 if value is None:
                     params.append(None)

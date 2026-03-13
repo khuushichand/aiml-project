@@ -261,6 +261,68 @@ def test_persona_profile_state_docs_roundtrip_and_archives_previous_version(pers
     fastapi_app.dependency_overrides.clear()
 
 
+def test_persona_profile_voice_defaults_roundtrip(persona_db: CharactersRAGDB):
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={
+                "name": "Voice Helper",
+                "mode": "persistent_scoped",
+                "voice_defaults": {
+                    "stt_language": "en-US",
+                    "stt_model": "whisper-1",
+                    "tts_provider": "tldw",
+                    "tts_voice": "af_heart",
+                    "confirmation_mode": "always",
+                    "voice_chat_trigger_phrases": ["hey helper", "okay helper"],
+                    "auto_resume": True,
+                    "barge_in": False,
+                },
+            },
+        )
+        assert created.status_code == 201, created.text
+        payload = created.json()
+        persona_id = payload["id"]
+        assert payload["voice_defaults"]["stt_language"] == "en-US"
+        assert payload["voice_defaults"]["confirmation_mode"] == "always"
+        assert payload["voice_defaults"]["voice_chat_trigger_phrases"] == [
+            "hey helper",
+            "okay helper",
+        ]
+
+        fetched = client.get(f"/api/v1/persona/profiles/{persona_id}")
+        assert fetched.status_code == 200, fetched.text
+        fetched_payload = fetched.json()
+        assert fetched_payload["voice_defaults"]["tts_provider"] == "tldw"
+        assert fetched_payload["voice_defaults"]["tts_voice"] == "af_heart"
+        assert fetched_payload["voice_defaults"]["auto_resume"] is True
+        assert fetched_payload["voice_defaults"]["barge_in"] is False
+
+        updated = client.patch(
+            f"/api/v1/persona/profiles/{persona_id}",
+            json={
+                "voice_defaults": {
+                    "stt_language": "fr-FR",
+                    "confirmation_mode": "destructive_only",
+                    "voice_chat_trigger_phrases": ["bonjour helper"],
+                    "auto_resume": False,
+                    "barge_in": True,
+                }
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        updated_payload = updated.json()
+        assert updated_payload["voice_defaults"]["stt_language"] == "fr-FR"
+        assert updated_payload["voice_defaults"]["confirmation_mode"] == "destructive_only"
+        assert updated_payload["voice_defaults"]["voice_chat_trigger_phrases"] == [
+            "bonjour helper"
+        ]
+        assert updated_payload["voice_defaults"]["auto_resume"] is False
+        assert updated_payload["voice_defaults"]["barge_in"] is True
+
+    fastapi_app.dependency_overrides.clear()
+
+
 def test_persona_profile_state_update_rejects_empty_payload(persona_db: CharactersRAGDB):
     with _client_for_user(1, persona_db) as client:
         created = client.post(

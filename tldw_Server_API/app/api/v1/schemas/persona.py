@@ -17,6 +17,7 @@ PersonaSessionStatus = Literal["active", "paused", "closed", "archived"]
 PersonaExemplarKind = Literal["style", "catchphrase", "boundary", "scenario_demo", "tool_behavior"]
 PersonaExemplarSourceType = Literal["manual", "transcript_import", "character_seed", "generated_candidate"]
 PersonaExemplarReviewAction = Literal["approve", "reject"]
+PersonaConfirmationMode = Literal["always", "destructive_only", "never"]
 
 
 class PersonaInfo(BaseModel):
@@ -72,6 +73,41 @@ class PersonaSessionDetail(PersonaSessionSummary):
     turns: list[dict[str, object]] = Field(default_factory=list)
 
 
+class PersonaVoiceDefaults(BaseModel):
+    stt_language: str | None = None
+    stt_model: str | None = None
+    tts_provider: str | None = None
+    tts_voice: str | None = None
+    confirmation_mode: PersonaConfirmationMode | None = None
+    voice_chat_trigger_phrases: list[str] = Field(default_factory=list)
+    auto_resume: bool | None = None
+    barge_in: bool | None = None
+
+    @field_validator("stt_language", "stt_model", "tts_provider", "tts_voice", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("voice_chat_trigger_phrases", mode="before")
+    @classmethod
+    def _normalize_trigger_phrases(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        items = value if isinstance(value, list) else [value]
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for item in items:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
+        return normalized
+
+
 class PersonaProfileCreate(BaseModel):
     id: str | None = Field(default=None, min_length=1, max_length=200)
     name: str = Field(..., min_length=1, max_length=200)
@@ -80,6 +116,7 @@ class PersonaProfileCreate(BaseModel):
     system_prompt: str | None = None
     is_active: bool = True
     use_persona_state_context_default: bool = True
+    voice_defaults: PersonaVoiceDefaults = Field(default_factory=PersonaVoiceDefaults)
 
 
 class PersonaProfileUpdate(BaseModel):
@@ -89,6 +126,7 @@ class PersonaProfileUpdate(BaseModel):
     system_prompt: str | None = None
     is_active: bool | None = None
     use_persona_state_context_default: bool | None = None
+    voice_defaults: PersonaVoiceDefaults | None = None
 
 
 class PersonaProfileResponse(BaseModel):
@@ -102,6 +140,7 @@ class PersonaProfileResponse(BaseModel):
     system_prompt: str | None = None
     is_active: bool = True
     use_persona_state_context_default: bool = True
+    voice_defaults: PersonaVoiceDefaults = Field(default_factory=PersonaVoiceDefaults)
     created_at: str
     last_modified: str
     version: int = 1

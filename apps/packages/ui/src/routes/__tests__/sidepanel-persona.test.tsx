@@ -93,7 +93,20 @@ vi.mock("@/services/companion", () => ({
   fetchCompanionConversationPrompts: (...args: unknown[]) =>
     (mocks.fetchCompanionConversationPrompts as (...args: unknown[]) => unknown)(
       ...args
-    )
+  )
+}))
+
+vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
+  useResolvedPersonaVoiceDefaults: () => ({
+    sttLanguage: "en-US",
+    sttModel: "whisper-1",
+    ttsProvider: "tldw",
+    ttsVoice: "af_heart",
+    confirmationMode: "destructive_only",
+    voiceChatTriggerPhrases: ["hey helper"],
+    autoResume: true,
+    bargeIn: false
+  })
 }))
 
 vi.mock("@/components/Common/FeatureEmptyState", () => ({
@@ -1857,6 +1870,151 @@ describe("SidepanelPersona", () => {
         String(statePutCall?.[0]).includes("/persona/profiles/research_assistant/state")
       ).toBe(false)
     })
+  })
+
+  it("loads and saves persona assistant defaults from the Profiles tab", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        if (method === "PATCH") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: "research_assistant",
+              use_persona_state_context_default: true,
+              voice_defaults: init?.body?.voice_defaults
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1",
+              tts_provider: "tldw",
+              tts_voice: "af_heart",
+              confirmation_mode: "destructive_only",
+              voice_chat_trigger_phrases: ["hey helper"],
+              auto_resume: true,
+              barge_in: false
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-assistant-defaults",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByRole("tab", { name: "Profiles" }))
+    const profileTabPanel = screen.getByRole("tabpanel", { name: "Profiles" })
+
+    await waitFor(() => {
+      expect(within(profileTabPanel).getByLabelText("STT language")).toHaveValue(
+        "en-US"
+      )
+    })
+    expect(
+      within(profileTabPanel).getByText(
+        "Persona defaults stay separate from browser-wide fallback settings. The preview below shows the effective values after local fallback is applied."
+      )
+    ).toBeInTheDocument()
+
+    fireEvent.change(within(profileTabPanel).getByLabelText("STT language"), {
+      target: { value: "fr-FR" }
+    })
+    fireEvent.change(within(profileTabPanel).getByLabelText("Trigger phrases"), {
+      target: { value: "bonjour helper\nstatus helper" }
+    })
+    fireEvent.click(
+      within(profileTabPanel).getByRole("button", {
+        name: "Save assistant defaults"
+      })
+    )
+
+    await waitFor(() => {
+      const patchCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/research_assistant") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PATCH" &&
+          Boolean(
+            (calledInit as { body?: { voice_defaults?: unknown } } | undefined)?.body
+              ?.voice_defaults
+          )
+      )
+      expect(patchCall).toBeTruthy()
+      expect(
+        (
+          patchCall?.[1] as {
+            body?: {
+              voice_defaults?: {
+                stt_language?: string
+                voice_chat_trigger_phrases?: string[]
+              }
+            }
+          } | undefined
+        )?.body?.voice_defaults
+      ).toEqual(
+        expect.objectContaining({
+          stt_language: "fr-FR",
+          voice_chat_trigger_phrases: ["bonjour helper", "status helper"]
+        })
+      )
+    })
+
+    expect(within(profileTabPanel).getByText("Assistant defaults saved.")).toBeInTheDocument()
   })
 
   it("tracks dirty state and supports reverting state docs without saving", async () => {

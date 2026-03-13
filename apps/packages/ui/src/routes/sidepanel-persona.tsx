@@ -33,6 +33,9 @@ import {
   type PersonaGardenTabKey
 } from "@/utils/persona-garden-route"
 import { usePersonaGardenRouteBootstrap } from "@/hooks/usePersonaGardenRouteBootstrap"
+import {
+  type PersonaVoiceDefaults
+} from "@/hooks/useResolvedPersonaVoiceDefaults"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
 
 type PersonaInfo = {
@@ -146,6 +149,7 @@ type PersonaSessionDetailResponse = {
 type PersonaProfileResponse = {
   id?: string
   use_persona_state_context_default?: boolean
+  voice_defaults?: PersonaVoiceDefaults | null
 }
 
 type PersonaStateDocsResponse = {
@@ -2193,6 +2197,7 @@ const SidepanelPersona = ({
           personaCount={catalog.length}
           connected={connected}
           sessionId={sessionId}
+          isActive={activeTab === "profiles"}
         />
       )
     },
