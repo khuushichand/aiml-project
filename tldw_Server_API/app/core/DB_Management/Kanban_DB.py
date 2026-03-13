@@ -364,6 +364,7 @@ class KanbanDB:
             if enable_wal:
                 conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA temp_store=MEMORY")
             conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
         except sqlite3.Error as e:
             logger.error(f"Failed to set performance PRAGMA options: {e}")

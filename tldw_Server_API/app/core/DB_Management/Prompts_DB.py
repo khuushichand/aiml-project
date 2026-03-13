@@ -42,6 +42,11 @@ from typing import Any, Optional, Union
 #
 # Third-Party Libraries
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    begin_immediate_if_needed,
+    configure_sqlite_connection,
+)
 from loguru import logger as logging
 
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -342,6 +347,11 @@ class PromptsDatabase:
                 logging.error(f"PromptsDatabase initialization block finished for {self.db_path_str}, but failed.")
 
     # --- Connection Management ---
+    def _sqlite_journal_mode(self) -> str | None:
+        if self.is_memory_db:
+            return None
+        return "WAL"
+
     def _get_thread_connection(self) -> sqlite3.Connection:
         conn = getattr(self._local, 'conn', None)
         is_closed = True
@@ -367,15 +377,18 @@ class PromptsDatabase:
                     timeout=1.0  # seconds; keep short to avoid long blocking on locks
                 )
                 conn.row_factory = sqlite3.Row
-                if not self.is_memory_db:
+                journal_mode = self._sqlite_journal_mode()
+                if journal_mode:
                     try:
-                        conn.execute("PRAGMA journal_mode=WAL;")
+                        conn.execute(f"PRAGMA journal_mode={journal_mode};")
                     except sqlite3.OperationalError as exc:
                         if "database is locked" not in str(exc).lower():
                             raise
-                # Keep lock waits short so concurrent tests don't hang
-                conn.execute("PRAGMA busy_timeout=1000")  # 1000 ms
-                conn.execute("PRAGMA foreign_keys = ON;")
+                configure_sqlite_connection(
+                    conn,
+                    use_wal=False,
+                    busy_timeout_ms=1000,
+                )
                 self._local.conn = conn
                 logging.debug(
                     f"Opened/Reopened SQLite connection to {self.db_path_str} [Client: {self.client_id}, Thread: {threading.current_thread().name}]")
@@ -519,7 +532,7 @@ class PromptsDatabase:
         in_outer = conn.in_transaction
         try:
             if not in_outer:
-                conn.execute("BEGIN")
+                begin_immediate_if_needed(conn)
                 logging.debug("Started transaction.")
             yield conn  # yield connection
             if not in_outer:

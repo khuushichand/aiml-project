@@ -11,6 +11,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import configure_sqlite_connection
+
 _SCHEMA_VERSION = 2
 
 
@@ -79,8 +81,7 @@ class CircuitBreakerRegistryDB:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=10, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        configure_sqlite_connection(conn)
         return conn
 
     def _initialize_schema(self) -> None:

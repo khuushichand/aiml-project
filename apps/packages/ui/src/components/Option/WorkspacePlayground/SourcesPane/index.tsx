@@ -55,6 +55,15 @@ import {
   SourceFolderTree,
   type SourceFolderTreeNode
 } from "./SourceFolderTree"
+import { SourceAdvancedControls } from "./SourceAdvancedControls"
+import {
+  buildSourceFilterSummary,
+  DEFAULT_SOURCE_LIST_VIEW_STATE,
+  filterSources as applyAdvancedSourceFilters,
+  hasActiveSourceFilters,
+  sortSources as applySourceSort,
+  type SourceListViewState
+} from "./source-list-view"
 
 // Icon mapping for source types
 const SOURCE_TYPE_ICONS: Record<WorkspaceSourceType, React.ElementType> = {
@@ -107,6 +116,12 @@ interface SourcesPaneProps {
   onHide?: () => void
   /** Rollout gate for status/guardrails source handling. */
   statusGuardrailsEnabled?: boolean
+  /** Non-persisted session-local source list view state owned by the page. */
+  sourceListViewState?: SourceListViewState
+  /** Partial state patcher for source list view state. */
+  onPatchSourceListViewState?: (patch: Partial<SourceListViewState>) => void
+  /** Reset advanced controls without clearing search/folder state. */
+  onResetAdvancedSourceFilters?: () => void
 }
 
 /**
@@ -114,10 +129,22 @@ interface SourcesPaneProps {
  */
 export const SourcesPane: React.FC<SourcesPaneProps> = ({
   onHide,
-  statusGuardrailsEnabled = true
+  statusGuardrailsEnabled = true,
+  sourceListViewState = DEFAULT_SOURCE_LIST_VIEW_STATE,
+  onPatchSourceListViewState,
+  onResetAdvancedSourceFilters
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const [messageApi, messageContextHolder] = message.useMessage()
+  const patchSourceListViewState = React.useCallback(
+    (patch: Partial<SourceListViewState>) => {
+      onPatchSourceListViewState?.(patch)
+    },
+    [onPatchSourceListViewState]
+  )
+  const resetAdvancedSourceFilters = React.useCallback(() => {
+    onResetAdvancedSourceFilters?.()
+  }, [onResetAdvancedSourceFilters])
 
   // Store state
   const sources = useWorkspaceStore((s) => s.sources)
@@ -140,6 +167,9 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   ) || (() => undefined)
   const selectAllSources = useWorkspaceStore((s) => s.selectAllSources)
   const deselectAllSources = useWorkspaceStore((s) => s.deselectAllSources)
+  const setSelectedSourceIds = useWorkspaceStore(
+    (s) => s.setSelectedSourceIds
+  ) || (() => undefined)
   const setSourceSearchQuery = useWorkspaceStore((s) => s.setSourceSearchQuery)
   const setActiveFolder = useWorkspaceStore((s) => s.setActiveFolder) || (() => undefined)
   const clearSourceFocusTarget = useWorkspaceStore(
@@ -324,8 +354,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     [activeFolderId, organizationIndex]
   )
 
-  // Filter sources based on search query
-  const filteredSources = React.useMemo(() => {
+  const searchedSources = React.useMemo(() => {
     const scopedSources = activeFolderSourceIds
       ? sources.filter((source) => activeFolderSourceIds.has(source.id))
       : sources
@@ -335,6 +364,14 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
       source.title.toLowerCase().includes(query)
     )
   }, [activeFolderSourceIds, sourceSearchQuery, sources])
+  const filteredSources = React.useMemo(
+    () =>
+      applySourceSort(
+        applyAdvancedSourceFilters(searchedSources, sourceListViewState),
+        sourceListViewState.sort
+      ),
+    [searchedSources, sourceListViewState]
+  )
 
   const useVirtualizedSources =
     filteredSources.length > SOURCE_VIRTUALIZATION_THRESHOLD
@@ -357,6 +394,22 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   const visibleSources = useVirtualizedSources
     ? filteredSources.slice(virtualStartIndex, virtualEndIndex)
     : filteredSources
+  const sourceFilterSummary = React.useMemo(
+    () => buildSourceFilterSummary(sourceListViewState),
+    [sourceListViewState]
+  )
+  const hasFileSizeSources = React.useMemo(
+    () => sources.some((source) => Number.isFinite(source.fileSize)),
+    [sources]
+  )
+  const hasDurationSources = React.useMemo(
+    () => sources.some((source) => Number.isFinite(source.duration)),
+    [sources]
+  )
+  const hasPageCountSources = React.useMemo(
+    () => sources.some((source) => Number.isFinite(source.pageCount)),
+    [sources]
+  )
 
   const effectiveSelectedSourceEntries = React.useMemo(() => {
     if (typeof getEffectiveSelectedSources === "function") {
@@ -379,13 +432,84 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     sources
   ])
   const effectiveSelectedCount = effectiveSelectedSourceEntries.length
+  const effectiveSelectedSourceIds = React.useMemo(
+    () => new Set(effectiveSelectedSourceEntries.map((source) => source.id)),
+    [effectiveSelectedSourceEntries]
+  )
+  const visibleReadySourceIds = React.useMemo(
+    () =>
+      filteredSources
+        .filter((source) => organizationIndex.readySourceIds.has(source.id))
+        .map((source) => source.id),
+    [filteredSources, organizationIndex.readySourceIds]
+  )
+  const visibleReadySourceIdSet = React.useMemo(
+    () => new Set(visibleReadySourceIds),
+    [visibleReadySourceIds]
+  )
+  const hiddenDirectSelectedSourceIds = React.useMemo(
+    () =>
+      organizationIndex.sourceIdsInOrder.filter(
+        (sourceId) =>
+          selectedSourceIds.includes(sourceId) &&
+          organizationIndex.readySourceIds.has(sourceId) &&
+          !visibleReadySourceIdSet.has(sourceId)
+      ),
+    [
+      organizationIndex.readySourceIds,
+      organizationIndex.sourceIdsInOrder,
+      selectedSourceIds,
+      visibleReadySourceIdSet
+    ]
+  )
+  const visibleEffectiveSelectedCount = React.useMemo(
+    () =>
+      filteredSources.filter((source) => effectiveSelectedSourceIds.has(source.id))
+        .length,
+    [effectiveSelectedSourceIds, filteredSources]
+  )
+  const hiddenSelectedCount = Math.max(
+    0,
+    effectiveSelectedCount - visibleEffectiveSelectedCount
+  )
+  const isListNarrowed =
+    activeFolderId !== null ||
+    sourceSearchQuery.trim().length > 0 ||
+    hasActiveSourceFilters(sourceListViewState)
+  const isTemporarySortActive = sourceListViewState.sort !== "manual"
+  const allVisibleSelected =
+    visibleReadySourceIds.length > 0 &&
+    visibleReadySourceIds.every((sourceId) =>
+      effectiveSelectedSourceIds.has(sourceId)
+    )
+  const someVisibleSelected =
+    !allVisibleSelected && visibleEffectiveSelectedCount > 0
   const allSelected =
     organizationIndex.readySourceIds.size > 0 &&
     effectiveSelectedCount === organizationIndex.readySourceIds.size
   const someSelected = effectiveSelectedCount > 0 && !allSelected
+  const selectionCheckboxChecked = isListNarrowed ? allVisibleSelected : allSelected
+  const selectionCheckboxIndeterminate = isListNarrowed
+    ? !allVisibleSelected &&
+      (someVisibleSelected || hiddenSelectedCount > 0)
+    : someSelected
+  const selectionCheckboxLabel = isListNarrowed
+    ? t("playground:sources.selectVisible", "Select visible")
+    : t("playground:sources.selectAll", "Select all")
   const selectedSourceEntries = effectiveSelectedSourceEntries
   const singleSelectedSource =
     selectedSourceEntries.length === 1 ? selectedSourceEntries[0] : null
+  const batchRemoveDescription =
+    hiddenSelectedCount > 0
+      ? t(
+          "playground:sources.batchRemoveHiddenSelection",
+          {
+            count: hiddenSelectedCount,
+            defaultValue:
+              "{{count}} selected sources are hidden by current filters and will also be removed."
+          }
+        )
+      : undefined
 
   const clearEffectiveSelection = React.useCallback(() => {
     deselectAllSources()
@@ -467,13 +591,38 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     ? sourceAnnotations[previewSourceId] || []
     : []
 
-  const handleSelectAllToggle = () => {
+  const handleSelectAllToggle = React.useCallback((event: {
+    target: { checked: boolean }
+  }) => {
+    if (isListNarrowed) {
+      const nextSelectedIds = event.target.checked
+        ? organizationIndex.sourceIdsInOrder.filter(
+            (sourceId) =>
+              visibleReadySourceIdSet.has(sourceId) ||
+              hiddenDirectSelectedSourceIds.includes(sourceId)
+          )
+        : hiddenDirectSelectedSourceIds
+      setSelectedSourceIds(nextSelectedIds)
+      return
+    }
+
     if (allSelected || someSelected) {
       clearEffectiveSelection()
-    } else {
-      selectAllSources()
+      return
     }
-  }
+
+    selectAllSources()
+  }, [
+    allSelected,
+    clearEffectiveSelection,
+    hiddenDirectSelectedSourceIds,
+    isListNarrowed,
+    organizationIndex.sourceIdsInOrder,
+    selectAllSources,
+    setSelectedSourceIds,
+    someSelected,
+    visibleReadySourceIdSet
+  ])
 
   const handleCreateSourceFolder = React.useCallback(() => {
     if (typeof createSourceFolder !== "function") {
@@ -839,6 +988,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     const isReady = sourceStatus === "ready"
     const isProcessing = sourceStatus === "processing"
     const isError = sourceStatus === "error"
+    const canReorder = !isTemporarySortActive && isReady
     const processingStatusText =
       typeof source.statusMessage === "string" && source.statusMessage.trim().length > 0
         ? source.statusMessage
@@ -866,8 +1016,9 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     const metadataPreview = metadataParts.slice(0, 2).join(" • ")
     const metadataTooltip = metadataParts.join(" • ")
     const sourceOrderIndex = sources.findIndex((entry) => entry.id === source.id)
-    const canMoveUp = sourceOrderIndex > 0
-    const canMoveDown = sourceOrderIndex >= 0 && sourceOrderIndex < sources.length - 1
+    const canMoveUp = canReorder && sourceOrderIndex > 0
+    const canMoveDown =
+      canReorder && sourceOrderIndex >= 0 && sourceOrderIndex < sources.length - 1
     const isDropTarget = draggedSourceId != null && draggedSourceId !== source.id
     const assignedFolderIds = organizationIndex.folderIdsBySourceId.get(source.id) || []
     const sourceTypeLabel = t(`playground:sources.type.${source.type}`, source.type)
@@ -891,9 +1042,9 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
         ref={(element) => {
           sourceItemRefs.current[source.id] = element
         }}
-        draggable={isReady}
+        draggable={canReorder}
         onDragStart={(event) => {
-          if (!isReady) {
+          if (!canReorder) {
             event.preventDefault()
             return
           }
@@ -911,12 +1062,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
           event.dataTransfer.setData("text/plain", source.title)
         }}
         onDragOver={(event) => {
-          if (!isReady || !draggedSourceId || draggedSourceId === source.id) return
+          if (!canReorder || !draggedSourceId || draggedSourceId === source.id) return
           event.preventDefault()
           event.dataTransfer.dropEffect = "move"
         }}
         onDrop={(event) => {
-          if (!isReady || !draggedSourceId || draggedSourceId === source.id) return
+          if (!canReorder || !draggedSourceId || draggedSourceId === source.id) return
           event.preventDefault()
           const targetIndex = sources.findIndex((entry) => entry.id === source.id)
           if (targetIndex >= 0) {
@@ -935,7 +1086,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             : ""
         } ${
           isDropTarget ? "border-primary/50 bg-primary/5" : ""
-        } ${isReady ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
+        } ${canReorder ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
       >
         <div
           data-testid={`source-checkbox-hitarea-${source.id}`}
@@ -1237,10 +1388,28 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             size="small"
             allowClear
           />
+          <SourceAdvancedControls
+            viewState={sourceListViewState}
+            summary={sourceFilterSummary}
+            hasFileSizeSources={hasFileSizeSources}
+            hasDurationSources={hasDurationSources}
+            hasPageCountSources={hasPageCountSources}
+            onPatchViewState={patchSourceListViewState}
+            onResetAdvancedFilters={resetAdvancedSourceFilters}
+          />
+          {isTemporarySortActive && (
+            <p className="mt-2 text-[11px] text-text-subtle">
+              {t(
+                "playground:sources.reorderDisabledHint",
+                "Temporary sort is active. Switch back to manual order to reorder sources."
+              )}
+            </p>
+          )}
           <div className="mt-2 flex items-center justify-between text-xs">
             <Checkbox
-              checked={allSelected}
-              indeterminate={someSelected}
+              aria-label={selectionCheckboxLabel}
+              checked={selectionCheckboxChecked}
+              indeterminate={selectionCheckboxIndeterminate}
               onChange={handleSelectAllToggle}
               className="[@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11"
             >
@@ -1249,7 +1418,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
                   ? t("playground:sources.selectedCount", "{{count}} selected", {
                       count: effectiveSelectedCount
                     })
-                  : t("playground:sources.selectAll", "Select all")}
+                  : selectionCheckboxLabel}
               </span>
             </Checkbox>
             {effectiveSelectedCount > 0 && (
@@ -1291,6 +1460,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
                   "Remove {{count}} selected sources?",
                   { count: effectiveSelectedCount }
                 )}
+                description={batchRemoveDescription}
                 onConfirm={handleBatchRemoveSelected}
                 okText={t("common:remove", "Remove")}
                 cancelText={t("common:cancel", "Cancel")}

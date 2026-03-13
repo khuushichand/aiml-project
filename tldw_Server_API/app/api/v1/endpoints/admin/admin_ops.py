@@ -27,6 +27,8 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
+from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.Chat.chat_service import (
     invalidate_model_alias_caches,
 )
@@ -72,6 +74,7 @@ if TYPE_CHECKING:
 
 router = APIRouter()
 
+_INCIDENT_ASSIGNABLE_ROLES = frozenset({"admin", "owner", "super_admin"})
 
 _OPS_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -107,6 +110,43 @@ def _enforce_domain_scope_unified(principal: AuthPrincipal, domain: str | None) 
     return jobs_admin_mod._enforce_domain_scope_unified(principal, domain)
 
 
+def _user_has_incident_admin_role(user: dict[str, Any], role_rows: list[dict[str, Any]]) -> bool:
+    """Return whether the user is eligible for incident assignment."""
+
+    role_names = {
+        str(role.get("name") or "").strip().lower() for role in role_rows if str(role.get("name") or "").strip()
+    }
+    legacy_role = str(user.get("role") or "").strip().lower()
+    if legacy_role:
+        role_names.add(legacy_role)
+    return bool(role_names & _INCIDENT_ASSIGNABLE_ROLES) or bool(user.get("is_superuser"))
+
+
+async def _resolve_incident_assignee(user_id: int) -> dict[str, Any]:
+    """Resolve persisted assignee fields for an incident update.
+
+    Raises:
+        ValueError: ``assignee_not_found`` when the user does not exist.
+        ValueError: ``incident_assignee_must_be_admin`` when the user is not admin-capable.
+    """
+
+    repo = await AuthnzUsersRepo.from_pool()
+    user = await repo.get_user_by_id(int(user_id))
+    if not user:
+        raise ValueError("assignee_not_found")
+
+    rbac_repo = AuthnzRbacRepo()
+    role_rows = await asyncio.to_thread(rbac_repo.get_user_roles, int(user_id))
+    if not _user_has_incident_admin_role(user, role_rows):
+        raise ValueError("incident_assignee_must_be_admin")
+
+    label = str(user.get("email") or "").strip() or str(user.get("username") or "").strip() or str(user["id"])
+    return {
+        "assigned_to_user_id": int(user["id"]),
+        "assigned_to_label": label,
+    }
+
+
 async def _get_admin_org_ids(principal: AuthPrincipal) -> list[int] | None:
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
 
@@ -136,6 +176,7 @@ async def _emit_admin_audit_event(
         action=action,
         metadata=metadata,
     )
+
 
 @router.get("/maintenance", response_model=MaintenanceState)
 async def get_maintenance_mode(
@@ -492,7 +533,23 @@ async def update_incident(
 ) -> IncidentItem:
     _require_platform_admin(principal)
     actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    update_fields = payload.model_dump(exclude_unset=True)
+    workflow_fields: dict[str, Any] = {}
+    for field_name in ("root_cause", "impact", "action_items"):
+        if field_name in payload.model_fields_set:
+            workflow_fields[field_name] = update_fields[field_name]
     try:
+        assignee_fields: dict[str, Any] = {}
+        if "assigned_to_user_id" in payload.model_fields_set:
+            assignee_user_id = payload.assigned_to_user_id
+            if assignee_user_id is None:
+                assignee_fields = {
+                    "assigned_to_user_id": None,
+                    "assigned_to_label": None,
+                }
+            else:
+                assignee_fields = await _resolve_incident_assignee(int(assignee_user_id))
+
         incident = svc_update_incident(
             incident_id=incident_id,
             title=payload.title,
@@ -500,6 +557,8 @@ async def update_incident(
             severity=payload.severity,
             summary=payload.summary,
             tags=payload.tags,
+            **assignee_fields,
+            **workflow_fields,
             update_message=payload.update_message,
             actor=actor,
         )
@@ -507,7 +566,9 @@ async def update_incident(
         detail = str(exc)
         if detail == "not_found":
             raise HTTPException(status_code=404, detail="incident_not_found") from exc
-        if detail in {"invalid_status", "invalid_severity"}:
+        if detail == "assignee_not_found":
+            raise HTTPException(status_code=404, detail=detail) from exc
+        if detail in {"invalid_status", "invalid_severity", "incident_assignee_must_be_admin"}:
             raise HTTPException(status_code=400, detail=detail) from exc
         raise HTTPException(status_code=400, detail="invalid_incident") from exc
     await _emit_admin_audit_event(
@@ -589,6 +650,7 @@ async def delete_incident(
 # Pricing Catalog Management
 # ---------------------------------------------
 
+
 @router.post("/llm-usage/pricing/reload", response_model=dict)
 async def reload_llm_pricing_catalog() -> dict:
     """Reload the LLM pricing catalog from environment and config file (admin-only).
@@ -607,6 +669,7 @@ async def reload_llm_pricing_catalog() -> dict:
 # ---------------------------------------------
 # Chat Model Alias Cache Management
 # ---------------------------------------------
+
 
 @router.post("/chat/model-aliases/reload", response_model=dict)
 async def reload_chat_model_alias_caches() -> dict:

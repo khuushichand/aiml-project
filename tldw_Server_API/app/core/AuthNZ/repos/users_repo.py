@@ -184,6 +184,7 @@ class AuthnzUsersRepo:
         offset: int,
         limit: int,
         role: str | None = None,
+        admin_capable: bool = False,
         is_active: bool | None = None,
         search: str | None = None,
         org_ids: list[int] | None = None,
@@ -222,6 +223,41 @@ class AuthnzUsersRepo:
             param_count += 1
             conditions.append(f"role = ${param_count}" if is_pg else "role = ?")
             params.append(role)
+
+        if admin_capable:
+            if is_pg:
+                role_pos = param_count + 1
+                rbac_pos = param_count + 2
+                admin_capable_condition = """(
+                        users.role = ${role_pos}
+                        OR COALESCE(users.is_superuser, FALSE) = TRUE
+                        OR EXISTS (
+                            SELECT 1
+                            FROM user_roles ur
+                            JOIN roles r ON r.id = ur.role_id
+                            WHERE ur.user_id = users.id
+                              AND r.name = ANY(${rbac_pos})
+                        )
+                    )"""
+                conditions.append(admin_capable_condition.format_map(locals()))  # nosec B608
+                params.append("admin")
+                params.append(["admin", "owner", "super_admin"])
+                param_count += 2
+            else:
+                placeholders = ", ".join(["?"] * 3)
+                admin_capable_condition = """(
+                        users.role = ?
+                        OR COALESCE(users.is_superuser, 0) = 1
+                        OR EXISTS (
+                            SELECT 1
+                            FROM user_roles ur
+                            JOIN roles r ON r.id = ur.role_id
+                            WHERE ur.user_id = users.id
+                              AND r.name IN ({placeholders})
+                        )
+                    )"""
+                conditions.append(admin_capable_condition.format_map(locals()))  # nosec B608
+                params.extend(["admin", "admin", "owner", "super_admin"])
 
         if is_active is not None:
             param_count += 1

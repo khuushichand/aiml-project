@@ -13,6 +13,9 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
 
 from .models import RunPhase, RunStatus, RuntimeType
 
@@ -921,8 +924,7 @@ class SQLiteStore(SandboxStore):
 
     def _conn(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.db_path)
-        con.execute("PRAGMA journal_mode=WAL;")
-        con.execute("PRAGMA synchronous=NORMAL;")
+        configure_sqlite_connection(con)
         con.row_factory = sqlite3.Row
         return con
 

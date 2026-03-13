@@ -222,6 +222,76 @@ def test_add_media_with_keywords_overwrite_preserves_sharing_state():
     assert after["owner_user_id"] == 1
 
 
+def test_media_database_transaction_uses_begin_immediate(tmp_path: Path):
+
+    db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="txn-mode")
+
+    class _RecordingConnection:
+        def __init__(self) -> None:
+            self.row_factory = None
+            self.statements: list[str] = []
+            self.committed = False
+            self.rolled_back = False
+            self.closed = False
+
+        def execute(self, sql: str, *args):
+            self.statements.append(sql)
+
+        def commit(self) -> None:
+            self.committed = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    conn = _RecordingConnection()
+    db._persistent_conn = None
+    db.backend.connect = lambda: conn
+
+    with db.transaction():
+        pass
+
+    assert conn.statements[:3] == [
+        "PRAGMA foreign_keys = ON",
+        "PRAGMA busy_timeout = 10000",
+        "BEGIN IMMEDIATE",
+    ]
+    assert conn.committed is True
+    assert conn.closed is True
+
+
+def test_media_database_connection_pragmas_delegate_to_sqlite_policy(tmp_path: Path, monkeypatch):
+
+    db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="delegate-test")
+    conn = sqlite3.connect(tmp_path / "delegate-check.db")
+    calls: list[dict[str, object]] = []
+
+    def fake_configure(connection, **kwargs):
+        assert connection is conn
+        calls.append(kwargs)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.DB_Management.Media_DB_v2.configure_sqlite_connection",
+        fake_configure,
+        raising=False,
+    )
+
+    db._apply_sqlite_connection_pragmas(conn)
+
+    assert calls == [
+        {
+            "use_wal": True,
+            "synchronous": "NORMAL",
+            "foreign_keys": True,
+            "busy_timeout_ms": 10000,
+            "cache_size": -2000,
+        }
+    ]
+    conn.close()
+
+
 def test_search_media_db_returns_tuple_when_matches_exist():
 
     db = _make_media_db()

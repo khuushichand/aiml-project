@@ -19,6 +19,7 @@ from typing import Any, Optional, Union
 
 from loguru import logger as _loguru_logger
 
+from ..sqlite_policy import configure_sqlite_connection
 from .base import (
     BackendFeatures,
     BackendType,
@@ -152,20 +153,14 @@ class SQLiteConnectionPool(ConnectionPool):
         # Set row factory for dict-like access
         conn.row_factory = sqlite3.Row
 
-        # Apply optimizations
-        if self.config.sqlite_wal_mode and not self._is_memory:
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA synchronous = NORMAL")
-
-        if self.config.sqlite_foreign_keys:
-            conn.execute("PRAGMA foreign_keys = ON")
-
-        # Reduce lock contention under concurrent access (increase to 10s)
-        conn.execute("PRAGMA busy_timeout = 10000")
-
-        # Additional optimizations
-        conn.execute("PRAGMA cache_size = -2000")  # 2MB cache
-        conn.execute("PRAGMA temp_store = MEMORY")
+        configure_sqlite_connection(
+            conn,
+            use_wal=bool(self.config.sqlite_wal_mode),
+            synchronous="NORMAL" if self.config.sqlite_wal_mode else None,
+            foreign_keys=bool(self.config.sqlite_foreign_keys),
+            busy_timeout_ms=10000,
+            cache_size=-2000,
+        )
 
         return conn
 
@@ -292,15 +287,13 @@ class SQLiteBackend(DatabaseBackend):
 
         conn.row_factory = sqlite3.Row
 
-        # Apply configuration
-        if self.config.sqlite_wal_mode and not is_memory:
-            conn.execute("PRAGMA journal_mode = WAL")
-
-        if self.config.sqlite_foreign_keys:
-            conn.execute("PRAGMA foreign_keys = ON")
-
-        # Reduce lock contention under concurrent access (increase to 10s)
-        conn.execute("PRAGMA busy_timeout = 10000")
+        configure_sqlite_connection(
+            conn,
+            use_wal=bool(self.config.sqlite_wal_mode),
+            synchronous="NORMAL" if self.config.sqlite_wal_mode else None,
+            foreign_keys=bool(self.config.sqlite_foreign_keys),
+            busy_timeout_ms=10000,
+        )
 
         return conn
 
@@ -313,7 +306,7 @@ class SQLiteBackend(DatabaseBackend):
     def transaction(self, connection: Optional[sqlite3.Connection] = None) -> Generator[sqlite3.Connection, None, None]:
         """SQLite transaction context manager.
 
-        Uses explicit BEGIN/COMMIT/ROLLBACK and guards with in_transaction to
+        Uses explicit BEGIN IMMEDIATE/COMMIT/ROLLBACK and guards with in_transaction to
         avoid errors when statements (e.g., executescript) implicitly end a txn.
         """
         conn = connection or self.get_pool().get_connection()
@@ -321,7 +314,7 @@ class SQLiteBackend(DatabaseBackend):
         started = False
         try:
             if not getattr(conn, "in_transaction", False):
-                conn.execute("BEGIN")
+                conn.execute("BEGIN IMMEDIATE")
                 started = True
             yield conn
             if started and getattr(conn, "in_transaction", False):

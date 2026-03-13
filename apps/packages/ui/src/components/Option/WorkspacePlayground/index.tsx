@@ -38,6 +38,7 @@ import { WorkspaceStatusBar } from "./WorkspaceStatusBar"
 import { SourcesPane } from "./SourcesPane"
 import { ChatPane } from "./ChatPane"
 import { StudioPane } from "./StudioPane"
+import { useSourceListViewState } from "./use-source-list-view-state"
 import {
   PaneResizer,
   DEFAULT_LEFT_WIDTH,
@@ -799,6 +800,11 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const isStoreHydrated = storeHydrated !== false
   const sourceStatusFailureRef = React.useRef<Record<number, number>>({})
   const lastStatusViewSignatureRef = React.useRef<string | null>(null)
+  const {
+    sourceListViewState,
+    patchSourceListViewState,
+    resetAdvancedSourceFilters
+  } = useSourceListViewState()
 
   const [leftPaneWidth, setLeftPaneWidth] = React.useState(DEFAULT_LEFT_WIDTH)
   const [rightPaneWidth, setRightPaneWidth] = React.useState(DEFAULT_RIGHT_WIDTH)
@@ -1800,7 +1806,14 @@ const WorkspacePlaygroundBody: React.FC = () => {
           )}
         </span>
       ),
-      children: <SourcesPane statusGuardrailsEnabled={statusGuardrailsEnabled} />
+      children: (
+        <SourcesPane
+          sourceListViewState={sourceListViewState}
+          onPatchSourceListViewState={patchSourceListViewState}
+          onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
+          statusGuardrailsEnabled={statusGuardrailsEnabled}
+        />
+      )
     },
     {
       key: "chat",
@@ -2039,6 +2052,9 @@ const WorkspacePlaygroundBody: React.FC = () => {
                 >
                   <SourcesPane
                     onHide={() => setLeftPaneCollapsed(true)}
+                    sourceListViewState={sourceListViewState}
+                    onPatchSourceListViewState={patchSourceListViewState}
+                    onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
                     statusGuardrailsEnabled={statusGuardrailsEnabled}
                   />
                 </aside>
@@ -2065,7 +2081,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
               className="lg:hidden"
               styles={{ wrapper: { width: 320 }, body: { padding: 0 } }}
             >
-              <SourcesPane statusGuardrailsEnabled={statusGuardrailsEnabled} />
+              <SourcesPane
+                sourceListViewState={sourceListViewState}
+                onPatchSourceListViewState={patchSourceListViewState}
+                onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
+                statusGuardrailsEnabled={statusGuardrailsEnabled}
+              />
             </Drawer>
 
             <main

@@ -13,6 +13,10 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    begin_immediate_if_needed,
+    configure_sqlite_connection,
+)
 
 _SESSION_STATUSES = {"scheduled", "live", "processing", "completed", "failed"}
 _SOURCE_TYPES = {"upload", "stream", "import"}
@@ -92,9 +96,7 @@ class MeetingsDatabase:
         if conn is None:
             conn = sqlite3.connect(self._db_path_str, check_same_thread=False)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA busy_timeout = 5000")
+            configure_sqlite_connection(conn)
             self._local.connection = conn
         return conn
 
@@ -107,11 +109,14 @@ class MeetingsDatabase:
     @contextmanager
     def transaction(self) -> Iterable[sqlite3.Connection]:
         conn = self.get_connection()
+        started = begin_immediate_if_needed(conn)
         try:
             yield conn
-            conn.commit()
+            if started:
+                conn.commit()
         except Exception:
-            conn.rollback()
+            if started:
+                conn.rollback()
             raise
 
     def ensure_schema(self) -> None:

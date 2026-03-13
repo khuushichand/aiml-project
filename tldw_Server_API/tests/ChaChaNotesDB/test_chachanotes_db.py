@@ -18,7 +18,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError,
     SchemaError,
     InputError,
-    ConflictError
+    ConflictError,
+    TransactionContextManager,
 )
 #
 #######################################################################################################################
@@ -1251,6 +1252,37 @@ class TestTransactions:
         # Check that the first insert was rolled back
         assert len(db_instance.list_character_cards()) == initial_count
         assert db_instance.get_character_card_by_name(card_data_name) is None
+
+    def test_transaction_context_manager_uses_begin_immediate(self):
+        class _RecordingConnection:
+            def __init__(self) -> None:
+                self.in_transaction = False
+                self.statements: list[str] = []
+                self.committed = False
+                self.rolled_back = False
+
+            def execute(self, sql: str, *args):
+                self.statements.append(sql)
+                if sql == "BEGIN IMMEDIATE":
+                    self.in_transaction = True
+                return None
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def rollback(self) -> None:
+                self.rolled_back = True
+
+        conn = _RecordingConnection()
+        db = CharactersRAGDB.__new__(CharactersRAGDB)
+        db._ensure_sqlite_backend = lambda: None
+        db.get_connection = lambda: conn
+
+        with TransactionContextManager(db):
+            pass
+
+        assert conn.statements == ["BEGIN IMMEDIATE"]
+        assert conn.committed is True
 
 # More tests can be added for:
 # - Specific FTS trigger behavior (though search tests cover them indirectly)

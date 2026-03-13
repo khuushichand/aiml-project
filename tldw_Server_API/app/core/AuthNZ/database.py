@@ -33,6 +33,9 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     WeakPasswordError,
 )
 from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection_async,
+)
 
 #
 # Local imports
@@ -388,9 +391,7 @@ class DatabasePool:
 
         try:
             async with aiosqlite.connect(self.db_path, uri=self._sqlite_uri) as conn:
-                # Enable WAL mode for better concurrency
-                await conn.execute("PRAGMA journal_mode=WAL")
-                await conn.execute("PRAGMA busy_timeout=5000")
+                await configure_sqlite_connection_async(conn)
 
                 # Check if users table exists
                 cursor = await conn.execute(
@@ -447,10 +448,9 @@ class DatabasePool:
             conn = None
             try:
                 conn = await aiosqlite.connect(self.db_path, uri=self._sqlite_uri)
-                await conn.execute("PRAGMA busy_timeout=5000")
-                await conn.execute("PRAGMA foreign_keys = ON")
+                await configure_sqlite_connection_async(conn)
                 conn.row_factory = aiosqlite.Row
-                await conn.execute("BEGIN")
+                await conn.execute("BEGIN IMMEDIATE")
 
                 try:
                     # Yield a shim that normalizes execute() parameter passing for SQLite
@@ -514,8 +514,7 @@ class DatabasePool:
             conn = None
             try:
                 conn = await aiosqlite.connect(self.db_path, uri=self._sqlite_uri)
-                await conn.execute("PRAGMA busy_timeout=5000")
-                await conn.execute("PRAGMA foreign_keys = ON")
+                await configure_sqlite_connection_async(conn)
                 conn.row_factory = aiosqlite.Row
                 # Yield a shim with normalized execute() signature (see transaction())
                 class _SQLiteConnShim:
