@@ -1,124 +1,89 @@
-import type { IncidentItem } from '@/types/incidents';
-
-export interface IncidentActionItem {
-  id: string;
-  text: string;
-  done: boolean;
-}
+import type {
+  IncidentActionItem,
+  IncidentItem,
+} from '@/types/incidents';
 
 export interface IncidentWorkflowState {
   assignedTo?: string;
-  rootCause?: string;
-  impact?: string;
+  assignedToLabel?: string;
+  rootCause: string;
+  impact: string;
   actionItems: IncidentActionItem[];
 }
 
 export type IncidentWorkflowMap = Record<string, IncidentWorkflowState>;
 
-const INCIDENT_WORKFLOW_STORAGE_KEY = 'admin.incidents.workflow.v1';
+const cloneActionItems = (items: IncidentActionItem[] | undefined | null): IncidentActionItem[] =>
+  Array.isArray(items)
+    ? items.map((item) => ({
+        id: item.id,
+        text: item.text,
+        done: Boolean(item.done),
+      }))
+    : [];
 
-const toObject = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === 'object'
-    ? (value as Record<string, unknown>)
-    : null;
-
-const toStringValue = (value: unknown): string | undefined =>
-  typeof value === 'string' && value.trim()
-    ? value.trim()
-    : undefined;
-
-const toActionItems = (value: unknown): IncidentActionItem[] => {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry): IncidentActionItem | null => {
-      const obj = toObject(entry);
-      if (!obj) return null;
-      const id = toStringValue(obj.id) ?? `ai_${Math.random().toString(36).slice(2, 10)}`;
-      const text = toStringValue(obj.text) ?? '';
-      return {
-        id,
-        text,
-        done: Boolean(obj.done),
-      };
-    })
-    .filter((entry): entry is IncidentActionItem => entry !== null);
-};
-
-const getStorage = (): Storage | null =>
-  typeof window === 'undefined' ? null : window.localStorage;
-
-export const readIncidentWorkflowMap = (storage?: Storage | null): IncidentWorkflowMap => {
-  const resolvedStorage = storage ?? getStorage();
-  if (!resolvedStorage) return {};
-  try {
-    const raw = resolvedStorage.getItem(INCIDENT_WORKFLOW_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as unknown;
-    const root = toObject(parsed);
-    if (!root) return {};
-    const normalized: IncidentWorkflowMap = {};
-    Object.entries(root).forEach(([incidentId, value]) => {
-      const entry = toObject(value);
-      if (!entry) return;
-      normalized[incidentId] = {
-        assignedTo: toStringValue(entry.assignedTo),
-        rootCause: toStringValue(entry.rootCause),
-        impact: toStringValue(entry.impact),
-        actionItems: toActionItems(entry.actionItems),
-      };
-    });
-    return normalized;
-  } catch {
-    return {};
-  }
-};
-
-export const writeIncidentWorkflowMap = (
-  state: IncidentWorkflowMap,
-  storage?: Storage | null
-): void => {
-  const resolvedStorage = storage ?? getStorage();
-  if (!resolvedStorage) return;
-  try {
-    resolvedStorage.setItem(INCIDENT_WORKFLOW_STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // no-op if storage is unavailable
-  }
-};
-
-const createDefaultState = (): IncidentWorkflowState => ({
-  assignedTo: undefined,
-  rootCause: '',
-  impact: '',
-  actionItems: [],
+export const incidentWorkflowStateFromIncident = (
+  incident: IncidentItem
+): IncidentWorkflowState => ({
+  assignedTo:
+    incident.assigned_to_user_id !== undefined && incident.assigned_to_user_id !== null
+      ? String(incident.assigned_to_user_id)
+      : undefined,
+  assignedToLabel: incident.assigned_to_label ?? undefined,
+  rootCause: incident.root_cause ?? '',
+  impact: incident.impact ?? '',
+  actionItems: cloneActionItems(incident.action_items),
 });
 
 export const ensureIncidentWorkflowState = (
   map: IncidentWorkflowMap,
-  incidentId: string
-): IncidentWorkflowState => map[incidentId] ?? createDefaultState();
+  incident: IncidentItem
+): IncidentWorkflowState => map[incident.id] ?? incidentWorkflowStateFromIncident(incident);
+
+export const replaceIncidentWorkflowState = (
+  map: IncidentWorkflowMap,
+  incident: IncidentItem
+): IncidentWorkflowMap => ({
+  ...map,
+  [incident.id]: incidentWorkflowStateFromIncident(incident),
+});
 
 export const upsertIncidentWorkflowState = (
   map: IncidentWorkflowMap,
   incidentId: string,
   nextState: Partial<IncidentWorkflowState>
-): IncidentWorkflowMap => ({
-  ...map,
-  [incidentId]: {
-    ...ensureIncidentWorkflowState(map, incidentId),
-    ...nextState,
-    actionItems: nextState.actionItems ?? ensureIncidentWorkflowState(map, incidentId).actionItems,
-  },
-});
+): IncidentWorkflowMap => {
+  const current = map[incidentId] ?? {
+    assignedTo: undefined,
+    assignedToLabel: undefined,
+    rootCause: '',
+    impact: '',
+    actionItems: [],
+  };
+  return {
+    ...map,
+    [incidentId]: {
+      ...current,
+      ...nextState,
+      actionItems: nextState.actionItems ?? cloneActionItems(current.actionItems),
+    },
+  };
+};
 
 export const addIncidentActionItem = (
   map: IncidentWorkflowMap,
   incidentId: string
 ): IncidentWorkflowMap => {
-  const current = ensureIncidentWorkflowState(map, incidentId);
+  const current = map[incidentId] ?? {
+    assignedTo: undefined,
+    assignedToLabel: undefined,
+    rootCause: '',
+    impact: '',
+    actionItems: [],
+  };
   return upsertIncidentWorkflowState(map, incidentId, {
     actionItems: [
-      ...current.actionItems,
+      ...cloneActionItems(current.actionItems),
       {
         id: `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         text: '',
@@ -134,8 +99,7 @@ export const updateIncidentActionItem = (
   actionItemId: string,
   next: Partial<IncidentActionItem>
 ): IncidentWorkflowMap => {
-  const current = ensureIncidentWorkflowState(map, incidentId);
-  const actionItems = current.actionItems.map((item) =>
+  const actionItems = cloneActionItems(map[incidentId]?.actionItems).map((item) =>
     item.id === actionItemId
       ? { ...item, ...next }
       : item
@@ -148,27 +112,24 @@ export const removeIncidentActionItem = (
   incidentId: string,
   actionItemId: string
 ): IncidentWorkflowMap => {
-  const current = ensureIncidentWorkflowState(map, incidentId);
-  const actionItems = current.actionItems.filter((item) => item.id !== actionItemId);
+  const actionItems = cloneActionItems(map[incidentId]?.actionItems).filter(
+    (item) => item.id !== actionItemId
+  );
   return upsertIncidentWorkflowState(map, incidentId, { actionItems });
 };
 
 export const mergeIncidentWorkflowWithIncidents = (
   incidents: IncidentItem[],
   map: IncidentWorkflowMap
-): IncidentWorkflowMap => {
-  let next = { ...map };
-  incidents.forEach((incident) => {
-    if (!next[incident.id]) {
-      next = upsertIncidentWorkflowState(next, incident.id, {});
-    }
-  });
-  return next;
-};
+): IncidentWorkflowMap =>
+  incidents.reduce<IncidentWorkflowMap>((next, incident) => {
+    next[incident.id] = map[incident.id] ?? incidentWorkflowStateFromIncident(incident);
+    return next;
+  }, {});
 
 export const buildPostmortemTimelineMessage = (state: IncidentWorkflowState): string => {
   const actionItemCount = state.actionItems.filter((item) => item.text.trim()).length;
-  const root = state.rootCause?.trim() ? 'root cause set' : 'root cause pending';
-  const impact = state.impact?.trim() ? 'impact set' : 'impact pending';
+  const root = state.rootCause.trim() ? 'root cause set' : 'root cause pending';
+  const impact = state.impact.trim() ? 'impact set' : 'impact pending';
   return `Post-mortem updated (${root}, ${impact}, ${actionItemCount} action item${actionItemCount === 1 ? '' : 's'})`;
 };

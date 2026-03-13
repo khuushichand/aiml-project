@@ -5,6 +5,12 @@ export type IncidentEvent = {
   actor?: string | null;
 };
 
+export type IncidentActionItem = {
+  id: string;
+  text: string;
+  done: boolean;
+};
+
 export type IncidentItem = {
   id: string;
   title: string;
@@ -18,6 +24,11 @@ export type IncidentItem = {
   created_by?: string | null;
   updated_by?: string | null;
   timeline?: IncidentEvent[];
+  assigned_to_user_id?: number | null;
+  assigned_to_label?: string | null;
+  root_cause?: string | null;
+  impact?: string | null;
+  action_items?: IncidentActionItem[];
 };
 
 export type IncidentsResponse = {
