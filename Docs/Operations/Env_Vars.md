@@ -43,6 +43,17 @@ Operational notes:
 ## OCR (PDF pipeline)
 - `OCR_PAGE_CONCURRENCY`: Per-page OCR concurrency (default `1`).
 
+### MinerU OCR
+- `MINERU_CMD`: Command used to launch MinerU for document-level PDF OCR. Defaults to `mineru`. The command is tokenized safely and executed without a shell.
+- `MINERU_TIMEOUT_SEC`: Whole-document MinerU timeout in seconds (default `120`).
+- `MINERU_MAX_CONCURRENCY`: Max concurrent MinerU document runs (default `1`). Applies at the document level, not per page.
+- `MINERU_TMP_ROOT`: Optional root directory for MinerU temporary working directories.
+- `MINERU_DEBUG_SAVE_RAW`: When `true`, include full raw `content_list.json` and `middle.json` payloads in the normalized structured OCR artifact block. Off by default.
+
+Notes
+- MinerU is PDF-only in v1 and does not participate in `auto` backend selection.
+- `ocr_lang` and `ocr_dpi` remain request parameters for API consistency, but MinerU currently treats them as advisory metadata only.
+
 ### Dolphin OCR
 - `DOLPHIN_MODE`: `auto` | `transformers` | `remote`.
 - `DOLPHIN_PROMPT`, `DOLPHIN_PROMPT_PRESET`: main prompt override/preset (`general|doc|table|json`).

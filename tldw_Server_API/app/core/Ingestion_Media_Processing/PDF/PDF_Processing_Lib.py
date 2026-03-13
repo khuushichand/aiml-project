@@ -1612,4 +1612,14 @@ def _run_mineru_document_ocr(
     requested_lang: str | None = None,
     requested_dpi: int | None = None,
 ) -> dict[str, Any]:
-    raise RuntimeError("MinerU document OCR is not configured")
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
+        run_mineru_document_ocr,
+    )
+
+    return run_mineru_document_ocr(
+        pdf_path=pdf_path,
+        output_format=output_format,
+        prompt_preset=prompt_preset,
+        requested_lang=requested_lang,
+        requested_dpi=requested_dpi,
+    )
