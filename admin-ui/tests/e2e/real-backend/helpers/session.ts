@@ -1,5 +1,6 @@
 import { type Page } from '@playwright/test';
 
+import { postAdminE2EJson } from './admin-e2e-support';
 import { getFixturePassword } from './fixture-secrets';
 import { type RealBackendProjectEnv } from './project-env';
 
@@ -25,27 +26,6 @@ export type SeedResponse = {
     alerts: SeededAlertFixture[];
     organizations?: Array<{ id: number; name: string; slug: string }>;
   };
-};
-
-const postJson = async <T>(
-  baseUrl: string,
-  path: string,
-  body: unknown,
-): Promise<T> => {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`Request failed for ${path}: ${response.status} ${detail}`.trim());
-  }
-
-  return response.json() as Promise<T>;
 };
 
 export class SeededSession {
@@ -110,7 +90,7 @@ export class SeededSession {
   }
 
   async seed(scenario: SeedScenario = 'jwt_admin'): Promise<SeedResponse> {
-    return postJson<SeedResponse>(
+    return postAdminE2EJson<SeedResponse>(
       this.projectEnv.apiBaseUrl,
       '/api/v1/test-support/admin-e2e/seed',
       { scenario },

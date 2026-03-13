@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+import hmac
+import os
+
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from tldw_Server_API.app.api.v1.schemas.test_support_schemas import (
     AdminE2EBootstrapJwtSessionRequest,
@@ -17,7 +20,29 @@ from tldw_Server_API.app.services.admin_e2e_support_service import (
     seed_admin_e2e_scenario,
 )
 
-router = APIRouter()
+ADMIN_E2E_SUPPORT_HEADER = "X-TLDW-Admin-E2E-Key"
+ADMIN_E2E_SUPPORT_KEY_ENV = "TLDW_ADMIN_E2E_SUPPORT_KEY"
+
+
+def require_admin_e2e_support_access(
+    support_key: str | None = Header(None, alias=ADMIN_E2E_SUPPORT_HEADER),
+) -> None:
+    """Fail closed unless the caller presents the explicit admin e2e support key."""
+    configured_support_key = os.getenv(ADMIN_E2E_SUPPORT_KEY_ENV, "").strip()
+    if not configured_support_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="admin_e2e_support_key_not_configured",
+        )
+
+    if not support_key or not hmac.compare_digest(support_key, configured_support_key):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin_e2e_support_access_denied",
+        )
+
+
+router = APIRouter(dependencies=[Depends(require_admin_e2e_support_access)])
 
 
 @router.post("/reset", response_model=AdminE2EResetResponse)

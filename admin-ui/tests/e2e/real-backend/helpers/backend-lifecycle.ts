@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { DEFAULT_ADMIN_E2E_SUPPORT_KEY } from './admin-e2e-support';
 import { getFixturePasswordEnv } from './fixture-secrets';
 import { type RealBackendProjectEnv } from './project-env';
 
@@ -64,6 +65,8 @@ export const buildBackendEnv = (
   TEST_MODE: 'true',
   DEFER_HEAVY_STARTUP: 'true',
   ENABLE_ADMIN_E2E_TEST_MODE: 'true',
+  TLDW_ADMIN_E2E_SUPPORT_KEY:
+    process.env.TLDW_ADMIN_E2E_SUPPORT_KEY || DEFAULT_ADMIN_E2E_SUPPORT_KEY,
   PYTEST_CURRENT_TEST: process.env.PYTEST_CURRENT_TEST || 'admin-ui-real-backend-e2e',
   JWT_ALGORITHM: process.env.JWT_ALGORITHM || 'HS256',
   JWT_SECRET_KEY: process.env.JWT_SECRET_KEY || 'playwright-test-secret-1234567890',

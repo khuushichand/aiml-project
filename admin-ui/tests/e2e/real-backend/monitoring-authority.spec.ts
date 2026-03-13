@@ -1,22 +1,12 @@
 import { expect, test } from './helpers/fixtures';
-
-const postAdminE2E = async <T>(baseUrl: string, path: string): Promise<T> => {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`Admin e2e request failed for ${path}: ${response.status} ${detail}`.trim());
-  }
-  return response.json() as Promise<T>;
-};
+import { postAdminE2EJson } from './helpers/admin-e2e-support';
 
 test.describe.configure({ mode: 'serial' });
 
 test('monitoring rule and alert assignment persist across reload', async ({ monitoringPage, projectEnv, seededSession }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-real-jwt', 'Monitoring authority coverage only runs in the multi-user JWT project');
 
-  await postAdminE2E(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
+  await postAdminE2EJson(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
   const seed = await seededSession.as('admin', 'jwt_admin');
   const alertFixture = seed.fixtures.alerts[0];
 
@@ -39,7 +29,7 @@ test('monitoring rule and alert assignment persist across reload', async ({ moni
 test('non-admin users are denied from the monitoring route', async ({ monitoringPage, projectEnv, seededSession }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-real-jwt', 'Monitoring authority coverage only runs in the multi-user JWT project');
 
-  await postAdminE2E(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
+  await postAdminE2EJson(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
   await seededSession.as('non_admin', 'jwt_admin');
 
   await monitoringPage.goto();

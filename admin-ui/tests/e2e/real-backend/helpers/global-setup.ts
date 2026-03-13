@@ -1,3 +1,4 @@
+import { postAdminE2EJson } from './admin-e2e-support';
 import { getProjectEnv, REAL_BACKEND_PROJECTS, shouldManageBackend } from './project-env';
 import { startManagedBackend, stopManagedBackend, waitForManagedBackend } from './backend-lifecycle';
 
@@ -27,27 +28,6 @@ const wait = async (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-
-const postJson = async <T>(
-  baseUrl: string,
-  path: string,
-  body: unknown,
-): Promise<T> => {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`Request failed for ${path}: ${response.status} ${detail}`.trim());
-  }
-
-  return response.json() as Promise<T>;
-};
 
 const warmUiRoute = async (
   baseUrl: string,
@@ -83,7 +63,7 @@ const warmJwtProtectedRoute = async (
   apiBaseUrl: string,
   path: string,
 ): Promise<void> => {
-  const seed = await postJson<JwtSeedResponse>(
+  const seed = await postAdminE2EJson<JwtSeedResponse>(
     apiBaseUrl,
     '/api/v1/test-support/admin-e2e/seed',
     { scenario: 'jwt_admin' },
@@ -93,7 +73,7 @@ const warmJwtProtectedRoute = async (
     throw new Error('Missing seeded admin principal for JWT warm-up');
   }
 
-  const bootstrap = await postJson<JwtBootstrapResponse>(
+  const bootstrap = await postAdminE2EJson<JwtBootstrapResponse>(
     apiBaseUrl,
     '/api/v1/test-support/admin-e2e/bootstrap-jwt-session',
     { principal_key: principalKey },

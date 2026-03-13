@@ -1,19 +1,9 @@
 import { expect, test } from './helpers/fixtures';
+import { postAdminE2EJson } from './helpers/admin-e2e-support';
 
 type TriggerResponse = {
   ok: boolean;
   triggered_runs: number;
-};
-
-const postAdminE2E = async <T>(baseUrl: string, path: string): Promise<T> => {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`Admin e2e request failed for ${path}: ${response.status} ${detail}`.trim());
-  }
-  return response.json() as Promise<T>;
 };
 
 test.describe.configure({ mode: 'serial' });
@@ -21,7 +11,7 @@ test.describe.configure({ mode: 'serial' });
 test('creates a schedule and persists it across reload', async ({ backupsPage, projectEnv, seededSession }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-real-jwt', 'Backup scheduling browser coverage only runs in the multi-user JWT project');
 
-  await postAdminE2E(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
+  await postAdminE2EJson(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
   const seed = await seededSession.as('admin', 'dsr_jwt_admin');
 
   await backupsPage.gotoScheduleTab();
@@ -41,7 +31,7 @@ test('creates a schedule and persists it across reload', async ({ backupsPage, p
 test('scheduler trigger produces visible run metadata', async ({ backupsPage, projectEnv, seededSession }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-real-jwt', 'Backup scheduling browser coverage only runs in the multi-user JWT project');
 
-  await postAdminE2E(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
+  await postAdminE2EJson(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
   const seed = await seededSession.as('admin', 'dsr_jwt_admin');
 
   await backupsPage.gotoScheduleTab();
@@ -53,7 +43,7 @@ test('scheduler trigger produces visible run metadata', async ({ backupsPage, pr
     retentionCount: 5,
   });
 
-  const trigger = await postAdminE2E<TriggerResponse>(
+  const trigger = await postAdminE2EJson<TriggerResponse>(
     projectEnv.apiBaseUrl,
     '/api/v1/test-support/admin-e2e/run-due-backup-schedules',
   );
@@ -67,7 +57,7 @@ test('scheduler trigger produces visible run metadata', async ({ backupsPage, pr
 test('authnz schedule fails closed for a non-platform admin', async ({ backupsPage, projectEnv, seededSession }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-real-jwt', 'Backup scheduling browser coverage only runs in the multi-user JWT project');
 
-  await postAdminE2E(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
+  await postAdminE2EJson(projectEnv.apiBaseUrl, '/api/v1/test-support/admin-e2e/reset');
   await seededSession.as('admin', 'jwt_admin');
 
   await backupsPage.gotoScheduleTab();
