@@ -2165,6 +2165,8 @@ async def create_chat_session(
             'cluster_id': session_data.cluster_id,
             'source': session_data.source,
             'external_ref': session_data.external_ref,
+            'scope_type': session_data.scope_type or 'global',
+            'workspace_id': session_data.workspace_id,
         }
 
         # Add to database
@@ -4075,6 +4077,8 @@ async def list_chat_sessions(
         False,
         description="Include per-chat settings payload for each returned chat.",
     ),
+    scope_type: Optional[Literal["global", "workspace"]] = Query(None, description="Scope filter: 'global' or 'workspace'"),
+    workspace_id: Optional[str] = Query(None, description="Workspace ID (required when scope_type='workspace')"),
     include_message_counts: bool = Query(
         True,
         description="Include message counts for each returned chat.",
@@ -4114,6 +4118,13 @@ async def list_chat_sessions(
                 include_deleted=include_deleted_effective,
                 deleted_only=deleted_only,
             )
+            # Post-filter by scope when character-scoped query is used
+            if scope_type:
+                conversations = [
+                    c for c in conversations
+                    if c.get("scope_type") == scope_type
+                    and (scope_type != "workspace" or c.get("workspace_id") == workspace_id)
+                ]
             try:
                 total_count = db.count_conversations_for_user_by_character(
                     user_id_str,
@@ -4121,6 +4132,8 @@ async def list_chat_sessions(
                     include_deleted=include_deleted_effective,
                     deleted_only=deleted_only,
                 )
+                if scope_type:
+                    total_count = len(conversations)
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fallback: filter by client_id in-memory if efficient count isn't available
                 total_count = len([c for c in conversations if c.get('client_id') == user_id_str])
@@ -4132,6 +4145,8 @@ async def list_chat_sessions(
                 offset=offset,
                 include_deleted=include_deleted_effective,
                 deleted_only=deleted_only,
+                scope_type=scope_type,
+                workspace_id=workspace_id,
                 character_scope=character_scope,
             )
             try:
@@ -4140,7 +4155,11 @@ async def list_chat_sessions(
                     include_deleted=include_deleted_effective,
                     deleted_only=deleted_only,
                     character_scope=character_scope,
+                    scope_type=scope_type,
+                    workspace_id=workspace_id,
                 )
+                if scope_type:
+                    total_count = len(conversations)
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 total_count = len(conversations)
 

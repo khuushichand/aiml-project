@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildApiUrl } from '@/lib/api-config';
+import { buildApiUrlForRequest } from '@/lib/api-config';
 import { setApiKeySessionCookies } from '@/lib/server-auth';
 
 const isAdminApiKeyLoginEnabled = (): boolean =>
@@ -10,6 +10,9 @@ const isEnterpriseAdminUiMode = (): boolean =>
 
 const isSingleUserAuthMode = (): boolean =>
   process.env.AUTH_MODE === 'single_user';
+
+const shouldAttachTestDiagnostics = (): boolean =>
+  process.env.TEST_MODE === 'true';
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   if (isEnterpriseAdminUiMode() || !isAdminApiKeyLoginEnabled() || !isSingleUserAuthMode()) {
@@ -26,7 +29,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ detail: 'API key is required' }, { status: 400 });
   }
 
-  const response = await fetch(buildApiUrl('/users/me'), {
+  const backendUrl = buildApiUrlForRequest(request, '/users/me');
+  const response = await fetch(backendUrl, {
     method: 'GET',
     headers: {
       'X-API-KEY': apiKey,
@@ -36,10 +40,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload) {
-    return NextResponse.json(payload ?? { detail: 'API key validation failed' }, { status: response.status });
+    const nextResponse = NextResponse.json(
+      payload ?? { detail: 'API key validation failed' },
+      { status: response.status },
+    );
+    if (shouldAttachTestDiagnostics()) {
+      nextResponse.headers.set('X-TLDW-Backend-Url', backendUrl);
+    }
+    return nextResponse;
   }
 
   const nextResponse = NextResponse.json({ user: payload }, { status: 200 });
+  if (shouldAttachTestDiagnostics()) {
+    nextResponse.headers.set('X-TLDW-Backend-Url', backendUrl);
+  }
   setApiKeySessionCookies(nextResponse, apiKey);
   return nextResponse;
 }

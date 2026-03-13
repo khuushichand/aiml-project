@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildApiUrl } from '@/lib/api-config';
+import { buildApiUrlForRequest } from '@/lib/api-config';
 import {
   appendProxyHeaders,
   buildProxyResponse,
@@ -9,7 +9,7 @@ import {
 
 const forward = async (request: NextRequest): Promise<NextResponse> => {
   const backendPath = request.nextUrl.pathname.replace(/^\/api\/proxy/, '') || '/';
-  const backendUrl = new URL(buildApiUrl(backendPath));
+  const backendUrl = new URL(buildApiUrlForRequest(request, backendPath));
   backendUrl.search = request.nextUrl.search;
 
   const headers = getBackendAuthHeaders(request);

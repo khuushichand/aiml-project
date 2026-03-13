@@ -894,6 +894,9 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
 
+    # Workspace Endpoints
+    from tldw_Server_API.app.api.v1.endpoints.workspaces import router as workspaces_router
+
     # Character Endpoints
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
     from tldw_Server_API.app.api.v1.endpoints.chat import (
@@ -1145,6 +1148,7 @@ elif _MINIMAL_TEST_APP:
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
+    from tldw_Server_API.app.api.v1.endpoints.workspaces import router as workspaces_router
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
     from tldw_Server_API.app.api.v1.endpoints.chat import (
         conversations_alias_router,
@@ -5436,6 +5440,7 @@ elif _MINIMAL_TEST_APP:
         app, character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
     )
     include_router_idempotent(app, character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    include_router_idempotent(app, workspaces_router, prefix=f"{API_V1_PREFIX}/workspaces", tags=["workspaces"])
     # Include audio endpoints (REST + WebSocket) only when enabled by route policy.
     # In pytest + MINIMAL_TEST_APP, default to skipping audio router imports unless
     # explicitly requested. This avoids importing heavy optional transcriber deps
@@ -6184,6 +6189,10 @@ else:
         _include_if_enabled("acp", acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    if "workspaces_router" in locals():
+        _include_if_enabled(
+            "workspaces", workspaces_router, prefix=f"{API_V1_PREFIX}/workspaces", tags=["workspaces"]
+        )
     if "character_chat_sessions_router" in locals():
         _include_if_enabled(
             "character-chat-sessions",
@@ -6581,6 +6590,21 @@ else:
     _include_if_enabled("web-scraping", web_scraping_router, prefix=f"{API_V1_PREFIX}", tags=["web-scraping"])
 
 # Register control-plane metrics endpoints (works in both minimal and full modes)
+if _shared_env_flag_enabled("ENABLE_ADMIN_E2E_TEST_MODE"):
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.test_support.admin_e2e import (
+            router as admin_e2e_test_support_router,
+        )
+
+        include_router_idempotent(
+            app,
+            admin_e2e_test_support_router,
+            prefix=f"{API_V1_PREFIX}/test-support/admin-e2e",
+            tags=["test-support"],
+        )
+    except _IMPORT_EXCEPTIONS as _admin_e2e_err:
+        logger.warning(f"Failed to include admin e2e test-support router: {_admin_e2e_err}")
+
 try:
     if route_enabled("metrics"):
         app.add_api_route("/metrics", metrics, include_in_schema=False)

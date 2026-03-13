@@ -4544,6 +4544,8 @@ async def list_chat_conversations(
     order_by: Literal["bm25", "recency", "hybrid", "topic"] = Query("recency", description="Ranking mode"),
     limit: int = Query(50, ge=1, le=200, description="Items per page"),
     offset: int = Query(0, ge=0, description="Offset"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Scope filter: 'global' or 'workspace'"),
+    workspace_id: str | None = Query(None, description="Workspace ID (required when scope_type='workspace')"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
@@ -4602,6 +4604,8 @@ async def list_chat_conversations(
             half_life_days=RECENCY_HALF_LIFE_DAYS,
             bm25_weight=CHAT_BM25_WEIGHT,
             recency_weight=CHAT_RECENCY_WEIGHT,
+            scope_type=scope_type,
+            workspace_id=workspace_id,
         )
         db_ms = (time.perf_counter() - db_started_at) * 1000.0
         enrichment_started_at = time.perf_counter()
