@@ -229,6 +229,14 @@ export const usePersonaLiveVoiceController = ({
     setListeningRecoveryRestartKey((current) => current + 1)
   }, [clearListeningRecoveryTimeout])
 
+  const waitOnRecovery = React.useCallback(() => {
+    if (state !== "thinking") {
+      setRecoveryMode("none")
+      return
+    }
+    armThinkingRecovery()
+  }, [armThinkingRecovery, state])
+
   React.useEffect(() => {
     manualModeRequiredRef.current = manualModeRequired
   }, [manualModeRequired])
@@ -719,6 +727,7 @@ export const usePersonaLiveVoiceController = ({
     toggleListening,
     sendCurrentTranscriptNow,
     keepListening,
+    waitOnRecovery,
     resetTurn,
     setSessionAutoResume,
     setSessionBargeIn,

@@ -1,13 +1,14 @@
 import React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
+  act,
   fireEvent,
   render as rtlRender,
   screen,
   waitFor,
   within
 } from "@testing-library/react"
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
   isOnline: true,
@@ -307,6 +308,10 @@ describe("SidepanelPersona", () => {
         }
       ]
     })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it("shows connect empty state while offline and navigates to settings", () => {
@@ -2137,6 +2142,130 @@ describe("SidepanelPersona", () => {
           })
         ])
       )
+    })
+  })
+
+  it("copies the last committed voice command into the composer and reconnects the persona session from recovery", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+
+    const issuedSessionIds = ["sess-live-voice", "sess-live-voice-2"]
+    let sessionCallCount = 0
+
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1",
+              tts_provider: "tldw",
+              tts_voice: "af_heart",
+              confirmation_mode: "destructive_only",
+              voice_chat_trigger_phrases: ["hey helper"],
+              auto_resume: true,
+              barge_in: false
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        const nextSessionId = issuedSessionIds[sessionCallCount] || `sess-live-voice-${sessionCallCount + 1}`
+        sessionCallCount += 1
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: nextSessionId,
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const firstWs = MockWebSocket.instances[0]
+    firstWs.emitOpen()
+    await screen.findByText("Persona stream connected")
+    vi.useFakeTimers()
+
+    firstWs.emitMessage(
+      JSON.stringify({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000)
+    })
+
+    expect(screen.getByText("Assistant response is delayed")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("live-voice-recovery-copy-command"))
+    expect(screen.getByPlaceholderText("Ask Persona...")).toHaveValue("search my notes")
+
+    vi.useRealTimers()
+    fireEvent.click(screen.getByTestId("live-voice-recovery-reconnect"))
+
+    await waitFor(() => {
+      expect(firstWs.close).toHaveBeenCalledTimes(1)
+      expect(MockWebSocket.instances).toHaveLength(2)
+    })
+
+    MockWebSocket.instances[1].emitOpen()
+    await waitFor(() => {
+      expect(
+        mocks.fetchWithAuth.mock.calls.filter(
+          ([path]) => String(path) === "/api/v1/persona/session"
+        )
+      ).toHaveLength(2)
     })
   })
 

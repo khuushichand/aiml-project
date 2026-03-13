@@ -339,6 +339,8 @@ const SidepanelPersona = ({
     React.useState<string | null>(null)
   const [lastTestLabPhrase, setLastTestLabPhrase] = React.useState("")
   const [testLabRerunToken, setTestLabRerunToken] = React.useState(0)
+  const [pendingRecoveryReconnectToken, setPendingRecoveryReconnectToken] =
+    React.useState(0)
   const [voiceAnalytics, setVoiceAnalytics] = React.useState<PersonaVoiceAnalytics | null>(
     null
   )
@@ -1282,6 +1284,26 @@ const SidepanelPersona = ({
   ])
 
   React.useEffect(() => {
+    if (!pendingRecoveryReconnectToken) return
+    if (connected || connecting) return
+    setPendingRecoveryReconnectToken(0)
+    void connect()
+  }, [connect, connected, connecting, pendingRecoveryReconnectToken])
+
+  const handleCopyLastVoiceCommandToComposer = React.useCallback(() => {
+    const nextValue = String(liveVoiceController.lastCommittedText || "").trim()
+    if (!nextValue) return
+    setInput(nextValue)
+  }, [liveVoiceController.lastCommittedText])
+
+  const handleReconnectPersonaSessionFromRecovery = React.useCallback(() => {
+    if (connecting) return
+    liveVoiceController.resetTurn()
+    setPendingRecoveryReconnectToken((current) => current + 1)
+    disconnect({ force: true })
+  }, [connecting, disconnect, liveVoiceController])
+
+  React.useEffect(() => {
     return () => {
       const ws = wsRef.current
       if (!ws) return
@@ -1798,6 +1820,7 @@ const SidepanelPersona = ({
       heardText={liveVoiceController.heardText}
       lastCommittedText={liveVoiceController.lastCommittedText}
       warning={liveVoiceController.warning}
+      recoveryMode={liveVoiceController.recoveryMode}
       manualModeRequired={liveVoiceController.manualModeRequired}
       canSendNow={liveVoiceController.canSendNow}
       textOnlyDueToTtsFailure={liveVoiceController.textOnlyDueToTtsFailure}
@@ -1807,6 +1830,11 @@ const SidepanelPersona = ({
       onSendNow={liveVoiceController.sendCurrentTranscriptNow}
       onSessionAutoResumeChange={liveVoiceController.setSessionAutoResume}
       onSessionBargeInChange={liveVoiceController.setSessionBargeIn}
+      onKeepListening={liveVoiceController.keepListening}
+      onResetTurn={liveVoiceController.resetTurn}
+      onWaitOnRecovery={liveVoiceController.waitOnRecovery}
+      onCopyLastCommandToComposer={handleCopyLastVoiceCommandToComposer}
+      onReconnectPersonaSession={handleReconnectPersonaSessionFromRecovery}
     />
   )
 

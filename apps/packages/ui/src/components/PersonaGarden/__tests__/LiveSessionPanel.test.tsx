@@ -29,6 +29,11 @@ describe("AssistantVoiceCard", () => {
     const onSendNow = vi.fn()
     const onSessionAutoResumeChange = vi.fn()
     const onSessionBargeInChange = vi.fn()
+    const onKeepListening = vi.fn()
+    const onResetTurn = vi.fn()
+    const onWaitOnRecovery = vi.fn()
+    const onCopyLastCommandToComposer = vi.fn()
+    const onReconnectPersonaSession = vi.fn()
 
     render(
       <AssistantVoiceCard
@@ -48,6 +53,7 @@ describe("AssistantVoiceCard", () => {
         heardText="hey helper open notes"
         lastCommittedText="open notes"
         warning="Live TTS unavailable for this session. Continuing in text-only mode."
+        recoveryMode="none"
         textOnlyDueToTtsFailure
         manualModeRequired
         canSendNow
@@ -57,6 +63,11 @@ describe("AssistantVoiceCard", () => {
         onSendNow={onSendNow}
         onSessionAutoResumeChange={onSessionAutoResumeChange}
         onSessionBargeInChange={onSessionBargeInChange}
+        onKeepListening={onKeepListening}
+        onResetTurn={onResetTurn}
+        onWaitOnRecovery={onWaitOnRecovery}
+        onCopyLastCommandToComposer={onCopyLastCommandToComposer}
+        onReconnectPersonaSession={onReconnectPersonaSession}
       />
     )
 
@@ -83,5 +94,121 @@ describe("AssistantVoiceCard", () => {
 
     fireEvent.click(screen.getByTestId("live-voice-barge-in"))
     expect(onSessionBargeInChange).toHaveBeenCalledWith(false)
+  })
+
+  it("renders listening recovery copy and actions", () => {
+    const onKeepListening = vi.fn()
+    const onResetTurn = vi.fn()
+    const onReconnectPersonaSession = vi.fn()
+
+    render(
+      <AssistantVoiceCard
+        resolvedDefaults={{
+          sttLanguage: "en-US",
+          sttModel: "whisper-1",
+          ttsProvider: "openai",
+          ttsVoice: "alloy",
+          confirmationMode: "destructive_only",
+          voiceChatTriggerPhrases: ["hey helper"],
+          autoResume: true,
+          bargeIn: false
+        }}
+        state="listening"
+        speechAvailable
+        isListening
+        heardText="hey helper search my notes"
+        lastCommittedText=""
+        warning={null}
+        recoveryMode="listening_stuck"
+        textOnlyDueToTtsFailure={false}
+        manualModeRequired={false}
+        canSendNow
+        sessionAutoResume
+        sessionBargeIn={false}
+        onToggleListening={vi.fn()}
+        onSendNow={vi.fn()}
+        onSessionAutoResumeChange={vi.fn()}
+        onSessionBargeInChange={vi.fn()}
+        onKeepListening={onKeepListening}
+        onResetTurn={onResetTurn}
+        onWaitOnRecovery={vi.fn()}
+        onCopyLastCommandToComposer={vi.fn()}
+        onReconnectPersonaSession={onReconnectPersonaSession}
+      />
+    )
+
+    expect(screen.getByText("Voice turn needs attention")).toBeInTheDocument()
+    expect(
+      screen.getByText("I heard speech, but this turn has not been committed yet.")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("live-voice-recovery-keep-listening"))
+    expect(onKeepListening).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId("live-voice-recovery-reset-turn"))
+    expect(onResetTurn).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId("live-voice-recovery-reconnect"))
+    expect(onReconnectPersonaSession).toHaveBeenCalledTimes(1)
+  })
+
+  it("renders thinking recovery copy and actions", () => {
+    const onWaitOnRecovery = vi.fn()
+    const onCopyLastCommandToComposer = vi.fn()
+    const onResetTurn = vi.fn()
+    const onReconnectPersonaSession = vi.fn()
+
+    render(
+      <AssistantVoiceCard
+        resolvedDefaults={{
+          sttLanguage: "en-US",
+          sttModel: "whisper-1",
+          ttsProvider: "openai",
+          ttsVoice: "alloy",
+          confirmationMode: "destructive_only",
+          voiceChatTriggerPhrases: ["hey helper"],
+          autoResume: true,
+          bargeIn: false
+        }}
+        state="thinking"
+        speechAvailable
+        isListening={false}
+        heardText="hey helper search my notes"
+        lastCommittedText="search my notes"
+        warning={null}
+        recoveryMode="thinking_stuck"
+        textOnlyDueToTtsFailure={false}
+        manualModeRequired={false}
+        canSendNow={false}
+        sessionAutoResume
+        sessionBargeIn={false}
+        onToggleListening={vi.fn()}
+        onSendNow={vi.fn()}
+        onSessionAutoResumeChange={vi.fn()}
+        onSessionBargeInChange={vi.fn()}
+        onKeepListening={vi.fn()}
+        onResetTurn={onResetTurn}
+        onWaitOnRecovery={onWaitOnRecovery}
+        onCopyLastCommandToComposer={onCopyLastCommandToComposer}
+        onReconnectPersonaSession={onReconnectPersonaSession}
+      />
+    )
+
+    expect(screen.getByText("Assistant response is delayed")).toBeInTheDocument()
+    expect(
+      screen.getByText("This voice turn was sent, but the assistant has not responded yet.")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("live-voice-recovery-wait"))
+    expect(onWaitOnRecovery).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId("live-voice-recovery-copy-command"))
+    expect(onCopyLastCommandToComposer).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId("live-voice-recovery-reset-turn"))
+    expect(onResetTurn).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId("live-voice-recovery-reconnect"))
+    expect(onReconnectPersonaSession).toHaveBeenCalledTimes(1)
   })
 })

@@ -2,7 +2,10 @@ import React from "react"
 import { Button, Checkbox, Tag, Typography } from "antd"
 
 import type { ResolvedPersonaVoiceDefaults } from "@/hooks/useResolvedPersonaVoiceDefaults"
-import type { PersonaLiveVoiceState } from "@/hooks/usePersonaLiveVoiceController"
+import type {
+  PersonaLiveVoiceRecoveryMode,
+  PersonaLiveVoiceState
+} from "@/hooks/usePersonaLiveVoiceController"
 
 type AssistantVoiceCardProps = {
   resolvedDefaults: ResolvedPersonaVoiceDefaults
@@ -12,6 +15,7 @@ type AssistantVoiceCardProps = {
   heardText: string
   lastCommittedText: string
   warning: string | null
+  recoveryMode: PersonaLiveVoiceRecoveryMode
   manualModeRequired: boolean
   canSendNow: boolean
   textOnlyDueToTtsFailure: boolean
@@ -21,6 +25,11 @@ type AssistantVoiceCardProps = {
   onSendNow: () => void
   onSessionAutoResumeChange: (next: boolean) => void
   onSessionBargeInChange: (next: boolean) => void
+  onKeepListening: () => void
+  onResetTurn: () => void
+  onWaitOnRecovery: () => void
+  onCopyLastCommandToComposer: () => void
+  onReconnectPersonaSession: () => void
 }
 
 const formatTriggerPhrases = (phrases: string[]): string =>
@@ -34,6 +43,7 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   heardText,
   lastCommittedText,
   warning,
+  recoveryMode,
   manualModeRequired,
   canSendNow,
   textOnlyDueToTtsFailure,
@@ -42,7 +52,12 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   onToggleListening,
   onSendNow,
   onSessionAutoResumeChange,
-  onSessionBargeInChange
+  onSessionBargeInChange,
+  onKeepListening,
+  onResetTurn,
+  onWaitOnRecovery,
+  onCopyLastCommandToComposer,
+  onReconnectPersonaSession
 }) => {
   return (
     <div className="rounded-lg border border-border bg-surface p-3">
@@ -126,6 +141,93 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
           className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-warning"
         >
           {warning}
+        </div>
+      ) : null}
+
+      {recoveryMode === "listening_stuck" ? (
+        <div
+          data-testid="live-voice-recovery-panel"
+          className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs"
+        >
+          <Typography.Text strong>Voice turn needs attention</Typography.Text>
+          <div className="mt-1 text-text">
+            I heard speech, but this turn has not been committed yet.
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              data-testid="live-voice-recovery-send-now"
+              size="small"
+              type="primary"
+              disabled={!canSendNow}
+              onClick={onSendNow}
+            >
+              Send now
+            </Button>
+            <Button
+              data-testid="live-voice-recovery-keep-listening"
+              size="small"
+              onClick={onKeepListening}
+            >
+              Keep listening
+            </Button>
+            <Button
+              data-testid="live-voice-recovery-reset-turn"
+              size="small"
+              onClick={onResetTurn}
+            >
+              Reset turn
+            </Button>
+            <Button
+              data-testid="live-voice-recovery-reconnect"
+              size="small"
+              onClick={onReconnectPersonaSession}
+            >
+              Reconnect Persona session
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {recoveryMode === "thinking_stuck" ? (
+        <div
+          data-testid="live-voice-recovery-panel"
+          className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs"
+        >
+          <Typography.Text strong>Assistant response is delayed</Typography.Text>
+          <div className="mt-1 text-text">
+            This voice turn was sent, but the assistant has not responded yet.
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              data-testid="live-voice-recovery-wait"
+              size="small"
+              onClick={onWaitOnRecovery}
+            >
+              Wait
+            </Button>
+            <Button
+              data-testid="live-voice-recovery-copy-command"
+              size="small"
+              disabled={!String(lastCommittedText || "").trim()}
+              onClick={onCopyLastCommandToComposer}
+            >
+              Copy last command to composer
+            </Button>
+            <Button
+              data-testid="live-voice-recovery-reset-turn"
+              size="small"
+              onClick={onResetTurn}
+            >
+              Reset turn
+            </Button>
+            <Button
+              data-testid="live-voice-recovery-reconnect"
+              size="small"
+              onClick={onReconnectPersonaSession}
+            >
+              Reconnect Persona session
+            </Button>
+          </div>
         </div>
       ) : null}
 
