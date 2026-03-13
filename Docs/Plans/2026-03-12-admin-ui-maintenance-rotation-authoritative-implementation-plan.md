@@ -12,6 +12,8 @@
 
 ### Task 1: Add the rotation-run persistence model
 
+**Status:** Complete
+
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-maintenance-rotation-authoritative/tldw_Server_API/app/core/AuthNZ/migrations.py`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-maintenance-rotation-authoritative/tldw_Server_API/app/core/AuthNZ/pg_migrations_extra.py`
@@ -67,6 +69,8 @@ git commit -m "feat(maintenance): add rotation run persistence"
 
 ### Task 2: Add service-layer validation and run creation
 
+**Status:** Complete
+
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-maintenance-rotation-authoritative/tldw_Server_API/app/services/admin_maintenance_rotation_service.py`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-maintenance-rotation-authoritative/tldw_Server_API/app/api/v1/schemas/admin_schemas.py`
@@ -117,6 +121,8 @@ git commit -m "feat(maintenance): add rotation service validation"
 
 ### Task 3: Add admin endpoints for create/list/detail
 
+**Status:** Complete
+
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-maintenance-rotation-authoritative/tldw_Server_API/app/api/v1/endpoints/admin/admin_ops.py`
 - Test: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-maintenance-rotation-authoritative/tldw_Server_API/tests/Admin/test_maintenance_rotation_api.py`
@@ -164,6 +170,8 @@ git commit -m "feat(maintenance): add rotation run admin endpoints"
 
 ### Task 4: Add Jobs-backed execution worker
 
+**Status:** Complete
+
 **Files:**
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-maintenance-rotation-authoritative/tldw_Server_API/app/services/admin_maintenance_rotation_jobs_worker.py`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-maintenance-rotation-authoritative/tldw_Server_API/app/main.py`
@@ -210,6 +218,8 @@ git commit -m "feat(maintenance): add jobs-backed rotation worker"
 ```
 
 ### Task 5: Replace the admin-ui simulated workflow
+
+**Status:** Complete
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-maintenance-rotation-authoritative/admin-ui/components/data-ops/MaintenanceSection.tsx`
@@ -264,6 +274,8 @@ git commit -m "feat(admin-ui): use authoritative maintenance rotation runs"
 ```
 
 ### Task 6: Add verification and cleanup coverage
+
+**Status:** Complete
 
 **Files:**
 - Modify as needed based on verification
