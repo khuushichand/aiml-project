@@ -40,6 +40,31 @@ describe("TestLabPanel", () => {
         path === "/api/v1/persona/profiles/persona-1/voice-commands/test" &&
         init?.method === "POST"
       ) {
+        if (init.body.heard_text === "start a focused research sprint") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              heard_text: init.body.heard_text,
+              matched: false,
+              match_reason: "no_direct_match",
+              command_id: null,
+              command_name: null,
+              extracted_params: {},
+              planned_action: {
+                target_type: "llm_chat",
+                target_name: "persona planner",
+                payload_preview: { heard_text: init.body.heard_text }
+              },
+              safety_gate: {
+                classification: "planner_fallback",
+                requires_confirmation: false,
+                reason: "persona_fallback"
+              },
+              fallback_to_persona_planner: true,
+              failure_phase: null
+            })
+          })
+        }
         if (init.body.heard_text === "send alert repaired") {
           return Promise.resolve({
             ok: true,
@@ -189,6 +214,38 @@ describe("TestLabPanel", () => {
     expect(onOpenCommand).toHaveBeenCalledWith(
       "cmd-alert",
       "send alert for model drift"
+    )
+  })
+
+  it("offers a create-command handoff when no direct command matches", async () => {
+    const onCreateCommandDraft = vi.fn()
+
+    render(
+      <TestLabPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        onCreateCommandDraft={onCreateCommandDraft}
+      />
+    )
+
+    fireEvent.change(screen.getByTestId("persona-test-lab-heard-input"), {
+      target: { value: "start a focused research sprint" }
+    })
+    fireEvent.click(screen.getByTestId("persona-test-lab-run"))
+
+    expect(await screen.findByTestId("persona-test-lab-match-status")).toHaveTextContent(
+      "persona fallback"
+    )
+    expect(
+      screen.getByText(
+        "No direct command matched. Open this phrase in Commands to register it as a saved shortcut."
+      )
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("persona-test-lab-create-command"))
+    expect(onCreateCommandDraft).toHaveBeenCalledWith(
+      "start a focused research sprint"
     )
   })
 

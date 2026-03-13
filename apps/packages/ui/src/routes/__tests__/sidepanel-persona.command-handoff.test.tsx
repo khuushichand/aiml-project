@@ -159,16 +159,18 @@ vi.mock("@/components/PersonaGarden/CommandsPanel", () => ({
     isActive,
     openCommandId,
     rerunAfterSaveCommandId,
-    onRerunAfterSave
+    onRerunAfterSave,
+    draftCommandPhrase
   }: {
     isActive?: boolean
     openCommandId?: string | null
     rerunAfterSaveCommandId?: string | null
+    draftCommandPhrase?: string
     onRerunAfterSave?: (commandId: string) => void
   }) => (
     <div data-testid="commands-panel">
       {isActive ? "active" : "inactive"}:{openCommandId || "none"}:
-      {rerunAfterSaveCommandId || "none"}
+      {rerunAfterSaveCommandId || "none"}:{draftCommandPhrase || "none"}
       <button
         type="button"
         data-testid="commands-panel-rerun"
@@ -234,11 +236,13 @@ vi.mock("@/components/PersonaGarden/TestLabPanel", () => ({
   TestLabPanel: ({
     isActive,
     onOpenCommand,
+    onCreateCommandDraft,
     initialHeardText,
     rerunRequestToken
   }: {
     isActive?: boolean
     onOpenCommand?: (commandId: string, heardText: string) => void
+    onCreateCommandDraft?: (heardText: string) => void
     initialHeardText?: string
     rerunRequestToken?: number
   }) => (
@@ -264,6 +268,15 @@ vi.mock("@/components/PersonaGarden/TestLabPanel", () => ({
         }
       >
         open repaired command
+      </button>
+      <button
+        type="button"
+        data-testid="test-lab-create-command"
+        onClick={() =>
+          onCreateCommandDraft?.("start a focused research sprint")
+        }
+      >
+        create command
       </button>
     </div>
   )
@@ -298,7 +311,7 @@ describe("SidepanelPersona command handoff", () => {
       "commands"
     )
     expect(screen.getByTestId("commands-panel")).toHaveTextContent(
-      "active:cmd-alert:cmd-alert"
+      "active:cmd-alert:cmd-alert:none"
     )
 
     fireEvent.click(screen.getByTestId("commands-panel-rerun"))
@@ -316,7 +329,27 @@ describe("SidepanelPersona command handoff", () => {
       "commands"
     )
     expect(screen.getByTestId("commands-panel")).toHaveTextContent(
-      "active:cmd-alert:cmd-alert"
+      "active:cmd-alert:cmd-alert:none"
+    )
+  })
+
+  it("opens a new command draft from an unmatched test lab phrase", () => {
+    render(
+      <MemoryRouter initialEntries={["/persona?tab=test-lab"]}>
+        <SidepanelPersona />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
+      "test-lab"
+    )
+    fireEvent.click(screen.getByTestId("test-lab-create-command"))
+
+    expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
+      "commands"
+    )
+    expect(screen.getByTestId("commands-panel")).toHaveTextContent(
+      "active:none:none:start a focused research sprint"
     )
   })
 })

@@ -320,6 +320,7 @@ const SidepanelPersona = ({
     React.useState<string>(DEFAULT_PERSONA_ID)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
   const [openCommandId, setOpenCommandId] = React.useState<string | null>(null)
+  const [draftCommandPhrase, setDraftCommandPhrase] = React.useState<string | null>(null)
   const [rerunAfterSaveCommandId, setRerunAfterSaveCommandId] =
     React.useState<string | null>(null)
   const [lastTestLabPhrase, setLastTestLabPhrase] = React.useState("")
@@ -403,8 +404,19 @@ const SidepanelPersona = ({
     const normalizedCommandId = String(commandId || "").trim()
     const normalizedHeardText = String(heardText || "").trim()
     if (!normalizedCommandId) return
+    setDraftCommandPhrase(null)
     setOpenCommandId(normalizedCommandId)
     setRerunAfterSaveCommandId(normalizedCommandId)
+    setLastTestLabPhrase(normalizedHeardText)
+    setActiveTab("commands")
+  }, [])
+
+  const handleCreateCommandFromTestLab = React.useCallback((heardText: string) => {
+    const normalizedHeardText = String(heardText || "").trim()
+    if (!normalizedHeardText) return
+    setOpenCommandId(null)
+    setRerunAfterSaveCommandId(null)
+    setDraftCommandPhrase(normalizedHeardText)
     setLastTestLabPhrase(normalizedHeardText)
     setActiveTab("commands")
   }, [])
@@ -414,6 +426,14 @@ const SidepanelPersona = ({
     if (!normalizedCommandId) return
     setOpenCommandId((current) =>
       current === normalizedCommandId ? null : current
+    )
+  }, [])
+
+  const handleDraftCommandPhraseHandled = React.useCallback((heardText: string) => {
+    const normalizedHeardText = String(heardText || "").trim()
+    if (!normalizedHeardText) return
+    setDraftCommandPhrase((current) =>
+      current === normalizedHeardText ? null : current
     )
   }, [])
 
@@ -2128,6 +2148,8 @@ const SidepanelPersona = ({
           isActive={activeTab === "commands"}
           openCommandId={openCommandId}
           onOpenCommandHandled={handleOpenCommandHandled}
+          draftCommandPhrase={draftCommandPhrase}
+          onDraftCommandPhraseHandled={handleDraftCommandPhraseHandled}
           rerunAfterSaveCommandId={rerunAfterSaveCommandId}
           onRerunAfterSave={handleRerunAfterCommandSave}
         />
@@ -2144,6 +2166,7 @@ const SidepanelPersona = ({
           initialHeardText={lastTestLabPhrase}
           rerunRequestToken={testLabRerunToken}
           onOpenCommand={handleOpenCommandFromTestLab}
+          onCreateCommandDraft={handleCreateCommandFromTestLab}
         />
       )
     },

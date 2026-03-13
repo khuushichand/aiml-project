@@ -32,6 +32,7 @@ type TestLabPanelProps = {
   selectedPersonaName: string
   isActive?: boolean
   onOpenCommand?: (commandId: string, heardText: string) => void
+  onCreateCommandDraft?: (heardText: string) => void
   initialHeardText?: string
   rerunRequestToken?: number
 }
@@ -44,6 +45,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
   selectedPersonaName,
   isActive = false,
   onOpenCommand,
+  onCreateCommandDraft,
   initialHeardText = "",
   rerunRequestToken = 0
 }) => {
@@ -316,6 +318,31 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                         })}
                       </button>
                     ) : null}
+                  </div>
+                ) : null}
+
+                {!result.matched && onCreateCommandDraft ? (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800">
+                    <div>
+                      {t("sidepanel:personaGarden.testLab.createCommandHint", {
+                        defaultValue:
+                          "No direct command matched. Open this phrase in Commands to register it as a saved shortcut."
+                      })}
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="persona-test-lab-create-command"
+                      className="mt-2 rounded-md border border-amber-500/40 bg-white/60 px-2 py-1 text-xs font-medium text-amber-800 transition hover:bg-white/80"
+                      onClick={() =>
+                        onCreateCommandDraft(
+                          String(result.heard_text || heardText).trim()
+                        )
+                      }
+                    >
+                      {t("sidepanel:personaGarden.testLab.createCommand", {
+                        defaultValue: "Create command from this phrase"
+                      })}
+                    </button>
                   </div>
                 ) : null}
 

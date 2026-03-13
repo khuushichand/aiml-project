@@ -63,6 +63,8 @@ type CommandsPanelProps = {
   isActive?: boolean
   openCommandId?: string | null
   onOpenCommandHandled?: (commandId: string) => void
+  draftCommandPhrase?: string | null
+  onDraftCommandPhraseHandled?: (heardText: string) => void
   rerunAfterSaveCommandId?: string | null
   onRerunAfterSave?: (commandId: string) => void
 }
@@ -161,6 +163,21 @@ const stringifyJson = (value: unknown): string =>
     null,
     2
   )
+
+const toDraftCommandName = (phrase: string): string => {
+  const normalized = String(phrase || "").trim().replace(/\s+/g, " ")
+  if (!normalized) return ""
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+}
+
+const toDraftFormState = (phrase: string): CommandFormState => {
+  const normalized = String(phrase || "").trim().replace(/\s+/g, " ")
+  return {
+    ...DEFAULT_FORM_STATE,
+    name: toDraftCommandName(normalized),
+    phrasesText: normalized
+  }
+}
 
 const parseJsonRecord = (
   rawValue: string,
@@ -268,6 +285,8 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   isActive = false,
   openCommandId = null,
   onOpenCommandHandled,
+  draftCommandPhrase = null,
+  onDraftCommandPhraseHandled,
   rerunAfterSaveCommandId = null,
   onRerunAfterSave
 }) => {
@@ -281,6 +300,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   const [validationError, setValidationError] = React.useState<string | null>(null)
   const [formState, setFormState] =
     React.useState<CommandFormState>(DEFAULT_FORM_STATE)
+  const [draftSourcePhrase, setDraftSourcePhrase] = React.useState<string | null>(null)
   const editingCommand = React.useMemo(
     () =>
       formState.commandId
@@ -378,6 +398,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
 
   const resetForm = React.useCallback(() => {
     setFormState(DEFAULT_FORM_STATE)
+    setDraftSourcePhrase(null)
     setValidationError(null)
   }, [])
 
@@ -393,14 +414,33 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
 
   const handleTemplateApply = React.useCallback((template: CommandTemplate) => {
     setFormState(template.apply())
+    setDraftSourcePhrase(null)
     setValidationError(null)
   }, [])
 
   const handleEdit = React.useCallback((command: PersonaVoiceCommand) => {
     setFormState(toFormState(command))
+    setDraftSourcePhrase(null)
     setValidationError(null)
     setError(null)
   }, [])
+
+  React.useEffect(() => {
+    const normalizedDraftPhrase = String(draftCommandPhrase || "")
+      .trim()
+      .replace(/\s+/g, " ")
+    if (!isActive || !selectedPersonaId || !normalizedDraftPhrase) return
+    setFormState(toDraftFormState(normalizedDraftPhrase))
+    setDraftSourcePhrase(normalizedDraftPhrase)
+    setValidationError(null)
+    setError(null)
+    onDraftCommandPhraseHandled?.(normalizedDraftPhrase)
+  }, [
+    draftCommandPhrase,
+    isActive,
+    onDraftCommandPhraseHandled,
+    selectedPersonaId
+  ])
 
   React.useEffect(() => {
     const normalizedRequestedCommandId = String(openCommandId || "").trim()
@@ -879,6 +919,18 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                 </div>
 
                 <div className="mt-3 space-y-3">
+                  {draftSourcePhrase && !formState.commandId ? (
+                    <div
+                      data-testid="persona-commands-draft-banner"
+                      className="rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-900"
+                    >
+                      {t("sidepanel:personaGarden.commands.draftFromTestLab", {
+                        defaultValue:
+                          "Drafted from Test Lab. Adjust the phrase, add placeholders like {topic} if needed, then choose a target."
+                      })}
+                    </div>
+                  ) : null}
+
                   <label className="block text-xs text-text-muted">
                     {t("sidepanel:personaGarden.commands.name", {
                       defaultValue: "Command name"

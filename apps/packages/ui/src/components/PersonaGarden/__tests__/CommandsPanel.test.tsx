@@ -482,6 +482,36 @@ describe("CommandsPanel", () => {
     expect(onOpenCommandHandled).toHaveBeenCalledWith("cmd-missing-connection")
   })
 
+  it("prefills a new command draft from a test lab phrase", async () => {
+    const onDraftCommandPhraseHandled = vi.fn()
+
+    render(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        draftCommandPhrase="start a focused research sprint"
+        onDraftCommandPhraseHandled={onDraftCommandPhraseHandled}
+      />
+    )
+
+    await screen.findByText("Search Notes")
+    expect(screen.getByTestId("persona-commands-name-input")).toHaveValue(
+      "Start a focused research sprint"
+    )
+    expect(screen.getByTestId("persona-commands-phrases-input")).toHaveValue(
+      "start a focused research sprint"
+    )
+    expect(
+      screen.getByText(
+        "Drafted from Test Lab. Adjust the phrase, add placeholders like {topic} if needed, then choose a target."
+      )
+    ).toBeInTheDocument()
+    expect(onDraftCommandPhraseHandled).toHaveBeenCalledWith(
+      "start a focused research sprint"
+    )
+  })
+
   it("requests a test-lab rerun after saving a repaired command", async () => {
     const onOpenCommandHandled = vi.fn()
     const onRerunAfterSave = vi.fn()
