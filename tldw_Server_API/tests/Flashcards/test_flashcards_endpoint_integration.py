@@ -19,6 +19,7 @@ os.environ.setdefault("TEST_MODE", "1")
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Flashcards.asset_refs import extract_flashcard_asset_uuids
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 from tldw_Server_API.tests.test_config import TestConfig
 
@@ -1658,6 +1659,174 @@ def test_import_apkg_invalid_archive_returns_400(client_with_flashcards_db: Test
     r = client_with_flashcards_db.post("/api/v1/flashcards/import/apkg", files=files, headers=AUTH_HEADERS)
     assert r.status_code == 400
     assert "Invalid APKG archive" in r.json().get("detail", "")
+
+
+def test_export_apkg_packages_managed_assets_and_preserves_notes(
+    client_with_flashcards_db: TestClient,
+):
+    upload_front = client_with_flashcards_db.post(
+        "/api/v1/flashcards/assets",
+        files={"file": ("front.png", PNG_1X1_BYTES, "image/png")},
+        headers=AUTH_HEADERS,
+    )
+    assert upload_front.status_code == 200
+    upload_notes = client_with_flashcards_db.post(
+        "/api/v1/flashcards/assets",
+        files={"file": ("notes.png", PNG_1X1_BYTES, "image/png")},
+        headers=AUTH_HEADERS,
+    )
+    assert upload_notes.status_code == 200
+
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "front": f"Question {upload_front.json()['markdown_snippet']}",
+            "back": "Answer",
+            "notes": f"Notes {upload_notes.json()['markdown_snippet']}",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+
+    exported = client_with_flashcards_db.get(
+        "/api/v1/flashcards/export",
+        params={"format": "apkg"},
+        headers=AUTH_HEADERS,
+    )
+    assert exported.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(exported.content))
+    try:
+        media_map = json.loads(zf.read("media").decode("utf-8"))
+        assert len(media_map) == 2
+
+        with zf.open("collection.anki2") as collection_file:
+            collection_bytes = collection_file.read()
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            col_path = os.path.join(tmp, "collection.anki2")
+            with open(col_path, "wb") as fh:
+                fh.write(collection_bytes)
+            conn = sqlite3.connect(col_path)
+            try:
+                flds = conn.execute("SELECT flds FROM notes").fetchone()[0].split("\x1f")
+                assert len(flds) == 4
+                assert "<img" in flds[0]
+                assert "<img" in flds[3]
+                assert "flashcard-asset://" not in flds[0]
+                assert "flashcard-asset://" not in flds[3]
+            finally:
+                conn.close()
+    finally:
+        zf.close()
+
+
+def test_import_apkg_creates_managed_assets_from_media_and_preserves_notes(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    payload_rows = [
+        {
+            "deck_name": "APKG Managed",
+            "model_type": "basic",
+            "front": "Front ![Slide](flashcard-asset://asset-front)",
+            "back": "Back",
+            "notes": "Notes ![Notes](flashcard-asset://asset-notes)",
+        }
+    ]
+
+    def asset_loader(asset_uuid: str):
+        return {
+            "content": PNG_1X1_BYTES,
+            "mime_type": "image/png",
+            "original_filename": f"{asset_uuid}.png",
+        }
+
+    apkg = export_apkg_from_rows(payload_rows, asset_loader=asset_loader)
+    imported = client_with_flashcards_db.post(
+        "/api/v1/flashcards/import/apkg",
+        files={"file": ("managed.apkg", apkg, "application/apkg")},
+        headers=AUTH_HEADERS,
+    )
+    assert imported.status_code == 200
+    assert imported.json()["imported"] == 1
+
+    listed = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert listed.status_code == 200
+    card = next(item for item in listed.json()["items"] if item["front"].startswith("Front "))
+    front_asset_uuids = extract_flashcard_asset_uuids(card["front"])
+    notes_asset_uuids = extract_flashcard_asset_uuids(card["notes"])
+    assert len(front_asset_uuids) == 1
+    assert len(notes_asset_uuids) == 1
+
+    front_asset = flashcards_db.get_flashcard_asset(front_asset_uuids[0])
+    notes_asset = flashcards_db.get_flashcard_asset(notes_asset_uuids[0])
+    assert front_asset is not None
+    assert notes_asset is not None
+    assert front_asset["card_uuid"] == card["uuid"]
+    assert notes_asset["card_uuid"] == card["uuid"]
+
+
+def test_export_apkg_rejects_oversized_total_media(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    uploaded = client_with_flashcards_db.post(
+        "/api/v1/flashcards/assets",
+        files={"file": ("front.png", PNG_1X1_BYTES, "image/png")},
+        headers=AUTH_HEADERS,
+    )
+    assert uploaded.status_code == 200
+
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "front": uploaded.json()["markdown_snippet"],
+            "back": "Answer",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+
+    monkeypatch.setenv("FLASHCARDS_APKG_MAX_MEDIA_BYTES", "8")
+    exported = client_with_flashcards_db.get(
+        "/api/v1/flashcards/export",
+        params={"format": "apkg"},
+        headers=AUTH_HEADERS,
+    )
+    assert exported.status_code == 400
+    assert "APKG media exceeds max total size" in exported.json()["detail"]
+
+
+def test_import_apkg_rejects_oversized_total_media(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    payload_rows = [
+        {
+            "deck_name": "APKG Managed",
+            "model_type": "basic",
+            "front": "Front ![Slide](flashcard-asset://asset-front)",
+            "back": "Back",
+        }
+    ]
+
+    def asset_loader(asset_uuid: str):
+        return {
+            "content": PNG_1X1_BYTES,
+            "mime_type": "image/png",
+            "original_filename": f"{asset_uuid}.png",
+        }
+
+    apkg = export_apkg_from_rows(payload_rows, asset_loader=asset_loader)
+    monkeypatch.setenv("FLASHCARDS_APKG_MAX_MEDIA_BYTES", "8")
+    imported = client_with_flashcards_db.post(
+        "/api/v1/flashcards/import/apkg",
+        files={"file": ("managed.apkg", apkg, "application/apkg")},
+        headers=AUTH_HEADERS,
+    )
+    assert imported.status_code == 400
+    assert "APKG media exceeds max total size" in imported.json()["detail"]
 
 
 def test_export_csv_preserves_quotes_and_no_extra_separators(client_with_flashcards_db: TestClient):

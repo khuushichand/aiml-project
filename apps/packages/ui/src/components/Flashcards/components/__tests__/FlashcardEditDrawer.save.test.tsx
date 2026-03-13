@@ -26,6 +26,18 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("@/hooks/useAntdMessage", () => ({
+  useAntdMessage: () => ({
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+    loading: vi.fn(),
+    open: vi.fn(),
+    destroy: vi.fn()
+  })
+}))
+
 if (!(globalThis as any).ResizeObserver) {
   ;(globalThis as any).ResizeObserver = class ResizeObserver {
     observe() {}

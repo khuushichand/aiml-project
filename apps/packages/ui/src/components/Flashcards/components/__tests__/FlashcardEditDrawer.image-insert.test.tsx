@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
 import { FlashcardEditDrawer } from "../FlashcardEditDrawer"
 import type { Flashcard } from "@/services/flashcards"
+
+const uploadFlashcardAsset = vi.hoisted(() => vi.fn())
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -38,6 +41,14 @@ vi.mock("@/hooks/useAntdMessage", () => ({
   })
 }))
 
+vi.mock("../MarkdownWithBoundary", () => ({
+  MarkdownWithBoundary: ({ content }: { content: string }) => <div>{content}</div>
+}))
+
+vi.mock("@/services/flashcard-assets", () => ({
+  uploadFlashcardAsset
+}))
+
 if (!(globalThis as any).ResizeObserver) {
   ;(globalThis as any).ResizeObserver = class ResizeObserver {
     observe() {}
@@ -63,43 +74,48 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 }
 
 const sampleCard: Flashcard = {
-  uuid: "card-reset-1",
+  uuid: "card-1",
   deck_id: 1,
-  front: "Front text",
+  front: "Alpha Omega",
   back: "Back text",
   notes: null,
   extra: null,
   is_cloze: false,
   tags: [],
-  ef: 1.8,
-  interval_days: 17,
-  repetitions: 6,
-  lapses: 4,
-  due_at: "2026-02-20T10:30:00Z",
-  last_reviewed_at: "2026-02-18T08:15:00Z",
+  ef: 2.5,
+  interval_days: 0,
+  repetitions: 0,
+  lapses: 0,
+  due_at: null,
+  created_at: null,
+  last_reviewed_at: null,
   last_modified: null,
   deleted: false,
   client_id: "1",
-  version: 5,
+  version: 3,
   model_type: "basic",
-  reverse: false,
-  source_ref_type: "message",
-  source_ref_id: "m-12",
-  conversation_id: "c-3"
+  reverse: false
 }
 
-describe("FlashcardEditDrawer reset scheduling action", () => {
-  it("confirms and invokes reset scheduling callback", async () => {
-    const onResetScheduling = vi.fn().mockResolvedValue(undefined)
+describe("FlashcardEditDrawer image insertion", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("inserts an uploaded image snippet into the front field at the cursor", async () => {
+    uploadFlashcardAsset.mockResolvedValue({
+      asset_uuid: "asset-1",
+      reference: "flashcard-asset://asset-1",
+      markdown_snippet: "![Slide](flashcard-asset://asset-1)"
+    })
 
     render(
       <FlashcardEditDrawer
         open
         onClose={vi.fn()}
         card={sampleCard}
-        onSave={vi.fn()}
+        onSave={vi.fn().mockResolvedValue(undefined)}
         onDelete={vi.fn()}
-        onResetScheduling={onResetScheduling}
         decks={[
           {
             id: 1,
@@ -113,22 +129,23 @@ describe("FlashcardEditDrawer reset scheduling action", () => {
       />
     )
 
-    expect(screen.getByText("Message #m-12")).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Reset scheduling" }))
-    expect(
-      screen.getByText("Reset scheduling for this card?")
-    ).toBeInTheDocument()
-    expect(screen.getByText("Current scheduling state:")).toBeInTheDocument()
-    expect(screen.getByText("Memory strength: 1.80")).toBeInTheDocument()
-    expect(screen.getByText("Next review gap: 17 day(s)")).toBeInTheDocument()
-    expect(screen.getByText("Recall runs: 6")).toBeInTheDocument()
-    expect(screen.getByText("Relearns: 4")).toBeInTheDocument()
+    const frontTextarea = await screen.findByDisplayValue("Alpha Omega")
+    fireEvent.change(frontTextarea, { target: { value: "Alpha Omega" } })
+    ;(frontTextarea as HTMLTextAreaElement).focus()
+    ;(frontTextarea as HTMLTextAreaElement).setSelectionRange(6, 6)
+    fireEvent.select(frontTextarea)
 
-    const resetButtons = screen.getAllByRole("button", { name: "Reset scheduling" })
-    fireEvent.click(resetButtons[resetButtons.length - 1])
+    const uploadInput = screen.getByLabelText("Upload image for Front")
+    fireEvent.change(uploadInput, {
+      target: {
+        files: [new File(["binary"], "slide.png", { type: "image/png" })]
+      }
+    })
 
     await waitFor(() => {
-      expect(onResetScheduling).toHaveBeenCalledTimes(1)
+      expect((frontTextarea as HTMLTextAreaElement).value).toBe(
+        "Alpha ![Slide](flashcard-asset://asset-1)Omega"
+      )
     })
-  }, 15000)
+  })
 })

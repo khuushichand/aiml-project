@@ -1,13 +1,23 @@
 import React from "react"
-import { Alert, Button, Checkbox, Input, Select, Tag, Typography } from "antd"
+import { Alert, Button, Checkbox, Input, Select, Tag, Typography, type InputRef } from "antd"
+import type { TextAreaRef } from "antd/es/input/TextArea"
 
 import type { Deck, Flashcard, FlashcardBulkUpdateItem, FlashcardBulkUpdateResponse } from "@/services/flashcards"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
 import { useFlashcardDocumentRowState } from "../hooks/useFlashcardDocumentRowState"
 import type { DocumentQueryFilterContext } from "../utils/document-cache-policy"
+import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
+import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
+import {
+  getSelectionFromElement,
+  insertTextAtSelection,
+  restoreSelection,
+  type TextSelection
+} from "../utils/text-selection"
 
 const { Text } = Typography
 const { TextArea } = Input
+type EditableTextField = "front" | "back" | "notes"
 
 export interface FlashcardDocumentRowProps {
   card: Flashcard
@@ -34,6 +44,7 @@ export const FlashcardDocumentRow: React.FC<FlashcardDocumentRowProps> = ({
   bulkUpdate,
   loadLatestCard
 }) => {
+  const [uploadError, setUploadError] = React.useState<string | null>(null)
   const {
     card: savedCard,
     draft,
@@ -59,11 +70,61 @@ export const FlashcardDocumentRow: React.FC<FlashcardDocumentRowProps> = ({
   })
 
   const rowRef = React.useRef<HTMLDivElement | null>(null)
+  const frontInputRef = React.useRef<InputRef | null>(null)
+  const backInputRef = React.useRef<TextAreaRef | null>(null)
+  const notesInputRef = React.useRef<TextAreaRef | null>(null)
+  const selectionRef = React.useRef<Record<EditableTextField, TextSelection>>({
+    front: { start: 0, end: 0 },
+    back: { start: 0, end: 0 },
+    notes: { start: 0, end: 0 }
+  })
   const deckLabel =
     savedCard.deck_id != null
       ? decks.find((deck) => deck.id === savedCard.deck_id)?.name || `Deck ${savedCard.deck_id}`
       : "No deck"
   const sourceMeta = getFlashcardSourceMeta(savedCard)
+
+  const getFieldElement = React.useCallback(
+    (field: EditableTextField): HTMLInputElement | HTMLTextAreaElement | null => {
+      if (field === "front") {
+        return frontInputRef.current?.input ?? null
+      }
+      if (field === "back") {
+        return backInputRef.current?.resizableTextArea?.textArea ?? null
+      }
+      return notesInputRef.current?.resizableTextArea?.textArea ?? null
+    },
+    []
+  )
+
+  const updateSelection = React.useCallback(
+    (
+      field: EditableTextField,
+      element: HTMLInputElement | HTMLTextAreaElement | null | undefined
+    ) => {
+      const currentValue = String(draft[field] ?? "")
+      selectionRef.current[field] = getSelectionFromElement(element, currentValue)
+    },
+    [draft]
+  )
+
+  const handleInsertImage = React.useCallback(
+    async (field: EditableTextField, markdownSnippet: string) => {
+      const currentValue = String(draft[field] ?? "")
+      const element = getFieldElement(field)
+      const selection =
+        selectionRef.current[field] ?? getSelectionFromElement(element, currentValue)
+      const { nextValue, cursor } = insertTextAtSelection(
+        currentValue,
+        selection,
+        markdownSnippet
+      )
+      setUploadError(null)
+      setField(field, nextValue)
+      restoreSelection(element, cursor)
+    },
+    [draft, getFieldElement, setField]
+  )
 
   const handleRowBlur = React.useCallback(
     (event: React.FocusEvent<HTMLDivElement>) => {
@@ -125,6 +186,13 @@ export const FlashcardDocumentRow: React.FC<FlashcardDocumentRowProps> = ({
             Question
           </Text>
           <div className="flex items-center gap-2">
+            {isEditing && (
+              <FlashcardImageInsertButton
+                ariaLabel={`Upload image for Question ${savedCard.uuid}`}
+                onInsert={(markdownSnippet) => handleInsertImage("front", markdownSnippet)}
+                onError={(error) => setUploadError(error.message)}
+              />
+            )}
             {status === "saving" && <Tag color="processing">Saving</Tag>}
             {status === "saved" && undoSnapshot && (
               <Button
@@ -153,8 +221,15 @@ export const FlashcardDocumentRow: React.FC<FlashcardDocumentRowProps> = ({
         </div>
         {isEditing ? (
           <Input
+            ref={frontInputRef}
             value={draft.front}
-            onChange={(event) => setField("front", event.target.value)}
+            onChange={(event) => {
+              setUploadError(null)
+              setField("front", event.target.value)
+            }}
+            onSelect={(event) => updateSelection("front", event.currentTarget)}
+            onClick={(event) => updateSelection("front", event.currentTarget)}
+            onKeyUp={(event) => updateSelection("front", event.currentTarget)}
             data-testid={`flashcards-document-row-front-input-${savedCard.uuid}`}
           />
         ) : (
@@ -162,7 +237,7 @@ export const FlashcardDocumentRow: React.FC<FlashcardDocumentRowProps> = ({
             className="cursor-text whitespace-pre-wrap break-words"
             data-testid={`flashcards-document-row-front-display-${savedCard.uuid}`}
           >
-            {savedCard.front}
+            <MarkdownWithBoundary content={savedCard.front} size="sm" />
           </div>
         )}
         <div className="flex flex-wrap gap-1.5">
@@ -180,19 +255,35 @@ export const FlashcardDocumentRow: React.FC<FlashcardDocumentRowProps> = ({
       </div>
 
       <div className="min-w-0 space-y-2">
-        <Text strong className="block text-xs uppercase tracking-wide text-text-muted">
-          Answer
-        </Text>
+        <div className="flex items-center justify-between gap-2">
+          <Text strong className="block text-xs uppercase tracking-wide text-text-muted">
+            Answer
+          </Text>
+          {isEditing && (
+            <FlashcardImageInsertButton
+              ariaLabel={`Upload image for Answer ${savedCard.uuid}`}
+              onInsert={(markdownSnippet) => handleInsertImage("back", markdownSnippet)}
+              onError={(error) => setUploadError(error.message)}
+            />
+          )}
+        </div>
         {isEditing ? (
           <TextArea
+            ref={backInputRef}
             value={draft.back}
-            onChange={(event) => setField("back", event.target.value)}
+            onChange={(event) => {
+              setUploadError(null)
+              setField("back", event.target.value)
+            }}
+            onSelect={(event) => updateSelection("back", event.currentTarget)}
+            onClick={(event) => updateSelection("back", event.currentTarget)}
+            onKeyUp={(event) => updateSelection("back", event.currentTarget)}
             autoSize={{ minRows: 3, maxRows: 8 }}
             data-testid={`flashcards-document-row-back-input-${savedCard.uuid}`}
           />
         ) : (
           <div className="cursor-text whitespace-pre-wrap break-words">
-            {savedCard.back}
+            <MarkdownWithBoundary content={savedCard.back} size="sm" />
           </div>
         )}
       </div>
@@ -246,13 +337,32 @@ export const FlashcardDocumentRow: React.FC<FlashcardDocumentRowProps> = ({
               data-testid={`flashcards-document-row-template-select-${savedCard.uuid}`}
             />
 
-            <TextArea
-              value={draft.notes}
-              placeholder="Notes"
-              onChange={(event) => setField("notes", event.target.value)}
-              autoSize={{ minRows: 2, maxRows: 6 }}
-              data-testid={`flashcards-document-row-notes-input-${savedCard.uuid}`}
-            />
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <Text className="text-[11px] uppercase tracking-wide text-text-muted">
+                  Notes
+                </Text>
+                <FlashcardImageInsertButton
+                  ariaLabel={`Upload image for Notes ${savedCard.uuid}`}
+                  onInsert={(markdownSnippet) => handleInsertImage("notes", markdownSnippet)}
+                  onError={(error) => setUploadError(error.message)}
+                />
+              </div>
+              <TextArea
+                ref={notesInputRef}
+                value={draft.notes}
+                placeholder="Notes"
+                onChange={(event) => {
+                  setUploadError(null)
+                  setField("notes", event.target.value)
+                }}
+                onSelect={(event) => updateSelection("notes", event.currentTarget)}
+                onClick={(event) => updateSelection("notes", event.currentTarget)}
+                onKeyUp={(event) => updateSelection("notes", event.currentTarget)}
+                autoSize={{ minRows: 2, maxRows: 6 }}
+                data-testid={`flashcards-document-row-notes-input-${savedCard.uuid}`}
+              />
+            </div>
 
             <div className="flex items-center justify-end gap-2">
               <Button
@@ -281,8 +391,23 @@ export const FlashcardDocumentRow: React.FC<FlashcardDocumentRowProps> = ({
           <div className="space-y-2 text-sm text-text-muted">
             <div>{deckLabel}</div>
             <div>{savedCard.tags?.length ? savedCard.tags.join(", ") : "No tags"}</div>
-            <div>{savedCard.notes?.trim() ? savedCard.notes : "No notes"}</div>
+            <div>
+              {savedCard.notes?.trim() ? (
+                <MarkdownWithBoundary content={savedCard.notes} size="sm" />
+              ) : (
+                "No notes"
+              )}
+            </div>
           </div>
+        )}
+
+        {uploadError && (
+          <Alert
+            type="error"
+            showIcon
+            title={uploadError}
+            data-testid={`flashcards-document-row-upload-error-${savedCard.uuid}`}
+          />
         )}
 
         {status === "conflict" && (

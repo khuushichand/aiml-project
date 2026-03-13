@@ -54,7 +54,10 @@ from tldw_Server_API.app.core.Flashcards.apkg_importer import (
     import_rows_from_apkg_bytes,
 )
 from tldw_Server_API.app.core.Flashcards.structured_qa_import import parse_structured_qa_preview
-from tldw_Server_API.app.core.Utils.image_validation import validate_uploaded_image_bytes
+from tldw_Server_API.app.core.Utils.image_validation import (
+    get_max_flashcard_asset_bytes,
+    validate_uploaded_image_bytes,
+)
 from tldw_Server_API.app.core.Workflows.adapters.content import run_flashcard_generate_adapter
 
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
@@ -303,6 +306,20 @@ def _require_flashcards_admin(principal: AuthPrincipal) -> None:
             status_code=403,
             detail="Admin flashcards permission required for override",
         )
+
+
+def _get_flashcards_apkg_max_media_bytes() -> int:
+    """Resolve the total APKG media cap for flashcard import/export."""
+    raw_bytes = os.getenv("FLASHCARDS_APKG_MAX_MEDIA_BYTES")
+    if raw_bytes is not None:
+        try:
+            return max(1, int(raw_bytes))
+        except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
+            logger.warning(
+                "Invalid FLASHCARDS_APKG_MAX_MEDIA_BYTES={!r}; falling back to derived default.",
+                raw_bytes,
+            )
+    return max(get_max_flashcard_asset_bytes() * 10, get_max_flashcard_asset_bytes())
 
 
 @router.post("/decks", response_model=Deck)
@@ -1172,6 +1189,7 @@ async def import_flashcards_apkg(
 
         env_max_items = _int_env("FLASHCARDS_IMPORT_MAX_LINES", 10000)
         env_max_field_length = _int_env("FLASHCARDS_IMPORT_MAX_FIELD_LENGTH", 8192)
+        apkg_max_media_bytes = _get_flashcards_apkg_max_media_bytes()
         if any(p is not None for p in (max_items, max_field_length)):
             _require_flashcards_admin(principal)
         effective_max_items = min(env_max_items, max_items) if max_items else env_max_items
@@ -1181,10 +1199,28 @@ async def import_flashcards_apkg(
             else env_max_field_length
         )
 
+        def asset_importer(content: bytes, mime_type: str, original_filename: str) -> str:
+            is_valid, error_message, width, height = validate_uploaded_image_bytes(content, mime_type)
+            if not is_valid:
+                raise APKGImportError(error_message or "Invalid APKG image media")
+            try:
+                return db.add_flashcard_asset(
+                    image_bytes=content,
+                    mime_type=mime_type,
+                    original_filename=original_filename,
+                    width=width,
+                    height=height,
+                )
+            except CharactersRAGDBError as exc:
+                logger.error(f"Failed to store APKG flashcard asset: {exc}")
+                raise APKGImportError("Failed to store APKG flashcard media") from exc
+
         rows, errors = import_rows_from_apkg_bytes(
             raw,
             max_notes=effective_max_items,
             max_field_length=effective_max_field_length,
+            max_total_media_bytes=apkg_max_media_bytes,
+            asset_importer=asset_importer,
         )
 
         existing_decks = {
@@ -1241,6 +1277,8 @@ async def import_flashcards_apkg(
                 "due_at": row.get("due_at"),
             }
             uuid = db.add_flashcard(data)
+            if _collect_flashcard_asset_refs_by_field(data):
+                _reconcile_flashcard_assets_or_500(uuid, db)
             if tags_list:
                 db.set_flashcard_tags(uuid, tags_list)
             created.append({"uuid": uuid, "deck_id": deck_id})
@@ -1356,7 +1394,27 @@ def export_flashcards(
     try:
         items = db.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
         if format == 'apkg':
-            apkg = export_apkg_from_rows(items, include_reverse=include_reverse)
+            apkg_max_media_bytes = _get_flashcards_apkg_max_media_bytes()
+
+            def asset_loader(asset_uuid: str) -> dict[str, Any]:
+                asset = db.get_flashcard_asset(asset_uuid)
+                if not asset:
+                    raise ValueError(f"Managed flashcard asset not found: {asset_uuid}")
+                content = db.get_flashcard_asset_content(asset_uuid)
+                if content is None:
+                    raise ValueError(f"Managed flashcard asset content missing: {asset_uuid}")
+                return {
+                    "content": content,
+                    "mime_type": asset.get("mime_type"),
+                    "original_filename": asset.get("original_filename"),
+                }
+
+            apkg = export_apkg_from_rows(
+                items,
+                include_reverse=include_reverse,
+                asset_loader=asset_loader,
+                max_total_media_bytes=apkg_max_media_bytes,
+            )
             return StreamingResponse(iter([apkg]), media_type="application/apkg",
                                      headers={"Content-Disposition": "attachment; filename=flashcards.apkg"})
         # default csv/tsv
@@ -1366,6 +1424,8 @@ def export_flashcards(
         filename = "flashcards.tsv" if dlm == '\t' else "flashcards.csv"
         return StreamingResponse(iter([data]), media_type=media_type,
                                  headers={"Content-Disposition": f"attachment; filename={filename}"})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to export flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to export flashcards") from e

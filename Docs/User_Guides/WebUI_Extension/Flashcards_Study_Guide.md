@@ -4,6 +4,23 @@ _Last updated: 2026-03-12_
 
 This guide explains the Flashcards flow in `Study`, `Manage`, and `Transfer`, including scheduling basics, cloze syntax, and import/export formats.
 
+## Card Images
+
+Flashcard text fields now support inline images in `Front`, `Back`, `Extra`, and `Notes`.
+
+How to add images:
+
+- Use `Insert image` in the create drawer, edit drawer, or a document-mode row.
+- The uploaded image is stored as a managed flashcard asset.
+- The text field keeps a lightweight markdown reference instead of raw image bytes.
+- Previews and read views resolve that reference through an authenticated image fetch.
+
+Why the 8 KB field limit did not increase:
+
+- The field cap still protects search indexing, list payload size, and editor performance.
+- Inline image bytes would inflate `front`, `back`, and `notes` beyond what those text fields are meant to store.
+- Managed asset references keep cards searchable and lightweight while letting images round-trip through export/import.
+
 ## Daily Study Workflow
 
 1. Add cards through `Manage` (manual create), `Transfer` import, or `Transfer` generate.
@@ -111,6 +128,13 @@ Preview rules:
 ### APKG Export
 
 APKG export is available from `Transfer` and preserves scheduling metadata for Anki import.
+
+Image-backed cards:
+
+- Managed flashcard image references are converted into packaged Anki media on export.
+- APKG import rewrites packaged media back into managed flashcard asset references.
+- `Notes` are included in `tldw` APKG round-trips even though that is not part of Anki's default basic/cloze field set.
+- Large media-heavy APKG imports or exports can be rejected if they exceed the configured total media cap.
 
 ## Troubleshooting
 

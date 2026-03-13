@@ -1,0 +1,128 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+import { FlashcardCreateDrawer } from "../FlashcardCreateDrawer"
+import { useCreateDeckMutation, useCreateFlashcardMutation, useDecksQuery } from "../../hooks"
+
+const uploadFlashcardAsset = vi.hoisted(() => vi.fn())
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      key: string,
+      defaultValueOrOptions?:
+        | string
+        | {
+            defaultValue?: string
+          }
+    ) => {
+      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
+      if (defaultValueOrOptions?.defaultValue) {
+        return defaultValueOrOptions.defaultValue.replace(
+          /\{\{(\w+)\}\}/g,
+          (_match, token: string) =>
+            String((defaultValueOrOptions as Record<string, unknown>)[token] ?? `{{${token}}}`)
+        )
+      }
+      return key
+    }
+  })
+}))
+
+vi.mock("@/hooks/useAntdMessage", () => ({
+  useAntdMessage: () => ({
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+    loading: vi.fn(),
+    open: vi.fn(),
+    destroy: vi.fn()
+  })
+}))
+
+vi.mock("../../hooks", () => ({
+  useDecksQuery: vi.fn(),
+  useCreateFlashcardMutation: vi.fn(),
+  useCreateDeckMutation: vi.fn(),
+  useDebouncedFormField: vi.fn(() => undefined)
+}))
+
+vi.mock("../MarkdownWithBoundary", () => ({
+  MarkdownWithBoundary: ({ content }: { content: string }) => <div>{content}</div>
+}))
+
+vi.mock("@/services/flashcard-assets", () => ({
+  uploadFlashcardAsset
+}))
+
+if (!(globalThis as any).ResizeObserver) {
+  ;(globalThis as any).ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}
+
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn()
+    }))
+  })
+}
+
+describe("FlashcardCreateDrawer image insertion", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(useDecksQuery).mockReturnValue({
+      data: [],
+      isLoading: false
+    } as any)
+    vi.mocked(useCreateFlashcardMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useCreateDeckMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+  })
+
+  it("inserts an uploaded image snippet into the front field at the cursor", async () => {
+    uploadFlashcardAsset.mockResolvedValue({
+      asset_uuid: "asset-1",
+      reference: "flashcard-asset://asset-1",
+      markdown_snippet: "![Slide](flashcard-asset://asset-1)"
+    })
+
+    render(<FlashcardCreateDrawer open onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+    const frontTextarea = screen.getByPlaceholderText("Question or prompt...") as HTMLTextAreaElement
+    fireEvent.change(frontTextarea, { target: { value: "Alpha Omega" } })
+    frontTextarea.focus()
+    frontTextarea.setSelectionRange(6, 6)
+    fireEvent.select(frontTextarea)
+
+    const uploadInput = screen.getByLabelText("Upload image for Front")
+    fireEvent.change(uploadInput, {
+      target: {
+        files: [new File(["binary"], "slide.png", { type: "image/png" })]
+      }
+    })
+
+    await waitFor(() => {
+      expect(frontTextarea.value).toBe(
+        "Alpha ![Slide](flashcard-asset://asset-1)Omega"
+      )
+    })
+  })
+})

@@ -112,3 +112,75 @@ def test_import_rows_from_apkg_bytes_respects_max_notes_limit():
     )
     assert len(parsed) == 2
     assert any("Maximum import item limit reached (2)" in err.get("error", "") for err in errors)
+
+
+def test_import_rows_from_apkg_bytes_rewrites_packaged_media_to_managed_refs_and_notes():
+    rows = [
+        {
+            "deck_name": "ManagedRoundTrip",
+            "model_type": "basic",
+            "front": "Front ![Slide](flashcard-asset://asset-front)",
+            "back": "Answer",
+            "extra": "",
+            "notes": "Notes ![Notes](flashcard-asset://asset-notes)",
+        }
+    ]
+
+    def asset_loader(asset_uuid: str):
+        return {
+            "content": b"\x89PNG\r\n\x1a\npayload-" + asset_uuid.encode("utf-8"),
+            "mime_type": "image/png",
+            "original_filename": f"{asset_uuid}.png",
+        }
+
+    imported_assets: list[tuple[bytes, str, str]] = []
+
+    def asset_importer(content: bytes, mime_type: str, original_filename: str) -> str:
+        imported_assets.append((content, mime_type, original_filename))
+        return f"imported-{len(imported_assets)}"
+
+    apkg = export_apkg_from_rows(rows, asset_loader=asset_loader)
+    parsed, errors = import_rows_from_apkg_bytes(
+        apkg,
+        max_notes=100,
+        max_field_length=8192,
+        asset_importer=asset_importer,
+    )
+
+    assert errors == []
+    assert len(parsed) == 1
+    assert len(imported_assets) == 2
+    assert parsed[0]["front"] == "Front ![Slide](flashcard-asset://imported-1)"
+    assert parsed[0]["notes"] == "Notes ![Notes](flashcard-asset://imported-2)"
+
+
+def test_import_rows_from_apkg_bytes_rejects_oversized_total_media():
+    rows = [
+        {
+            "deck_name": "ManagedRoundTrip",
+            "model_type": "basic",
+            "front": "![Slide](flashcard-asset://asset-front)",
+            "back": "Answer",
+        }
+    ]
+
+    def asset_loader(asset_uuid: str):
+        return {
+            "content": b"0123456789",
+            "mime_type": "image/png",
+            "original_filename": f"{asset_uuid}.png",
+        }
+
+    apkg = export_apkg_from_rows(rows, asset_loader=asset_loader)
+
+    def asset_importer(content: bytes, mime_type: str, original_filename: str) -> str:
+        return "imported-1"
+
+    with pytest.raises(APKGImportError, match="APKG media exceeds max total size"):
+        import_rows_from_apkg_bytes(
+            apkg,
+            max_notes=100,
+            max_field_length=8192,
+            max_total_media_bytes=4,
+            asset_importer=asset_importer,
+        )
