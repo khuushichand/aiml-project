@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
@@ -24,10 +24,19 @@ from tldw_Server_API.app.api.v1.schemas.quizzes import (
     QuizResponse,
     QuizUpdate,
 )
+from tldw_Server_API.app.api.v1.schemas.flashcards import (
+    StudyAssistantContextResponse,
+    StudyAssistantRespondRequest,
+    StudyAssistantRespondResponse,
+)
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
+)
+from tldw_Server_API.app.core.Flashcards.study_assistant import (
+    build_quiz_attempt_question_context,
+    generate_study_assistant_reply,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.quiz_generator import (
@@ -37,6 +46,25 @@ from tldw_Server_API.app.services.quiz_generator import (
 
 router = APIRouter(prefix="/quizzes", tags=["quizzes"])
 QUIZ_EXPORT_FORMAT = "tldw.quiz.export.v1"
+
+
+def _build_assistant_context_snapshot(context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "context_type": context.get("context_type"),
+        "attempt": context.get("attempt"),
+        "question": context.get("question"),
+    }
+
+
+def _default_study_assistant_message(action: str, context: dict[str, Any]) -> str:
+    question_text = str((context.get("question") or {}).get("question_text") or "this question").strip()
+    return {
+        "explain": f"Explain why I missed this question: {question_text}",
+        "mnemonic": f"Give me a mnemonic for this question: {question_text}",
+        "follow_up": f"I have a follow-up about this question: {question_text}",
+        "fact_check": f"Fact-check my explanation of this question: {question_text}",
+        "freeform": f"Help me review this question: {question_text}",
+    }.get(action, f"Help me review this question: {question_text}")
 
 
 @router.get("", response_model=QuizListResponse)
@@ -339,6 +367,99 @@ def get_attempt(
     if not attempt:
         raise HTTPException(status_code=404, detail="Attempt not found")
     return attempt
+
+
+@router.get(
+    "/attempts/{attempt_id:int}/questions/{question_id:int}/assistant",
+    response_model=StudyAssistantContextResponse,
+)
+def get_quiz_attempt_question_assistant(
+    attempt_id: int,
+    question_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        context = build_quiz_attempt_question_context(db, attempt_id, question_id)
+        return {
+            "thread": context["thread"],
+            "messages": context["history"],
+            "context_snapshot": _build_assistant_context_snapshot(context),
+            "available_actions": context["available_actions"],
+        }
+    except ConflictError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CharactersRAGDBError as exc:
+        logger.error(f"Failed to fetch quiz question assistant context: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to fetch study assistant context") from exc
+
+
+@router.post(
+    "/attempts/{attempt_id:int}/questions/{question_id:int}/assistant/respond",
+    response_model=StudyAssistantRespondResponse,
+)
+async def respond_quiz_attempt_question_assistant(
+    attempt_id: int,
+    question_id: int,
+    payload: StudyAssistantRespondRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        context = build_quiz_attempt_question_context(db, attempt_id, question_id)
+        thread = context["thread"]
+        if payload.expected_thread_version is not None and int(thread["version"]) != int(payload.expected_thread_version):
+            raise HTTPException(status_code=409, detail="Study assistant thread version mismatch")
+
+        user_content = str(payload.message or "").strip() or _default_study_assistant_message(payload.action, context)
+        reply = await generate_study_assistant_reply(
+            action=payload.action,
+            context=context,
+            message=user_content,
+            provider=payload.provider,
+            model=payload.model,
+        )
+        context_snapshot = _build_assistant_context_snapshot(context)
+        user_message = db.append_study_assistant_message(
+            thread_id=int(thread["id"]),
+            role="user",
+            action_type=payload.action,
+            input_modality=payload.input_modality,
+            content=user_content,
+            structured_payload={"action": payload.action},
+            context_snapshot=context_snapshot,
+            provider=payload.provider,
+            model=payload.model,
+        )
+        assistant_message = db.append_study_assistant_message(
+            thread_id=int(thread["id"]),
+            role="assistant",
+            action_type=payload.action,
+            input_modality="text",
+            content=str(reply.get("assistant_text") or "").strip(),
+            structured_payload=reply.get("structured_payload") or {},
+            context_snapshot=context_snapshot,
+            provider=str(reply.get("provider") or payload.provider or "default"),
+            model=reply.get("model") or payload.model,
+        )
+        updated_thread = db.get_study_assistant_thread(int(thread["id"]))
+        if not updated_thread:
+            raise HTTPException(status_code=404, detail="Study assistant thread not found after update")
+        return {
+            "thread": updated_thread,
+            "user_message": user_message,
+            "assistant_message": assistant_message,
+            "structured_payload": reply.get("structured_payload") or {},
+            "context_snapshot": context_snapshot,
+        }
+    except HTTPException:
+        raise
+    except ConflictError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CharactersRAGDBError as exc:
+        logger.error(f"Failed to respond with quiz question assistant: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to generate study assistant response") from exc
+    except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        logger.error(f"Unexpected quiz question assistant failure: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to generate study assistant response") from exc
 
 
 @router.post("/generate", response_model=QuizGenerateResponse)

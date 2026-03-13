@@ -28,6 +28,8 @@ import {
   useCramQueueQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
+  useFlashcardAssistantQuery,
+  useFlashcardAssistantRespondMutation,
   useUpdateFlashcardMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
@@ -38,7 +40,13 @@ import {
   useHasCardsQuery,
   useNextDueQuery
 } from "../hooks"
-import { MarkdownWithBoundary, ReviewProgress, ReviewAnalyticsSummary, FlashcardEditDrawer } from "../components"
+import {
+  MarkdownWithBoundary,
+  ReviewProgress,
+  ReviewAnalyticsSummary,
+  FlashcardEditDrawer,
+  FlashcardStudyAssistantPanel
+} from "../components"
 import { calculateIntervals } from "../utils/calculateIntervals"
 import { formatCardType } from "../utils/model-type-labels"
 import { buildReviewUndoState } from "../utils/review-undo"
@@ -48,6 +56,7 @@ import {
   mapFlashcardsUiError,
   type FlashcardsUiErrorCode
 } from "../utils/error-taxonomy"
+import type { StudyAssistantRespondRequest } from "@/services/flashcards"
 import { trackFlashcardsErrorRecoveryTelemetry } from "@/utils/flashcards-error-recovery-telemetry"
 import { useFlashcardsShortcutHintDensity } from "../hooks/useFlashcardsShortcutHintDensity"
 
@@ -172,6 +181,10 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     localOverrideCard ??
     reviewOverrideCard ??
     (reviewMode === "cram" ? cramQueueCard : reviewQuery.data)
+  const assistantQuery = useFlashcardAssistantQuery(activeCard?.uuid, {
+    enabled: isActive && !!activeCard
+  })
+  const assistantRespondMutation = useFlashcardAssistantRespondMutation()
   const reviewProgressTotal =
     reviewMode === "cram" ? cramQueue.length : dueCountsQuery.data?.total ?? 0
   const isCramMode = reviewMode === "cram"
@@ -719,6 +732,17 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     }
   }, [activeCard, resetSchedulingMutation, message, reportUiError, t])
 
+  const handleAssistantRespond = React.useCallback(
+    async (request: StudyAssistantRespondRequest) => {
+      if (!activeCard) return
+      await assistantRespondMutation.mutateAsync({
+        cardUuid: activeCard.uuid,
+        request
+      })
+    },
+    [activeCard, assistantRespondMutation]
+  )
+
   React.useEffect(() => {
     if (reviewMode !== "cram") return
     setCramQueueIndex((idx) => Math.min(idx, cramQueue.length))
@@ -944,6 +968,16 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                 )}
               </div>
             )}
+
+            <FlashcardStudyAssistantPanel
+              cardUuid={activeCard.uuid}
+              messages={assistantQuery.data?.messages ?? []}
+              availableActions={assistantQuery.data?.available_actions ?? null}
+              isLoading={assistantQuery.isLoading}
+              isError={assistantQuery.isError}
+              isResponding={assistantRespondMutation.isPending}
+              onRespond={handleAssistantRespond}
+            />
 
             <div className="mt-2 flex flex-col gap-3">
               {!showAnswer ? (

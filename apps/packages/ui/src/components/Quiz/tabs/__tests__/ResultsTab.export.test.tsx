@@ -2,7 +2,14 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ResultsTab } from "../ResultsTab"
-import { useAllAttemptsQuery, useAttemptQuery, useQuizzesQuery } from "../../hooks"
+import {
+  useAllAttemptsQuery,
+  useAttemptQuery,
+  useGenerateRemediationQuizMutation,
+  useQuizAttemptQuestionAssistantQuery,
+  useQuizAttemptQuestionAssistantRespondMutation,
+  useQuizzesQuery
+} from "../../hooks"
 import {
   useCreateDeckMutation,
   useCreateFlashcardMutation,
@@ -48,7 +55,10 @@ vi.mock("react-router-dom", () => ({
 vi.mock("../../hooks", () => ({
   useAllAttemptsQuery: vi.fn(),
   useQuizzesQuery: vi.fn(),
-  useAttemptQuery: vi.fn()
+  useAttemptQuery: vi.fn(),
+  useGenerateRemediationQuizMutation: vi.fn(),
+  useQuizAttemptQuestionAssistantQuery: vi.fn(),
+  useQuizAttemptQuestionAssistantRespondMutation: vi.fn()
 }))
 
 vi.mock("@/components/Flashcards/hooks/useFlashcardQueries", () => ({
@@ -121,6 +131,19 @@ describe("ResultsTab CSV export", () => {
       data: null,
       isLoading: false,
       isFetching: false
+    } as any)
+    vi.mocked(useGenerateRemediationQuizMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useQuizAttemptQuestionAssistantQuery).mockReturnValue({
+      data: null,
+      isLoading: false,
+      isError: false
+    } as any)
+    vi.mocked(useQuizAttemptQuestionAssistantRespondMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
     } as any)
 
     vi.mocked(useDecksQuery).mockReturnValue({

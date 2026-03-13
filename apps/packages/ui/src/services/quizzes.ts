@@ -1,6 +1,11 @@
 import { bgRequest } from "@/services/background-proxy"
 import type { AllowedPath } from "@/services/tldw/openapi-guard"
 import { createResourceClient } from "@/services/resource-client"
+import type {
+  StudyAssistantContextResponse,
+  StudyAssistantRespondRequest,
+  StudyAssistantRespondResponse
+} from "@/services/flashcards"
 
 const quizzesClient = createResourceClient({
   basePath: "/api/v1/quizzes" as AllowedPath
@@ -400,6 +405,33 @@ export async function getAttempt(
   return await quizAttemptsClient.get<QuizAttempt>(attemptId, {
     include_questions: params?.include_questions ? true : undefined,
     include_answers: params?.include_answers ? true : undefined
+  })
+}
+
+export async function getQuizAttemptQuestionAssistant(
+  attemptId: number,
+  questionId: number,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantContextResponse> {
+  return await bgRequest<StudyAssistantContextResponse, AllowedPath, "GET">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/questions/${questionId}/assistant` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function respondQuizAttemptQuestionAssistant(
+  attemptId: number,
+  questionId: number,
+  input: StudyAssistantRespondRequest,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantRespondResponse> {
+  return await bgRequest<StudyAssistantRespondResponse, AllowedPath, "POST">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/questions/${questionId}/assistant/respond` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input,
+    abortSignal: options?.signal
   })
 }
 

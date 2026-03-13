@@ -13,8 +13,10 @@ import {
   submitAttempt,
   listAttempts,
   getAttempt,
+  getQuizAttemptQuestionAssistant,
   generateQuiz,
   generateRemediationQuiz,
+  respondQuizAttemptQuestionAssistant,
   type Quiz,
   type Question,
   type QuestionListParams,
@@ -30,6 +32,11 @@ import {
   type AttemptListParams,
   type QuizAttempt
 } from "@/services/quizzes"
+import type {
+  StudyAssistantAction,
+  StudyAssistantContextResponse,
+  StudyAssistantRespondRequest
+} from "@/services/flashcards"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 
@@ -39,6 +46,13 @@ export interface UseQuizQueriesOptions {
 
 const QUIZ_QUERY_STALE_TIME_MS = 30_000
 const ATTEMPT_QUERY_STALE_TIME_MS = 30_000
+const DEFAULT_STUDY_ASSISTANT_ACTIONS: StudyAssistantAction[] = [
+  "explain",
+  "mnemonic",
+  "follow_up",
+  "fact_check",
+  "freeform"
+]
 
 type QuizListCacheValue = {
   items: Quiz[]
@@ -437,6 +451,58 @@ export function useAttemptQuery(
     enabled: (options?.enabled ?? quizzesEnabled) && attemptId != null,
     staleTime: ATTEMPT_QUERY_STALE_TIME_MS,
     refetchOnWindowFocus: false
+  })
+}
+
+export function useQuizAttemptQuestionAssistantQuery(
+  attemptId: number | null | undefined,
+  questionId: number | null | undefined,
+  options?: UseQuizQueriesOptions
+) {
+  const { quizzesEnabled } = useQuizzesEnabled()
+
+  return useQuery({
+    queryKey: ["quizzes:assistant", attemptId ?? null, questionId ?? null],
+    queryFn: ({ signal }) => getQuizAttemptQuestionAssistant(attemptId!, questionId!, { signal }),
+    enabled: (options?.enabled ?? quizzesEnabled) && attemptId != null && questionId != null,
+    staleTime: ATTEMPT_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false
+  })
+}
+
+export function useQuizAttemptQuestionAssistantRespondMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["quizzes:assistant:respond"],
+    mutationFn: (params: {
+      attemptId: number
+      questionId: number
+      request: StudyAssistantRespondRequest
+      signal?: AbortSignal
+    }) =>
+      respondQuizAttemptQuestionAssistant(
+        params.attemptId,
+        params.questionId,
+        params.request,
+        params.signal ? { signal: params.signal } : undefined
+      ),
+    onSuccess: (response, variables) => {
+      qc.setQueryData<StudyAssistantContextResponse>(
+        ["quizzes:assistant", variables.attemptId, variables.questionId],
+        (current) => ({
+          thread: response.thread,
+          messages: current
+            ? [...current.messages, response.user_message, response.assistant_message]
+            : [response.user_message, response.assistant_message],
+          context_snapshot: response.context_snapshot,
+          available_actions: current?.available_actions ?? [...DEFAULT_STUDY_ASSISTANT_ACTIONS]
+        })
+      )
+    },
+    onError: (error) => {
+      console.error("Failed to respond with quiz question assistant:", error)
+    }
   })
 }
 
