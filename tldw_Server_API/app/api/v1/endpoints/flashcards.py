@@ -19,6 +19,10 @@ from tldw_Server_API.app.api.v1.schemas.flashcards import (
     FlashcardGenerateResponse,
     FlashcardAnalyticsSummaryResponse,
     Flashcard,
+    FlashcardBulkUpdateError,
+    FlashcardBulkUpdateItem,
+    FlashcardBulkUpdateResponse,
+    FlashcardBulkUpdateResult,
     FlashcardCreate,
     FlashcardListResponse,
     FlashcardReviewRequest,
@@ -110,6 +114,100 @@ def _normalize_flashcard_model_fields(
             },
         )
     return effective_model, eff_is_cloze, eff_reverse
+
+
+def _normalize_flashcard_update_model_fields(
+    current: dict[str, Any],
+    data: dict[str, Any],
+) -> None:
+    if any(k in data for k in ("model_type", "reverse", "is_cloze")):
+        current_model = current.get("model_type") or "basic"
+        incoming_model = data.get("model_type")
+        incoming_reverse = data.get("reverse")
+        incoming_is_cloze = data.get("is_cloze")
+
+        if incoming_model is not None:
+            effective_model = str(incoming_model).lower()
+        elif incoming_is_cloze is True:
+            effective_model = "cloze"
+        elif incoming_is_cloze is False:
+            effective_model = "basic_reverse" if incoming_reverse is True else "basic"
+        else:
+            if incoming_reverse is True:
+                effective_model = "basic_reverse" if current_model != "cloze" else "cloze"
+            elif incoming_reverse is False:
+                effective_model = "basic" if current_model == "basic_reverse" else current_model
+            else:
+                effective_model = current_model
+
+        if effective_model not in ("basic", "basic_reverse", "cloze"):
+            raise HTTPException(status_code=400, detail="Invalid model_type")
+
+        data["model_type"] = effective_model
+        data["is_cloze"] = (effective_model == "cloze")
+        data["reverse"] = (effective_model == "basic_reverse")
+
+
+def _prepare_flashcard_update(
+    card_uuid: str,
+    payload: FlashcardUpdate,
+    db: CharactersRAGDB,
+) -> tuple[dict[str, Any], int | None, list[str] | None]:
+    data = payload.model_dump(exclude_unset=True)
+    expected_version = data.pop("expected_version", None)
+    tags = data.pop("tags", None)
+    current = db.get_flashcard(card_uuid)
+    if not current:
+        raise HTTPException(status_code=404, detail="Flashcard not found")
+
+    if "deck_id" in data:
+        deck_id = data.get("deck_id")
+        if deck_id is not None:
+            deck = db.get_deck(int(deck_id))
+            if not deck or bool(deck.get("deleted")):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Deck not found",
+                        "invalid_deck_ids": [int(deck_id)],
+                        "message": "Fix or remove invalid deck_id and retry",
+                    },
+                )
+            data["deck_id"] = int(deck_id)
+
+    _normalize_flashcard_update_model_fields(current, data)
+
+    effective_model = data.get("model_type") or current.get("model_type")
+    if effective_model == "cloze":
+        front_text = data.get("front") if "front" in data else (current.get("front") or "")
+        if not re.search(r"\{\{c\d+::", front_text):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid cloze",
+                    "invalid_fields": ["front"],
+                    "message": "Front must contain one or more {{cN::...}} patterns",
+                },
+            )
+
+    return data, expected_version, tags
+
+
+def _coerce_bulk_update_error(
+    code: str,
+    detail: str | dict[str, Any] | None,
+) -> FlashcardBulkUpdateError:
+    if isinstance(detail, dict):
+        return FlashcardBulkUpdateError(
+            code=code,
+            message=str(detail.get("message") or detail.get("error") or code.replace("_", " ")),
+            invalid_fields=[str(field) for field in detail.get("invalid_fields", [])],
+            invalid_deck_ids=[int(deck_id) for deck_id in detail.get("invalid_deck_ids", [])],
+        )
+    return FlashcardBulkUpdateError(
+        code=code,
+        message=str(detail or code.replace("_", " ")),
+    )
 
 
 def _require_flashcards_admin(principal: AuthPrincipal) -> None:
@@ -284,6 +382,76 @@ def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB =
         raise HTTPException(status_code=500, detail="Failed to create flashcards") from e
 
 
+@router.patch("/bulk", response_model=FlashcardBulkUpdateResponse)
+def update_flashcards_bulk(
+    payload: list[FlashcardBulkUpdateItem],
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    try:
+        results: list[FlashcardBulkUpdateResult] = []
+        for item in payload:
+            try:
+                update_payload = FlashcardUpdate(
+                    **item.model_dump(exclude={"uuid"}, exclude_unset=True)
+                )
+                data, expected_version, tags = _prepare_flashcard_update(item.uuid, update_payload, db)
+                ok = db.update_flashcard(item.uuid, data, expected_version, tags=tags)
+                if not ok:
+                    results.append(
+                        FlashcardBulkUpdateResult(
+                            uuid=item.uuid,
+                            status="not_found",
+                            error=_coerce_bulk_update_error("not_found", "Flashcard not found or not updated"),
+                        )
+                    )
+                    continue
+                card = db.get_flashcard(item.uuid)
+                if not card:
+                    results.append(
+                        FlashcardBulkUpdateResult(
+                            uuid=item.uuid,
+                            status="not_found",
+                            error=_coerce_bulk_update_error("not_found", "Flashcard not found"),
+                        )
+                    )
+                    continue
+                results.append(
+                    FlashcardBulkUpdateResult(
+                        uuid=item.uuid,
+                        status="updated",
+                        flashcard=card,
+                    )
+                )
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    status = "not_found"
+                    code = "not_found"
+                elif exc.status_code == 400:
+                    status = "validation_error"
+                    code = "validation_error"
+                else:
+                    raise
+                results.append(
+                    FlashcardBulkUpdateResult(
+                        uuid=item.uuid,
+                        status=status,
+                        error=_coerce_bulk_update_error(code, exc.detail),
+                    )
+                )
+            except ConflictError as exc:
+                results.append(
+                    FlashcardBulkUpdateResult(
+                        uuid=item.uuid,
+                        status="conflict",
+                        error=_coerce_bulk_update_error("conflict", str(exc)),
+                    )
+                )
+        return FlashcardBulkUpdateResponse(results=results)
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed bulk update flashcards: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update flashcards") from e
+
+
 @router.get("", response_model=FlashcardListResponse)
 def list_flashcards(
     deck_id: Optional[int] = None,
@@ -332,72 +500,13 @@ def get_flashcard(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_db_fo
 @router.patch("/{card_uuid}", response_model=Flashcard)
 def update_flashcard(card_uuid: str, payload: FlashcardUpdate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
-        data = payload.model_dump(exclude_unset=True)
-        expected_version = data.pop("expected_version", None)
-        tags = data.pop("tags", None)
-        # Validate cloze if model_type/is_cloze implies cloze
-        current = db.get_flashcard(card_uuid)
-        if not current:
-            raise HTTPException(status_code=404, detail="Flashcard not found")
-        # Validate deck_id if provided (including deleted decks)
-        if "deck_id" in data:
-            deck_id = data.get("deck_id")
-            if deck_id is not None:
-                deck = db.get_deck(int(deck_id))
-                if not deck or bool(deck.get("deleted")):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Deck not found",
-                            "invalid_deck_ids": [int(deck_id)],
-                            "message": "Fix or remove invalid deck_id and retry",
-                        },
-                    )
-                data["deck_id"] = int(deck_id)
-        # Normalize model_type / reverse / is_cloze if any were provided
-        if any(k in data for k in ("model_type", "reverse", "is_cloze")):
-            current_model = current.get("model_type") or "basic"
-            incoming_model = data.get("model_type")
-            incoming_reverse = data.get("reverse")
-            incoming_is_cloze = data.get("is_cloze")
-
-            if incoming_model is not None:
-                effective_model = str(incoming_model).lower()
-            elif incoming_is_cloze is True:
-                effective_model = "cloze"
-            elif incoming_is_cloze is False:
-                effective_model = "basic_reverse" if incoming_reverse is True else "basic"
-            else:
-                if incoming_reverse is True:
-                    effective_model = "basic_reverse" if current_model != "cloze" else "cloze"
-                elif incoming_reverse is False:
-                    effective_model = "basic" if current_model == "basic_reverse" else current_model
-                else:
-                    effective_model = current_model
-
-            if effective_model not in ("basic", "basic_reverse", "cloze"):
-                raise HTTPException(status_code=400, detail="Invalid model_type")
-
-            data["model_type"] = effective_model
-            data["is_cloze"] = (effective_model == "cloze")
-            data["reverse"] = (effective_model == "basic_reverse")
-
-        effective_model = data.get("model_type") or current.get("model_type")
-        if effective_model == "cloze":
-            front_text = data.get("front") if "front" in data else (current.get("front") or "")
-            if not re.search(r"\{\{c\d+::", front_text):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Invalid cloze",
-                        "invalid_fields": ["front"],
-                        "message": "Front must contain one or more {{cN::...}} patterns",
-                    },
-                )
+        data, expected_version, tags = _prepare_flashcard_update(card_uuid, payload, db)
         ok = db.update_flashcard(card_uuid, data, expected_version, tags=tags)
         if not ok:
             raise HTTPException(status_code=404, detail="Flashcard not found or not updated")
         card = db.get_flashcard(card_uuid)
+        if not card:
+            raise HTTPException(status_code=404, detail="Flashcard not found")
         return card
     except ConflictError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e

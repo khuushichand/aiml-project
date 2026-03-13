@@ -166,6 +166,28 @@ class FlashcardUpdate(BaseModel):
     reverse: Optional[bool] = None
 
 
+class FlashcardBulkUpdateItem(FlashcardUpdate):
+    uuid: str
+
+
+class FlashcardBulkUpdateError(BaseModel):
+    code: Literal["validation_error", "not_found", "conflict"]
+    message: str
+    invalid_fields: list[str] = Field(default_factory=list)
+    invalid_deck_ids: list[int] = Field(default_factory=list)
+
+
+class FlashcardBulkUpdateResult(BaseModel):
+    uuid: str
+    status: Literal["updated", "validation_error", "not_found", "conflict"]
+    flashcard: Optional[Flashcard] = None
+    error: Optional[FlashcardBulkUpdateError] = None
+
+
+class FlashcardBulkUpdateResponse(BaseModel):
+    results: list[FlashcardBulkUpdateResult] = Field(default_factory=list)
+
+
 class FlashcardResetSchedulingRequest(BaseModel):
     expected_version: int = Field(..., ge=1)
 

@@ -704,6 +704,178 @@ def test_patch_deck_id_rejects_invalid_or_deleted(
     assert det.get("error") == "Deck not found"
 
 
+def test_bulk_patch_returns_mixed_results(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "BulkPatchDeck"},
+        headers=AUTH_HEADERS,
+    )
+    deck_id = r.json()["id"]
+
+    first = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": deck_id,
+            "front": "Original first",
+            "back": "Original back",
+        },
+        headers=AUTH_HEADERS,
+    )
+    second = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": deck_id,
+            "front": "Plain front",
+            "back": "Plain back",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_card = first.json()
+    second_card = second.json()
+
+    response = client_with_flashcards_db.patch(
+        "/api/v1/flashcards/bulk",
+        json=[
+            {
+                "uuid": first_card["uuid"],
+                "front": "Updated front",
+                "expected_version": first_card["version"],
+            },
+            {
+                "uuid": second_card["uuid"],
+                "model_type": "cloze",
+                "front": "Not a cloze",
+                "expected_version": second_card["version"],
+            },
+        ],
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["status"] == "updated"
+    assert data["results"][0]["flashcard"]["front"] == "Updated front"
+    assert data["results"][1]["status"] == "validation_error"
+    assert data["results"][1]["error"]["invalid_fields"] == ["front"]
+
+
+def test_bulk_patch_reports_conflict_without_rolling_back_siblings(
+    client_with_flashcards_db: TestClient,
+):
+    first = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "Sibling front", "back": "Sibling back"},
+        headers=AUTH_HEADERS,
+    )
+    second = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "Conflict front", "back": "Conflict back"},
+        headers=AUTH_HEADERS,
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_card = first.json()
+    second_card = second.json()
+
+    concurrent = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/{second_card['uuid']}",
+        json={
+            "front": "Other update",
+            "expected_version": second_card["version"],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert concurrent.status_code == 200
+
+    response = client_with_flashcards_db.patch(
+        "/api/v1/flashcards/bulk",
+        json=[
+            {
+                "uuid": first_card["uuid"],
+                "back": "Saved sibling",
+                "expected_version": first_card["version"],
+            },
+            {
+                "uuid": second_card["uuid"],
+                "back": "Conflicted edit",
+                "expected_version": second_card["version"],
+            },
+        ],
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["status"] == "updated"
+    assert data["results"][0]["flashcard"]["back"] == "Saved sibling"
+    assert data["results"][1]["status"] == "conflict"
+
+    current = client_with_flashcards_db.get(
+        f"/api/v1/flashcards/id/{first_card['uuid']}",
+        headers=AUTH_HEADERS,
+    )
+    assert current.status_code == 200
+    assert current.json()["back"] == "Saved sibling"
+
+
+def test_bulk_patch_classifies_deleted_deck_and_missing_card(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    live_deck = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "LiveBulkPatchDeck"},
+        headers=AUTH_HEADERS,
+    )
+    deleted_deck = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "DeletedBulkPatchDeck"},
+        headers=AUTH_HEADERS,
+    )
+    assert live_deck.status_code == 200
+    assert deleted_deck.status_code == 200
+    deleted_deck_id = deleted_deck.json()["id"]
+    with flashcards_db.transaction() as conn:
+        conn.execute("UPDATE decks SET deleted = 1 WHERE id = ?", (deleted_deck_id,))
+
+    live_card = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": live_deck.json()["id"],
+            "front": "Live card",
+            "back": "Live back",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert live_card.status_code == 200
+    card = live_card.json()
+
+    response = client_with_flashcards_db.patch(
+        "/api/v1/flashcards/bulk",
+        json=[
+            {
+                "uuid": card["uuid"],
+                "deck_id": deleted_deck_id,
+                "expected_version": card["version"],
+            },
+            {
+                "uuid": str(uuid.uuid4()),
+                "front": "No card",
+                "expected_version": 1,
+            },
+        ],
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["status"] == "validation_error"
+    assert data["results"][0]["error"]["invalid_deck_ids"] == [deleted_deck_id]
+    assert data["results"][1]["status"] == "not_found"
+
+
 def test_export_apkg_include_reverse_no_duplication_for_basic_reverse(client_with_flashcards_db: TestClient):
     # Create deck and a basic_reverse card
     r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckThree"}, headers=AUTH_HEADERS)
