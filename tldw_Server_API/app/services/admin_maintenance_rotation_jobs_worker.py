@@ -27,6 +27,11 @@ def maintenance_rotation_queue() -> str:
     return (os.getenv("ADMIN_MAINTENANCE_ROTATION_JOBS_QUEUE") or "default").strip() or "default"
 
 
+def maintenance_rotation_worker_enabled() -> bool:
+    """Return True when the authoritative maintenance rotation worker path is enabled."""
+    return env_flag_enabled("ADMIN_MAINTENANCE_ROTATION_JOBS_WORKER_ENABLED")
+
+
 def build_maintenance_rotation_job_payload(*, run_id: str) -> dict[str, Any]:
     """Build the opaque Jobs payload for a maintenance rotation run."""
     return {"run_id": str(run_id)}
@@ -152,7 +157,7 @@ async def run_admin_maintenance_rotation_jobs_worker() -> None:
 
 async def start_admin_maintenance_rotation_jobs_worker() -> asyncio.Task | None:
     """Start the maintenance rotation Jobs worker when explicitly enabled."""
-    if not env_flag_enabled("ADMIN_MAINTENANCE_ROTATION_JOBS_WORKER_ENABLED"):
+    if not maintenance_rotation_worker_enabled():
         return None
     return asyncio.create_task(
         run_admin_maintenance_rotation_jobs_worker(),
@@ -169,6 +174,7 @@ __all__ = [
     "enqueue_maintenance_rotation_run",
     "handle_maintenance_rotation_job",
     "maintenance_rotation_queue",
+    "maintenance_rotation_worker_enabled",
     "resolve_rotation_keys",
     "run_admin_maintenance_rotation_jobs_worker",
     "start_admin_maintenance_rotation_jobs_worker",

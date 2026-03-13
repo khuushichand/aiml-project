@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -197,6 +198,21 @@ def get_maintenance_rotation_job_enqueuer():
     return enqueue_maintenance_rotation_run
 
 
+def _get_maintenance_rotation_allowed_domains(principal: AuthPrincipal) -> list[str] | None:
+    """Return the effective domain allowlist for rotation-run history, or None when unrestricted."""
+    from tldw_Server_API.app.core.testing import env_flag_enabled
+
+    if not env_flag_enabled("JOBS_DOMAIN_SCOPED_RBAC"):
+        return None
+    if principal.user_id is None:
+        return None
+    raw_allowlist = os.getenv(f"JOBS_DOMAIN_ALLOWLIST_{principal.user_id}", "").strip()
+    if not raw_allowlist:
+        return None
+    allowed_domains = [entry.strip() for entry in raw_allowlist.split(",") if entry.strip()]
+    return sorted(set(allowed_domains))
+
+
 @router.post("/maintenance/rotation-runs", response_model=MaintenanceRotationRunCreateResponse)
 async def create_maintenance_rotation_run(
     payload: MaintenanceRotationRunCreateRequest,
@@ -206,6 +222,12 @@ async def create_maintenance_rotation_run(
     service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
     enqueue_run=Depends(get_maintenance_rotation_job_enqueuer),
 ) -> MaintenanceRotationRunCreateResponse:
+    from tldw_Server_API.app.services.admin_maintenance_rotation_jobs_worker import (
+        maintenance_rotation_worker_enabled,
+    )
+
+    if not maintenance_rotation_worker_enabled():
+        raise HTTPException(status_code=503, detail="maintenance_rotation_worker_unavailable")
     _enforce_domain_scope_unified(principal, payload.domain)
     actor_label = principal.email or principal.username or (
         str(principal.user_id) if principal.user_id is not None else None
@@ -253,19 +275,14 @@ async def list_maintenance_rotation_runs(
     principal: AuthPrincipal = Depends(get_auth_principal),
     service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
 ) -> MaintenanceRotationRunListResponse:
-    payload = await service.list_runs(limit=limit, offset=offset)
-    visible_items: list[dict[str, Any]] = []
-    for item in payload["items"]:
-        try:
-            _enforce_domain_scope_unified(principal, item.get("domain"))
-        except HTTPException as exc:
-            if exc.status_code == 403:
-                continue
-            raise
-        visible_items.append(item)
+    payload = await service.list_runs(
+        limit=limit,
+        offset=offset,
+        allowed_domains=_get_maintenance_rotation_allowed_domains(principal),
+    )
     return MaintenanceRotationRunListResponse(
-        items=[MaintenanceRotationRunItem(**item) for item in visible_items],
-        total=len(visible_items),
+        items=[MaintenanceRotationRunItem(**item) for item in payload["items"]],
+        total=payload["total"],
         limit=payload["limit"],
         offset=payload["offset"],
     )

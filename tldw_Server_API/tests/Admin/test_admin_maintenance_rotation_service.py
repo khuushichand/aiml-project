@@ -51,6 +51,12 @@ class _ActiveExecuteRepo(_RecordingRepo):
         return True
 
 
+@dataclass
+class _DuplicateExecuteRepo(_RecordingRepo):
+    async def create_run(self, **kwargs):
+        raise RuntimeError("duplicate key value violates unique constraint idx_maintenance_rotation_runs_active_execute")
+
+
 @pytest.mark.asyncio
 async def test_create_dry_run_persists_scope_summary_and_key_source(monkeypatch) -> None:
     from tldw_Server_API.app.services.admin_maintenance_rotation_service import (
@@ -153,6 +159,34 @@ async def test_create_execute_rejects_when_another_execute_run_is_active(monkeyp
     monkeypatch.setenv("JOBS_CRYPTO_ROTATE_NEW_KEY", "new-key-material")
 
     service = AdminMaintenanceRotationService(repo=_ActiveExecuteRepo())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.create_run(
+            mode="execute",
+            domain="jobs",
+            queue="default",
+            job_type="encryption_rotation",
+            fields=["payload"],
+            limit=100,
+            confirmed=True,
+            requested_by_user_id=7,
+            requested_by_label="ops-admin@example.com",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "active_execute_run_exists"
+
+
+@pytest.mark.asyncio
+async def test_create_execute_maps_unique_index_race_to_conflict(monkeypatch) -> None:
+    from tldw_Server_API.app.services.admin_maintenance_rotation_service import (
+        AdminMaintenanceRotationService,
+    )
+
+    monkeypatch.setenv("JOBS_CRYPTO_ROTATE_OLD_KEY", "old-key-material")
+    monkeypatch.setenv("JOBS_CRYPTO_ROTATE_NEW_KEY", "new-key-material")
+
+    service = AdminMaintenanceRotationService(repo=_DuplicateExecuteRepo())
 
     with pytest.raises(HTTPException) as exc_info:
         await service.create_run(

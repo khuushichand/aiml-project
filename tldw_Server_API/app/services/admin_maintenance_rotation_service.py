@@ -24,6 +24,19 @@ class AdminMaintenanceRotationService:
     repo: Any
 
     @staticmethod
+    def _is_duplicate_active_execute_error(exc: Exception) -> bool:
+        """Return True when an insert failure matches the active execute uniqueness guard."""
+        message = str(exc).strip().lower()
+        return any(
+            token in message
+            for token in (
+                "idx_maintenance_rotation_runs_active_execute",
+                "duplicate key value violates unique constraint",
+                "unique constraint failed",
+            )
+        )
+
+    @staticmethod
     def _normalize_optional_scope_text(value: str | None) -> str | None:
         """Trim optional scope text and collapse blanks to None."""
         if value is None:
@@ -113,30 +126,47 @@ class AdminMaintenanceRotationService:
         if mode == "execute" and await self.repo.has_active_execute_run():
             raise HTTPException(status_code=409, detail="active_execute_run_exists")
 
-        created = await self.repo.create_run(
-            mode=mode,
-            domain=normalized_domain,
-            queue=normalized_queue,
-            job_type=normalized_job_type,
-            fields_json=json.dumps(normalized_fields, separators=(",", ":")),
-            limit=normalized_limit,
-            requested_by_user_id=requested_by_user_id,
-            requested_by_label=requested_by_label.strip() if requested_by_label else None,
-            confirmation_recorded=bool(confirmed),
-            scope_summary=self.build_scope_summary(
+        try:
+            created = await self.repo.create_run(
+                mode=mode,
                 domain=normalized_domain,
                 queue=normalized_queue,
                 job_type=normalized_job_type,
-                fields=normalized_fields,
+                fields_json=json.dumps(normalized_fields, separators=(",", ":")),
                 limit=normalized_limit,
-            ),
-            key_source=key_source,
-        )
+                requested_by_user_id=requested_by_user_id,
+                requested_by_label=requested_by_label.strip() if requested_by_label else None,
+                confirmation_recorded=bool(confirmed),
+                scope_summary=self.build_scope_summary(
+                    domain=normalized_domain,
+                    queue=normalized_queue,
+                    job_type=normalized_job_type,
+                    fields=normalized_fields,
+                    limit=normalized_limit,
+                ),
+                key_source=key_source,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            if mode == "execute" and self._is_duplicate_active_execute_error(exc):
+                raise HTTPException(status_code=409, detail="active_execute_run_exists") from exc
+            raise
         return MaintenanceRotationRunItem.model_validate(created).model_dump(mode="json")
 
-    async def list_runs(self, *, limit: int, offset: int) -> dict[str, Any]:
+    async def list_runs(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        allowed_domains: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Return paginated maintenance rotation run history."""
-        rows, total = await self.repo.list_runs(limit=limit, offset=offset)
+        rows, total = await self.repo.list_runs(
+            limit=limit,
+            offset=offset,
+            allowed_domains=allowed_domains,
+        )
         response = MaintenanceRotationRunListResponse(
             items=[MaintenanceRotationRunItem.model_validate(row) for row in rows],
             total=total,

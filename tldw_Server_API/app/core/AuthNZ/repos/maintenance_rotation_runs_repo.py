@@ -201,24 +201,57 @@ class AuthnzMaintenanceRotationRunsRepo:
             logger.error("AuthnzMaintenanceRotationRunsRepo.get_run failed")
             raise
 
-    async def list_runs(self, *, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+    async def list_runs(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        allowed_domains: list[str] | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
         """List maintenance rotation runs newest-first with total count."""
+        if allowed_domains is not None and len(allowed_domains) == 0:
+            return [], 0
+
         try:
-            rows = await self.db_pool.fetchall(
-                """
-                SELECT id, mode, status, domain, queue, job_type, fields_json, "limit",
-                       affected_count, requested_by_user_id, requested_by_label,
-                       confirmation_recorded, job_id, scope_summary, key_source,
-                       error_message, created_at, started_at, completed_at
-                FROM maintenance_rotation_runs
-                ORDER BY created_at DESC, id DESC
-                LIMIT ? OFFSET ?
-                """,
-                (limit, offset),
-            )
-            count_row = await self.db_pool.fetchone(
-                "SELECT COUNT(*) AS total FROM maintenance_rotation_runs"
-            )
+            if allowed_domains is not None:
+                allowed_domains_token = f",{','.join(allowed_domains)},"
+                rows = await self.db_pool.fetchall(
+                    """
+                    SELECT id, mode, status, domain, queue, job_type, fields_json, "limit",
+                           affected_count, requested_by_user_id, requested_by_label,
+                           confirmation_recorded, job_id, scope_summary, key_source,
+                           error_message, created_at, started_at, completed_at
+                    FROM maintenance_rotation_runs
+                    WHERE domain IS NOT NULL AND ? LIKE ('%,' || domain || ',%')
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (allowed_domains_token, limit, offset),
+                )
+                count_row = await self.db_pool.fetchone(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM maintenance_rotation_runs
+                    WHERE domain IS NOT NULL AND ? LIKE ('%,' || domain || ',%')
+                    """,
+                    (allowed_domains_token,),
+                )
+            else:
+                rows = await self.db_pool.fetchall(
+                    """
+                    SELECT id, mode, status, domain, queue, job_type, fields_json, "limit",
+                           affected_count, requested_by_user_id, requested_by_label,
+                           confirmation_recorded, job_id, scope_summary, key_source,
+                           error_message, created_at, started_at, completed_at
+                    FROM maintenance_rotation_runs
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (limit, offset),
+                )
+                count_row = await self.db_pool.fetchone(
+                    "SELECT COUNT(*) AS total FROM maintenance_rotation_runs"
+                )
             total = 0
             if count_row is not None:
                 try:
