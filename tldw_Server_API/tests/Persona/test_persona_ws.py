@@ -1700,6 +1700,150 @@ def test_persona_audio_chunk_emits_partial_transcript_and_voice_commit_routes_to
             assert plan.get("steps")
 
 
+def test_persona_audio_chunk_uses_streaming_transcriber_for_pcm16_partials(monkeypatch):
+    class _FakePersonaTranscriber:
+        def __init__(self):
+            self.initialize_called = False
+            self.processed_chunks: list[bytes] = []
+
+        def initialize(self):
+            self.initialize_called = True
+
+        async def process_audio_chunk(self, audio_data: bytes):
+            self.processed_chunks.append(audio_data)
+            return {
+                "type": "partial",
+                "text": "streaming partial transcript",
+                "is_final": False,
+            }
+
+        def get_full_transcript(self) -> str:
+            return ""
+
+        def reset(self):
+            return None
+
+        def cleanup(self):
+            return None
+
+    fake_transcriber = _FakePersonaTranscriber()
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_stt_transcriber",
+        lambda *args, **kwargs: fake_transcriber,
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            audio_payload = base64.b64encode(b"\x00\x00\xff\x7f\x00\x80").decode("ascii")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_audio_streaming",
+                        "stt": {"model": "whisper-1", "language": "en-US"},
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_audio_streaming",
+                        "audio_format": "pcm16",
+                        "bytes_base64": audio_payload,
+                    }
+                )
+            )
+
+            partial = _recv_until(ws, lambda d: d.get("event") == "partial_transcript")
+            assert partial.get("session_id") == "sess_audio_streaming"
+            assert partial.get("text_delta") == "streaming partial transcript"
+            assert fake_transcriber.initialize_called is True
+            assert len(fake_transcriber.processed_chunks) == 1
+
+
+def test_persona_voice_commit_uses_transcriber_snapshot_when_client_omits_transcript(monkeypatch):
+    class _FakePersonaTranscriber:
+        def __init__(self):
+            self.initialize_called = False
+            self.reset_called = False
+
+        def initialize(self):
+            self.initialize_called = True
+
+        async def process_audio_chunk(self, audio_data: bytes):
+            return None
+
+        def get_full_transcript(self) -> str:
+            return "open my notes"
+
+        def reset(self):
+            self.reset_called = True
+
+        def cleanup(self):
+            return None
+
+    fake_transcriber = _FakePersonaTranscriber()
+    monkeypatch.setattr(
+        persona_ep,
+        "_create_persona_live_stt_transcriber",
+        lambda *args, **kwargs: fake_transcriber,
+        raising=False,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            audio_payload = base64.b64encode(b"\x00\x00\xff\x7f\x00\x80").decode("ascii")
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_audio_snapshot",
+                        "stt": {"model": "whisper-1", "language": "en-US"},
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "audio_chunk",
+                        "session_id": "sess_audio_snapshot",
+                        "audio_format": "pcm16",
+                        "bytes_base64": audio_payload,
+                    }
+                )
+            )
+
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_commit",
+                        "session_id": "sess_audio_snapshot",
+                    }
+                )
+            )
+
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            assert plan.get("session_id") == "sess_audio_snapshot"
+            assert plan.get("steps")
+            assert fake_transcriber.initialize_called is True
+            assert fake_transcriber.reset_called is True
+
+
 def test_persona_voice_config_stores_runtime_preferences(monkeypatch):
     from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 

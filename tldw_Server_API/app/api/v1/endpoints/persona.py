@@ -2080,6 +2080,100 @@ async def _transcribe_audio_chunk(audio_bytes: bytes, audio_format: str) -> str:
     return f"[audio:{audio_format or 'unknown'}:{len(audio_bytes)} bytes]"
 
 
+def _normalize_persona_live_stt_model(raw_model: Any) -> tuple[str, str, str | None]:
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.model_utils import (
+        normalize_model_and_variant,
+    )
+
+    normalized_raw = str(raw_model or "").strip().lower() or None
+    model_name, model_variant = normalize_model_and_variant(
+        normalized_raw,
+        "parakeet",
+        "standard",
+    )
+    whisper_model_size: str | None = None
+    if model_name == "whisper" and normalized_raw and normalized_raw not in {"whisper", "whisper-1"}:
+        whisper_model_size = normalized_raw
+    return model_name, model_variant, whisper_model_size
+
+
+def _build_persona_live_stt_config(voice_runtime: dict[str, Any] | None) -> Any:
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+        UnifiedStreamingConfig,
+    )
+
+    config = UnifiedStreamingConfig()
+    model_name, model_variant, whisper_model_size = _normalize_persona_live_stt_model(
+        (voice_runtime or {}).get("stt_model")
+    )
+    config.model = model_name
+    config.model_variant = model_variant
+    if whisper_model_size:
+        config.whisper_model_size = whisper_model_size
+    language = str((voice_runtime or {}).get("stt_language") or "").strip()
+    config.language = language or None
+    config.sample_rate = 16000
+    config.enable_vad = False
+    config.enable_partial = True
+    config.partial_interval = 0.35
+    config.min_partial_duration = 0.3
+    return config
+
+
+def _create_persona_live_stt_transcriber(*, voice_runtime: dict[str, Any] | None) -> Any:
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+        UnifiedStreamingTranscriber,
+    )
+
+    config = _build_persona_live_stt_config(voice_runtime)
+    return UnifiedStreamingTranscriber(config)
+
+
+def _normalize_persona_live_stt_audio(audio_bytes: bytes, *, audio_format: str) -> bytes:
+    import numpy as np
+
+    fmt = str(audio_format or "").strip().lower()
+    if fmt in {"pcm16", "pcm", "s16le"}:
+        audio_np = np.frombuffer(audio_bytes, dtype="<i2").astype(np.float32, copy=False)
+        if audio_np.size == 0:
+            return b""
+        audio_np = audio_np / 32768.0
+        return audio_np.astype(np.float32, copy=False).tobytes()
+    if fmt in {"float32", "f32le", "f32"}:
+        if len(audio_bytes) % 4 != 0:
+            raise ValueError("float32 audio size must be divisible by 4")
+        return bytes(audio_bytes)
+    raise ValueError(f"Unsupported live STT audio_format '{fmt}'")
+
+
+def _persona_live_transcript_snapshot(
+    *,
+    transcriber: Any,
+    result: dict[str, Any],
+) -> str:
+    finalized = str(getattr(transcriber, "get_full_transcript", lambda: "")() or "").strip()
+    result_text = str(result.get("text") or "").strip()
+    if str(result.get("type") or "").strip().lower() == "final":
+        return finalized or result_text
+    if finalized and result_text:
+        if result_text.startswith(finalized):
+            return result_text
+        return f"{finalized} {result_text}".strip()
+    return result_text or finalized
+
+
+def _persona_live_forward_delta(previous_snapshot: str, next_snapshot: str) -> str:
+    previous = str(previous_snapshot or "").strip()
+    current = str(next_snapshot or "").strip()
+    if not current:
+        return ""
+    if not previous:
+        return current
+    if current.startswith(previous):
+        return current[len(previous) :].strip()
+    return ""
+
+
 async def _generate_tts_audio_chunks(
     text: str,
     audio_format: str,
@@ -4169,6 +4263,7 @@ async def persona_stream(
     auth_watchdog_task: asyncio.Task | None = None
     auth_watchdog_stop: asyncio.Event | None = None
     auth_revoked_event: asyncio.Event | None = None
+    persona_live_stt_state_by_session: dict[str, dict[str, Any]] = {}
     try:
         user_id, credentials_supplied, auth_ok = await _resolve_authenticated_user_id(ws, token=token, api_key=api_key)
         if not auth_ok:
@@ -4551,6 +4646,66 @@ async def persona_stream(
                 tts_in_flight_by_session[session_id] = max(
                     0, tts_in_flight_by_session[session_id] - 1
                 )
+
+        def _cleanup_persona_live_stt_state(session_id: str) -> None:
+            state = persona_live_stt_state_by_session.pop(session_id, None)
+            transcriber = state.get("transcriber") if isinstance(state, dict) else None
+            if transcriber is not None:
+                with contextlib.suppress(Exception):
+                    transcriber.cleanup()
+            voice_transcript_buffer_by_session.pop(session_id, None)
+
+        def _reset_persona_live_stt_session(session_id: str) -> None:
+            state = persona_live_stt_state_by_session.get(session_id) or {}
+            transcriber = state.get("transcriber")
+            if transcriber is not None:
+                with contextlib.suppress(Exception):
+                    transcriber.reset()
+            voice_transcript_buffer_by_session.pop(session_id, None)
+
+        def _get_or_create_persona_live_stt_state(
+            session_id: str,
+        ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+            preferences = session_manager.get_preferences(
+                session_id=session_id,
+                user_id=connection_user_id,
+            )
+            voice_runtime = preferences.get("voice_runtime")
+            if not isinstance(voice_runtime, dict):
+                return None, None
+
+            existing_state = persona_live_stt_state_by_session.get(session_id)
+            if isinstance(existing_state, dict):
+                return existing_state, voice_runtime
+
+            try:
+                transcriber = _create_persona_live_stt_transcriber(
+                    voice_runtime=voice_runtime,
+                )
+                transcriber.initialize()
+            except Exception as exc:
+                logger.debug(
+                    "persona live STT initialization failed for session {}: {}",
+                    session_id,
+                    exc,
+                )
+                return None, voice_runtime
+
+            state = {"transcriber": transcriber}
+            persona_live_stt_state_by_session[session_id] = state
+            return state, voice_runtime
+
+        def _current_persona_live_transcript(session_id: str) -> str:
+            buffered = str(voice_transcript_buffer_by_session.get(session_id) or "").strip()
+            if buffered:
+                return buffered
+            state = persona_live_stt_state_by_session.get(session_id) or {}
+            transcriber = state.get("transcriber")
+            if transcriber is None:
+                return ""
+            with contextlib.suppress(Exception):
+                return str(transcriber.get_full_transcript() or "").strip()
+            return ""
 
         def _pending_retry_key(*, plan_id: str, step_idx: int, tool_name: str) -> str:
             """Return the stable storage key for a pending approval-backed retry."""
@@ -5586,6 +5741,7 @@ async def persona_stream(
                     user_id=connection_user_id,
                     preferences={"voice_runtime": voice_runtime},
                 )
+                _cleanup_persona_live_stt_state(session_id)
                 await _emit_notice(
                     session_id=session_id,
                     level="info",
@@ -5605,7 +5761,7 @@ async def persona_stream(
                     continue
                 transcript = str(msg.get("transcript") or msg.get("text") or "").strip()
                 if not transcript:
-                    transcript = str(voice_transcript_buffer_by_session.get(session_id) or "").strip()
+                    transcript = _current_persona_live_transcript(session_id)
                 if not transcript:
                     await _emit_notice(
                         session_id=session_id,
@@ -5614,7 +5770,7 @@ async def persona_stream(
                         reason_code="TRANSCRIPT_REQUIRED",
                     )
                     continue
-                voice_transcript_buffer_by_session.pop(session_id, None)
+                _reset_persona_live_stt_session(session_id)
                 voice_turn_payload = dict(msg)
                 voice_turn_payload["session_id"] = session_id
                 await _handle_persona_live_turn(
@@ -5692,7 +5848,49 @@ async def persona_stream(
                 session_window.append(now_mono)
 
                 timestamp_ms = int(time.time() * 1000)
-                transcript_delta = await _transcribe_audio_chunk(audio_bytes, audio_format=audio_format)
+                transcript_delta = ""
+                should_fallback_to_scaffold = True
+                stt_state, _voice_runtime = _get_or_create_persona_live_stt_state(session_id)
+                if stt_state is not None:
+                    should_fallback_to_scaffold = False
+                    transcriber = stt_state.get("transcriber")
+                    try:
+                        normalized_audio = _normalize_persona_live_stt_audio(
+                            audio_bytes,
+                            audio_format=audio_format,
+                        )
+                        previous_snapshot = str(
+                            voice_transcript_buffer_by_session.get(session_id) or ""
+                        ).strip()
+                        result = await transcriber.process_audio_chunk(normalized_audio)
+                        if isinstance(result, dict):
+                            next_snapshot = _persona_live_transcript_snapshot(
+                                transcriber=transcriber,
+                                result=result,
+                            )
+                        else:
+                            next_snapshot = str(transcriber.get_full_transcript() or "").strip()
+                        next_snapshot = str(next_snapshot or "").strip()
+                        if next_snapshot:
+                            voice_transcript_buffer_by_session[session_id] = next_snapshot
+                        transcript_delta = _persona_live_forward_delta(
+                            previous_snapshot,
+                            next_snapshot,
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "persona live STT processing failed for session {}: {}",
+                            session_id,
+                            exc,
+                        )
+                        _cleanup_persona_live_stt_state(session_id)
+                        should_fallback_to_scaffold = True
+
+                if should_fallback_to_scaffold:
+                    transcript_delta = await _transcribe_audio_chunk(
+                        audio_bytes,
+                        audio_format=audio_format,
+                    )
                 if transcript_delta:
                     transcript_seq = transcript_seq_by_session[session_id]
                     transcript_seq_by_session[session_id] += 1
@@ -6171,6 +6369,8 @@ async def persona_stream(
             auth_watchdog_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await auth_watchdog_task
+        for session_id in list(persona_live_stt_state_by_session.keys()):
+            _cleanup_persona_live_stt_state(session_id)
         if stream is not None:
             with contextlib.suppress(Exception):
                 await stream.stop()
