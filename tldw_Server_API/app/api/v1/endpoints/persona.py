@@ -2098,15 +2098,71 @@ async def _generate_tts_audio_chunks(
     if not spoken:
         return []
     encoded = spoken.encode("utf-8")
+    return _chunk_persona_audio_bytes(
+        encoded,
+        chunk_size_bytes=chunk_size_bytes,
+        max_chunks=max_chunks,
+        max_total_bytes=max_total_bytes,
+    )
+
+
+def _chunk_persona_audio_bytes(
+    audio_bytes: bytes,
+    *,
+    chunk_size_bytes: int,
+    max_chunks: int,
+    max_total_bytes: int,
+) -> list[bytes]:
+    if not audio_bytes:
+        return []
+    data = bytes(audio_bytes)
     if max_total_bytes > 0:
-        encoded = encoded[:max_total_bytes]
-    if not encoded:
+        data = data[:max_total_bytes]
+    if not data:
         return []
     size = max(1, int(chunk_size_bytes))
-    chunks = [encoded[i : i + size] for i in range(0, len(encoded), size)]
+    chunks = [data[i : i + size] for i in range(0, len(data), size)]
     if max_chunks > 0:
         chunks = chunks[:max_chunks]
     return chunks
+
+
+async def _generate_persona_live_tts_audio(
+    text: str,
+    *,
+    provider: str | None,
+    voice: str | None,
+    response_format: str = "mp3",
+) -> tuple[bytes, str]:
+    provider_norm = str(provider or "").strip().lower()
+    voice_norm = str(voice or "").strip()
+    if not provider_norm or provider_norm == "browser":
+        return b"", response_format
+
+    model_name = "kokoro" if provider_norm == "tldw" else provider_norm
+
+    from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
+    from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
+
+    tts_service = await get_tts_service_v2()
+    request = OpenAISpeechRequest(
+        model=model_name,
+        input=text,
+        voice=voice_norm or "af_heart",
+        response_format=response_format,
+        stream=False,
+    )
+
+    audio_chunks: list[bytes] = []
+    async for chunk in tts_service.generate_speech(
+        request=request,
+        provider=provider_norm,
+        fallback=True,
+    ):
+        if chunk:
+            audio_chunks.append(chunk)
+
+    return b"".join(audio_chunks), response_format
 
 
 def _is_authnz_access_token(token: str) -> bool:
@@ -4344,6 +4400,7 @@ async def persona_stream(
         tts_max_in_flight_chunks = _get_persona_tts_max_in_flight_chunks()
         audio_rate_windows: dict[str, deque[float]] = defaultdict(deque)
         transcript_seq_by_session: dict[str, int] = defaultdict(int)
+        voice_transcript_buffer_by_session: dict[str, str] = defaultdict(str)
         tts_seq_by_session: dict[str, int] = defaultdict(int)
         tts_in_flight_by_session: dict[str, int] = defaultdict(int)
 
@@ -4394,6 +4451,105 @@ async def persona_stream(
                     store_as_memory=should_store_memory,
                     runtime_mode=effective_runtime_mode,
                     scope_snapshot_id=effective_scope_snapshot_id,
+                )
+
+        async def _emit_persona_live_tts_for_assistant_text(
+            *,
+            session_id: str,
+            assistant_text: str,
+        ) -> None:
+            preferences = session_manager.get_preferences(
+                session_id=session_id,
+                user_id=connection_user_id,
+            )
+            if str(preferences.get("last_turn_type") or "").strip().lower() != "voice_commit":
+                return
+            voice_runtime = preferences.get("voice_runtime")
+            if not isinstance(voice_runtime, dict):
+                return
+            if bool(voice_runtime.get("text_only_due_to_tts_failure")):
+                return
+
+            provider = str(voice_runtime.get("tts_provider") or "").strip().lower()
+            voice = str(voice_runtime.get("tts_voice") or "").strip() or None
+            if not provider or provider == "browser":
+                return
+
+            try:
+                audio_bytes, audio_format = await _generate_persona_live_tts_audio(
+                    assistant_text,
+                    provider=provider,
+                    voice=voice,
+                    response_format="mp3",
+                )
+                if not audio_bytes:
+                    raise RuntimeError("TTS returned no audio")
+            except Exception as exc:
+                updated_voice_runtime = dict(voice_runtime)
+                updated_voice_runtime["text_only_due_to_tts_failure"] = True
+                with contextlib.suppress(Exception):
+                    session_manager.update_preferences(
+                        session_id=session_id,
+                        user_id=connection_user_id,
+                        preferences={"voice_runtime": updated_voice_runtime},
+                    )
+                logger.debug(f"persona live TTS unavailable for session {session_id}: {exc}")
+                await _emit_notice(
+                    session_id=session_id,
+                    level="warning",
+                    reason_code="TTS_UNAVAILABLE_TEXT_ONLY",
+                    message="Live TTS unavailable for this session. Continuing in text-only mode.",
+                )
+                return
+
+            tts_chunks = _chunk_persona_audio_bytes(
+                audio_bytes,
+                chunk_size_bytes=tts_chunk_size_bytes,
+                max_chunks=tts_max_chunks,
+                max_total_bytes=tts_max_total_bytes,
+            )
+            total_chunks = len(tts_chunks)
+            for idx, chunk in enumerate(tts_chunks):
+                if tts_in_flight_by_session[session_id] >= tts_max_in_flight_chunks:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="warning",
+                        reason_code="TTS_BACKPRESSURE_DROP",
+                        message=f"Dropping TTS chunk due to in-flight limit ({tts_max_in_flight_chunks})",
+                    )
+                    break
+
+                chunk_seq = tts_seq_by_session[session_id]
+                tts_seq_by_session[session_id] += 1
+                chunk_id = uuid.uuid4().hex
+                tts_in_flight_by_session[session_id] += 1
+                await stream.send_json(
+                    {
+                        "event": "tts_audio",
+                        "session_id": session_id,
+                        "audio_format": str(audio_format or "mp3"),
+                        "chunk_id": chunk_id,
+                        "chunk_index": idx,
+                        "chunk_count": total_chunks,
+                        "seq": chunk_seq,
+                        "timestamp_ms": int(time.time() * 1000),
+                    }
+                )
+                try:
+                    await stream.ws.send_bytes(chunk)
+                except Exception as exc:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="warning",
+                        message=f"Failed to send tts audio binary chunk: {exc}",
+                        reason_code="TTS_SEND_FAILED",
+                    )
+                    tts_in_flight_by_session[session_id] = max(
+                        0, tts_in_flight_by_session[session_id] - 1
+                    )
+                    break
+                tts_in_flight_by_session[session_id] = max(
+                    0, tts_in_flight_by_session[session_id] - 1
                 )
 
         def _pending_retry_key(*, plan_id: str, step_idx: int, tool_name: str) -> str:
@@ -4981,6 +5137,405 @@ async def persona_stream(
                 )
             return {"steps": steps}
 
+        async def _handle_persona_live_turn(
+            *,
+            msg: dict[str, Any],
+            text: str,
+            turn_type: str = "user_message",
+            source: str = "ws",
+        ) -> None:
+            normalized_text = str(text or "").strip()
+            original_session_id = msg.get("session_id")
+            session_id = _normalize_ws_identifier(original_session_id, fallback=default_session_id)
+            if str(original_session_id or "").strip() and str(original_session_id).strip() != session_id:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="warning",
+                    message="Invalid session_id normalized to a safe identifier.",
+                    reason_code="SESSION_ID_NORMALIZED",
+                )
+            forbidden_client_fields = [
+                field_name
+                for field_name in ("persona_scope", "allowed_tools", "persona_audit", "metadata")
+                if field_name in msg
+            ]
+            if forbidden_client_fields:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="warning",
+                    message="Ignored unsupported client-controlled security fields.",
+                    reason_code="SECURITY_FIELDS_IGNORED",
+                    ignored_fields=forbidden_client_fields,
+                )
+
+            runtime_context = _load_persona_policy_rules_for_session(
+                persona_scope_db,
+                session_id=session_id,
+                user_id=authenticated_user_id,
+            )
+            runtime_persona_id = str(runtime_context.get("persona_id") or _DEFAULT_PERSONA_ID).strip() or _DEFAULT_PERSONA_ID
+            runtime_mode = _bounded_label(
+                runtime_context.get("runtime_mode"),
+                allowed=_PERSONA_RUNTIME_MODES,
+                fallback="session_scoped",
+            )
+            runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
+            persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
+            session_exists = bool(runtime_context.get("session_exists", False))
+            _increment_persona_metric(
+                "persona_ws_runtime_mode_total",
+                {"mode": runtime_mode, "session_exists": "true" if session_exists else "false"},
+            )
+            _ = session_manager.create(
+                user_id=connection_user_id,
+                persona_id=runtime_persona_id,
+                resume_session_id=session_id,
+            )
+            existing_preferences, activity_surface = _get_session_preferences_with_activity_surface(
+                session_manager=session_manager,
+                session_id=session_id,
+                user_id=connection_user_id,
+                persisted_preferences=runtime_context.get("preferences"),
+                persisted_activity_surface=runtime_context.get("activity_surface"),
+            )
+            configured_top_k = _get_persona_memory_top_k()
+            default_use_memory = _coerce_bool(
+                existing_preferences.get("use_memory_context"),
+                default=True,
+            )
+            requested_use_memory_context = _coerce_bool(
+                msg.get("use_memory_context"),
+                default=default_use_memory,
+            )
+            use_memory_context = requested_use_memory_context
+            default_use_companion_context = _coerce_bool(
+                existing_preferences.get("use_companion_context"),
+                default=True,
+            )
+            requested_use_companion_context = _coerce_bool(
+                msg.get("use_companion_context"),
+                default=default_use_companion_context,
+            )
+            use_companion_context = requested_use_companion_context
+            runtime_persona_state_context_default = _coerce_bool(
+                runtime_context.get("persona_state_context_default"),
+                default=True,
+            )
+            default_use_persona_state_context = _coerce_bool(
+                existing_preferences.get("use_persona_state_context"),
+                default=runtime_persona_state_context_default,
+            )
+            requested_use_persona_state_context = _coerce_bool(
+                msg.get("use_persona_state_context"),
+                default=default_use_persona_state_context,
+            )
+            state_context_override = "use_persona_state_context" in msg
+            use_persona_state_context = requested_use_persona_state_context
+            memory_allowed_by_mode = _memory_mode_allows_personalization_retrieval(
+                runtime_mode,
+                session_exists=session_exists,
+            )
+            if not memory_allowed_by_mode:
+                use_memory_context = False
+            state_context_allowed_by_mode = runtime_mode == "persistent_scoped"
+            if not state_context_allowed_by_mode:
+                use_persona_state_context = False
+            pref_top_k_raw = existing_preferences.get("memory_top_k", configured_top_k)
+            try:
+                pref_top_k = int(pref_top_k_raw)
+            except (TypeError, ValueError):
+                pref_top_k = configured_top_k
+            requested_top_k_raw = msg.get("memory_top_k", pref_top_k)
+            try:
+                memory_top_k = int(requested_top_k_raw)
+            except (TypeError, ValueError):
+                memory_top_k = pref_top_k
+            memory_top_k = max(1, min(memory_top_k, configured_top_k))
+            if "session_policy_rules" in msg:
+                session_policy_rules = normalize_policy_rules(msg.get("session_policy_rules"))
+            else:
+                session_policy_rules = _session_policy_rules_from_preferences(existing_preferences)
+            preferences_patch: dict[str, Any] = {
+                "use_memory_context": use_memory_context,
+                "use_companion_context": use_companion_context,
+                "use_persona_state_context": use_persona_state_context,
+                "memory_top_k": memory_top_k,
+            }
+            if "session_policy_rules" in msg:
+                preferences_patch["session_policy_rules"] = session_policy_rules
+            with contextlib.suppress(Exception):
+                session_manager.update_preferences(
+                    session_id=session_id,
+                    user_id=connection_user_id,
+                    preferences=preferences_patch,
+                )
+            with contextlib.suppress(Exception):
+                session_manager.update_preferences(
+                    session_id=session_id,
+                    user_id=connection_user_id,
+                    preferences={
+                        "last_input_source": source,
+                        "last_turn_type": turn_type,
+                    },
+                )
+            _ = _persist_persona_session_preferences(
+                persona_scope_db,
+                session_id=session_id,
+                user_id=authenticated_user_id,
+                base_preferences=runtime_context.get("preferences"),
+                patch_preferences=preferences_patch,
+            )
+            persona_turn_classifier = classify_persona_turn(normalized_text)
+            persona_exemplar_context = await resolve_persona_exemplar_runtime_context(
+                persona_scope_db=persona_scope_db,
+                user_id=authenticated_user_id,
+                persona_id=runtime_persona_id,
+                classifier=persona_turn_classifier,
+                current_turn_text=normalized_text,
+                lookup_limit=50,
+            )
+            persona_exemplar_assembly = persona_exemplar_context.assembly
+            persona_exemplar_selection = persona_exemplar_context.selection_metadata
+            await _record_turn(
+                session_id=session_id,
+                role="user",
+                content=normalized_text,
+                turn_type=turn_type,
+                metadata={
+                    "source": source,
+                    "use_memory_context": use_memory_context,
+                    "use_companion_context": use_companion_context,
+                    "use_persona_state_context": use_persona_state_context,
+                    "memory_top_k": memory_top_k,
+                    "session_policy_rule_count": len(session_policy_rules),
+                    "runtime_mode": runtime_mode,
+                    "session_exists": session_exists,
+                    "persona_exemplar_selection": persona_exemplar_selection,
+                },
+                persist_as_memory=False,
+                persona_id_override=runtime_persona_id,
+                runtime_mode_override=runtime_mode,
+                scope_snapshot_id_override=runtime_scope_snapshot_id,
+            )
+            memory_context: list[str] = []
+            if use_memory_context and memory_allowed_by_mode:
+                memories = retrieve_top_memories(
+                    user_id=authenticated_user_id,
+                    query_text=normalized_text,
+                    top_k=memory_top_k,
+                    persona_id=runtime_persona_id,
+                    runtime_mode=runtime_mode,
+                    scope_snapshot_id=runtime_scope_snapshot_id,
+                    session_id=session_id,
+                )
+                memory_context = [m.content for m in memories]
+            companion_context = {
+                "knowledge_lines": [],
+                "activity_lines": [],
+                "card_count": 0,
+                "activity_count": 0,
+            }
+            if use_companion_context:
+                companion_context = await asyncio.to_thread(
+                    load_companion_context,
+                    user_id=authenticated_user_id,
+                    query=normalized_text,
+                )
+            persona_state_hints: dict[str, str] = {}
+            if use_persona_state_context and state_context_allowed_by_mode:
+                persona_state_hints = _load_persona_state_hints_for_runtime(
+                    persona_scope_db,
+                    user_id=authenticated_user_id,
+                    persona_id=runtime_persona_id,
+                    runtime_mode=runtime_mode,
+                )
+            persona_state_fields = sorted(persona_state_hints.keys())
+            memory_usage = {
+                "enabled": use_memory_context,
+                "requested_enabled": requested_use_memory_context,
+                "requested_top_k": memory_top_k,
+                "applied_count": len(memory_context),
+                "runtime_mode": runtime_mode,
+                "persona_state_enabled": use_persona_state_context,
+                "persona_state_requested_enabled": requested_use_persona_state_context,
+                "persona_state_profile_default": runtime_persona_state_context_default,
+                "persona_state_mode_allowed": state_context_allowed_by_mode,
+                "persona_state_applied_count": len(persona_state_fields),
+                "persona_state_fields": persona_state_fields,
+            }
+            companion_usage = {
+                "enabled": use_companion_context,
+                "requested_enabled": requested_use_companion_context,
+                "mode": str(companion_context.get("mode") or "recent_fallback"),
+                "applied_card_count": int(companion_context.get("card_count", 0) or 0),
+                "applied_goal_count": int(companion_context.get("goal_count", 0) or 0),
+                "applied_activity_count": int(companion_context.get("activity_count", 0) or 0),
+            }
+            if use_memory_context and memory_context:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="MEMORY_CONTEXT_APPLIED",
+                    message=f"Applied {len(memory_context)} personalization memories",
+                )
+            elif requested_use_memory_context and not memory_allowed_by_mode:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="MEMORY_CONTEXT_MODE_DISABLED",
+                    message="Memory context is disabled for session_scoped personas.",
+                )
+            elif not use_memory_context:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="MEMORY_CONTEXT_DISABLED",
+                    message="Memory context disabled for this message",
+                )
+            if use_companion_context and (
+                companion_usage["applied_card_count"]
+                or companion_usage["applied_goal_count"]
+                or companion_usage["applied_activity_count"]
+            ):
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="COMPANION_CONTEXT_APPLIED",
+                    message=(
+                        "Applied companion context from "
+                        f"{companion_usage['applied_card_count']} knowledge cards and "
+                        f"{companion_usage['applied_goal_count']} goals and "
+                        f"{companion_usage['applied_activity_count']} recent activities"
+                    ),
+                )
+            elif not use_companion_context:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="COMPANION_CONTEXT_DISABLED",
+                    message="Companion context disabled for this message",
+                )
+            if persona_state_fields:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="PERSONA_STATE_HINTS_APPLIED",
+                    message=f"Applied {len(persona_state_fields)} persona state docs",
+                )
+            elif state_context_override and requested_use_persona_state_context and not state_context_allowed_by_mode:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="PERSONA_STATE_MODE_DISABLED",
+                    message="Persona state context is disabled for session_scoped personas.",
+                )
+            elif state_context_override and not use_persona_state_context:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="info",
+                    reason_code="PERSONA_STATE_DISABLED",
+                    message="Persona state context disabled for this message",
+                )
+            plan = await _propose_plan(
+                normalized_text,
+                memory_context=memory_context,
+                persona_state_hints=persona_state_hints,
+                companion_context=companion_context,
+                persona_exemplar_sections=persona_exemplar_assembly.sections,
+            )
+            plan_id = uuid.uuid4().hex
+            max_tool_steps = _get_persona_max_tool_steps()
+            proposed_steps = list(plan.get("steps", []))
+            if len(proposed_steps) > max_tool_steps:
+                proposed_steps = proposed_steps[:max_tool_steps]
+                await _emit_notice(
+                    session_id=session_id,
+                    level="warning",
+                    message=f"Plan truncated to max_tool_steps={max_tool_steps}",
+                    reason_code="PLAN_TRUNCATED",
+                )
+            try:
+                pending_plan = session_manager.put_plan(
+                    session_id=session_id,
+                    user_id=connection_user_id,
+                    persona_id=runtime_persona_id,
+                    plan_id=plan_id,
+                    steps=proposed_steps,
+                )
+            except ValueError as exc:
+                await _emit_notice(
+                    session_id=session_id,
+                    level="error",
+                    message=str(exc),
+                    reason_code="PLAN_INVALID",
+                )
+                return
+            stored_steps: list[dict[str, Any]] = []
+            for step in pending_plan.steps:
+                step_type = _normalize_persona_step_type(step.step_type, tool_name=step.tool)
+                policy = _evaluate_step_policy(
+                    step_type=step_type,
+                    tool_name=step.tool,
+                    args=step.args,
+                    persona_policy_rules=persona_policy_rules,
+                    session_policy_rules=session_policy_rules,
+                    session_scopes=session_scopes,
+                    allow_export=allow_export,
+                    allow_delete=allow_delete,
+                )
+                if not bool(policy.get("allow", False)):
+                    _increment_persona_metric(
+                        "persona_ws_policy_denials_total",
+                        {
+                            "step_type": _bounded_label(step_type, allowed=_PERSONA_WS_ALLOWED_STEP_TYPES, fallback="mcp_tool"),
+                            "reason": _metric_reason_bucket(policy.get("reason_code")),
+                        },
+                    )
+                stored_steps.append(
+                    {
+                        "idx": step.idx,
+                        "step_type": step_type,
+                        "tool": step.tool,
+                        "args": step.args,
+                        "description": step.description,
+                        "why": step.why,
+                        "policy": policy,
+                    }
+                )
+            await _emit_tool_plan(
+                session_id=session_id,
+                plan_id=plan_id,
+                steps=stored_steps,
+                memory=memory_usage,
+                companion=companion_usage,
+                persona_id_value=runtime_persona_id,
+            )
+
+        def _normalize_voice_runtime_config(msg: dict[str, Any]) -> dict[str, Any]:
+            voice_payload = msg.get("voice") if isinstance(msg.get("voice"), dict) else {}
+            stt_payload = msg.get("stt") if isinstance(msg.get("stt"), dict) else {}
+            tts_payload = msg.get("tts") if isinstance(msg.get("tts"), dict) else {}
+
+            normalized_trigger_phrases: list[str] = []
+            seen_phrases: set[str] = set()
+            for raw_phrase in voice_payload.get("trigger_phrases") or []:
+                phrase = str(raw_phrase or "").strip()
+                if not phrase or phrase in seen_phrases:
+                    continue
+                seen_phrases.add(phrase)
+                normalized_trigger_phrases.append(phrase)
+
+            return {
+                "trigger_phrases": normalized_trigger_phrases,
+                "auto_resume": _coerce_bool(voice_payload.get("auto_resume"), default=False),
+                "barge_in": _coerce_bool(voice_payload.get("barge_in"), default=False),
+                "stt_language": str(stt_payload.get("language") or "").strip() or None,
+                "stt_model": str(stt_payload.get("model") or "").strip() or None,
+                "tts_provider": str(tts_payload.get("provider") or "").strip() or None,
+                "tts_voice": str(tts_payload.get("voice") or "").strip() or None,
+                "text_only_due_to_tts_failure": False,
+            }
+
         while True:
             raw = await stream.receive_text()
             try:
@@ -4990,362 +5545,83 @@ async def persona_stream(
 
             mtype = msg.get("type") or msg.get("event") or "unknown"
             if mtype == "user_message":
-                text = (msg.get("text") or msg.get("message") or "").strip()
+                await _handle_persona_live_turn(
+                    msg=msg,
+                    text=msg.get("text") or msg.get("message") or "",
+                    turn_type="user_message",
+                    source="ws",
+                )
+            elif mtype == "voice_config":
                 original_session_id = msg.get("session_id")
-                session_id = _normalize_ws_identifier(original_session_id, fallback=default_session_id)
-                if str(original_session_id or "").strip() and str(original_session_id).strip() != session_id:
+                session_id = _normalize_ws_identifier(original_session_id, fallback="")
+                if not session_id:
+                    await _emit_notice(
+                        session_id=default_session_id,
+                        level="error",
+                        message="session_id is required",
+                        reason_code="SESSION_ID_REQUIRED",
+                    )
+                    continue
+                if str(original_session_id or "").strip() != session_id:
                     await _emit_notice(
                         session_id=session_id,
                         level="warning",
                         message="Invalid session_id normalized to a safe identifier.",
                         reason_code="SESSION_ID_NORMALIZED",
                     )
-                forbidden_client_fields = [
-                    field_name
-                    for field_name in ("persona_scope", "allowed_tools", "persona_audit", "metadata")
-                    if field_name in msg
-                ]
-                if forbidden_client_fields:
-                    await _emit_notice(
-                        session_id=session_id,
-                        level="warning",
-                        message="Ignored unsupported client-controlled security fields.",
-                        reason_code="SECURITY_FIELDS_IGNORED",
-                        ignored_fields=forbidden_client_fields,
-                    )
-
                 runtime_context = _load_persona_policy_rules_for_session(
                     persona_scope_db,
                     session_id=session_id,
                     user_id=authenticated_user_id,
                 )
                 runtime_persona_id = str(runtime_context.get("persona_id") or _DEFAULT_PERSONA_ID).strip() or _DEFAULT_PERSONA_ID
-                runtime_mode = _bounded_label(
-                    runtime_context.get("runtime_mode"),
-                    allowed=_PERSONA_RUNTIME_MODES,
-                    fallback="session_scoped",
-                )
-                runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
-                persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
-                session_exists = bool(runtime_context.get("session_exists", False))
-                _increment_persona_metric(
-                    "persona_ws_runtime_mode_total",
-                    {"mode": runtime_mode, "session_exists": "true" if session_exists else "false"},
-                )
                 _ = session_manager.create(
                     user_id=connection_user_id,
                     persona_id=runtime_persona_id,
                     resume_session_id=session_id,
                 )
-                existing_preferences, activity_surface = _get_session_preferences_with_activity_surface(
-                    session_manager=session_manager,
+                voice_runtime = _normalize_voice_runtime_config(msg)
+                session_manager.update_preferences(
                     session_id=session_id,
                     user_id=connection_user_id,
-                    persisted_preferences=runtime_context.get("preferences"),
-                    persisted_activity_surface=runtime_context.get("activity_surface"),
+                    preferences={"voice_runtime": voice_runtime},
                 )
-                configured_top_k = _get_persona_memory_top_k()
-                default_use_memory = _coerce_bool(
-                    existing_preferences.get("use_memory_context"),
-                    default=True,
-                )
-                requested_use_memory_context = _coerce_bool(
-                    msg.get("use_memory_context"),
-                    default=default_use_memory,
-                )
-                use_memory_context = requested_use_memory_context
-                default_use_companion_context = _coerce_bool(
-                    existing_preferences.get("use_companion_context"),
-                    default=True,
-                )
-                requested_use_companion_context = _coerce_bool(
-                    msg.get("use_companion_context"),
-                    default=default_use_companion_context,
-                )
-                use_companion_context = requested_use_companion_context
-                runtime_persona_state_context_default = _coerce_bool(
-                    runtime_context.get("persona_state_context_default"),
-                    default=True,
-                )
-                default_use_persona_state_context = _coerce_bool(
-                    existing_preferences.get("use_persona_state_context"),
-                    default=runtime_persona_state_context_default,
-                )
-                requested_use_persona_state_context = _coerce_bool(
-                    msg.get("use_persona_state_context"),
-                    default=default_use_persona_state_context,
-                )
-                state_context_override = "use_persona_state_context" in msg
-                use_persona_state_context = requested_use_persona_state_context
-                memory_allowed_by_mode = _memory_mode_allows_personalization_retrieval(
-                    runtime_mode,
-                    session_exists=session_exists,
-                )
-                if not memory_allowed_by_mode:
-                    use_memory_context = False
-                state_context_allowed_by_mode = runtime_mode == "persistent_scoped"
-                if not state_context_allowed_by_mode:
-                    use_persona_state_context = False
-                pref_top_k_raw = existing_preferences.get("memory_top_k", configured_top_k)
-                try:
-                    pref_top_k = int(pref_top_k_raw)
-                except (TypeError, ValueError):
-                    pref_top_k = configured_top_k
-                requested_top_k_raw = msg.get("memory_top_k", pref_top_k)
-                try:
-                    memory_top_k = int(requested_top_k_raw)
-                except (TypeError, ValueError):
-                    memory_top_k = pref_top_k
-                memory_top_k = max(1, min(memory_top_k, configured_top_k))
-                if "session_policy_rules" in msg:
-                    session_policy_rules = normalize_policy_rules(msg.get("session_policy_rules"))
-                else:
-                    session_policy_rules = _session_policy_rules_from_preferences(existing_preferences)
-                preferences_patch: dict[str, Any] = {
-                    "use_memory_context": use_memory_context,
-                    "use_companion_context": use_companion_context,
-                    "use_persona_state_context": use_persona_state_context,
-                    "memory_top_k": memory_top_k,
-                }
-                if "session_policy_rules" in msg:
-                    preferences_patch["session_policy_rules"] = session_policy_rules
-                with contextlib.suppress(Exception):
-                    session_manager.update_preferences(
-                        session_id=session_id,
-                        user_id=connection_user_id,
-                        preferences=preferences_patch,
-                    )
-                _ = _persist_persona_session_preferences(
-                    persona_scope_db,
+                await _emit_notice(
                     session_id=session_id,
-                    user_id=authenticated_user_id,
-                    base_preferences=runtime_context.get("preferences"),
-                    patch_preferences=preferences_patch,
+                    level="info",
+                    message="Voice runtime updated for this live session.",
+                    reason_code="VOICE_CONFIG_UPDATED",
                 )
-                persona_turn_classifier = classify_persona_turn(text)
-                persona_exemplar_context = await resolve_persona_exemplar_runtime_context(
-                    persona_scope_db=persona_scope_db,
-                    user_id=authenticated_user_id,
-                    persona_id=runtime_persona_id,
-                    classifier=persona_turn_classifier,
-                    current_turn_text=text,
-                    lookup_limit=50,
-                )
-                persona_exemplar_assembly = persona_exemplar_context.assembly
-                persona_exemplar_selection = persona_exemplar_context.selection_metadata
-                await _record_turn(
-                    session_id=session_id,
-                    role="user",
-                    content=text,
-                    turn_type="user_message",
-                    metadata={
-                        "source": "ws",
-                        "use_memory_context": use_memory_context,
-                        "use_companion_context": use_companion_context,
-                        "use_persona_state_context": use_persona_state_context,
-                        "memory_top_k": memory_top_k,
-                        "session_policy_rule_count": len(session_policy_rules),
-                        "runtime_mode": runtime_mode,
-                        "session_exists": session_exists,
-                        "persona_exemplar_selection": persona_exemplar_selection,
-                    },
-                    persist_as_memory=False,
-                    persona_id_override=runtime_persona_id,
-                    runtime_mode_override=runtime_mode,
-                    scope_snapshot_id_override=runtime_scope_snapshot_id,
-                )
-                memory_context: list[str] = []
-                if use_memory_context and memory_allowed_by_mode:
-                    memories = retrieve_top_memories(
-                        user_id=authenticated_user_id,
-                        query_text=text,
-                        top_k=memory_top_k,
-                        persona_id=runtime_persona_id,
-                        runtime_mode=runtime_mode,
-                        scope_snapshot_id=runtime_scope_snapshot_id,
-                        session_id=session_id,
-                    )
-                    memory_context = [m.content for m in memories]
-                companion_context = {
-                    "knowledge_lines": [],
-                    "activity_lines": [],
-                    "card_count": 0,
-                    "activity_count": 0,
-                }
-                if use_companion_context:
-                    companion_context = await asyncio.to_thread(
-                        load_companion_context,
-                        user_id=authenticated_user_id,
-                        query=text,
-                    )
-                persona_state_hints: dict[str, str] = {}
-                if use_persona_state_context and state_context_allowed_by_mode:
-                    persona_state_hints = _load_persona_state_hints_for_runtime(
-                        persona_scope_db,
-                        user_id=authenticated_user_id,
-                        persona_id=runtime_persona_id,
-                        runtime_mode=runtime_mode,
-                    )
-                persona_state_fields = sorted(persona_state_hints.keys())
-                memory_usage = {
-                    "enabled": use_memory_context,
-                    "requested_enabled": requested_use_memory_context,
-                    "requested_top_k": memory_top_k,
-                    "applied_count": len(memory_context),
-                    "runtime_mode": runtime_mode,
-                    "persona_state_enabled": use_persona_state_context,
-                    "persona_state_requested_enabled": requested_use_persona_state_context,
-                    "persona_state_profile_default": runtime_persona_state_context_default,
-                    "persona_state_mode_allowed": state_context_allowed_by_mode,
-                    "persona_state_applied_count": len(persona_state_fields),
-                    "persona_state_fields": persona_state_fields,
-                }
-                companion_usage = {
-                    "enabled": use_companion_context,
-                    "requested_enabled": requested_use_companion_context,
-                    "mode": str(companion_context.get("mode") or "recent_fallback"),
-                    "applied_card_count": int(companion_context.get("card_count", 0) or 0),
-                    "applied_goal_count": int(companion_context.get("goal_count", 0) or 0),
-                    "applied_activity_count": int(companion_context.get("activity_count", 0) or 0),
-                }
-                if use_memory_context and memory_context:
+            elif mtype == "voice_commit":
+                original_session_id = msg.get("session_id")
+                session_id = _normalize_ws_identifier(original_session_id, fallback="")
+                if not session_id:
                     await _emit_notice(
-                        session_id=session_id,
-                        level="info",
-                        reason_code="MEMORY_CONTEXT_APPLIED",
-                        message=f"Applied {len(memory_context)} personalization memories",
+                        session_id=default_session_id,
+                        level="error",
+                        message="session_id is required",
+                        reason_code="SESSION_ID_REQUIRED",
                     )
-                elif requested_use_memory_context and not memory_allowed_by_mode:
-                    await _emit_notice(
-                        session_id=session_id,
-                        level="info",
-                        reason_code="MEMORY_CONTEXT_MODE_DISABLED",
-                        message="Memory context is disabled for session_scoped personas.",
-                    )
-                elif not use_memory_context:
-                    await _emit_notice(
-                        session_id=session_id,
-                        level="info",
-                        reason_code="MEMORY_CONTEXT_DISABLED",
-                        message="Memory context disabled for this message",
-                    )
-                if use_companion_context and (
-                    companion_usage["applied_card_count"]
-                    or companion_usage["applied_goal_count"]
-                    or companion_usage["applied_activity_count"]
-                ):
-                    await _emit_notice(
-                        session_id=session_id,
-                        level="info",
-                        reason_code="COMPANION_CONTEXT_APPLIED",
-                        message=(
-                            "Applied companion context from "
-                            f"{companion_usage['applied_card_count']} knowledge cards and "
-                            f"{companion_usage['applied_goal_count']} goals and "
-                            f"{companion_usage['applied_activity_count']} recent activities"
-                        ),
-                    )
-                elif not use_companion_context:
-                    await _emit_notice(
-                        session_id=session_id,
-                        level="info",
-                        reason_code="COMPANION_CONTEXT_DISABLED",
-                        message="Companion context disabled for this message",
-                    )
-                if persona_state_fields:
-                    await _emit_notice(
-                        session_id=session_id,
-                        level="info",
-                        reason_code="PERSONA_STATE_HINTS_APPLIED",
-                        message=f"Applied {len(persona_state_fields)} persona state docs",
-                    )
-                elif state_context_override and requested_use_persona_state_context and not state_context_allowed_by_mode:
-                    await _emit_notice(
-                        session_id=session_id,
-                        level="info",
-                        reason_code="PERSONA_STATE_MODE_DISABLED",
-                        message="Persona state context is disabled for session_scoped personas.",
-                    )
-                elif state_context_override and not use_persona_state_context:
-                    await _emit_notice(
-                        session_id=session_id,
-                        level="info",
-                        reason_code="PERSONA_STATE_DISABLED",
-                        message="Persona state context disabled for this message",
-                    )
-                plan = await _propose_plan(
-                    text,
-                    memory_context=memory_context,
-                    persona_state_hints=persona_state_hints,
-                    companion_context=companion_context,
-                    persona_exemplar_sections=persona_exemplar_assembly.sections,
-                )
-                plan_id = uuid.uuid4().hex
-                max_tool_steps = _get_persona_max_tool_steps()
-                proposed_steps = list(plan.get("steps", []))
-                if len(proposed_steps) > max_tool_steps:
-                    proposed_steps = proposed_steps[:max_tool_steps]
-                    await _emit_notice(
-                        session_id=session_id,
-                        level="warning",
-                        message=f"Plan truncated to max_tool_steps={max_tool_steps}",
-                        reason_code="PLAN_TRUNCATED",
-                    )
-                try:
-                    pending_plan = session_manager.put_plan(
-                        session_id=session_id,
-                        user_id=connection_user_id,
-                        persona_id=runtime_persona_id,
-                        plan_id=plan_id,
-                        steps=proposed_steps,
-                    )
-                except ValueError as exc:
+                    continue
+                transcript = str(msg.get("transcript") or msg.get("text") or "").strip()
+                if not transcript:
+                    transcript = str(voice_transcript_buffer_by_session.get(session_id) or "").strip()
+                if not transcript:
                     await _emit_notice(
                         session_id=session_id,
                         level="error",
-                        message=str(exc),
-                        reason_code="PLAN_INVALID",
+                        message="transcript is required",
+                        reason_code="TRANSCRIPT_REQUIRED",
                     )
                     continue
-                stored_steps: list[dict[str, Any]] = []
-                for step in pending_plan.steps:
-                    step_type = _normalize_persona_step_type(step.step_type, tool_name=step.tool)
-                    policy = _evaluate_step_policy(
-                        step_type=step_type,
-                        tool_name=step.tool,
-                        args=step.args,
-                        persona_policy_rules=persona_policy_rules,
-                        session_policy_rules=session_policy_rules,
-                        session_scopes=session_scopes,
-                        allow_export=allow_export,
-                        allow_delete=allow_delete,
-                    )
-                    if not bool(policy.get("allow", False)):
-                        _increment_persona_metric(
-                            "persona_ws_policy_denials_total",
-                            {
-                                "step_type": _bounded_label(step_type, allowed=_PERSONA_WS_ALLOWED_STEP_TYPES, fallback="mcp_tool"),
-                                "reason": _metric_reason_bucket(policy.get("reason_code")),
-                            },
-                        )
-                    stored_steps.append(
-                        {
-                            "idx": step.idx,
-                            "step_type": step_type,
-                            "tool": step.tool,
-                            "args": step.args,
-                            "description": step.description,
-                            "why": step.why,
-                            "policy": policy,
-                        }
-                    )
-                await _emit_tool_plan(
-                    session_id=session_id,
-                    plan_id=plan_id,
-                    steps=stored_steps,
-                    memory=memory_usage,
-                    companion=companion_usage,
-                    persona_id_value=runtime_persona_id,
+                voice_transcript_buffer_by_session.pop(session_id, None)
+                voice_turn_payload = dict(msg)
+                voice_turn_payload["session_id"] = session_id
+                await _handle_persona_live_turn(
+                    msg=voice_turn_payload,
+                    text=transcript,
+                    turn_type="voice_commit",
+                    source=str(msg.get("source") or "persona_live_voice").strip() or "persona_live_voice",
                 )
             elif mtype == "audio_chunk":
                 session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
@@ -5420,16 +5696,11 @@ async def persona_stream(
                 if transcript_delta:
                     transcript_seq = transcript_seq_by_session[session_id]
                     transcript_seq_by_session[session_id] += 1
-                    await _record_turn(
-                        session_id=session_id,
-                        role="user",
-                        content=transcript_delta,
-                        turn_type="audio_transcript",
-                        metadata={"audio_format": audio_format, "bytes": len(audio_bytes)},
-                        persist_as_memory=False,
-                        persona_id_override=runtime_persona_id,
-                        runtime_mode_override=runtime_mode,
-                        scope_snapshot_id_override=runtime_scope_snapshot_id,
+                    existing_buffer = str(voice_transcript_buffer_by_session.get(session_id) or "").strip()
+                    voice_transcript_buffer_by_session[session_id] = (
+                        f"{existing_buffer} {transcript_delta}".strip()
+                        if existing_buffer
+                        else transcript_delta
                     )
                     await stream.send_json(
                         {
@@ -5441,6 +5712,9 @@ async def persona_stream(
                             "timestamp_ms": timestamp_ms,
                         }
                     )
+
+                if "tts_text" not in msg:
+                    continue
 
                 tts_text = str(msg.get("tts_text") or f"You said: {transcript_delta or 'audio received.'}")
                 tts_source_len = len(tts_text.encode("utf-8"))
@@ -5673,6 +5947,10 @@ async def persona_stream(
                             runtime_mode_override=runtime_mode,
                             scope_snapshot_id_override=runtime_scope_snapshot_id,
                             memory_kind="summary",
+                        )
+                        await _emit_persona_live_tts_for_assistant_text(
+                            session_id=session_id,
+                            assistant_text=assistant_text,
                         )
                         continue
 

@@ -14,6 +14,7 @@ import { PersonaPolicySummary } from "@/components/Option/MCPHub"
 import {
   type PersonaVoiceAnalytics
 } from "@/components/PersonaGarden/CommandAnalyticsSummary"
+import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCard"
 import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
 import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
 import { LiveSessionPanel } from "@/components/PersonaGarden/LiveSessionPanel"
@@ -37,6 +38,10 @@ import {
 } from "@/utils/persona-garden-route"
 import { usePersonaGardenRouteBootstrap } from "@/hooks/usePersonaGardenRouteBootstrap"
 import {
+  usePersonaLiveVoiceController
+} from "@/hooks/usePersonaLiveVoiceController"
+import {
+  useResolvedPersonaVoiceDefaults,
   type PersonaVoiceDefaults
 } from "@/hooks/useResolvedPersonaVoiceDefaults"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
@@ -325,6 +330,8 @@ const SidepanelPersona = ({
   const [catalog, setCatalog] = React.useState<PersonaInfo[]>([])
   const [selectedPersonaId, setSelectedPersonaId] =
     React.useState<string>(DEFAULT_PERSONA_ID)
+  const [personaVoiceDefaults, setPersonaVoiceDefaults] =
+    React.useState<PersonaVoiceDefaults | null>(null)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
   const [openCommandId, setOpenCommandId] = React.useState<string | null>(null)
   const [draftCommandPhrase, setDraftCommandPhrase] = React.useState<string | null>(null)
@@ -407,6 +414,50 @@ const SidepanelPersona = ({
     setPersonaStateContextEnabled(false)
     setPersonaStateContextProfileDefault(false)
   }, [isCompanionMode])
+
+  React.useEffect(() => {
+    const normalizedPersonaId = String(selectedPersonaId || "").trim()
+    if (!normalizedPersonaId || isCompanionMode) {
+      setPersonaVoiceDefaults(null)
+      return
+    }
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(normalizedPersonaId)}` as any,
+          { method: "GET" }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to load persona profile")
+        }
+        const payload = (await response.json()) as PersonaProfileResponse
+        if (!cancelled) {
+          setPersonaVoiceDefaults(payload?.voice_defaults || null)
+        }
+      } catch {
+        if (!cancelled) {
+          setPersonaVoiceDefaults(null)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isCompanionMode, selectedPersonaId])
+
+  const resolvedPersonaVoiceDefaults = useResolvedPersonaVoiceDefaults(personaVoiceDefaults)
+  const livePersonaId = connected ? activeSessionPersonaId || selectedPersonaId : selectedPersonaId
+  const liveVoiceController = usePersonaLiveVoiceController({
+    ws: wsRef.current,
+    connected,
+    sessionId: sessionId || "",
+    personaId: String(livePersonaId || "").trim(),
+    resolvedDefaults: resolvedPersonaVoiceDefaults,
+    canUseServerStt: Boolean(capabilities?.hasAudio)
+  })
 
   const handleOpenCommandFromTestLab = React.useCallback((
     commandId: string,
@@ -694,6 +745,11 @@ const SidepanelPersona = ({
     (payload: any) => {
       const eventType = String(payload?.event || payload?.type || "").toLowerCase()
       if (!eventType) return
+      liveVoiceController.handlePayload(
+        payload && typeof payload === "object"
+          ? (payload as Record<string, unknown>)
+          : null
+      )
 
       if (eventType === "tool_plan") {
         const planId = String(payload?.plan_id || "")
@@ -841,7 +897,7 @@ const SidepanelPersona = ({
         appendLog("notice", "Received persona TTS audio chunk")
       }
     },
-    [appendLog, sessionId]
+    [appendLog, liveVoiceController, sessionId]
   )
 
   const applyPersonaStatePayload = React.useCallback((payload: PersonaStateDocsResponse) => {
@@ -1174,6 +1230,10 @@ const SidepanelPersona = ({
 
       ws.onmessage = (event) => {
         if (typeof event.data !== "string") {
+          if (event.data instanceof ArrayBuffer) {
+            liveVoiceController.handleBinaryPayload(event.data)
+            return
+          }
           appendLog("notice", "Received binary persona stream payload")
           return
         }
@@ -1212,6 +1272,7 @@ const SidepanelPersona = ({
     connecting,
     disconnect,
     handleIncomingPayload,
+    liveVoiceController,
     isCompanionMode,
     loadPersonaStateDocs,
     applySessionPreferences,
@@ -1728,6 +1789,24 @@ const SidepanelPersona = ({
     </div>
   ) : null
 
+  const assistantVoiceCard = (
+    <AssistantVoiceCard
+      resolvedDefaults={resolvedPersonaVoiceDefaults}
+      state={liveVoiceController.state}
+      speechAvailable={liveVoiceController.speechAvailable}
+      isListening={liveVoiceController.isListening}
+      heardText={liveVoiceController.heardText}
+      lastCommittedText={liveVoiceController.lastCommittedText}
+      warning={liveVoiceController.warning}
+      textOnlyDueToTtsFailure={liveVoiceController.textOnlyDueToTtsFailure}
+      sessionAutoResume={liveVoiceController.sessionAutoResume}
+      sessionBargeIn={liveVoiceController.sessionBargeIn}
+      onToggleListening={liveVoiceController.toggleListening}
+      onSessionAutoResumeChange={liveVoiceController.setSessionAutoResume}
+      onSessionBargeInChange={liveVoiceController.setSessionBargeIn}
+    />
+  )
+
   const runtimeApprovalCard = pendingApprovals.length ? (
     <div className="rounded-lg border border-warning/40 bg-warning/5 p-3">
       <Typography.Text strong>
@@ -2239,6 +2318,7 @@ const SidepanelPersona = ({
       content: (
         <LiveSessionPanel
           controls={liveSessionControls}
+          assistantVoice={assistantVoiceCard}
           error={liveSessionStatusPanels}
           pendingPlan={pendingPlanCard}
           transcript={transcriptPanel}

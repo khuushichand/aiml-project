@@ -2017,6 +2017,129 @@ describe("SidepanelPersona", () => {
     expect(within(profileTabPanel).getByText("Assistant defaults saved.")).toBeInTheDocument()
   })
 
+  it("sends persona voice_config on connect and when live session overrides change", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1",
+              tts_provider: "tldw",
+              tts_voice: "af_heart",
+              confirmation_mode: "destructive_only",
+              voice_chat_trigger_phrases: ["hey helper"],
+              auto_resume: true,
+              barge_in: false
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-live-voice",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    await waitFor(() => {
+      expect(getSentPayloads(ws)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-live-voice",
+            voice: expect.objectContaining({
+              trigger_phrases: ["hey helper"],
+              auto_resume: true,
+              barge_in: false
+            }),
+            stt: expect.objectContaining({
+              language: "en-US",
+              model: "whisper-1"
+            }),
+            tts: expect.objectContaining({
+              provider: "tldw",
+              voice: "af_heart"
+            })
+          })
+        ])
+      )
+    })
+
+    fireEvent.click(screen.getByTestId("live-voice-auto-resume"))
+    fireEvent.click(screen.getByTestId("live-voice-barge-in"))
+
+    await waitFor(() => {
+      expect(getSentPayloads(ws)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-live-voice",
+            voice: expect.objectContaining({
+              auto_resume: false,
+              barge_in: true
+            })
+          })
+        ])
+      )
+    })
+  })
+
   it("tracks dirty state and supports reverting state docs without saving", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
@@ -2781,9 +2904,12 @@ describe("SidepanelPersona", () => {
 
     await waitFor(() => {
       expect(confirmSpy).toHaveBeenCalled()
-      expect(mocks.fetchWithAuth).not.toHaveBeenCalled()
       expect(MockWebSocket.instances).toHaveLength(0)
     })
+    const connectSessionCall = mocks.fetchWithAuth.mock.calls.find(([path]) =>
+      String(path).includes("/persona/session")
+    )
+    expect(connectSessionCall).toBeFalsy()
     expect(String(confirmSpy.mock.calls[0]?.[0] || "")).toContain(
       "Connect and discard local drafts"
     )
@@ -2850,6 +2976,7 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
+    confirmSpy.mockClear()
 
     fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
       target: { value: "unsaved disconnect draft" }
@@ -2977,6 +3104,7 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
+    confirmSpy.mockClear()
 
     const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
     await waitFor(() => {

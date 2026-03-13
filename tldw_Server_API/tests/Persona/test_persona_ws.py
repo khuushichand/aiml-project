@@ -1663,7 +1663,7 @@ def test_persona_tool_call_attaches_scope_metadata_from_persisted_session(tmp_pa
     assert scope_payload.get("explicit_ids", {}).get("media_id") == ["2"]
 
 
-def test_persona_audio_chunk_emits_partial_transcript_and_tts_audio():
+def test_persona_audio_chunk_emits_partial_transcript_and_voice_commit_routes_to_plan():
 
     with TestClient(fastapi_app) as c:
         with c.websocket_connect("/api/v1/persona/stream") as ws:
@@ -1687,17 +1687,217 @@ def test_persona_audio_chunk_emits_partial_transcript_and_tts_audio():
             assert isinstance(partial.get("seq"), int)
             assert isinstance(partial.get("timestamp_ms"), int)
 
-            tts_event = _recv_until(ws, lambda d: d.get("event") == "tts_audio")
-            assert tts_event.get("session_id") == "sess_audio"
-            assert tts_event.get("audio_format") == "pcm16"
-            assert tts_event.get("chunk_id")
-            assert isinstance(tts_event.get("chunk_index"), int)
-            assert isinstance(tts_event.get("chunk_count"), int)
-            assert isinstance(tts_event.get("seq"), int)
-            assert isinstance(tts_event.get("timestamp_ms"), int)
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_commit",
+                        "session_id": "sess_audio",
+                    }
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            assert plan.get("session_id") == "sess_audio"
+            assert plan.get("steps")
 
-            audio_bytes = ws.receive_bytes()
-            assert audio_bytes
+
+def test_persona_voice_config_stores_runtime_preferences(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    manager = SessionManager()
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            session_id = "sess_voice_config"
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": session_id,
+                        "voice": {
+                            "trigger_phrases": ["hey helper", "ok helper"],
+                            "auto_resume": True,
+                            "barge_in": False,
+                        },
+                        "stt": {"language": "en-US", "model": "whisper-1"},
+                        "tts": {"provider": "openai", "voice": "alloy"},
+                    }
+                )
+            )
+
+            notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+            assert notice.get("session_id") == session_id
+
+    preferences = manager.get_preferences(session_id=session_id, user_id="1")
+    assert preferences["voice_runtime"] == {
+        "trigger_phrases": ["hey helper", "ok helper"],
+        "auto_resume": True,
+        "barge_in": False,
+        "stt_language": "en-US",
+        "stt_model": "whisper-1",
+        "tts_provider": "openai",
+        "tts_voice": "alloy",
+        "text_only_due_to_tts_failure": False,
+    }
+
+
+def test_persona_voice_commit_requires_session_id():
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(json.dumps({"type": "voice_commit", "transcript": "hello"}))
+
+            notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "SESSION_ID_REQUIRED",
+            )
+            assert "session_id is required" in str(notice.get("message"))
+
+
+def test_persona_voice_commit_reuses_persona_tool_plan_flow(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    manager = SessionManager()
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            session_id = "sess_voice_commit"
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_commit",
+                        "session_id": session_id,
+                        "transcript": "https://example.com",
+                        "source": "persona_live_voice",
+                    }
+                )
+            )
+
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            assert plan.get("session_id") == session_id
+            assert plan.get("steps")
+
+    turns = manager.list_turns(session_id=session_id, user_id="1")
+    assert any(
+        t["role"] == "user"
+        and t["content"] == "https://example.com"
+        and t["type"] == "voice_commit"
+        and t["metadata"].get("source") == "persona_live_voice"
+        for t in turns
+    )
+
+
+def test_persona_voice_confirm_plan_tts_failure_degrades_to_text_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    manager = SessionManager()
+
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_voice_tts_failure",
+        mode="persistent_scoped",
+    )
+    _seed_persona_state_docs(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        persona_id="research_assistant",
+        identity_md="You are the research assistant persona.",
+    )
+
+    async def _raise_tts_failure(*args: object, **kwargs: object) -> tuple[bytes, str]:
+        raise RuntimeError("tts provider unavailable")
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "_generate_persona_live_tts_audio", _raise_tts_failure)
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_voice_tts_failure",
+                        "tts": {"provider": "openai", "voice": "alloy"},
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_commit",
+                        "session_id": "sess_voice_tts_failure",
+                        "transcript": "Who are you?",
+                    }
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            final_answer_step = next(
+                step for step in plan.get("steps", []) if step.get("step_type") == "final_answer"
+            )
+
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": "sess_voice_tts_failure",
+                        "plan_id": plan["plan_id"],
+                        "approved_steps": [final_answer_step["idx"]],
+                    }
+                )
+            )
+
+            assistant_delta = _recv_until(ws, lambda d: d.get("event") == "assistant_delta")
+            assert "research assistant persona" in str(assistant_delta.get("text_delta", "")).lower()
+
+            tts_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "TTS_UNAVAILABLE_TEXT_ONLY",
+            )
+            assert "text-only" in str(tts_notice.get("message", "")).lower()
+
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "cancel",
+                        "session_id": "sess_voice_tts_failure",
+                        "reason": "verify_stream_still_open",
+                    }
+                )
+            )
+            cancel_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "PLAN_CANCELLED",
+            )
+            assert "verify_stream_still_open" in str(cancel_notice.get("message", ""))
+
+    preferences = manager.get_preferences(session_id="sess_voice_tts_failure", user_id="1")
+    assert preferences["voice_runtime"]["text_only_due_to_tts_failure"] is True
 
 
 def test_persona_audio_chunk_rejects_unsupported_format(monkeypatch):
@@ -1827,8 +2027,6 @@ def test_persona_audio_chunk_rate_limited(monkeypatch):
                 )
             )
             _ = _recv_until(ws, lambda d: d.get("event") == "partial_transcript")
-            _ = _recv_until(ws, lambda d: d.get("event") == "tts_audio")
-            _ = ws.receive_bytes()
 
             second_payload = base64.b64encode(b"second chunk").decode("ascii")
             ws.send_text(

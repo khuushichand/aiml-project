@@ -1,0 +1,135 @@
+import React from "react"
+import { Button, Checkbox, Tag, Typography } from "antd"
+
+import type { ResolvedPersonaVoiceDefaults } from "@/hooks/useResolvedPersonaVoiceDefaults"
+import type { PersonaLiveVoiceState } from "@/hooks/usePersonaLiveVoiceController"
+
+type AssistantVoiceCardProps = {
+  resolvedDefaults: ResolvedPersonaVoiceDefaults
+  state: PersonaLiveVoiceState
+  speechAvailable: boolean
+  isListening: boolean
+  heardText: string
+  lastCommittedText: string
+  warning: string | null
+  textOnlyDueToTtsFailure: boolean
+  sessionAutoResume: boolean
+  sessionBargeIn: boolean
+  onToggleListening: () => void
+  onSessionAutoResumeChange: (next: boolean) => void
+  onSessionBargeInChange: (next: boolean) => void
+}
+
+const formatTriggerPhrases = (phrases: string[]): string =>
+  phrases.length ? phrases.join(", ") : "No trigger phrases configured"
+
+export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
+  resolvedDefaults,
+  state,
+  speechAvailable,
+  isListening,
+  heardText,
+  lastCommittedText,
+  warning,
+  textOnlyDueToTtsFailure,
+  sessionAutoResume,
+  sessionBargeIn,
+  onToggleListening,
+  onSessionAutoResumeChange,
+  onSessionBargeInChange
+}) => {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <Typography.Text strong>Assistant Voice</Typography.Text>
+          <Typography.Text type="secondary" className="mt-1 block text-xs">
+            Saved defaults live under Profiles. The toggles here only affect this live
+            session.
+          </Typography.Text>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Tag color={textOnlyDueToTtsFailure ? "orange" : "blue"}>{state}</Tag>
+          <Button
+            data-testid="live-voice-start-stop"
+            size="small"
+            type={isListening ? "default" : "primary"}
+            disabled={!speechAvailable}
+            onClick={onToggleListening}
+          >
+            {isListening ? "Stop listening" : "Start listening"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 text-xs text-text sm:grid-cols-2">
+        <div className="rounded border border-border bg-surface2 px-2 py-1.5">
+          <div className="text-text-muted">Trigger phrases</div>
+          <div data-testid="live-voice-trigger-phrases" className="mt-1">
+            {formatTriggerPhrases(resolvedDefaults.voiceChatTriggerPhrases)}
+          </div>
+        </div>
+        <div className="rounded border border-border bg-surface2 px-2 py-1.5">
+          <div className="text-text-muted">STT</div>
+          <div className="mt-1">{`${resolvedDefaults.sttLanguage} · ${resolvedDefaults.sttModel || "default model"}`}</div>
+        </div>
+        <div className="rounded border border-border bg-surface2 px-2 py-1.5">
+          <div className="text-text-muted">TTS</div>
+          <div className="mt-1">{`${resolvedDefaults.ttsProvider} · ${resolvedDefaults.ttsVoice || "default voice"}`}</div>
+        </div>
+        <div className="rounded border border-border bg-surface2 px-2 py-1.5">
+          <div className="text-text-muted">Live status</div>
+          <div className="mt-1">
+            {speechAvailable
+              ? "Server speech transcription ready."
+              : "Server speech transcription is unavailable for this connection."}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-xs">
+        <Checkbox
+          data-testid="live-voice-auto-resume"
+          checked={sessionAutoResume}
+          onChange={(event) => onSessionAutoResumeChange(event.target.checked)}
+        >
+          Auto-resume (session only)
+        </Checkbox>
+        <Checkbox
+          data-testid="live-voice-barge-in"
+          checked={sessionBargeIn}
+          onChange={(event) => onSessionBargeInChange(event.target.checked)}
+        >
+          Barge-in (session only)
+        </Checkbox>
+      </div>
+
+      {warning ? (
+        <div
+          data-testid="live-voice-warning"
+          className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-warning"
+        >
+          {warning}
+        </div>
+      ) : null}
+
+      {heardText ? (
+        <div className="mt-3 rounded border border-border bg-surface2 px-2 py-1.5 text-xs">
+          <div className="text-text-muted">Last heard</div>
+          <div data-testid="live-voice-heard-text" className="mt-1 whitespace-pre-wrap">
+            {heardText}
+          </div>
+        </div>
+      ) : null}
+
+      {lastCommittedText ? (
+        <div className="mt-2 rounded border border-border bg-surface2 px-2 py-1.5 text-xs">
+          <div className="text-text-muted">Last sent to Persona</div>
+          <div data-testid="live-voice-last-commit" className="mt-1 whitespace-pre-wrap">
+            {lastCommittedText}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
