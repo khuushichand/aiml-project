@@ -40,6 +40,24 @@ const DOCUMENT_PAGE_SIZE = 100
 const DOCUMENT_SCAN_PAGE_SIZE = 500
 const DOCUMENT_MAX_SCAN = 10000
 
+export const getFlashcardDocumentQueryKey = (
+  params: FlashcardDocumentQueryParams,
+  resolved?: {
+    normalizedTags?: string[]
+    dueStatus?: DueStatus
+    sortBy?: DocumentManageSortBy
+    pageSize?: number
+  }
+) => [
+  "flashcards:document",
+  params.deckId ?? null,
+  params.query ?? "",
+  (resolved?.normalizedTags ?? normalizeManageTags(params.tags, params.tag)).join("|"),
+  resolved?.dueStatus ?? params.dueStatus ?? "all",
+  resolved?.sortBy ?? params.sortBy ?? "due",
+  resolved?.pageSize ?? params.pageSize ?? DOCUMENT_PAGE_SIZE
+] as const
+
 const getListTotal = (response: FlashcardListResponse) =>
   Number(response.total ?? response.count ?? 0)
 
@@ -142,15 +160,12 @@ export function useFlashcardDocumentQuery(
   const pageSize = params.pageSize ?? DOCUMENT_PAGE_SIZE
 
   const query = useInfiniteQuery({
-    queryKey: [
-      "flashcards:document",
-      params.deckId ?? null,
-      params.query ?? "",
-      normalizedTags.join("|"),
+    queryKey: getFlashcardDocumentQueryKey(params, {
+      normalizedTags,
       dueStatus,
       sortBy,
       pageSize
-    ],
+    }),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
       const pageIndex =

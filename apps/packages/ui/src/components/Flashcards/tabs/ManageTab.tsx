@@ -31,9 +31,13 @@ import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { trackFlashcardsShortcutHintTelemetry } from "@/utils/flashcards-shortcut-hint-telemetry"
 import { processInChunks } from "@/utils/chunk-processing"
 import {
+  DOCUMENT_VIEW_SUPPORTED_SORTS,
+  getFlashcardDocumentQueryKey,
   useDecksQuery,
+  useFlashcardDocumentQuery,
   useManageQuery,
   useUpdateFlashcardMutation,
+  useUpdateFlashcardsBulkMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
   useCardsKeyboardNav,
@@ -43,6 +47,7 @@ import {
   type ManageSortBy
 } from "../hooks"
 import { MarkdownWithBoundary, FlashcardActionsMenu, FlashcardEditDrawer, FlashcardCreateDrawer } from "../components"
+import { FlashcardDocumentView } from "../components/FlashcardDocumentView"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { formatCardType } from "../utils/model-type-labels"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
@@ -151,7 +156,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [mSort, setMSort] = React.useState<ManageSortBy>("due")
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(20)
-  const [listDensity, setListDensity] = React.useState<"compact" | "expanded">("compact")
+  const [listDensity, setListDensity] = React.useState<"compact" | "expanded" | "document">("compact")
   const [shortcutHintDensity, setShortcutHintDensity] = useFlashcardsShortcutHintDensity()
   React.useEffect(() => {
     if (!isActive || viewMode !== "cards" || shortcutHintDensity === "hidden") return
@@ -197,6 +202,31 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         : t("option:flashcards.shortcutHintsShow", {
             defaultValue: "Show hints"
           })
+  const isDocumentMode = viewMode === "cards" && listDensity === "document"
+  const isDocumentSortSupported = DOCUMENT_VIEW_SUPPORTED_SORTS.includes(
+    mSort as (typeof DOCUMENT_VIEW_SUPPORTED_SORTS)[number]
+  )
+  const documentSort = isDocumentSortSupported ? mSort : "due"
+
+  React.useEffect(() => {
+    if (!isDocumentMode || isDocumentSortSupported) return
+    setMSort("due")
+  }, [isDocumentMode, isDocumentSortSupported])
+
+  const setPresentationMode = React.useCallback(
+    (mode: "compact" | "expanded" | "document") => {
+      setListDensity(mode)
+      if (
+        mode === "document" &&
+        !DOCUMENT_VIEW_SUPPORTED_SORTS.includes(
+          mSort as (typeof DOCUMENT_VIEW_SUPPORTED_SORTS)[number]
+        )
+      ) {
+        setMSort("due")
+      }
+    },
+    [mSort]
+  )
 
   // Check if any filters are active
   const hasActiveFilters = !!(mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all")
@@ -295,6 +325,46 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     pageSize
   })
 
+  const documentQuery = useFlashcardDocumentQuery(
+    {
+      deckId: mDeckId,
+      query: mQuery,
+      tags: mTags,
+      dueStatus: mDue,
+      sortBy: documentSort
+    },
+    {
+      enabled: viewMode === "cards" && listDensity === "document"
+    }
+  )
+  const documentFilterContext = React.useMemo(
+    () => ({
+      deckId: mDeckId,
+      query: mQuery,
+      tags: mTags,
+      dueStatus: mDue,
+      sortBy: documentSort
+    }),
+    [documentSort, mDeckId, mDue, mQuery, mTags]
+  )
+  const documentQueryKey = React.useMemo(
+    () =>
+      getFlashcardDocumentQueryKey(
+        {
+          deckId: mDeckId,
+          query: mQuery,
+          tags: mTags,
+          dueStatus: mDue,
+          sortBy: documentSort
+        },
+        {
+          sortBy: documentSort,
+          dueStatus: mDue
+        }
+      ),
+    [documentSort, mDeckId, mDue, mQuery, mTags]
+  )
+
   React.useEffect(() => {
     const timer = window.setTimeout(() => {
       if (mQueryInput === mQuery) return
@@ -335,7 +405,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   }
 
   const selectAllOnPage = () => {
-    const ids = (manageQuery.data?.items || []).map((i) => i.uuid)
+    const ids = visibleItems.map((i) => i.uuid)
     setSelectAllAcross(false)
     setSelectedIds(new Set([...(selectedIds || new Set()), ...ids]))
   }
@@ -346,6 +416,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   }, [])
 
   const selectAllAcrossResults = () => {
+    if (selectAllAcrossDisabled) return
     setSelectAllAcross(true)
     setSelectedIds(new Set())
   }
@@ -363,17 +434,27 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const pageItems = (manageQuery.data?.items || []).filter(
     (item) => !pendingDeletions[item.uuid]
   )
-  const pageCount = pageItems.length
+  const documentItems = documentQuery.items.filter((item) => !pendingDeletions[item.uuid])
+  const visibleItems = isDocumentMode ? documentItems : pageItems
+  const documentTotalCount =
+    documentQuery.data && documentQuery.data.pages.length > 0
+      ? (documentQuery.data.pages[documentQuery.data.pages.length - 1]?.total ?? documentItems.length)
+      : documentItems.length
+  const pageCount = visibleItems.length
   const selectedOnPageCount = selectAllAcross
     ? pageCount
-    : pageItems.filter((item) => selectedIds.has(item.uuid)).length
-  const totalCount = manageQuery.data?.total ?? manageQuery.data?.count ?? 0
+    : visibleItems.filter((item) => selectedIds.has(item.uuid)).length
+  const totalCount = isDocumentMode
+    ? documentTotalCount
+    : manageQuery.data?.total ?? manageQuery.data?.count ?? 0
   const selectedCount = selectAllAcross ? totalCount : selectedIds.size
   const anySelection = selectedCount > 0
   const allOnPageSelected = pageCount > 0 && selectedOnPageCount === pageCount
   const someOnPageSelected = selectedOnPageCount > 0 && selectedOnPageCount < pageCount
+  const selectAllAcrossDisabled = isDocumentMode && documentQuery.isTruncated
 
   const updateMutation = useUpdateFlashcardMutation()
+  const bulkUpdateMutation = useUpdateFlashcardsBulkMutation()
   const resetSchedulingMutation = useResetFlashcardSchedulingMutation()
   const deleteMutation = useDeleteFlashcardMutation()
 
@@ -424,7 +505,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   // Reset focused index when page or filters change
   React.useEffect(() => {
     setFocusedIndex(-1)
-  }, [page, pageSize, mDeckId, mQuery, mTags, mDue, mSort])
+  }, [page, pageSize, listDensity, mDeckId, mQuery, mTags, mDue, mSort])
 
   async function fetchAllItemsAcrossFilters(): Promise<Flashcard[]> {
     const items: Flashcard[] = []
@@ -478,8 +559,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
   async function getSelectedItems(): Promise<Flashcard[]> {
     if (!selectAllAcross) {
-      const onPage = manageQuery.data?.items || []
-      return onPage.filter((i) => selectedIds.has(i.uuid))
+      return visibleItems.filter((i) => selectedIds.has(i.uuid))
     }
     const all = await fetchAllItemsAcrossFilters()
     return all
@@ -1075,22 +1155,22 @@ export const ManageTab: React.FC<ManageTabProps> = ({
 
   // Keyboard navigation for Cards tab
   useCardsKeyboardNav({
-    enabled: isActive && viewMode === "cards" && !editOpen && !createOpen && !moveOpen,
+    enabled: isActive && viewMode === "cards" && !isDocumentMode && !editOpen && !createOpen && !moveOpen,
     itemCount: pageCount,
     focusedIndex,
     onFocusChange: setFocusedIndex,
     onEdit: (index) => {
-      const card = pageItems[index]
+      const card = visibleItems[index]
       if (card) openEdit(card)
     },
     onToggleSelect: (index) => {
-      const card = pageItems[index]
+      const card = visibleItems[index]
       if (card && !selectAllAcross) {
         toggleSelect(card.uuid, !selectedIds.has(card.uuid))
       }
     },
     onDelete: async (index) => {
-      const card = pageItems[index]
+      const card = visibleItems[index]
       if (card) {
         // Open edit drawer and trigger delete from there for consistency
         setEditing(card)
@@ -1248,6 +1328,46 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       )
     }
   }
+
+  const manageSortOptions = React.useMemo(() => {
+    const options: Array<{ value: ManageSortBy; label: string }> = [
+      {
+        value: "due",
+        label: t("option:flashcards.sortDueDate", {
+          defaultValue: "Sort: Due date"
+        })
+      },
+      {
+        value: "created",
+        label: t("option:flashcards.sortCreatedDate", {
+          defaultValue: "Sort: Created"
+        })
+      },
+      {
+        value: "ease",
+        label: t("option:flashcards.sortEaseFactor", {
+          defaultValue: "Sort: Ease factor"
+        })
+      },
+      {
+        value: "last_reviewed",
+        label: t("option:flashcards.sortLastReviewed", {
+          defaultValue: "Sort: Last reviewed"
+        })
+      },
+      {
+        value: "front_alpha",
+        label: t("option:flashcards.sortFrontAlpha", {
+          defaultValue: "Sort: Front (A-Z)"
+        })
+      }
+    ]
+
+    if (!isDocumentMode) return options
+
+    const supported = new Set(documentQuery.supportedSorts)
+    return options.filter((option) => supported.has(option.value as "due" | "created"))
+  }, [documentQuery.supportedSorts, isDocumentMode, t])
 
   return (
     <>
@@ -1524,61 +1644,55 @@ export const ManageTab: React.FC<ManageTabProps> = ({
               ]}
             />
             <div className="flex items-center gap-2">
-              <Select<ManageSortBy>
-                value={mSort}
-                className="min-w-44"
-                onChange={(value) => {
-                  setMSort(value)
-                  setPage(1)
-                }}
-                data-testid="flashcards-manage-sort-select"
-                options={[
-                  {
-                    value: "due",
-                    label: t("option:flashcards.sortDueDate", {
-                      defaultValue: "Sort: Due date"
-                    })
-                  },
-                  {
-                    value: "created",
-                    label: t("option:flashcards.sortCreatedDate", {
-                      defaultValue: "Sort: Created"
-                    })
-                  },
-                  {
-                    value: "ease",
-                    label: t("option:flashcards.sortEaseFactor", {
-                      defaultValue: "Sort: Ease factor"
-                    })
-                  },
-                  {
-                    value: "last_reviewed",
-                    label: t("option:flashcards.sortLastReviewed", {
-                      defaultValue: "Sort: Last reviewed"
-                    })
-                  },
-                  {
-                    value: "front_alpha",
-                    label: t("option:flashcards.sortFrontAlpha", {
-                      defaultValue: "Sort: Front (A-Z)"
-                    })
-                  }
-                ]}
-              />
-              <Tooltip
-                title={
-                  listDensity === "compact"
-                    ? t("option:flashcards.expandedView", { defaultValue: "Expanded view" })
-                    : t("option:flashcards.compactView", { defaultValue: "Compact view" })
-                }
-              >
-                <Button
-                  type="text"
-                  icon={listDensity === "compact" ? <LayoutList className="size-4" /> : <ListIcon className="size-4" />}
-                  onClick={() => setListDensity((d) => (d === "compact" ? "expanded" : "compact"))}
-                  data-testid="flashcards-density-toggle"
+              <div data-testid="flashcards-manage-sort-select">
+                <Select<ManageSortBy>
+                  value={mSort}
+                  className="min-w-44"
+                  onChange={(value) => {
+                    setMSort(value)
+                    setPage(1)
+                  }}
+                  options={manageSortOptions}
                 />
-              </Tooltip>
+              </div>
+              <div
+                className="flex items-center gap-1 rounded-lg border border-border bg-surface px-1 py-1"
+                aria-label={t("option:flashcards.presentationMode", {
+                  defaultValue: "Presentation mode"
+                })}
+              >
+                <Tooltip
+                  title={t("option:flashcards.compactView", { defaultValue: "Compact view" })}
+                >
+                  <Button
+                    type={listDensity === "compact" ? "default" : "text"}
+                    icon={<ListIcon className="size-4" />}
+                    onClick={() => setPresentationMode("compact")}
+                    data-testid="flashcards-density-toggle-compact"
+                  />
+                </Tooltip>
+                <Tooltip
+                  title={t("option:flashcards.expandedView", { defaultValue: "Expanded view" })}
+                >
+                  <Button
+                    type={listDensity === "expanded" ? "default" : "text"}
+                    icon={<LayoutList className="size-4" />}
+                    onClick={() => setPresentationMode("expanded")}
+                    data-testid="flashcards-density-toggle"
+                  />
+                </Tooltip>
+                <Tooltip
+                  title={t("option:flashcards.documentView", { defaultValue: "Document view" })}
+                >
+                  <Button
+                    type={listDensity === "document" ? "default" : "text"}
+                    onClick={() => setPresentationMode("document")}
+                    data-testid="flashcards-density-toggle-document"
+                  >
+                    {t("option:flashcards.document", { defaultValue: "Doc" })}
+                  </Button>
+                </Tooltip>
+              </div>
             </div>
           </div>
         </div>
@@ -1639,6 +1753,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                   <button
                     className="text-primary hover:underline text-sm"
                     onClick={selectAllAcrossResults}
+                    disabled={selectAllAcrossDisabled}
+                    data-testid="flashcards-select-all-across"
                   >
                     {t("option:flashcards.selectAllCount", {
                       defaultValue: "Select all {{count}}",
@@ -1659,55 +1775,77 @@ export const ManageTab: React.FC<ManageTabProps> = ({
         )}
 
         {viewMode === "cards" ? (
-        <List
-          loading={manageQuery.isFetching}
-          dataSource={pageItems}
-          locale={{
-            emptyText: (
-              <Empty
-                description={t("option:flashcards.noCardsTitle", {
-                  defaultValue:
-                    mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all"
-                      ? "No cards match your filters"
-                      : "No flashcards yet"
-                })}
-              >
-                <Space orientation="vertical" align="center">
-                  <Text type="secondary">
-                    {t("option:flashcards.noCardsDescription", {
-                      defaultValue:
-                        mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all"
-                          ? "Try adjusting your search, deck, tag, or due filters."
-                          : "Create cards from your notes and media, or import an existing deck."
-                    })}
-                  </Text>
-                  <Space>
-                    {mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all" ? (
-                      <Button onClick={clearAllFilters}>
-                        {t("option:flashcards.clearFilters", {
-                          defaultValue: "Clear filters"
-                        })}
-                      </Button>
-                    ) : (
-                      <>
-                        <Button type="primary" onClick={() => setCreateOpen(true)}>
-                          {t("option:flashcards.noCardsCreateCta", {
-                            defaultValue: "Create card"
+        isDocumentMode ? (
+          <FlashcardDocumentView
+            items={documentItems}
+            decks={decksQuery.data || []}
+            isLoading={documentQuery.isLoading}
+            isFetchingNextPage={documentQuery.isFetchingNextPage}
+            hasNextPage={Boolean(documentQuery.hasNextPage)}
+            isTruncated={documentQuery.isTruncated}
+            selectedIds={selectedIds}
+            selectAllAcross={selectAllAcross}
+            filterContext={documentFilterContext}
+            queryKey={documentQueryKey}
+            onToggleSelect={toggleSelect}
+            onLoadMore={() => {
+              if (documentQuery.hasNextPage && !documentQuery.isFetchingNextPage) {
+                void documentQuery.fetchNextPage()
+              }
+            }}
+            onOpenDrawer={openEdit}
+            bulkUpdate={bulkUpdateMutation.mutateAsync}
+          />
+        ) : (
+          <List
+            loading={manageQuery.isFetching}
+            dataSource={pageItems}
+            locale={{
+              emptyText: (
+                <Empty
+                  description={t("option:flashcards.noCardsTitle", {
+                    defaultValue:
+                      mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all"
+                        ? "No cards match your filters"
+                        : "No flashcards yet"
+                  })}
+                >
+                  <Space orientation="vertical" align="center">
+                    <Text type="secondary">
+                      {t("option:flashcards.noCardsDescription", {
+                        defaultValue:
+                          mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all"
+                            ? "Try adjusting your search, deck, tag, or due filters."
+                            : "Create cards from your notes and media, or import an existing deck."
+                      })}
+                    </Text>
+                    <Space>
+                      {mQuery || mTags.length > 0 || mDeckId != null || mDue !== "all" ? (
+                        <Button onClick={clearAllFilters}>
+                          {t("option:flashcards.clearFilters", {
+                            defaultValue: "Clear filters"
                           })}
                         </Button>
-                        <Button onClick={onNavigateToImport}>
-                          {t("option:flashcards.noCardsImportCta", {
-                            defaultValue: "Import flashcards"
-                          })}
-                        </Button>
-                      </>
-                    )}
+                      ) : (
+                        <>
+                          <Button type="primary" onClick={() => setCreateOpen(true)}>
+                            {t("option:flashcards.noCardsCreateCta", {
+                              defaultValue: "Create card"
+                            })}
+                          </Button>
+                          <Button onClick={onNavigateToImport}>
+                            {t("option:flashcards.noCardsImportCta", {
+                              defaultValue: "Import flashcards"
+                            })}
+                          </Button>
+                        </>
+                      )}
+                    </Space>
                   </Space>
-                </Space>
-              </Empty>
-            )
-          }}
-          renderItem={(item, index) => {
+                </Empty>
+              )
+            }}
+            renderItem={(item, index) => {
             const isFocused = index === focusedIndex
             const compactSchedule = compactSchedulingLabels(item)
             const expandedSchedule = expandedSchedulingLabels(item)
@@ -1930,6 +2068,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             </List.Item>
           )}}
         />
+        )
         ) : (
           <List
             dataSource={Object.values(pendingDeletions).sort(
@@ -1994,7 +2133,7 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           />
         )}
 
-        {viewMode === "cards" && (
+        {viewMode === "cards" && !isDocumentMode && (
         <div className="mt-3 flex justify-end">
           <Pagination
             current={page}

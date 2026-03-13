@@ -41,6 +41,25 @@ Example:
 
 `The powerhouse of the cell is the {{c1::mitochondrion}}.`
 
+## Manage Document Mode
+
+Use `Manage` → `Doc` when you want to review and clean up a large filtered deck in one continuous scroll instead of page-by-page cards.
+
+Document mode supports:
+
+- Continuous loading of the filtered result set as you scroll
+- Inline row editing for `Front`, `Back`, `Deck`, `Tags`, `Notes`, and `Template`
+- Immediate per-row saves with row-local conflict recovery
+- Inline undo after a successful row save
+
+Behavior notes:
+
+- Document mode only supports stable `Due date` and `Created` sorting.
+- If a multi-tag query hits the scan cap, a truncation banner appears and `Select all` across results is disabled for that view.
+- `Cmd/Ctrl+Enter` saves the active row.
+- `Escape` cancels the active row edit and restores the last saved values.
+- Use `Open drawer` on a row when you need the full edit surface, preview, or scheduling controls.
+
 ## Import and Export Formats
 
 ### Delimited (CSV/TSV)
