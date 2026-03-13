@@ -31,7 +31,9 @@ type TestLabPanelProps = {
   selectedPersonaId: string
   selectedPersonaName: string
   isActive?: boolean
-  onOpenCommand?: (commandId: string) => void
+  onOpenCommand?: (commandId: string, heardText: string) => void
+  initialHeardText?: string
+  rerunRequestToken?: number
 }
 
 const prettyJson = (value: unknown): string =>
@@ -41,10 +43,12 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
   selectedPersonaId,
   selectedPersonaName,
   isActive = false,
-  onOpenCommand
+  onOpenCommand,
+  initialHeardText = "",
+  rerunRequestToken = 0
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
-  const [heardText, setHeardText] = React.useState("")
+  const [heardText, setHeardText] = React.useState(initialHeardText)
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [result, setResult] = React.useState<PersonaCommandDryRunResult | null>(null)
@@ -59,8 +63,14 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
     setError(null)
   }, [isActive])
 
-  const handleRun = React.useCallback(async () => {
-    const trimmed = heardText.trim()
+  React.useEffect(() => {
+    setHeardText((current) =>
+      current === initialHeardText ? current : initialHeardText
+    )
+  }, [initialHeardText])
+
+  const runDryRun = React.useCallback(async (nextHeardText: string) => {
+    const trimmed = nextHeardText.trim()
     if (!selectedPersonaId || !trimmed) return
     setLoading(true)
     setError(null)
@@ -87,7 +97,22 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
     } finally {
       setLoading(false)
     }
-  }, [heardText, selectedPersonaId])
+  }, [selectedPersonaId])
+
+  React.useEffect(() => {
+    if (!isActive || !selectedPersonaId || rerunRequestToken <= 0) return
+    const nextHeardText = String(initialHeardText || heardText).trim()
+    if (!nextHeardText) return
+    setHeardText(nextHeardText)
+    void runDryRun(nextHeardText)
+  }, [
+    heardText,
+    initialHeardText,
+    isActive,
+    rerunRequestToken,
+    runDryRun,
+    selectedPersonaId
+  ])
 
   return (
     <div className="rounded-lg border border-border bg-surface p-3">
@@ -143,7 +168,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                 className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={loading || heardText.trim().length === 0}
                 onClick={() => {
-                  void handleRun()
+                  void runDryRun(heardText)
                 }}
               >
                 {loading
@@ -218,7 +243,12 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                         type="button"
                         data-testid="persona-test-lab-open-command"
                         className="mt-2 rounded-md border border-red-500/40 bg-white/60 px-2 py-1 text-xs font-medium text-red-700 transition hover:bg-white/80"
-                        onClick={() => onOpenCommand(result.command_id as string)}
+                        onClick={() =>
+                          onOpenCommand(
+                            result.command_id as string,
+                            String(result.heard_text || heardText).trim()
+                          )
+                        }
                       >
                         {t("sidepanel:personaGarden.testLab.openInCommands", {
                           defaultValue: "Open in Commands"

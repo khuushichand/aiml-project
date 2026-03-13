@@ -157,13 +157,29 @@ vi.mock("@/components/PersonaGarden/LiveSessionPanel", () => ({
 vi.mock("@/components/PersonaGarden/CommandsPanel", () => ({
   CommandsPanel: ({
     isActive,
-    openCommandId
+    openCommandId,
+    rerunAfterSaveCommandId,
+    onRerunAfterSave
   }: {
     isActive?: boolean
     openCommandId?: string | null
+    rerunAfterSaveCommandId?: string | null
+    onRerunAfterSave?: (commandId: string) => void
   }) => (
     <div data-testid="commands-panel">
-      {isActive ? "active" : "inactive"}:{openCommandId || "none"}
+      {isActive ? "active" : "inactive"}:{openCommandId || "none"}:
+      {rerunAfterSaveCommandId || "none"}
+      <button
+        type="button"
+        data-testid="commands-panel-rerun"
+        onClick={() =>
+          onRerunAfterSave?.(
+            String(rerunAfterSaveCommandId || openCommandId || "").trim()
+          )
+        }
+      >
+        rerun
+      </button>
     </div>
   )
 }))
@@ -217,17 +233,26 @@ vi.mock("@/components/PersonaGarden/StateDocsPanel", () => ({
 vi.mock("@/components/PersonaGarden/TestLabPanel", () => ({
   TestLabPanel: ({
     isActive,
-    onOpenCommand
+    onOpenCommand,
+    initialHeardText,
+    rerunRequestToken
   }: {
     isActive?: boolean
-    onOpenCommand?: (commandId: string) => void
+    onOpenCommand?: (commandId: string, heardText: string) => void
+    initialHeardText?: string
+    rerunRequestToken?: number
   }) => (
     <div data-testid="test-lab-panel">
-      {isActive ? "active" : "inactive"}
+      <div data-testid="test-lab-state">
+        {isActive ? "active" : "inactive"}:{initialHeardText || "none"}:
+        {String(rerunRequestToken ?? 0)}
+      </div>
       <button
         type="button"
         data-testid="test-lab-open-command"
-        onClick={() => onOpenCommand?.("cmd-alert")}
+        onClick={() =>
+          onOpenCommand?.("cmd-alert", "send alert for model drift")
+        }
       >
         open command
       </button>
@@ -248,7 +273,7 @@ vi.mock("~/components/Sidepanel/Chat/SidepanelHeaderSimple", () => ({
 import SidepanelPersona from "../sidepanel-persona"
 
 describe("SidepanelPersona command handoff", () => {
-  it("switches from test lab to commands and forwards the requested command id", () => {
+  it("switches from test lab to commands and back to rerun the repaired phrase", () => {
     render(
       <MemoryRouter initialEntries={["/persona?tab=test-lab"]}>
         <SidepanelPersona />
@@ -264,7 +289,16 @@ describe("SidepanelPersona command handoff", () => {
       "commands"
     )
     expect(screen.getByTestId("commands-panel")).toHaveTextContent(
-      "active:cmd-alert"
+      "active:cmd-alert:cmd-alert"
+    )
+
+    fireEvent.click(screen.getByTestId("commands-panel-rerun"))
+
+    expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
+      "test-lab"
+    )
+    expect(screen.getByTestId("test-lab-state")).toHaveTextContent(
+      "active:send alert for model drift:1"
     )
   })
 })

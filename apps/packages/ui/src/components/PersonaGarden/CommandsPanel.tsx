@@ -63,6 +63,8 @@ type CommandsPanelProps = {
   isActive?: boolean
   openCommandId?: string | null
   onOpenCommandHandled?: (commandId: string) => void
+  rerunAfterSaveCommandId?: string | null
+  onRerunAfterSave?: (commandId: string) => void
 }
 
 const REQUEST_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const
@@ -265,7 +267,9 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   selectedPersonaName,
   isActive = false,
   openCommandId = null,
-  onOpenCommandHandled
+  onOpenCommandHandled,
+  rerunAfterSaveCommandId = null,
+  onRerunAfterSave
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const [commands, setCommands] = React.useState<PersonaVoiceCommand[]>([])
@@ -618,6 +622,12 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
         return next
       })
       resetForm()
+      if (
+        String(rerunAfterSaveCommandId || "").trim() &&
+        saved.id === String(rerunAfterSaveCommandId || "").trim()
+      ) {
+        onRerunAfterSave?.(saved.id)
+      }
     } catch (saveError) {
       setError(
         saveError instanceof Error
@@ -627,7 +637,14 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     } finally {
       setSaving(false)
     }
-  }, [connections, formState, resetForm, selectedPersonaId])
+  }, [
+    connections,
+    formState,
+    onRerunAfterSave,
+    resetForm,
+    rerunAfterSaveCommandId,
+    selectedPersonaId
+  ])
 
   return (
     <div className="rounded-lg border border-border bg-surface p-3">

@@ -481,4 +481,46 @@ describe("CommandsPanel", () => {
     ).toHaveAttribute("data-selected", "true")
     expect(onOpenCommandHandled).toHaveBeenCalledWith("cmd-missing-connection")
   })
+
+  it("requests a test-lab rerun after saving a repaired command", async () => {
+    const onOpenCommandHandled = vi.fn()
+    const onRerunAfterSave = vi.fn()
+
+    render(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        openCommandId="cmd-missing-connection"
+        onOpenCommandHandled={onOpenCommandHandled}
+        rerunAfterSaveCommandId="cmd-missing-connection"
+        onRerunAfterSave={onRerunAfterSave}
+      />
+    )
+
+    await screen.findByText("Broken Alerts Command")
+    await waitFor(() =>
+      expect(screen.getByTestId("persona-commands-name-input")).toHaveValue(
+        "Broken Alerts Command"
+      )
+    )
+
+    fireEvent.change(screen.getByTestId("persona-commands-connection-select"), {
+      target: { value: "conn-1" }
+    })
+    fireEvent.click(screen.getByTestId("persona-commands-save"))
+
+    await waitFor(() =>
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/persona/profiles/persona-1/voice-commands/cmd-missing-connection",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.objectContaining({
+            connection_id: "conn-1"
+          })
+        })
+      )
+    )
+    expect(onRerunAfterSave).toHaveBeenCalledWith("cmd-missing-connection")
+  })
 })

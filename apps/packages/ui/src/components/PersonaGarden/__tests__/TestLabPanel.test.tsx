@@ -158,6 +158,34 @@ describe("TestLabPanel", () => {
     expect(screen.getByText("Connection missing: conn-missing")).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId("persona-test-lab-open-command"))
-    expect(onOpenCommand).toHaveBeenCalledWith("cmd-alert")
+    expect(onOpenCommand).toHaveBeenCalledWith(
+      "cmd-alert",
+      "send alert for model drift"
+    )
+  })
+
+  it("reruns the last phrase automatically when requested by the route", async () => {
+    render(
+      <TestLabPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        initialHeardText="send alert for model drift"
+        rerunRequestToken={1}
+      />
+    )
+
+    await waitFor(() =>
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/persona/profiles/persona-1/voice-commands/test",
+        expect.objectContaining({
+          method: "POST",
+          body: { heard_text: "send alert for model drift" }
+        })
+      )
+    )
+    expect(screen.getByTestId("persona-test-lab-heard-input")).toHaveValue(
+      "send alert for model drift"
+    )
   })
 })

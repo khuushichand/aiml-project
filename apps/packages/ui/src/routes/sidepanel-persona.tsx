@@ -320,6 +320,10 @@ const SidepanelPersona = ({
     React.useState<string>(DEFAULT_PERSONA_ID)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
   const [openCommandId, setOpenCommandId] = React.useState<string | null>(null)
+  const [rerunAfterSaveCommandId, setRerunAfterSaveCommandId] =
+    React.useState<string | null>(null)
+  const [lastTestLabPhrase, setLastTestLabPhrase] = React.useState("")
+  const [testLabRerunToken, setTestLabRerunToken] = React.useState(0)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
   const [sessionHistory, setSessionHistory] = React.useState<PersonaSessionSummary[]>([])
   const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
@@ -392,10 +396,16 @@ const SidepanelPersona = ({
     setPersonaStateContextProfileDefault(false)
   }, [isCompanionMode])
 
-  const handleOpenCommandFromTestLab = React.useCallback((commandId: string) => {
+  const handleOpenCommandFromTestLab = React.useCallback((
+    commandId: string,
+    heardText: string
+  ) => {
     const normalizedCommandId = String(commandId || "").trim()
+    const normalizedHeardText = String(heardText || "").trim()
     if (!normalizedCommandId) return
     setOpenCommandId(normalizedCommandId)
+    setRerunAfterSaveCommandId(normalizedCommandId)
+    setLastTestLabPhrase(normalizedHeardText)
     setActiveTab("commands")
   }, [])
 
@@ -406,6 +416,17 @@ const SidepanelPersona = ({
       current === normalizedCommandId ? null : current
     )
   }, [])
+
+  const handleRerunAfterCommandSave = React.useCallback((commandId: string) => {
+    const normalizedCommandId = String(commandId || "").trim()
+    if (!normalizedCommandId) return
+    if (rerunAfterSaveCommandId !== normalizedCommandId) return
+    if (String(lastTestLabPhrase || "").trim()) {
+      setActiveTab("test-lab")
+      setTestLabRerunToken((previous) => previous + 1)
+    }
+    setRerunAfterSaveCommandId(null)
+  }, [lastTestLabPhrase, rerunAfterSaveCommandId])
 
   React.useEffect(() => {
     if (!isCompanionMode || capsLoading || !capabilities?.hasPersonalization) {
@@ -2107,6 +2128,8 @@ const SidepanelPersona = ({
           isActive={activeTab === "commands"}
           openCommandId={openCommandId}
           onOpenCommandHandled={handleOpenCommandHandled}
+          rerunAfterSaveCommandId={rerunAfterSaveCommandId}
+          onRerunAfterSave={handleRerunAfterCommandSave}
         />
       )
     },
@@ -2118,6 +2141,8 @@ const SidepanelPersona = ({
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "test-lab"}
+          initialHeardText={lastTestLabPhrase}
+          rerunRequestToken={testLabRerunToken}
           onOpenCommand={handleOpenCommandFromTestLab}
         />
       )
