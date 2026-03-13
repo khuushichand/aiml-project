@@ -324,6 +324,10 @@ def test_slides_create_and_export_json(slides_client):
         "description": None,
         "theme": "black",
         "settings": {"controls": True},
+        "studio_data": {
+            "origin": "blank",
+            "default_voice": {"provider": "openai", "voice": "alloy"},
+        },
         "slides": [
             {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
             {"order": 1, "layout": "content", "title": "Slide", "content": "- A\n- B", "speaker_notes": None, "metadata": {}},
@@ -334,11 +338,13 @@ def test_slides_create_and_export_json(slides_client):
     assert resp.status_code == 201
     data = resp.json()
     assert data["title"] == "Deck"
+    assert data["studio_data"] == payload["studio_data"]
     presentation_id = data["id"]
     export_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/export?format=json")
     assert export_resp.status_code == 200
     exported = export_resp.json()
     assert exported["id"] == presentation_id
+    assert exported["studio_data"] == payload["studio_data"]
 
 
 def test_slides_create_rejects_invalid_image(slides_client):
@@ -586,6 +592,10 @@ def test_slides_versions_and_restore(slides_client):
         "description": None,
         "theme": "black",
         "settings": {"controls": True},
+        "studio_data": {
+            "origin": "blank",
+            "default_voice": {"provider": "openai", "voice": "alloy"},
+        },
         "slides": [
             {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
         ],
@@ -598,10 +608,17 @@ def test_slides_versions_and_restore(slides_client):
 
     update_resp = slides_client.patch(
         f"/api/v1/slides/presentations/{presentation_id}",
-        json={"title": "Updated"},
+        json={
+            "title": "Updated",
+            "studio_data": {
+                "origin": "extension_capture",
+                "default_voice": {"provider": "openai", "voice": "verse"},
+            },
+        },
         headers={"If-Match": etag},
     )
     assert update_resp.status_code == 200
+    assert update_resp.json()["studio_data"]["origin"] == "extension_capture"
     new_etag = update_resp.headers["ETag"]
 
     versions_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/versions")
@@ -613,6 +630,7 @@ def test_slides_versions_and_restore(slides_client):
     version_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/versions/1")
     assert version_resp.status_code == 200
     assert version_resp.json()["title"] == "Deck"
+    assert version_resp.json()["studio_data"] == payload["studio_data"]
 
     restore_resp = slides_client.post(
         f"/api/v1/slides/presentations/{presentation_id}/versions/1/restore",
@@ -620,6 +638,7 @@ def test_slides_versions_and_restore(slides_client):
     )
     assert restore_resp.status_code == 200
     assert restore_resp.json()["title"] == "Deck"
+    assert restore_resp.json()["studio_data"] == payload["studio_data"]
 
 def test_slides_generate_from_prompt_uses_stubbed_llm(slides_client, monkeypatch):
     monkeypatch.setattr(

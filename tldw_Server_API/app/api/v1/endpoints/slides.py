@@ -247,6 +247,14 @@ def _serialize_settings(settings: dict[str, Any] | None) -> str | None:
     return json.dumps(settings)
 
 
+def _serialize_studio_data(studio_data: dict[str, Any] | None) -> str | None:
+    if studio_data is None:
+        return None
+    if not isinstance(studio_data, dict):
+        raise HTTPException(status_code=422, detail="invalid_studio_data")
+    return json.dumps(studio_data)
+
+
 def _deserialize_settings(value: str | None) -> dict[str, Any] | None:
     if not value:
         return None
@@ -254,6 +262,16 @@ def _deserialize_settings(value: str | None) -> dict[str, Any] | None:
         parsed = json.loads(value)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=422, detail="invalid_settings_json") from exc
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _deserialize_studio_data(value: str | None) -> dict[str, Any] | None:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="invalid_studio_data_json") from exc
     return parsed if isinstance(parsed, dict) else None
 
 
@@ -365,6 +383,9 @@ def _payload_to_presentation(payload: dict[str, Any]) -> PresentationResponse:
     settings = payload.get("settings")
     if isinstance(settings, str):
         settings = _deserialize_settings(settings)
+    studio_data = payload.get("studio_data")
+    if isinstance(studio_data, str):
+        studio_data = _deserialize_studio_data(studio_data)
     source_ref = payload.get("source_ref")
     if isinstance(source_ref, str):
         source_ref = _deserialize_source_ref(source_ref)
@@ -388,6 +409,7 @@ def _payload_to_presentation(payload: dict[str, Any]) -> PresentationResponse:
         marp_theme=payload.get("marp_theme"),
         template_id=payload.get("template_id"),
         settings=settings if isinstance(settings, dict) or settings is None else None,
+        studio_data=studio_data if isinstance(studio_data, dict) or studio_data is None else None,
         slides=slides,
         custom_css=payload.get("custom_css"),
         source_type=payload.get("source_type"),
@@ -432,6 +454,7 @@ def _build_presentation_response(row) -> PresentationResponse:
         marp_theme=getattr(row, "marp_theme", None),
         template_id=getattr(row, "template_id", None),
         settings=_deserialize_settings(row.settings),
+        studio_data=_deserialize_studio_data(getattr(row, "studio_data", None)),
         slides=slides,
         custom_css=row.custom_css,
         source_type=row.source_type,
@@ -597,6 +620,7 @@ def _generate_presentation(
         marp_theme=marp_theme,
         template_id=template.template_id if template else None,
         settings=_serialize_settings(settings),
+        studio_data=None,
         slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
         slides_text=slides_text,
         source_type=source_type,
@@ -651,6 +675,7 @@ async def create_presentation(
         marp_theme=marp_theme,
         template_id=template.template_id if template else None,
         settings=_serialize_settings(settings),
+        studio_data=_serialize_studio_data(request.studio_data),
         slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
         slides_text=slides_text,
         source_type="manual",
@@ -772,6 +797,7 @@ async def update_presentation(
                 "marp_theme": marp_theme,
                 "template_id": template.template_id if template else None,
                 "settings": _serialize_settings(settings),
+                "studio_data": _serialize_studio_data(request.studio_data),
                 "slides": json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
                 "slides_text": slides_text,
                 "custom_css": custom_css,
@@ -822,6 +848,8 @@ async def patch_presentation(
     if request.settings is not None:
         settings = _validate_settings(request.settings)
         update_fields["settings"] = _serialize_settings(settings)
+    if _field_was_set(request, "studio_data"):
+        update_fields["studio_data"] = _serialize_studio_data(request.studio_data)
     if request.slides is not None:
         slides = _normalize_slides([_slide_from_obj(s) for s in request.slides])
         update_fields["slides"] = json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides])
@@ -1060,6 +1088,7 @@ async def restore_presentation_version(
     _validate_theme(theme)
     marp_theme = _validate_marp_theme(restored.marp_theme)
     settings = _validate_settings(restored.settings)
+    studio_data = restored.studio_data if isinstance(restored.studio_data, dict) or restored.studio_data is None else None
     slides = _normalize_slides(restored.slides)
     slides_text = _flatten_slides_text(slides)
     title = restored.title.strip()
@@ -1075,6 +1104,7 @@ async def restore_presentation_version(
                 "marp_theme": marp_theme,
                 "template_id": restored.template_id,
                 "settings": _serialize_settings(settings),
+                "studio_data": _serialize_studio_data(studio_data),
                 "slides": json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
                 "slides_text": slides_text,
                 "custom_css": restored.custom_css,

@@ -112,6 +112,8 @@ def load_safe_config() -> dict:
             "persona": bool(config_mod.legacy_get("PERSONA_ENABLED", True))
             and bool(config_mod.route_enabled("persona", default_stable=True)),
         }
+        caps["hasSlides"] = bool(config_mod.route_enabled("slides", default_stable=True))
+        caps["hasPresentationStudio"] = bool(caps["hasSlides"])
         # expose both for backward-compat and forward-looking UI
         safe_config["supported_features"] = caps
         safe_config["capabilities"] = caps

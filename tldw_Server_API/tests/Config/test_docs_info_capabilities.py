@@ -116,6 +116,25 @@ def test_docs_info_never_exposes_real_api_key(monkeypatch, tmp_path: Path) -> No
     assert safe_config["api_key_configured"] is True
 
 
+def test_docs_info_exposes_slides_and_presentation_studio_capabilities(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.txt"
+    _write_minimal_config(config_path)
+
+    monkeypatch.setenv("TLDW_CONFIG_PATH", str(config_path))
+    monkeypatch.delenv("ROUTES_DISABLE", raising=False)
+    monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+    config_mod._route_toggle_policy.cache_clear()
+
+    safe_config = config_info.load_safe_config()
+
+    assert safe_config["capabilities"]["hasSlides"] is True
+    assert safe_config["supported_features"]["hasSlides"] is True
+    assert safe_config["capabilities"]["hasPresentationStudio"] is True
+    assert safe_config["supported_features"]["hasPresentationStudio"] is True
+
+
 def test_docs_info_endpoint_returns_placeholder_api_key(monkeypatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.txt"
     _write_minimal_config(config_path)

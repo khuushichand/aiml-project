@@ -40,6 +40,7 @@ class PresentationBase(BaseModel):
     marp_theme: str | None = None
     template_id: str | None = None
     settings: dict[str, Any] | None = None
+    studio_data: dict[str, Any] | None = None
     slides: list[Slide] = Field(default_factory=list)
     custom_css: str | None = None
 
@@ -65,6 +66,7 @@ class PresentationPatchRequest(BaseModel):
     marp_theme: str | None = None
     template_id: str | None = None
     settings: dict[str, Any] | None = None
+    studio_data: dict[str, Any] | None = None
     slides: list[Slide] | None = None
     custom_css: str | None = None
 
