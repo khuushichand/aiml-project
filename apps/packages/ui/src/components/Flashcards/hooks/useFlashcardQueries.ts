@@ -4,6 +4,7 @@ import {
   listFlashcards,
   createFlashcard,
   createFlashcardsBulk,
+  updateFlashcardsBulk,
   createDeck,
   updateFlashcard,
   deleteFlashcard,
@@ -21,6 +22,8 @@ import {
   getFlashcardsImportLimits,
   type Deck,
   type Flashcard,
+  type FlashcardBulkUpdateItem,
+  type FlashcardBulkUpdateResponse,
   type FlashcardCreate,
   type FlashcardUpdate
 } from "@/services/flashcards"
@@ -483,6 +486,19 @@ export function useUpdateFlashcardMutation() {
     },
     onError: (error) => {
       console.error("Failed to update flashcard:", error)
+    }
+  })
+}
+
+/**
+ * Hook for updating multiple flashcards in one request without automatic global invalidation.
+ */
+export function useUpdateFlashcardsBulkMutation() {
+  return useMutation<FlashcardBulkUpdateResponse, Error, FlashcardBulkUpdateItem[]>({
+    mutationKey: ["flashcards:update:bulk"],
+    mutationFn: (payload) => updateFlashcardsBulk(payload),
+    onError: (error) => {
+      console.error("Failed to bulk update flashcards:", error)
     }
   })
 }

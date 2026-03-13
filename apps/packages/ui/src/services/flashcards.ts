@@ -80,6 +80,28 @@ export type FlashcardUpdate = {
   reverse?: boolean | null
 }
 
+export type FlashcardBulkUpdateItem = FlashcardUpdate & {
+  uuid: string
+}
+
+export type FlashcardBulkUpdateError = {
+  code: "validation_error" | "not_found" | "conflict"
+  message: string
+  invalid_fields?: string[]
+  invalid_deck_ids?: number[]
+}
+
+export type FlashcardBulkUpdateResult = {
+  uuid: string
+  status: "updated" | "validation_error" | "not_found" | "conflict"
+  flashcard?: Flashcard | null
+  error?: FlashcardBulkUpdateError | null
+}
+
+export type FlashcardBulkUpdateResponse = {
+  results: FlashcardBulkUpdateResult[]
+}
+
 export type FlashcardResetSchedulingRequest = {
   expected_version: number
 }
@@ -267,6 +289,17 @@ export async function createFlashcardsBulk(
   return await bgRequest<FlashcardListResponse, AllowedPath, "POST">({
     path: "/api/v1/flashcards/bulk",
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
+export async function updateFlashcardsBulk(
+  input: FlashcardBulkUpdateItem[]
+): Promise<FlashcardBulkUpdateResponse> {
+  return await bgRequest<FlashcardBulkUpdateResponse, AllowedPath, "PATCH">({
+    path: "/api/v1/flashcards/bulk",
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: input
   })
