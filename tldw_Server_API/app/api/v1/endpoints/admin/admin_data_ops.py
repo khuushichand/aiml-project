@@ -27,6 +27,8 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     DataSubjectRequestPreviewResponse,
     RetentionPoliciesResponse,
     RetentionPolicy,
+    RetentionPolicyPreviewRequest,
+    RetentionPolicyPreviewResponse,
     RetentionPolicyUpdateRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -39,8 +41,11 @@ from tldw_Server_API.app.services.admin_data_ops_service import (
     create_backup_snapshot as svc_create_backup_snapshot,
     list_backup_items as svc_list_backup_items,
     list_retention_policies as svc_list_retention_policies,
+    preview_retention_policy as svc_preview_retention_policy,
     restore_backup_snapshot as svc_restore_backup_snapshot,
+    build_retention_preview_signature as svc_build_retention_preview_signature,
     update_retention_policy as svc_update_retention_policy,
+    verify_retention_preview_signature as svc_verify_retention_preview_signature,
 )
 from tldw_Server_API.app.services.admin_data_subject_requests_service import (
     list_data_subject_requests as svc_list_data_subject_requests,
@@ -705,6 +710,39 @@ async def list_retention_policies(
         raise HTTPException(status_code=500, detail="Failed to list retention policies") from exc
 
 
+@router.post("/retention-policies/{policy_key}/preview", response_model=RetentionPolicyPreviewResponse)
+async def preview_retention_policy(
+    policy_key: str,
+    payload: RetentionPolicyPreviewRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> RetentionPolicyPreviewResponse:
+    try:
+        preview = await svc_preview_retention_policy(
+            policy_key=policy_key,
+            current_days=payload.current_days,
+            days=payload.days,
+        )
+        signature = svc_build_retention_preview_signature(
+            principal=principal,
+            policy_key=policy_key,
+            current_days=int(preview["current_days"]),
+            new_days=int(preview["new_days"]),
+        )
+        return RetentionPolicyPreviewResponse(**preview, preview_signature=signature)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "unknown_policy":
+            raise HTTPException(status_code=404, detail="unknown_policy") from exc
+        if detail == "invalid_range":
+            raise HTTPException(status_code=400, detail="invalid_range") from exc
+        if detail == "stale_current_days":
+            raise HTTPException(status_code=409, detail="stale_current_days") from exc
+        raise HTTPException(status_code=400, detail="invalid_retention_preview") from exc
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to preview retention policy: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to preview retention policy") from exc
+
+
 @router.put("/retention-policies/{policy_key}", response_model=RetentionPolicy)
 async def update_retention_policy(
     policy_key: str,
@@ -713,6 +751,12 @@ async def update_retention_policy(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> RetentionPolicy:
     try:
+        await svc_verify_retention_preview_signature(
+            principal=principal,
+            policy_key=policy_key,
+            days=payload.days,
+            preview_signature=payload.preview_signature,
+        )
         updated = await svc_update_retention_policy(policy_key, payload.days)
         await _emit_admin_audit_event(
             request,
@@ -731,6 +775,8 @@ async def update_retention_policy(
             raise HTTPException(status_code=404, detail="unknown_policy") from exc
         if detail == "invalid_range":
             raise HTTPException(status_code=400, detail="invalid_range") from exc
+        if detail in {"preview_signature_required", "invalid_preview_signature", "expired_preview_signature"}:
+            raise HTTPException(status_code=400, detail=detail) from exc
         raise HTTPException(status_code=400, detail="invalid_retention_update") from exc
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to update retention policy: {exc}")
