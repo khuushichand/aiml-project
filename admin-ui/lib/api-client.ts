@@ -29,6 +29,7 @@ import type {
   ProviderSecret,
   RegistrationCode,
   RetentionPoliciesResponse,
+  RetentionPolicyPreviewResponse,
   SecurityAlertStatus,
   SecurityHealthData,
   Subscription,
@@ -499,7 +500,7 @@ export const api = {
     }),
   getRetentionPolicies: () => requestJson<RetentionPoliciesResponse>('/admin/retention-policies'),
   previewRetentionPolicyImpact: (policyKey: string, data: Record<string, unknown>) =>
-    requestJson(`/admin/retention-policies/${encodeURIComponent(policyKey)}/preview`, {
+    requestJson<RetentionPolicyPreviewResponse>(`/admin/retention-policies/${encodeURIComponent(policyKey)}/preview`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),

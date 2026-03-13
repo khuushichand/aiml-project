@@ -272,6 +272,21 @@ export interface RetentionPoliciesResponse {
   policies: RetentionPolicy[];
 }
 
+export interface RetentionPolicyPreviewCounts {
+  audit_log_entries: number;
+  job_records: number;
+  backup_files: number;
+}
+
+export interface RetentionPolicyPreviewResponse {
+  key: string;
+  current_days: number;
+  new_days: number;
+  counts: RetentionPolicyPreviewCounts;
+  preview_signature: string;
+  notes: string[];
+}
+
 export interface ProviderSecret {
   provider: string;
   created_at: string;
