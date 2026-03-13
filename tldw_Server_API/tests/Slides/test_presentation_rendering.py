@@ -1,11 +1,14 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 from PIL import Image, ImageChops
 
 from tldw_Server_API.app.core.Slides.presentation_rendering import (
     PresentationRenderError,
+    _resolve_ffmpeg_timeout_seconds,
     _render_slide_frame,
+    _run_ffmpeg_command,
     render_presentation_video,
 )
 
@@ -70,10 +73,11 @@ def test_render_presentation_video_builds_slide_segments_from_visuals_and_audio(
         _fake_materialize_slide_audio,
     )
 
-    def _fake_run_ffmpeg(command: list[str], *, output_path: Path) -> None:
+    def _fake_run_ffmpeg(command: list[str], *, output_path: Path, timeout_seconds: int | None = None) -> None:
         captured_commands.append(command)
         segment_outputs.append(output_path)
         assert command[0] == "/usr/bin/ffmpeg"
+        assert timeout_seconds is not None
         output_path.write_bytes(b"video-bytes")
 
     monkeypatch.setattr(
@@ -134,3 +138,37 @@ def test_render_presentation_video_rejects_unsupported_format(tmp_path):
         )
 
     assert exc.value.code == "presentation_render_format_invalid"
+
+
+def test_run_ffmpeg_command_logs_stderr_on_failure(tmp_path, monkeypatch):
+    output_path = tmp_path / "missing.mp4"
+    logged: dict[str, object] = {}
+
+    def _fake_run(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0], stderr=b"ffmpeg exploded")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering.subprocess.run",
+        _fake_run,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering.logger.warning",
+        lambda message, *args: logged.update({"message": message, "args": args}),
+    )
+
+    with pytest.raises(PresentationRenderError) as exc:
+        _run_ffmpeg_command(["/usr/bin/ffmpeg"], output_path=output_path, timeout_seconds=321)
+
+    assert exc.value.code == "presentation_render_failed"
+    assert "ffmpeg command failed with exit code {}" in str(logged["message"])
+    assert "ffmpeg exploded" in str(logged["args"][1])
+
+
+def test_resolve_ffmpeg_timeout_scales_with_expected_duration(monkeypatch):
+    monkeypatch.delenv("PRESENTATION_RENDER_FFMPEG_TIMEOUT_SECONDS", raising=False)
+
+    assert _resolve_ffmpeg_timeout_seconds(expected_duration_seconds=10) == 120
+    assert _resolve_ffmpeg_timeout_seconds(expected_duration_seconds=600) > 120
+
+    monkeypatch.setenv("PRESENTATION_RENDER_FFMPEG_TIMEOUT_SECONDS", "45")
+    assert _resolve_ffmpeg_timeout_seconds(expected_duration_seconds=600) == 45

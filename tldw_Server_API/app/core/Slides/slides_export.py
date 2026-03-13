@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import zipfile
 from collections.abc import Callable, Iterable
+from functools import partial
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,11 @@ except Exception:  # pragma: no cover - playwright is an optional dependency
     PlaywrightTimeoutError = TimeoutError  # type: ignore
 
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.Slides.slides_assets import SlidesAssetError, resolve_slide_asset
+from tldw_Server_API.app.core.Slides.slides_assets import (
+    MAX_RESOLVED_SLIDE_ASSET_BYTES,
+    SlidesAssetError,
+    resolve_slide_asset,
+)
 from tldw_Server_API.app.core.Slides.slides_images import SlidesImageError, validate_images_payload
 from tldw_Server_API.app.core.testing import is_truthy
 
@@ -322,7 +327,10 @@ def _resolve_image_asset(
     asset_ref = image.get("asset_ref")
     if not isinstance(asset_ref, str) or not asset_ref.strip():
         return image
-    resolver = asset_resolver or resolve_slide_asset
+    resolver = asset_resolver or partial(
+        resolve_slide_asset,
+        max_bytes=MAX_RESOLVED_SLIDE_ASSET_BYTES,
+    )
     try:
         resolved = resolver(asset_ref.strip())
     except SlidesAssetError as exc:

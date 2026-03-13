@@ -3330,6 +3330,7 @@ class CollectionsDatabase:
         type_: str | None = None,
         workspace_tag: str | None = None,
         metadata_origin: str | None = None,
+        metadata_presentation_id: str | None = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
     ) -> tuple[list[CollectionsDatabase.OutputArtifactRow], int]:
@@ -3358,6 +3359,14 @@ class CollectionsDatabase:
                 params.extend([
                     f'%\"origin\":\"{origin}\"%',
                     f'%\"origin\": \"{origin}\"%',
+                ])
+        if metadata_presentation_id:
+            presentation_id = str(metadata_presentation_id).strip()
+            if presentation_id:
+                where.append("(metadata_json LIKE ? OR metadata_json LIKE ?)")
+                params.extend([
+                    f'%\"presentation_id\":\"{presentation_id}\"%',
+                    f'%\"presentation_id\": \"{presentation_id}\"%',
                 ])
         where_sql = " AND ".join(where)
 

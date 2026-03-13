@@ -54,6 +54,7 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, MEDIA_DELETE, MEDIA_READ, MEDIA_UPDATE
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -171,6 +172,19 @@ def _slides_jobs_manager() -> JobManager:
 
 def _render_enabled() -> bool:
     return is_truthy(os.getenv("PRESENTATION_RENDER_ENABLED", "true"))
+
+
+def _presentation_render_queue_name() -> str:
+    configured_queue = (os.getenv("PRESENTATION_RENDER_JOBS_QUEUE") or "").strip().lower()
+    if configured_queue in {"default", "high", "low"}:
+        return configured_queue
+    if configured_queue.endswith("-high"):
+        return "high"
+    if configured_queue.endswith("-low"):
+        return "low"
+    if configured_queue.endswith("-default"):
+        return "default"
+    return "default"
 
 
 def _normalize_dt(value: str) -> datetime:
@@ -1214,9 +1228,10 @@ async def submit_presentation_render_job(
         "theme": row.theme,
         "title": row.title,
     }
-    job = job_manager.create_job(
+    job = await asyncio.to_thread(
+        job_manager.create_job,
         domain="presentation_render",
-        queue="default",
+        queue=_presentation_render_queue_name(),
         job_type="presentation_render",
         payload=payload,
         owner_user_id=str(current_user.id),
@@ -1244,7 +1259,7 @@ async def get_presentation_render_job_status(
     current_user: User = Depends(get_request_user),
     job_manager: JobManager = Depends(_slides_jobs_manager),
 ) -> PresentationRenderJobStatusResponse:
-    job = job_manager.get_job(int(job_id))
+    job = await asyncio.to_thread(job_manager.get_job, int(job_id))
     if not job:
         raise HTTPException(status_code=404, detail="job_not_found")
     if str(job.get("owner_user_id") or "") != str(current_user.id):
@@ -1281,33 +1296,38 @@ async def get_presentation_render_job_status(
 )
 async def list_presentation_render_artifacts(
     presentation_id: str,
-    collections_db=Depends(get_collections_db_for_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> PresentationRenderArtifactListResponse:
-    rows, _total = collections_db.list_output_artifacts(
-        limit=200,
-        offset=0,
-        type_="presentation_render",
-        metadata_origin="presentation_studio",
-    )
     artifacts: list[PresentationRenderArtifactInfo] = []
-    for row in rows:
-        metadata = _safe_json_dict(getattr(row, "metadata_json", None))
-        if str(metadata.get("presentation_id") or "") != presentation_id:
-            continue
-        fmt = str(getattr(row, "format", "") or "").lower()
-        if fmt not in {"mp4", "webm"}:
-            continue
-        created_at = getattr(row, "created_at", None)
-        artifacts.append(
-            PresentationRenderArtifactInfo(
-                output_id=int(getattr(row, "id")),
-                format=PresentationRenderFormat(fmt),
-                title=getattr(row, "title", None),
-                download_url=f"/api/v1/outputs/{int(getattr(row, 'id'))}/download",
-                presentation_version=metadata.get("presentation_version"),
-                created_at=_normalize_dt(created_at) if isinstance(created_at, str) else None,
-            )
+    page_size = 200
+    offset = 0
+    total = 1
+    while offset < total:
+        rows, total = await asyncio.to_thread(
+            collections_db.list_output_artifacts,
+            limit=page_size,
+            offset=offset,
+            type_="presentation_render",
+            metadata_origin="presentation_studio",
+            metadata_presentation_id=presentation_id,
         )
+        for row in rows:
+            metadata = _safe_json_dict(getattr(row, "metadata_json", None))
+            fmt = str(getattr(row, "format", "") or "").lower()
+            if fmt not in {"mp4", "webm"}:
+                continue
+            created_at = getattr(row, "created_at", None)
+            artifacts.append(
+                PresentationRenderArtifactInfo(
+                    output_id=int(getattr(row, "id")),
+                    format=PresentationRenderFormat(fmt),
+                    title=getattr(row, "title", None),
+                    download_url=f"/api/v1/outputs/{int(getattr(row, 'id'))}/download",
+                    presentation_version=metadata.get("presentation_version"),
+                    created_at=_normalize_dt(created_at) if isinstance(created_at, str) else None,
+                )
+            )
+        offset += page_size
     return PresentationRenderArtifactListResponse(
         presentation_id=presentation_id,
         artifacts=artifacts,
@@ -1507,7 +1527,7 @@ async def export_presentation(
     pdf_margin_left: str | None = Query(None),
     pdf_margin_right: str | None = Query(None),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    collections_db=Depends(get_collections_db_for_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> Response:
     try:
         row = db.get_presentation_by_id(presentation_id, include_deleted=False)
@@ -1522,11 +1542,13 @@ async def export_presentation(
         user_id = int(db.client_id)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=500, detail="user_unavailable") from exc
-    asset_resolver = lambda asset_ref: resolve_slide_asset(
-        asset_ref,
-        collections_db=collections_db,
-        user_id=user_id,
-    )
+
+    def _asset_resolver(asset_ref: str) -> dict[str, Any]:
+        return resolve_slide_asset(
+            asset_ref,
+            collections_db=collections_db,
+            user_id=user_id,
+        )
     try:
         metrics = get_metrics_registry()
     except _SLIDES_NONCRITICAL_EXCEPTIONS:
@@ -1540,13 +1562,15 @@ async def export_presentation(
         media_type = "application/json"
     elif format == ExportFormat.MARKDOWN:
         try:
-            body = export_presentation_markdown(
+            markdown_text = await asyncio.to_thread(
+                export_presentation_markdown,
                 title=row.title,
                 slides=slides,
                 theme=row.theme,
                 marp_theme=getattr(row, "marp_theme", None),
-                asset_resolver=asset_resolver,
-            ).encode("utf-8")
+                asset_resolver=_asset_resolver,
+            )
+            body = markdown_text.encode("utf-8")
         except SlidesExportInputError as exc:
             if metrics is not None:
                 with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
@@ -1587,7 +1611,7 @@ async def export_presentation(
                 settings=settings,
                 custom_css=row.custom_css,
                 pdf_options=pdf_options,
-                asset_resolver=asset_resolver,
+                asset_resolver=_asset_resolver,
             )
         except SlidesExportInputError as exc:
             if metrics is not None:
@@ -1609,13 +1633,14 @@ async def export_presentation(
         media_type = "application/pdf"
     elif format == ExportFormat.REVEAL:
         try:
-            body = export_presentation_bundle(
+            body = await asyncio.to_thread(
+                export_presentation_bundle,
                 title=row.title,
                 slides=slides,
                 theme=row.theme,
                 settings=settings,
                 custom_css=row.custom_css,
-                asset_resolver=asset_resolver,
+                asset_resolver=_asset_resolver,
             )
         except SlidesAssetsMissingError as exc:
             if metrics is not None:

@@ -12,6 +12,7 @@ from typing import Any
 from tldw_Server_API.app.services.outputs_service import _resolve_output_path_for_user
 
 _OUTPUT_ASSET_REF_RE = re.compile(r"^output:(?P<output_id>\d+)$")
+MAX_RESOLVED_SLIDE_ASSET_BYTES = 5 * 1024 * 1024
 
 
 class SlidesAssetError(ValueError):
@@ -73,6 +74,7 @@ def resolve_slide_asset(
     *,
     collections_db: Any | None = None,
     user_id: int | None = None,
+    max_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Resolve a slide asset reference into file-backed bytes and metadata."""
 
@@ -93,14 +95,17 @@ def resolve_slide_asset(
     file_path = _resolve_output_path_for_user(int(user_id), normalized_storage)
     if not file_path.exists():
         raise SlidesAssetError("slide_asset_file_missing")
+    if isinstance(max_bytes, int) and max_bytes > 0:
+        if file_path.stat().st_size > max_bytes:
+            raise SlidesAssetError("slide_asset_too_large")
 
-    raw_bytes = file_path.read_bytes()
     metadata = _parse_metadata_json(getattr(row, "metadata_json", None))
     mime = _guess_mime_type(
         path=file_path,
         format_hint=getattr(row, "format", None),
         metadata=metadata,
     )
+    raw_bytes = file_path.read_bytes()
     return {
         "asset_ref": asset_ref,
         "mime": mime,

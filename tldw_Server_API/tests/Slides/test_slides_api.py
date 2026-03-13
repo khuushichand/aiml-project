@@ -419,6 +419,60 @@ def test_slides_create_and_export_markdown_with_image_asset_ref(slides_client, m
     assert "![Cover](data:image/png;base64," in export_resp.text
 
 
+def test_slides_export_offloads_blocking_markdown_and_reveal_generation(
+    slides_client, monkeypatch, tmp_path
+):
+    assets_dir = _build_assets(tmp_path)
+    monkeypatch.setenv("SLIDES_REVEALJS_ASSETS_DIR", str(assets_dir))
+    offloaded_calls: list[str] = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        offloaded_calls.append(getattr(func, "__name__", repr(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("tldw_Server_API.app.api.v1.endpoints.slides.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.resolve_slide_asset",
+        lambda asset_ref, **kwargs: {
+            "asset_ref": asset_ref,
+            "mime": "image/png",
+            "data_b64": _SAMPLE_PNG_B64,
+            "alt": "Cover",
+        },
+    )
+    payload = {
+        "title": "Deck",
+        "theme": "black",
+        "slides": [
+            {
+                "order": 0,
+                "layout": "content",
+                "title": "Slide",
+                "content": "Hello",
+                "speaker_notes": "Narration",
+                "metadata": {"images": [{"asset_ref": "output:123", "alt": "Cover"}]},
+            }
+        ],
+    }
+
+    create_resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert create_resp.status_code == 201, create_resp.text
+    presentation_id = create_resp.json()["id"]
+
+    markdown_resp = slides_client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/export?format=markdown"
+    )
+    assert markdown_resp.status_code == 200, markdown_resp.text
+
+    reveal_resp = slides_client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/export?format=revealjs"
+    )
+    assert reveal_resp.status_code == 200, reveal_resp.text
+
+    assert "export_presentation_markdown" in offloaded_calls
+    assert "export_presentation_bundle" in offloaded_calls
+
+
 def test_slides_export_reveal(slides_client, tmp_path, monkeypatch):
     assets_dir = _build_assets(tmp_path)
     monkeypatch.setenv("SLIDES_REVEALJS_ASSETS_DIR", str(assets_dir))

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.Slides.slides_assets import SlidesAssetError, resolve_slide_asset
@@ -29,6 +30,7 @@ _BACKGROUND_COLOR = "#0f172a"
 _TEXT_COLOR = "#f8fafc"
 _MUTED_TEXT_COLOR = "#cbd5e1"
 _ACCENT_COLOR = "#38bdf8"
+_DEFAULT_FFMPEG_TIMEOUT_SECONDS = 120
 
 
 class PresentationRenderError(RuntimeError):
@@ -141,7 +143,24 @@ def _resolve_ffmpeg_path() -> str:
     raise PresentationRenderError("presentation_render_ffmpeg_unavailable")
 
 
-def _run_ffmpeg_command(command: list[str], *, output_path: Path) -> None:
+def _resolve_ffmpeg_timeout_seconds(*, expected_duration_seconds: float) -> int:
+    override = (os.getenv("PRESENTATION_RENDER_FFMPEG_TIMEOUT_SECONDS") or "").strip()
+    if override:
+        try:
+            timeout_seconds = int(override)
+        except ValueError:
+            logger.warning("presentation render: invalid PRESENTATION_RENDER_FFMPEG_TIMEOUT_SECONDS {}", override)
+        else:
+            if timeout_seconds > 0:
+                return timeout_seconds
+
+    normalized_duration = max(0.0, float(expected_duration_seconds))
+    scaled_timeout = int(normalized_duration * 2.0) + 60
+    return max(_DEFAULT_FFMPEG_TIMEOUT_SECONDS, scaled_timeout)
+
+
+def _run_ffmpeg_command(command: list[str], *, output_path: Path, timeout_seconds: int | None = None) -> None:
+    resolved_timeout = timeout_seconds or _DEFAULT_FFMPEG_TIMEOUT_SECONDS
     try:
         # The renderer passes a fixed argv list to a locally resolved ffmpeg binary.
         subprocess.run(
@@ -149,13 +168,15 @@ def _run_ffmpeg_command(command: list[str], *, output_path: Path) -> None:
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=120,
+            timeout=resolved_timeout,
         )  # nosec B603
     except FileNotFoundError as exc:
         raise PresentationRenderError("presentation_render_ffmpeg_unavailable") from exc
     except subprocess.TimeoutExpired as exc:
         raise PresentationRenderError("presentation_render_timeout", retryable=True) from exc
     except subprocess.CalledProcessError as exc:
+        stderr_text = (exc.stderr or b"").decode("utf-8", "ignore")
+        logger.warning("ffmpeg command failed with exit code {}: {}", exc.returncode, stderr_text)
         raise PresentationRenderError("presentation_render_failed", retryable=True) from exc
     if not output_path.exists():
         raise PresentationRenderError("presentation_render_output_missing", retryable=True)
@@ -530,6 +551,7 @@ def render_presentation_video(
         temp_dir = Path(temp_dir_str)
         with _collections_db_context(user_id=user_id, collections_db=collections_db) as asset_db:
             segment_paths: list[Path] = []
+            total_expected_duration_seconds = 0.0
             for slide_index, slide in enumerate(render_slides):
                 frame_path = temp_dir / f"slide-{slide_index:03d}.png"
                 _render_slide_frame(
@@ -546,15 +568,23 @@ def render_presentation_video(
                     user_id=user_id,
                 )
                 segment_path = temp_dir / f"segment-{slide_index:03d}.{normalized_format}"
+                slide_duration_seconds = _estimate_slide_duration_seconds(slide)
+                total_expected_duration_seconds += slide_duration_seconds
                 command = _build_segment_command(
                     ffmpeg_path=ffmpeg_path,
                     frame_path=frame_path,
                     audio_path=audio_path,
-                    duration_seconds=_estimate_slide_duration_seconds(slide),
+                    duration_seconds=slide_duration_seconds,
                     segment_path=segment_path,
                     output_format=normalized_format,
                 )
-                _run_ffmpeg_command(command, output_path=segment_path)
+                _run_ffmpeg_command(
+                    command,
+                    output_path=segment_path,
+                    timeout_seconds=_resolve_ffmpeg_timeout_seconds(
+                        expected_duration_seconds=slide_duration_seconds,
+                    ),
+                )
                 segment_paths.append(segment_path)
 
         concat_list_path = temp_dir / "segments.txt"
@@ -568,7 +598,13 @@ def render_presentation_video(
             output_path=output_path,
             output_format=normalized_format,
         )
-        _run_ffmpeg_command(concat_command, output_path=output_path)
+        _run_ffmpeg_command(
+            concat_command,
+            output_path=output_path,
+            timeout_seconds=_resolve_ffmpeg_timeout_seconds(
+                expected_duration_seconds=total_expected_duration_seconds,
+            ),
+        )
 
     return PresentationRenderResult(
         output_format=normalized_format,

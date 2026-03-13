@@ -12,6 +12,7 @@ from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for
 from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Slides.presentation_rendering import PresentationRenderResult
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -56,8 +57,10 @@ def _user_overrides(app: FastAPI, tmp_path: Path) -> None:
 class _FakeCollectionsDB:
     def __init__(self) -> None:
         self.rows = []
+        self.list_calls: list[dict[str, object]] = []
 
     def list_output_artifacts(self, **kwargs):
+        self.list_calls.append(dict(kwargs))
         return list(self.rows), len(self.rows)
 
 
@@ -129,6 +132,66 @@ def test_submit_render_job_snapshots_current_presentation_version(render_jobs_cl
     assert job["payload"]["format"] == "mp4"
 
 
+def test_render_job_endpoints_offload_blocking_calls_and_use_configured_queue(
+    render_jobs_client, monkeypatch
+):
+    client, jobs_db_path, fake_collections = render_jobs_client
+    presentation_id, etag = _create_presentation(client)
+    monkeypatch.setenv("PRESENTATION_RENDER_JOBS_QUEUE", "presentation-low")
+    offloaded_calls: list[str] = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        offloaded_calls.append(getattr(func, "__name__", repr(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("tldw_Server_API.app.api.v1.endpoints.slides.asyncio.to_thread", _fake_to_thread)
+    fake_collections.rows = [
+        type(
+            "OutputRow",
+            (),
+            {
+                "id": 7,
+                "format": "mp4",
+                "type": "presentation_render",
+                "title": "Deck Render",
+                "metadata_json": json.dumps(
+                    {
+                        "origin": "presentation_studio",
+                        "presentation_id": presentation_id,
+                        "presentation_version": 1,
+                    }
+                ),
+            },
+        )()
+    ]
+
+    create_response = client.post(
+        f"/api/v1/slides/presentations/{presentation_id}/render-jobs",
+        json={"format": "mp4"},
+        headers={"If-Match": etag},
+    )
+
+    assert create_response.status_code == 202, create_response.text
+    job_id = int(create_response.json()["job_id"])
+    job = JobManager(Path(jobs_db_path)).get_job(job_id)
+    assert job is not None
+    assert job["queue"] == "low"
+
+    status_response = client.get(f"/api/v1/slides/render-jobs/{job_id}")
+    assert status_response.status_code == 200, status_response.text
+
+    artifacts_response = client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/render-artifacts"
+    )
+    assert artifacts_response.status_code == 200, artifacts_response.text
+
+    assert "create_job" in offloaded_calls
+    assert "get_job" in offloaded_calls
+    assert "list_output_artifacts" in offloaded_calls
+    assert fake_collections.list_calls
+    assert fake_collections.list_calls[-1]["metadata_presentation_id"] == presentation_id
+
+
 def test_submit_render_job_rejects_when_rendering_disabled(render_jobs_client, monkeypatch):
     client, _jobs_db_path, _fake_collections = render_jobs_client
     presentation_id, etag = _create_presentation(client)
@@ -174,6 +237,51 @@ def test_list_render_artifacts_returns_outputs_for_presentation(render_jobs_clie
     assert payload["artifacts"][0]["output_id"] == row.id
     assert payload["artifacts"][0]["format"] == "mp4"
     assert payload["artifacts"][0]["download_url"] == f"/api/v1/outputs/{row.id}/download"
+
+
+def test_collections_output_listing_filters_by_presentation_id_metadata(tmp_path, monkeypatch):
+    user_db_base = tmp_path / "user_dbs"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(user_db_base))
+    with CollectionsDatabase.for_user(user_id="1") as collections_db:
+        match = collections_db.create_output_artifact(
+            job_id=1,
+            type_="presentation_render",
+            title="Deck A",
+            format_="mp4",
+            storage_path="deck-a.mp4",
+            metadata_json=json.dumps(
+                {
+                    "origin": "presentation_studio",
+                    "presentation_id": "deck-a",
+                    "presentation_version": 1,
+                }
+            ),
+        )
+        collections_db.create_output_artifact(
+            job_id=2,
+            type_="presentation_render",
+            title="Deck B",
+            format_="mp4",
+            storage_path="deck-b.mp4",
+            metadata_json=json.dumps(
+                {
+                    "origin": "presentation_studio",
+                    "presentation_id": "deck-b",
+                    "presentation_version": 1,
+                }
+            ),
+        )
+
+        rows, total = collections_db.list_output_artifacts(
+            limit=50,
+            offset=0,
+            type_="presentation_render",
+            metadata_origin="presentation_studio",
+            metadata_presentation_id="deck-a",
+        )
+
+    assert total == 1
+    assert [row.id for row in rows] == [match.id]
 
 
 @pytest.mark.asyncio

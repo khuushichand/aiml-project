@@ -1,3 +1,5 @@
+"""Jobs worker for Presentation Studio video render requests."""
+
 from __future__ import annotations
 
 import asyncio
@@ -25,11 +27,15 @@ _JOB_TYPE = "presentation_render"
 
 @dataclass
 class _ProgressState:
+    """Mutable progress snapshot reported back to the Jobs worker SDK."""
+
     percent: float | None = None
     message: str | None = None
 
 
 class PresentationRenderJobError(RuntimeError):
+    """Normalized worker error with retry metadata for presentation renders."""
+
     def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: int | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
@@ -65,6 +71,19 @@ def _build_worker_config(*, worker_id: str, queue: str) -> WorkerConfig:
         retry_on_exception=True,
         retry_backoff_seconds=_coerce_int(os.getenv("PRESENTATION_RENDER_JOBS_RETRY_BACKOFF_SECONDS"), 10),
     )
+
+
+def _resolve_queue_name() -> str:
+    configured_queue = (os.getenv("PRESENTATION_RENDER_JOBS_QUEUE") or "").strip().lower()
+    if configured_queue in {"default", "high", "low"}:
+        return configured_queue
+    if configured_queue.endswith("-high"):
+        return "high"
+    if configured_queue.endswith("-low"):
+        return "low"
+    if configured_queue.endswith("-default"):
+        return "default"
+    return "default"
 
 
 def _normalize_payload(value: Any) -> dict[str, Any]:
@@ -193,7 +212,9 @@ async def process_presentation_render_job(
 
 
 async def run_presentation_render_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
-    queue_name = (os.getenv("PRESENTATION_RENDER_JOBS_QUEUE") or "").strip() or "default"
+    """Run the long-lived Presentation Studio render worker until stopped."""
+
+    queue_name = _resolve_queue_name()
     worker_id = (os.getenv("PRESENTATION_RENDER_JOBS_WORKER_ID") or "presentation-render-worker").strip()
     cfg = _build_worker_config(worker_id=worker_id, queue=queue_name)
     jm = _jobs_manager()
