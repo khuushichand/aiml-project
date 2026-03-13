@@ -14,6 +14,10 @@ import type {
   IncidentItem,
   IncidentsResponse,
   Invoice,
+  MaintenanceRotationRunCreateRequest,
+  MaintenanceRotationRunCreateResponse,
+  MaintenanceRotationRunItem,
+  MaintenanceRotationRunListResponse,
   OrgMember,
   Organization,
   OrgMembership,
@@ -1010,6 +1014,22 @@ export const api = {
     requestJson('/admin/jobs/crypto/rotate', {
       method: 'POST',
     }),
+  createMaintenanceRotationRun: (data: MaintenanceRotationRunCreateRequest) =>
+    requestJson<MaintenanceRotationRunCreateResponse>('/admin/maintenance/rotation-runs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getMaintenanceRotationRuns: (params?: { limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.limit === 'number') search.set('limit', String(params.limit));
+    if (typeof params?.offset === 'number') search.set('offset', String(params.offset));
+    const query = search.toString();
+    return requestJson<MaintenanceRotationRunListResponse>(
+      `/admin/maintenance/rotation-runs${query ? `?${query}` : ''}`
+    );
+  },
+  getMaintenanceRotationRun: (runId: string) =>
+    requestJson<MaintenanceRotationRunItem>(`/admin/maintenance/rotation-runs/${encodeURIComponent(runId)}`),
 
   // ============================================
   // Organization Watchlist Settings
