@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -514,20 +515,18 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
                 <div className="space-y-2">
                   <Label>Fields</Label>
                   <label htmlFor="rotate-payload-field" className="flex items-center gap-2 text-sm">
-                    <input
+                    <Checkbox
                       id="rotate-payload-field"
-                      type="checkbox"
                       checked={rotatePayloadField}
-                      onChange={(event) => setRotatePayloadField(event.target.checked)}
+                      onCheckedChange={setRotatePayloadField}
                     />
                     <span>Rotate payload field</span>
                   </label>
                   <label htmlFor="rotate-result-field" className="flex items-center gap-2 text-sm">
-                    <input
+                    <Checkbox
                       id="rotate-result-field"
-                      type="checkbox"
                       checked={rotateResultField}
-                      onChange={(event) => setRotateResultField(event.target.checked)}
+                      onCheckedChange={setRotateResultField}
                     />
                     <span>Rotate result field</span>
                   </label>
@@ -535,11 +534,10 @@ export function MaintenanceSection({ refreshSignal }: MaintenanceSectionProps) {
 
                 {rotationMode === 'execute' && (
                   <label htmlFor="rotation-confirmed" className="flex items-start gap-2 text-sm text-red-700">
-                    <input
+                    <Checkbox
                       id="rotation-confirmed"
-                      type="checkbox"
                       checked={rotationConfirmed}
-                      onChange={(event) => setRotationConfirmed(event.target.checked)}
+                      onCheckedChange={setRotationConfirmed}
                     />
                     <span>I confirm this will execute live key rotation.</span>
                   </label>

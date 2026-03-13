@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
@@ -64,6 +64,11 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 from tldw_Server_API.app.services.admin_system_ops_service import (
     upsert_feature_flag as svc_upsert_feature_flag,
 )
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.AuthNZ.repos.maintenance_rotation_runs_repo import (
+        AuthnzMaintenanceRotationRunsRepo,
+    )
 
 router = APIRouter()
 
@@ -171,7 +176,7 @@ async def update_maintenance_mode(
 
 async def _get_maintenance_rotation_runs_repo(
     pool: DatabasePool = Depends(get_db_pool),
-):
+) -> "AuthnzMaintenanceRotationRunsRepo":
     """Build the maintenance rotation runs repository from the shared AuthNZ pool."""
     from tldw_Server_API.app.core.AuthNZ.repos.maintenance_rotation_runs_repo import (
         AuthnzMaintenanceRotationRunsRepo,
@@ -183,13 +188,13 @@ async def _get_maintenance_rotation_runs_repo(
 
 
 async def get_admin_maintenance_rotation_service(
-    repo=Depends(_get_maintenance_rotation_runs_repo),
+    repo: "AuthnzMaintenanceRotationRunsRepo" = Depends(_get_maintenance_rotation_runs_repo),
 ) -> AdminMaintenanceRotationService:
     """Build the maintenance rotation service from the injected repository."""
     return AdminMaintenanceRotationService(repo=repo)
 
 
-def get_maintenance_rotation_job_enqueuer():
+def get_maintenance_rotation_job_enqueuer() -> Callable[[dict[str, Any]], Awaitable[str]]:
     """Return the callable used to enqueue maintenance rotation Jobs."""
     from tldw_Server_API.app.services.admin_maintenance_rotation_jobs_worker import (
         enqueue_maintenance_rotation_run,
@@ -218,10 +223,11 @@ async def create_maintenance_rotation_run(
     payload: MaintenanceRotationRunCreateRequest,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    repo=Depends(_get_maintenance_rotation_runs_repo),
+    repo: "AuthnzMaintenanceRotationRunsRepo" = Depends(_get_maintenance_rotation_runs_repo),
     service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
-    enqueue_run=Depends(get_maintenance_rotation_job_enqueuer),
+    enqueue_run: Callable[[dict[str, Any]], Awaitable[str]] = Depends(get_maintenance_rotation_job_enqueuer),
 ) -> MaintenanceRotationRunCreateResponse:
+    """Create one authoritative maintenance rotation run and enqueue its Jobs execution."""
     from tldw_Server_API.app.services.admin_maintenance_rotation_jobs_worker import (
         maintenance_rotation_worker_enabled,
     )
@@ -275,6 +281,7 @@ async def list_maintenance_rotation_runs(
     principal: AuthPrincipal = Depends(get_auth_principal),
     service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
 ) -> MaintenanceRotationRunListResponse:
+    """List maintenance rotation runs visible to the caller with truthful pagination metadata."""
     payload = await service.list_runs(
         limit=limit,
         offset=offset,
@@ -294,6 +301,7 @@ async def get_maintenance_rotation_run(
     principal: AuthPrincipal = Depends(get_auth_principal),
     service: AdminMaintenanceRotationService = Depends(get_admin_maintenance_rotation_service),
 ) -> MaintenanceRotationRunItem:
+    """Return one maintenance rotation run after enforcing the caller's domain scope."""
     item = await service.get_run(run_id)
     if item is None:
         raise HTTPException(status_code=404, detail="maintenance_rotation_run_not_found")
