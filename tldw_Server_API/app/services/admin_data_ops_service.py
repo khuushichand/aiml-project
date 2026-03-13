@@ -66,7 +66,7 @@ DATASET_DB_RESOLVERS = {
 }
 _BACKUP_DATASETS = frozenset([*DATASET_DB_RESOLVERS.keys(), "authnz"])
 _BACKUP_EXTENSIONS = (".db", ".sqlib", ".dump")
-_RETENTION_PREVIEW_TOKEN_VERSION = "v1"
+_RETENTION_PREVIEW_SCHEMA_VERSION = "v1"
 
 
 def _backup_base_dir() -> str:
@@ -375,7 +375,7 @@ def _retention_preview_secret() -> bytes:
     if not secret_seed:
         raise RuntimeError("preview_signature_secret_unavailable")
     pepper = getattr(settings, "API_KEY_PEPPER", None) or ""
-    material = f"{secret_seed}|{pepper}|retention-preview|{_RETENTION_PREVIEW_TOKEN_VERSION}"
+    material = f"{secret_seed}|{pepper}|retention-preview|{_RETENTION_PREVIEW_SCHEMA_VERSION}"
     return hashlib.sha256(material.encode("utf-8")).digest()
 
 
@@ -388,7 +388,7 @@ def build_retention_preview_signature(
 ) -> str:
     expires_at = int((datetime.now(timezone.utc) + timedelta(seconds=_retention_preview_ttl_seconds())).timestamp())
     payload = {
-        "v": _RETENTION_PREVIEW_TOKEN_VERSION,
+        "v": _RETENTION_PREVIEW_SCHEMA_VERSION,
         "p": policy_key,
         "c": int(current_days),
         "n": int(new_days),
@@ -433,7 +433,7 @@ async def verify_retention_preview_signature(
     if not preview_signature:
         raise InvalidRetentionRangeError("preview_signature_required")
     payload = _decode_retention_preview_signature(preview_signature)
-    if payload.get("v") != _RETENTION_PREVIEW_TOKEN_VERSION:
+    if payload.get("v") != _RETENTION_PREVIEW_SCHEMA_VERSION:
         raise InvalidRetentionRangeError("invalid_preview_signature")
     expires_at = int(payload.get("e") or 0)
     if expires_at < int(datetime.now(timezone.utc).timestamp()):
