@@ -332,6 +332,9 @@ class PersonaCommandDryRunResponse(BaseModel):
     match_reason: str | None = None
     command_id: str | None = None
     command_name: str | None = None
+    connection_id: str | None = None
+    connection_status: Literal["ok", "missing"] | None = None
+    connection_name: str | None = None
     extracted_params: dict[str, Any] = Field(default_factory=dict)
     planned_action: PersonaCommandPlannedActionResponse | None = None
     safety_gate: PersonaCommandSafetyGateResponse | None = None

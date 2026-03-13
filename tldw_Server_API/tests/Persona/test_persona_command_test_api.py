@@ -98,3 +98,64 @@ def test_persona_command_dry_run_returns_fallback_when_no_match(persona_db: Char
         assert payload["failure_phase"] == "no_match"
 
     fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_command_dry_run_surfaces_missing_connection_dependency(
+    persona_db: CharactersRAGDB,
+):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Dry Run Broken Connection Builder")
+
+        created_connection = client.post(
+            f"/api/v1/persona/profiles/{persona_id}/connections",
+            json={
+                "name": "Alerts API",
+                "base_url": "https://api.example.com/hooks",
+                "auth_type": "none",
+            },
+        )
+        assert created_connection.status_code == 201, created_connection.text
+        connection_id = created_connection.json()["id"]
+
+        created_command = client.post(
+            f"/api/v1/persona/profiles/{persona_id}/voice-commands",
+            json={
+                "name": "Send Alert",
+                "phrases": ["send alert for {query}"],
+                "action_type": "custom",
+                "connection_id": connection_id,
+                "action_config": {
+                    "action": "external_request",
+                    "method": "POST",
+                    "path": "alerts/send",
+                },
+                "priority": 10,
+                "enabled": True,
+                "requires_confirmation": True,
+            },
+        )
+        assert created_command.status_code == 201, created_command.text
+        command_id = created_command.json()["id"]
+
+        deleted_connection = client.delete(
+            f"/api/v1/persona/profiles/{persona_id}/connections/{connection_id}"
+        )
+        assert deleted_connection.status_code == 200, deleted_connection.text
+
+        tested = client.post(
+            f"/api/v1/persona/profiles/{persona_id}/voice-commands/test",
+            json={"heard_text": "send alert for model drift"},
+        )
+        assert tested.status_code == 200, tested.text
+        payload = tested.json()
+        assert payload["heard_text"] == "send alert for model drift"
+        assert payload["matched"] is True
+        assert payload["command_id"] == command_id
+        assert payload["command_name"] == "Send Alert"
+        assert payload["connection_id"] == connection_id
+        assert payload["connection_status"] == "missing"
+        assert payload["connection_name"] is None
+        assert payload["failure_phase"] == "missing_connection"
+        assert payload["fallback_to_persona_planner"] is False
+
+    fastapi_app.dependency_overrides.clear()

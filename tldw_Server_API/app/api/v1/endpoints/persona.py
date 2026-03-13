@@ -450,22 +450,31 @@ def _voice_command_to_response(command: VoiceCommand) -> VoiceCommandInfo:
     )
 
 
+def _resolve_voice_command_connection_status(
+    command: VoiceCommand,
+    *,
+    connections_by_id: dict[str, PersonaConnectionResponse] | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    connection_id = str(command.connection_id or "").strip() or None
+    if not connection_id:
+        return None, None, None
+    connection = (connections_by_id or {}).get(connection_id)
+    if connection is None:
+        return connection_id, "missing", None
+    return connection_id, "ok", connection.name
+
+
 def _voice_command_to_response_with_connections(
     command: VoiceCommand,
     *,
     connections_by_id: dict[str, PersonaConnectionResponse] | None = None,
 ) -> VoiceCommandInfo:
-    connection_status: str | None = None
-    connection_name: str | None = None
-    connection_id = str(command.connection_id or "").strip()
-    if connection_id:
-        connection = (connections_by_id or {}).get(connection_id)
-        if connection is None:
-            connection_status = "missing"
-        else:
-            connection_status = "ok"
-            connection_name = connection.name
+    connection_id, connection_status, connection_name = _resolve_voice_command_connection_status(
+        command,
+        connections_by_id=connections_by_id,
+    )
     response = _voice_command_to_response(command)
+    response.connection_id = connection_id
     response.connection_status = connection_status
     response.connection_name = connection_name
     return response
@@ -3477,6 +3486,17 @@ async def dry_run_persona_voice_command(
                 failure_phase="disabled_command" if command is not None and not command.enabled else "no_match",
             )
 
+        connections_by_id: dict[str, PersonaConnectionResponse] = {}
+        if command.connection_id:
+            connections_by_id = await _get_persona_connections_by_id(
+                db,
+                user_id=user_id,
+                persona_id=persona_id,
+            )
+        connection_id, connection_status, connection_name = _resolve_voice_command_connection_status(
+            command,
+            connections_by_id=connections_by_id,
+        )
         persona_policy_rules = normalize_policy_rules(
             await _run_persona_db_call(
                 db.list_persona_policy_rules,
@@ -3500,10 +3520,14 @@ async def dry_run_persona_voice_command(
             match_reason=parsed.match_reason or parsed.match_method,
             command_id=command.id,
             command_name=command.name,
+            connection_id=connection_id,
+            connection_status=connection_status,
+            connection_name=connection_name,
             extracted_params=parsed.intent.entities,
             planned_action=planned_action,
             safety_gate=safety_gate,
             fallback_to_persona_planner=False,
+            failure_phase="missing_connection" if connection_status == "missing" else None,
         )
     except HTTPException:
         raise
