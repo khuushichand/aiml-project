@@ -17,6 +17,7 @@ import { useTranslation } from "react-i18next"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { processInChunks } from "@/utils/chunk-processing"
+import { ImageOcclusionTransferPanel } from "./ImageOcclusionTransferPanel"
 import {
   useCreateDeckMutation,
   useCreateFlashcardMutation,
@@ -91,7 +92,7 @@ interface GeneratePanelProps {
 type TransferActionStatus = "success" | "warning" | "error"
 
 interface TransferActionSummaryInput {
-  area: "import" | "export" | "generate"
+  area: "import" | "export" | "generate" | "occlusion"
   status: TransferActionStatus
   message: string
 }
@@ -2306,9 +2307,13 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
         ? t("option:flashcards.importTitle", { defaultValue: "Import Flashcards" })
         : lastTransferAction.area === "export"
           ? t("option:flashcards.exportTitle", { defaultValue: "Export Flashcards" })
-          : t("option:flashcards.generateTitle", {
-              defaultValue: "Generate Flashcards"
-            })
+          : lastTransferAction.area === "occlusion"
+            ? t("option:flashcards.occlusionTitle", {
+                defaultValue: "Image Occlusion"
+              })
+            : t("option:flashcards.generateTitle", {
+                defaultValue: "Generate Flashcards"
+              })
     return t("option:flashcards.transferSummaryLastAction", {
       defaultValue: "{{area}} · {{message}} · {{time}}",
       area: areaLabel,
@@ -2318,9 +2323,9 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
   }, [lastTransferAction, t])
 
   return (
-    <div className="grid gap-4 grid-cols-1 xl:grid-cols-3">
+    <div className="grid gap-4 grid-cols-1 xl:grid-cols-4">
       <Card
-        className="xl:col-span-3"
+        className="xl:col-span-4"
         title={t("option:flashcards.transferSummaryTitle", {
           defaultValue: "Transfer summary"
         })}
@@ -2336,7 +2341,7 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
             <Text type="secondary">
               {t("option:flashcards.transferSummaryFormatsValue", {
                 defaultValue:
-                  "Import: CSV, TSV, JSON, JSONL, Structured Q&A, APKG · Export: TSV, CSV, APKG"
+                  "Import: CSV, TSV, JSON, JSONL, Structured Q&A, APKG · Author: Generate, Image Occlusion · Export: TSV, CSV, APKG"
               })}
             </Text>
           </div>
@@ -2401,6 +2406,13 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
           initialIntent={generateIntent || null}
           onTransferAction={handleTransferAction}
         />
+      </Card>
+      <Card
+        title={t("option:flashcards.occlusionTitle", {
+          defaultValue: "Image Occlusion"
+        })}
+      >
+        <ImageOcclusionTransferPanel onTransferAction={handleTransferAction} />
       </Card>
     </div>
   )

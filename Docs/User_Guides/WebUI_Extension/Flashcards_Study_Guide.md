@@ -1,6 +1,6 @@
 # Flashcards Study Guide
 
-_Last updated: 2026-03-12_
+_Last updated: 2026-03-13_
 
 This guide explains the Flashcards flow in `Study`, `Manage`, and `Transfer`, including scheduling basics, cloze syntax, and import/export formats.
 
@@ -23,7 +23,7 @@ Why the 8 KB field limit did not increase:
 
 ## Daily Study Workflow
 
-1. Add cards through `Manage` (manual create), `Transfer` import, or `Transfer` generate.
+1. Add cards through `Manage` (manual create), `Transfer` import, `Transfer` generate, or `Transfer` image occlusion.
 2. Open `Study` and review due cards.
 3. Reveal the answer, then rate recall (`Again`, `Hard`, `Good`, `Easy`).
 4. Repeat daily. The scheduler adjusts next due dates from your ratings.
@@ -124,6 +124,36 @@ Preview rules:
 - Blank lines are allowed.
 - Saving selected drafts writes standard `basic` flashcards into the chosen deck.
 - Unlabeled freeform notes are not inferred into cards in v1.
+
+### Image Occlusion Authoring
+
+Use `Transfer` → `Image Occlusion` when you want to turn one labeled screenshot, diagram, or slide into several image-backed cards.
+
+Workflow:
+
+- Upload one source image.
+- Draw rectangular occlusion regions directly on the preview.
+- Add an answer label for each region.
+- Generate drafts. The app uploads:
+  - one normalized source image
+  - one masked prompt image per region
+  - one highlighted answer image per region
+- Review/edit the generated drafts, then save them in bulk.
+
+Saved card shape:
+
+- `Front` contains a prompt line plus the masked image.
+- `Back` contains the label plus the highlighted answer image.
+- `Notes` store a readable `[image-occlusion]` metadata block with source ref and normalized geometry.
+- Cards are saved as standard `basic` flashcards with `source_ref_type = manual`.
+
+Current limits:
+
+- V1 supports one source image per generation run.
+- Regions are rectangular only.
+- Each region must have a label before drafts can be generated.
+- The generation run is capped at 25 regions.
+- Existing occlusion cards do not reopen in the authoring surface yet; edit the resulting flashcards directly instead.
 
 ### APKG Export
 
