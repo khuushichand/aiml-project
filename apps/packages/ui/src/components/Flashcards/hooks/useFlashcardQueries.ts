@@ -11,6 +11,8 @@ import {
   resetFlashcardScheduling,
   reviewFlashcard,
   getNextReviewCard,
+  getFlashcardAssistant,
+  respondFlashcardAssistant,
   generateFlashcards,
   getFlashcard,
   importFlashcards,
@@ -23,6 +25,8 @@ import {
   getFlashcardsImportLimits,
   type Deck,
   type Flashcard,
+  type StudyAssistantContextResponse,
+  type StudyAssistantRespondRequest,
   type FlashcardBulkUpdateItem,
   type FlashcardBulkUpdateResponse,
   type FlashcardCreate,
@@ -54,6 +58,7 @@ const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
   })
 
 const getListTotal = (res: { total?: number | null; count?: number }) => (res.total ?? res.count ?? 0)
+const STUDY_ASSISTANT_ACTIONS = ["explain", "mnemonic", "follow_up", "fact_check", "freeform"] as const
 
 async function fetchDueCounts(deckId?: number | null): Promise<DueCounts> {
   const [due, newCards, learning] = await Promise.all([
@@ -99,6 +104,19 @@ export function useReviewQuery(deckId: number | null | undefined, options?: UseF
       return response.card ?? null
     },
     enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+export function useFlashcardAssistantQuery(
+  cardUuid: string | null | undefined,
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+
+  return useQuery({
+    queryKey: ["flashcards:assistant", cardUuid ?? null],
+    queryFn: ({ signal }) => getFlashcardAssistant(cardUuid!, { signal }),
+    enabled: (options?.enabled ?? flashcardsEnabled) && !!cardUuid
   })
 }
 
@@ -536,6 +554,40 @@ export function useReviewFlashcardMutation() {
     },
     onError: (error) => {
       console.error("Failed to submit flashcard review:", error)
+    }
+  })
+}
+
+export function useFlashcardAssistantRespondMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:assistant:respond"],
+    mutationFn: (params: {
+      cardUuid: string
+      request: StudyAssistantRespondRequest
+      signal?: AbortSignal
+    }) =>
+      respondFlashcardAssistant(
+        params.cardUuid,
+        params.request,
+        params.signal ? { signal: params.signal } : undefined
+      ),
+    onSuccess: (response, variables) => {
+      qc.setQueryData<StudyAssistantContextResponse>(
+        ["flashcards:assistant", variables.cardUuid],
+        (current) => ({
+          thread: response.thread,
+          messages: current
+            ? [...current.messages, response.user_message, response.assistant_message]
+            : [response.user_message, response.assistant_message],
+          context_snapshot: response.context_snapshot,
+          available_actions: current?.available_actions ?? [...STUDY_ASSISTANT_ACTIONS]
+        })
+      )
+    },
+    onError: (error) => {
+      console.error("Failed to respond with flashcard assistant:", error)
     }
   })
 }

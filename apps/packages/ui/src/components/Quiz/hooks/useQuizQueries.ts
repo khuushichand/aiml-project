@@ -14,6 +14,7 @@ import {
   listAttempts,
   getAttempt,
   generateQuiz,
+  generateRemediationQuiz,
   type Quiz,
   type Question,
   type QuestionListParams,
@@ -21,7 +22,9 @@ import {
   type QuizUpdate,
   type QuestionCreate,
   type QuestionUpdate,
+  type QuestionType,
   type QuizGenerateRequest,
+  type QuizRemediationGenerateRequest,
   type QuizAnswerInput,
   type QuizListParams,
   type AttemptListParams,
@@ -480,6 +483,44 @@ export function useGenerateQuizMutation() {
     mutationKey: ["quizzes:generate"],
     mutationFn: (params: { request: QuizGenerateRequest; signal?: AbortSignal }) =>
       generateQuiz(params.request, { signal: params.signal }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["quizzes:list"] })
+    }
+  })
+}
+
+export function useGenerateRemediationQuizMutation() {
+  const qc = useQueryClient()
+  type GenerateRemediationQuizMutationInput = {
+    attemptId: number
+    questionIds: number[]
+    numQuestions?: number
+    questionTypes?: QuestionType[]
+    difficulty?: "easy" | "medium" | "hard" | "mixed"
+    focusTopics?: string[]
+    model?: string
+    workspaceTag?: string | null
+    signal?: AbortSignal
+  }
+
+  return useMutation({
+    mutationKey: ["quizzes:generate:remediation"],
+    mutationFn: (params: GenerateRemediationQuizMutationInput) => {
+      const request: QuizRemediationGenerateRequest = {
+        attemptId: params.attemptId,
+        questionIds: params.questionIds
+      }
+      if (params.numQuestions !== undefined) request.num_questions = params.numQuestions
+      if (params.questionTypes !== undefined) request.question_types = params.questionTypes
+      if (params.difficulty !== undefined) request.difficulty = params.difficulty
+      if (params.focusTopics !== undefined) request.focus_topics = params.focusTopics
+      if (params.model !== undefined) request.model = params.model
+      if (params.workspaceTag !== undefined) request.workspace_tag = params.workspaceTag
+
+      return params.signal
+        ? generateRemediationQuiz(request, { signal: params.signal })
+        : generateRemediationQuiz(request)
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["quizzes:list"] })
     }

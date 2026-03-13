@@ -32,6 +32,76 @@ export type FlashcardIntervalPreviews = {
   easy: string
 }
 
+export type StudyAssistantAction =
+  | "explain"
+  | "mnemonic"
+  | "follow_up"
+  | "fact_check"
+  | "freeform"
+
+export type StudyAssistantInputModality = "text" | "voice_transcript"
+
+export type StudyAssistantThreadSummary = {
+  id: number
+  context_type: "flashcard" | "quiz_attempt_question"
+  flashcard_uuid?: string | null
+  quiz_attempt_id?: number | null
+  question_id?: number | null
+  last_message_at?: string | null
+  message_count: number
+  deleted: boolean
+  client_id: string
+  version: number
+  created_at?: string | null
+  last_modified?: string | null
+}
+
+export type StudyAssistantMessage = {
+  id: number
+  thread_id: number
+  role: "user" | "assistant"
+  action_type: StudyAssistantAction
+  input_modality: StudyAssistantInputModality
+  content: string
+  structured_payload: Record<string, unknown>
+  context_snapshot: Record<string, unknown>
+  provider?: string | null
+  model?: string | null
+  created_at?: string | null
+  client_id: string
+}
+
+export type StudyAssistantFactCheckPayload = {
+  verdict: "correct" | "partially_correct" | "incorrect"
+  corrections: string[]
+  missing_points: string[]
+  next_prompt: string
+}
+
+export type StudyAssistantRespondRequest = {
+  action: StudyAssistantAction
+  message?: string | null
+  input_modality?: StudyAssistantInputModality
+  provider?: string | null
+  model?: string | null
+  expected_thread_version?: number | null
+}
+
+export type StudyAssistantContextResponse = {
+  thread: StudyAssistantThreadSummary
+  messages: StudyAssistantMessage[]
+  context_snapshot: Record<string, unknown>
+  available_actions: StudyAssistantAction[]
+}
+
+export type StudyAssistantRespondResponse = {
+  thread: StudyAssistantThreadSummary
+  user_message: StudyAssistantMessage
+  assistant_message: StudyAssistantMessage
+  structured_payload: Record<string, unknown>
+  context_snapshot: Record<string, unknown>
+}
+
 // Minimal client types based on openapi.json
 export type Deck = {
   id: number
@@ -358,6 +428,31 @@ export async function updateFlashcardsBulk(
 
 export async function getFlashcard(card_uuid: string): Promise<Flashcard> {
   return await flashcardsClient.get<Flashcard>(card_uuid)
+}
+
+export async function getFlashcardAssistant(
+  card_uuid: string,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantContextResponse> {
+  return await bgRequest<StudyAssistantContextResponse, AllowedPath, "GET">({
+    path: `/api/v1/flashcards/${card_uuid}/assistant` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function respondFlashcardAssistant(
+  card_uuid: string,
+  input: StudyAssistantRespondRequest,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantRespondResponse> {
+  return await bgRequest<StudyAssistantRespondResponse, AllowedPath, "POST">({
+    path: `/api/v1/flashcards/${card_uuid}/assistant/respond` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input,
+    abortSignal: options?.signal
+  })
 }
 
 export async function updateFlashcard(card_uuid: string, input: FlashcardUpdate): Promise<void> {

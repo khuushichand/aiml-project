@@ -26,7 +26,13 @@ const getQuizAttemptsClient = (quizId: number) =>
 // Question types
 export type QuestionType = "multiple_choice" | "multi_select" | "matching" | "true_false" | "fill_blank"
 export type AnswerValue = number | string | number[] | Record<string, string>
-export type QuizGenerateSourceType = "media" | "note" | "flashcard_deck" | "flashcard_card"
+export type QuizGenerateSourceType =
+  | "media"
+  | "note"
+  | "flashcard_deck"
+  | "flashcard_card"
+  | "quiz_attempt"
+  | "quiz_attempt_question"
 export type QuizGenerateSource = {
   source_type: QuizGenerateSourceType
   source_id: string
@@ -195,6 +201,17 @@ type QuizGenerateRequestWithSources = QuizGenerateRequestBase & {
 }
 
 export type QuizGenerateRequest = QuizGenerateRequestWithMedia | QuizGenerateRequestWithSources
+
+export type QuizRemediationGenerateRequest = {
+  attemptId: number
+  questionIds: number[]
+  num_questions?: number
+  question_types?: QuestionType[]
+  difficulty?: "easy" | "medium" | "hard" | "mixed"
+  focus_topics?: string[]
+  model?: string
+  workspace_tag?: string | null
+}
 
 // List response types
 export type QuizListResponse = {
@@ -405,6 +422,34 @@ export async function generateQuiz(
     abortSignal: options?.signal,
     timeoutMs
   })
+}
+
+export function buildQuizAttemptQuestionSources(
+  attemptId: number,
+  questionIds: number[]
+): QuizGenerateSource[] {
+  return questionIds.map((questionId) => ({
+    source_type: "quiz_attempt_question",
+    source_id: `${attemptId}:${questionId}`
+  }))
+}
+
+export async function generateRemediationQuiz(
+  request: QuizRemediationGenerateRequest,
+  options?: { signal?: AbortSignal; timeoutMs?: number }
+): Promise<QuizGenerateResponse> {
+  return await generateQuiz(
+    {
+      num_questions: request.num_questions,
+      question_types: request.question_types,
+      difficulty: request.difficulty,
+      focus_topics: request.focus_topics,
+      model: request.model,
+      workspace_tag: request.workspace_tag,
+      sources: buildQuizAttemptQuestionSources(request.attemptId, request.questionIds)
+    },
+    options
+  )
 }
 
 export async function importQuizzesJson(
