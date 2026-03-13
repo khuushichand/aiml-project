@@ -14,7 +14,7 @@
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/app/api/v1/schemas/admin_schemas.py`
-- Test: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/tests/Admin/test_admin_system_ops_service.py`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/tests/Admin/test_incidents_service.py`
 
 **Step 1: Write the failing backend schema/service tests**
 
@@ -32,7 +32,7 @@ Also add tests for default values on pre-existing incidents with no workflow fie
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_admin_system_ops_service.py -q
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_incidents_service.py -q
 ```
 
 Expected:
@@ -49,12 +49,14 @@ Define explicit partial-update semantics in comments/docstrings:
 - omitted means unchanged
 - `null` means clear
 
+Add schema-level notes that implementation must preserve omitted-vs-null distinction using `model_fields_set` or `model_dump(exclude_unset=True)` in the endpoint/service path.
+
 **Step 4: Re-run the focused pytest slice**
 
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_admin_system_ops_service.py -q
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_incidents_service.py -q
 ```
 
 Expected:
@@ -63,7 +65,7 @@ Expected:
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/api/v1/schemas/admin_schemas.py tldw_Server_API/tests/Admin/test_admin_system_ops_service.py
+git add tldw_Server_API/app/api/v1/schemas/admin_schemas.py tldw_Server_API/tests/Admin/test_incidents_service.py
 git commit -m "test(admin-incidents): cover workflow schema fields"
 ```
 
@@ -71,13 +73,14 @@ git commit -m "test(admin-incidents): cover workflow schema fields"
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/app/services/admin_system_ops_service.py`
-- Test: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/tests/Admin/test_admin_system_ops_service.py`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/tests/Admin/test_incidents_service.py`
 
 **Step 1: Write the failing backend service tests**
 
 Add tests covering:
 - assignment persistence using `assigned_to_user_id`
 - clearing assignment with `null`
+- omitted workflow fields remain unchanged
 - post-mortem persistence for `root_cause`, `impact`, and `action_items`
 - blank action items normalized away
 - timeline entry appended only when structured workflow update succeeds
@@ -87,7 +90,7 @@ Add tests covering:
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_admin_system_ops_service.py -q
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_incidents_service.py -q
 ```
 
 Expected:
@@ -99,6 +102,7 @@ In `admin_system_ops_service.py`:
 - normalize legacy incident records with default workflow fields
 - extend `create_incident(...)` defaults
 - extend `update_incident(...)` to:
+  - detect which request fields were actually supplied by the caller
   - support partial updates for workflow fields
   - clear fields when explicit `None` is provided
   - validate/cap action items
@@ -111,7 +115,7 @@ Keep the store update atomic inside the existing locked store context.
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_admin_system_ops_service.py -q
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_incidents_service.py -q
 ```
 
 Expected:
@@ -120,7 +124,7 @@ Expected:
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/services/admin_system_ops_service.py tldw_Server_API/tests/Admin/test_admin_system_ops_service.py
+git add tldw_Server_API/app/services/admin_system_ops_service.py tldw_Server_API/tests/Admin/test_incidents_service.py
 git commit -m "feat(admin-incidents): persist authoritative workflow state"
 ```
 
@@ -129,21 +133,23 @@ git commit -m "feat(admin-incidents): persist authoritative workflow state"
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/app/api/v1/endpoints/admin/admin_ops.py`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/app/api/v1/schemas/admin_schemas.py`
-- Test: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/tests/Admin/test_admin_ops_incidents_api.py`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/admin-ui-incidents-authoritative/tldw_Server_API/tests/Admin/test_incidents_api.py`
 
 **Step 1: Write the failing endpoint tests**
 
 Add API tests that assert:
 - `PATCH /admin/incidents/{id}` with `assigned_to_user_id` persists the user id and backend-resolved label
+- assignee must resolve to an admin-capable user
 - invalid assignee ids fail closed
 - `null` clears assignment
+- omitted workflow fields remain unchanged through the API layer
 
 **Step 2: Run the focused pytest slice to verify failure**
 
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_admin_ops_incidents_api.py -q
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_incidents_api.py -q
 ```
 
 Expected:
@@ -153,6 +159,7 @@ Expected:
 
 In `admin_ops.py`:
 - load/resolve the requested user when `assigned_to_user_id` is present
+- enforce the v1 assignable-user rule for admin-capable users only
 - pass backend-resolved assignee metadata into `svc_update_incident(...)`
 - reject invalid assignee ids with a stable 400/404-style API error
 
@@ -163,7 +170,7 @@ Do not trust a client-provided label.
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_admin_ops_incidents_api.py -q
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_incidents_api.py -q
 ```
 
 Expected:
@@ -172,7 +179,7 @@ Expected:
 **Step 5: Commit**
 
 ```bash
-git add tldw_Server_API/app/api/v1/endpoints/admin/admin_ops.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py tldw_Server_API/tests/Admin/test_admin_ops_incidents_api.py
+git add tldw_Server_API/app/api/v1/endpoints/admin/admin_ops.py tldw_Server_API/app/api/v1/schemas/admin_schemas.py tldw_Server_API/tests/Admin/test_incidents_api.py
 git commit -m "feat(admin-incidents): resolve authoritative assignee labels"
 ```
 
@@ -191,6 +198,7 @@ Add/update tests to assert:
 - page reads assignee/root-cause/impact/action-items from `IncidentItem`
 - workflow fields survive reload from backend incident payload
 - no `localStorage` incident workflow persistence remains
+- current assignee rendering prefers `assigned_to_label` from the incident payload even when the assignee is not present in the currently loaded dropdown options
 
 **Step 2: Run the focused vitest slice to verify failure**
 
@@ -210,6 +218,7 @@ In `page.tsx`:
 - initialize form state from incident payloads
 - use `api.updateIncident(...)` for assignment and post-mortem saves
 - keep unsaved edits only in memory
+- render the current assignee from backend incident fields, not only from the loaded dropdown option list
 
 In `types/incidents.ts`:
 - extend `IncidentItem` with authoritative workflow fields
@@ -244,7 +253,7 @@ git commit -m "feat(admin-ui): use authoritative incident workflow state"
 Run:
 
 ```bash
-source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_admin_system_ops_service.py tldw_Server_API/tests/Admin/test_admin_ops_incidents_api.py -q
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Admin/test_incidents_service.py tldw_Server_API/tests/Admin/test_incidents_api.py -q
 ```
 
 Expected:

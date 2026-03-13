@@ -42,6 +42,13 @@ The UI sends only `assigned_to_user_id`. The backend resolves the display label 
 
 The backend will not trust a client-provided assignee label.
 
+The v1 assignee contract is:
+
+- assignees must be admin-capable users
+- `assigned_to_label` is the primary display value returned by the backend
+- the UI dropdown options are only the selectable set, not the source of truth for current assignee rendering
+- if the current assignee is not present in the currently loaded option set, the page still renders the backend-confirmed `assigned_to_label`
+
 ### Partial Update Semantics
 
 The incident `PATCH` path will use explicit partial-update behavior:
@@ -51,6 +58,8 @@ The incident `PATCH` path will use explicit partial-update behavior:
 - non-null value: replace the field after validation
 
 This applies to `assigned_to_user_id`, `root_cause`, `impact`, and `action_items`.
+
+Implementation must preserve the omitted-vs-null distinction explicitly, using request metadata such as `model_fields_set` or `model_dump(exclude_unset=True)` rather than relying on naive `None` checks alone.
 
 ### Timeline Behavior
 
@@ -110,6 +119,7 @@ Mutation permissions remain aligned with the existing incidents surface unless a
 - incident update tests for assignment persistence and clearing
 - incident update tests for root cause, impact, and action item persistence
 - tests proving timeline append happens only on successful authoritative workflow updates
+- tests proving omitted fields remain unchanged while explicit `null` clears them
 
 ### Frontend
 
@@ -117,6 +127,7 @@ Mutation permissions remain aligned with the existing incidents surface unless a
 - assignment tests assert `updateIncident(...)` is called and backend-confirmed assignee survives reload
 - post-mortem tests assert backend-backed workflow fields render and survive reload
 - failure tests assert no fake durable local state remains after failed saves
+- assignee rendering tests assert the page prefers `assigned_to_label` from `IncidentItem` even when the current assignee is not present in the currently loaded dropdown options
 
 ### Verification
 
