@@ -1647,9 +1647,9 @@ Create character, navigate to chat, select character, verify system prompt in AP
 
 Create note, generate flashcards, verify cards created.
 
-### Task 7.5: Prompt Studio → Chat
+### Task 7.5: Prompts Workspace → Chat
 
-Create prompt, navigate to chat, use prompt, verify prompt in API call.
+Create prompt at `/prompts`, navigate to chat, use the saved prompt, verify prompt content appears in the chat completions API call payload.
 
 ### Task 7.6: Watchlist → Ingest → Notify
 
