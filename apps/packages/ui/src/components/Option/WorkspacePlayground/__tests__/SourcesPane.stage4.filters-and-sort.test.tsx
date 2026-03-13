@@ -268,6 +268,68 @@ describe("SourcesPane stage 4 filters and sort", () => {
     expect(mockSetSelectedSourceIds).toHaveBeenCalledWith(["s1"])
   })
 
+  it("preserves hidden direct selections when selecting visible results", () => {
+    workspaceStoreState.sources = [
+      {
+        id: "s1",
+        mediaId: 101,
+        title: "Alpha PDF",
+        type: "pdf",
+        status: "ready",
+        addedAt: new Date("2026-03-11T00:00:00.000Z")
+      },
+      {
+        id: "s2",
+        mediaId: 102,
+        title: "Bravo Website",
+        type: "website",
+        status: "ready",
+        addedAt: new Date("2026-03-12T00:00:00.000Z")
+      }
+    ]
+    workspaceStoreState.selectedSourceIds = ["s2"]
+    mockGetEffectiveSelectedSources.mockReturnValue([workspaceStoreState.sources[1]])
+
+    render(<ControlledSourcesPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "Type PDF" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select visible" }))
+
+    expect(mockSetSelectedSourceIds).toHaveBeenCalledWith(["s1", "s2"])
+  })
+
+  it("clears only visible direct selections when toggling select visible off", () => {
+    workspaceStoreState.sources = [
+      {
+        id: "s1",
+        mediaId: 101,
+        title: "Alpha PDF",
+        type: "pdf",
+        status: "ready",
+        addedAt: new Date("2026-03-11T00:00:00.000Z")
+      },
+      {
+        id: "s2",
+        mediaId: 102,
+        title: "Bravo Website",
+        type: "website",
+        status: "ready",
+        addedAt: new Date("2026-03-12T00:00:00.000Z")
+      }
+    ]
+    workspaceStoreState.selectedSourceIds = ["s1", "s2"]
+    mockGetEffectiveSelectedSources.mockReturnValue([...workspaceStoreState.sources])
+
+    render(<ControlledSourcesPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "Type PDF" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select visible" }))
+
+    expect(mockSetSelectedSourceIds).toHaveBeenCalledWith(["s2"])
+  })
+
   it("warns when bulk remove includes hidden selected sources", async () => {
     workspaceStoreState.selectedSourceIds = ["s1", "s2"]
     mockGetEffectiveSelectedSources.mockReturnValue([...workspaceStoreState.sources])

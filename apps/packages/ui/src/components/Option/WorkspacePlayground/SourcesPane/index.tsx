@@ -443,6 +443,25 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
         .map((source) => source.id),
     [filteredSources, organizationIndex.readySourceIds]
   )
+  const visibleReadySourceIdSet = React.useMemo(
+    () => new Set(visibleReadySourceIds),
+    [visibleReadySourceIds]
+  )
+  const hiddenDirectSelectedSourceIds = React.useMemo(
+    () =>
+      organizationIndex.sourceIdsInOrder.filter(
+        (sourceId) =>
+          selectedSourceIds.includes(sourceId) &&
+          organizationIndex.readySourceIds.has(sourceId) &&
+          !visibleReadySourceIdSet.has(sourceId)
+      ),
+    [
+      organizationIndex.readySourceIds,
+      organizationIndex.sourceIdsInOrder,
+      selectedSourceIds,
+      visibleReadySourceIdSet
+    ]
+  )
   const visibleEffectiveSelectedCount = React.useMemo(
     () =>
       filteredSources.filter((source) => effectiveSelectedSourceIds.has(source.id))
@@ -572,14 +591,18 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     ? sourceAnnotations[previewSourceId] || []
     : []
 
-  const handleSelectAllToggle = React.useCallback(() => {
+  const handleSelectAllToggle = React.useCallback((event: {
+    target: { checked: boolean }
+  }) => {
     if (isListNarrowed) {
-      if (selectionCheckboxChecked || selectionCheckboxIndeterminate) {
-        clearEffectiveSelection()
-        return
-      }
-
-      setSelectedSourceIds(visibleReadySourceIds)
+      const nextSelectedIds = event.target.checked
+        ? organizationIndex.sourceIdsInOrder.filter(
+            (sourceId) =>
+              visibleReadySourceIdSet.has(sourceId) ||
+              hiddenDirectSelectedSourceIds.includes(sourceId)
+          )
+        : hiddenDirectSelectedSourceIds
+      setSelectedSourceIds(nextSelectedIds)
       return
     }
 
@@ -592,13 +615,13 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   }, [
     allSelected,
     clearEffectiveSelection,
+    hiddenDirectSelectedSourceIds,
     isListNarrowed,
+    organizationIndex.sourceIdsInOrder,
     selectAllSources,
-    selectionCheckboxChecked,
-    selectionCheckboxIndeterminate,
     setSelectedSourceIds,
     someSelected,
-    visibleReadySourceIds
+    visibleReadySourceIdSet
   ])
 
   const handleCreateSourceFolder = React.useCallback(() => {
