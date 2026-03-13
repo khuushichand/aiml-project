@@ -193,6 +193,8 @@ describe("TestLabPanel", () => {
   })
 
   it("reruns the last phrase automatically when requested by the route", async () => {
+    const onOpenCommand = vi.fn()
+
     render(
       <TestLabPanel
         selectedPersonaId="persona-1"
@@ -200,6 +202,7 @@ describe("TestLabPanel", () => {
         isActive
         initialHeardText="send alert repaired"
         rerunRequestToken={1}
+        onOpenCommand={onOpenCommand}
       />
     )
 
@@ -224,5 +227,10 @@ describe("TestLabPanel", () => {
     expect(
       screen.getByText("Repair confirmed. The last phrase now resolves cleanly.")
     ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("persona-test-lab-repair-open-command"))
+    expect(onOpenCommand).toHaveBeenCalledWith(
+      "cmd-alert",
+      "send alert repaired"
+    )
   })
 })

@@ -256,6 +256,15 @@ vi.mock("@/components/PersonaGarden/TestLabPanel", () => ({
       >
         open command
       </button>
+      <button
+        type="button"
+        data-testid="test-lab-success-open-command"
+        onClick={() =>
+          onOpenCommand?.("cmd-alert", String(initialHeardText || "send alert repaired"))
+        }
+      >
+        open repaired command
+      </button>
     </div>
   )
 }))
@@ -299,6 +308,15 @@ describe("SidepanelPersona command handoff", () => {
     )
     expect(screen.getByTestId("test-lab-state")).toHaveTextContent(
       "active:send alert for model drift:1"
+    )
+
+    fireEvent.click(screen.getByTestId("test-lab-success-open-command"))
+
+    expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
+      "commands"
+    )
+    expect(screen.getByTestId("commands-panel")).toHaveTextContent(
+      "active:cmd-alert:cmd-alert"
     )
   })
 })

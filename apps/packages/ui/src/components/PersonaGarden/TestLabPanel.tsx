@@ -177,9 +177,28 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
         ) : null}
         {repairConfirmedVisible ? (
           <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700">
-            {t("sidepanel:personaGarden.testLab.repairConfirmedNotice", {
-              defaultValue: "Repair confirmed. The last phrase now resolves cleanly."
-            })}
+            <div>
+              {t("sidepanel:personaGarden.testLab.repairConfirmedNotice", {
+                defaultValue: "Repair confirmed. The last phrase now resolves cleanly."
+              })}
+            </div>
+            {result?.command_id && onOpenCommand ? (
+              <button
+                type="button"
+                data-testid="persona-test-lab-repair-open-command"
+                className="mt-2 rounded-md border border-emerald-500/40 bg-white/60 px-2 py-1 text-xs font-medium text-emerald-700 transition hover:bg-white/80"
+                onClick={() =>
+                  onOpenCommand(
+                    result.command_id as string,
+                    String(result.heard_text || heardText).trim()
+                  )
+                }
+              >
+                {t("sidepanel:personaGarden.testLab.repairOpenCommand", {
+                  defaultValue: "Back to Commands"
+                })}
+              </button>
+            ) : null}
           </div>
         ) : null}
 
