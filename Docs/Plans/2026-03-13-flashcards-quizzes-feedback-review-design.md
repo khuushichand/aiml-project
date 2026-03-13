@@ -56,7 +56,7 @@ The repeated user pain is not “generate cards from anything” in the abstract
 
 Recommended scope:
 
-- Accept pasted structured text, Markdown, and lightweight exported note content.
+- Accept pasted structured Q&A text, including labeled pairs copied from Markdown and lightweight note exports.
 - Parse question/answer blocks into candidate flashcards.
 - Present candidates in a review queue before save.
 - Allow per-card edit, reject, approve, and bulk approve actions.
@@ -68,6 +68,7 @@ Recommended non-scope for v1:
 - OneNote runtime integration
 - Screenshare capture
 - “Create deck from anything on screen”
+- Unlabeled freeform Markdown inference
 
 Why this fits the repo:
 

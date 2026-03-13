@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build a deterministic structured Q&A import flow in Flashcards `Transfer` so users can paste Q&A notes, preview editable candidate cards, and save only approved cards to a deck without LLM rewriting.
+**Goal:** Build a deterministic structured Q&A import flow in Flashcards `Transfer` so users can paste labeled Q&A notes, preview editable candidate cards, and save only approved cards to a deck without LLM rewriting.
 
-**Architecture:** Add a server-side structured Q&A preview parser and a preview endpoint at `/api/v1/flashcards/import/structured/preview`. Extend the shared UI service layer and `Transfer` import surface to call that preview endpoint, render editable drafts, and persist approved drafts via the existing flashcard create flow plus existing undo-notification patterns. Keep v1 text/Markdown-only and explicitly exclude live capture, OCR, OneNote integration, and image extraction.
+**Architecture:** Add a server-side structured Q&A preview parser and a preview endpoint at `/api/v1/flashcards/import/structured/preview`. Extend the shared UI service layer and `Transfer` import surface to call that preview endpoint, render editable drafts, and persist approved drafts via the existing flashcard bulk-create path plus existing undo-notification patterns. Keep v1 text/Markdown-only and explicitly exclude live capture, OCR, OneNote integration, and image extraction.
 
 **Tech Stack:** FastAPI, Pydantic, Python regex/text parsing, React, TypeScript, TanStack Query, Ant Design, pytest, Vitest
 
@@ -14,10 +14,11 @@ Follow `@superpowers/test-driven-development` throughout. Before declaring the w
 
 ## Scope Guardrails
 
-- Support deterministic `Q:` / `A:` and `Question:` / `Answer:` labeled text only in v1.
+- Support deterministic `Q:` / `A:` and `Question:` / `Answer:` labeled text only in v1, including the same labels copied from Markdown or note exports.
 - Preserve user-authored text and Markdown; do not call an LLM to rewrite card content.
-- Preview is non-destructive. Saving approved drafts uses the existing flashcard creation path.
+- Preview is non-destructive. Saving approved drafts uses the existing flashcard bulk-create path.
 - Do not change CSV/JSON/APKG behavior except to add the new structured import mode alongside them.
+- Do not infer unlabeled question/answer pairs in v1.
 - Do not add card image extraction, live app scanning, screenshare capture, or remote integrations in this plan.
 
 ## Relevant Existing Code
@@ -29,7 +30,7 @@ Follow `@superpowers/test-driven-development` throughout. Before declaring the w
 - `tldw_Server_API/app/api/v1/endpoints/flashcards.py`
 - `tldw_Server_API/app/api/v1/schemas/flashcards.py`
 - `tldw_Server_API/tests/Flashcards/test_flashcards_endpoint_integration.py`
-- `Docs/User_Guides/Flashcards_Study_Guide.md`
+- `Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md`
 
 ### Task 1: Add Deterministic Structured Q&A Parser Core
 
@@ -184,6 +185,25 @@ def test_structured_preview_endpoint_returns_drafts(client_with_flashcards_db):
     assert data["drafts"][0]["front"] == "What is ATP?"
     assert data["drafts"][0]["back"] == "Primary energy currency."
     assert data["errors"] == []
+
+
+def test_structured_preview_respects_line_caps(client_with_flashcards_db, monkeypatch):
+    monkeypatch.setenv("FLASHCARDS_IMPORT_MAX_LINES", "2")
+
+    payload = {
+        "content": "Q: One\nA: First\nQ: Two\nA: Second\n"
+    }
+
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/import/structured/preview",
+        json=payload,
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["drafts"]) == 1
+    assert any("Maximum preview line limit" in error["error"] for error in data["errors"])
 ```
 
 **Step 2: Run test to verify it fails**
@@ -229,8 +249,22 @@ class StructuredQaImportPreviewResponse(BaseModel):
     "/import/structured/preview",
     response_model=StructuredQaImportPreviewResponse,
 )
-def preview_structured_qa_import(payload: StructuredQaImportPreviewRequest):
-    result = parse_structured_qa_preview(payload.content)
+def preview_structured_qa_import(
+    payload: StructuredQaImportPreviewRequest,
+    max_lines: Optional[int] = Query(None, ge=1),
+    max_line_length: Optional[int] = Query(None, ge=1),
+    max_field_length: Optional[int] = Query(None, ge=1),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    if any(p is not None for p in (max_lines, max_line_length, max_field_length)):
+        _require_flashcards_admin(principal)
+
+    result = parse_structured_qa_preview(
+        payload.content,
+        max_lines=...,
+        max_line_length=...,
+        max_field_length=...,
+    )
     return {
         "drafts": [draft.__dict__ for draft in result.drafts],
         "errors": [error.__dict__ for error in result.errors],
@@ -243,6 +277,7 @@ Implementation notes:
 
 - Keep the endpoint preview-only. Do not write to the DB here.
 - Return non-fatal parse errors in the response body instead of throwing `400` for incomplete blocks.
+- Reuse the existing flashcards import env caps (`FLASHCARDS_IMPORT_MAX_LINES`, `FLASHCARDS_IMPORT_MAX_LINE_LENGTH`, `FLASHCARDS_IMPORT_MAX_FIELD_LENGTH`) so preview cannot bypass current abuse limits.
 - Only throw request-level errors for malformed/empty payloads.
 
 **Step 4: Run test to verify it passes**
@@ -290,7 +325,10 @@ vi.mock("@/services/resource-client", () => ({
   }))
 }))
 
-import { previewStructuredQaImport } from "@/services/flashcards"
+import {
+  createFlashcardsBulk,
+  previewStructuredQaImport
+} from "@/services/flashcards"
 
 describe("flashcards structured import service", () => {
   beforeEach(() => {
@@ -306,6 +344,25 @@ describe("flashcards structured import service", () => {
         path: "/api/v1/flashcards/import/structured/preview",
         method: "POST",
         body: { content: "Q: ATP\\nA: Energy" }
+      })
+    )
+  })
+
+  it("calls the bulk create endpoint for approved structured drafts", async () => {
+    await createFlashcardsBulk([
+      {
+        front: "What is ATP?",
+        back: "Primary energy currency.",
+        model_type: "basic",
+        is_cloze: false,
+        reverse: false
+      }
+    ])
+
+    expect(mockBgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/flashcards/bulk",
+        method: "POST",
       })
     )
   })
@@ -357,11 +414,14 @@ export async function previewStructuredQaImport(
   })
 }
 
-export function usePreviewStructuredQaImportMutation() {
-  return useMutation({
-    mutationKey: ["flashcards:import-structured-preview"],
-    mutationFn: (params: { content: string }) =>
-      previewStructuredQaImport({ content: params.content }),
+export async function createFlashcardsBulk(
+  input: FlashcardCreate[]
+): Promise<FlashcardListResponse> {
+  return await bgRequest({
+    path: "/api/v1/flashcards/bulk" as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
   })
 }
 ```
@@ -369,8 +429,9 @@ export function usePreviewStructuredQaImportMutation() {
 Implementation notes:
 
 - Keep this layer thin. No parsing logic belongs in the service.
-- Do not add a new persistence endpoint; approved drafts will save through the existing create mutation.
+- Do not add a new persistence endpoint; approved drafts will save through the existing bulk-create mutation.
 - Export the types so `ImportExportTab` can strongly type draft state.
+- Add `usePreviewStructuredQaImportMutation()` and `useCreateFlashcardsBulkMutation()` in `useFlashcardQueries.ts`, and ensure the bulk mutation invalidates flashcard queries once after the batch succeeds.
 
 **Step 4: Run test to verify it passes**
 
@@ -414,11 +475,14 @@ it("previews structured q and a drafts and saves only selected cards", async () 
     isPending: false
   } as any)
 
-  const createMutateAsync = vi
+  const createBulkMutateAsync = vi
     .fn()
-    .mockResolvedValueOnce({ uuid: "card-1", version: 1 })
-  vi.mocked(useCreateFlashcardMutation).mockReturnValue({
-    mutateAsync: createMutateAsync,
+    .mockResolvedValueOnce({
+      items: [{ uuid: "card-1", version: 1 }],
+      count: 1
+    })
+  vi.mocked(useCreateFlashcardsBulkMutation).mockReturnValue({
+    mutateAsync: createBulkMutateAsync,
     isPending: false
   } as any)
 
@@ -439,7 +503,7 @@ it("previews structured q and a drafts and saves only selected cards", async () 
   fireEvent.click(screen.getByTestId("flashcards-structured-save-button"))
 
   await waitFor(() => {
-    expect(createMutateAsync).toHaveBeenCalledTimes(1)
+    expect(createBulkMutateAsync).toHaveBeenCalledTimes(1)
   })
 })
 ```
@@ -480,23 +544,21 @@ const handleSaveStructuredDrafts = async () => {
   const selectedDrafts = structuredDrafts.filter((draft) =>
     selectedStructuredDraftIds.includes(draft.id)
   )
-  const createdCards = []
-  for (const draft of selectedDrafts) {
-    const created = await createMutation.mutateAsync({
-      deck_id: await resolveTargetDeckId(),
-      front: draft.front,
-      back: draft.back,
-      notes: draft.notes || undefined,
-      extra: draft.extra || undefined,
-      tags: draft.tags || undefined,
-      model_type: "basic",
-      is_cloze: false,
-      reverse: false,
-      source_ref_type: "manual"
-    })
-    createdCards.push(created)
-  }
-  // Reuse existing undo notification pattern with createdCards[].uuid/version.
+  const deckId = await resolveTargetDeckId()
+  const payload = selectedDrafts.map((draft) => ({
+    deck_id: deckId,
+    front: draft.front,
+    back: draft.back,
+    notes: draft.notes || undefined,
+    extra: draft.extra || undefined,
+    tags: draft.tags || undefined,
+    model_type: "basic",
+    is_cloze: false,
+    reverse: false,
+    source_ref_type: "manual"
+  }))
+  const createdCards = await createBulkMutation.mutateAsync(payload)
+  // Reuse existing undo notification pattern with createdCards.items[].uuid/version.
 }
 ```
 
@@ -512,7 +574,9 @@ Implementation notes:
   - remove draft action
 - Save only checked drafts.
 - Preserve the existing success/warning/error summary and undo-notification behavior.
+- Prefer extracting a small shared draft-editor renderer/state helper from the existing generated-card draft UI instead of building a second divergent draft editor.
 - If some saves fail, keep failed drafts in place and remove only successfully saved drafts, mirroring the generated-card save flow.
+- Do not save selected drafts through repeated single-card create calls; use the bulk-create path to avoid one invalidate per card.
 
 **Step 4: Run test to verify it passes**
 
@@ -534,7 +598,7 @@ git commit -m "feat(flashcards): add structured q and a transfer preview flow"
 ### Task 5: Sync Help Docs And In-App Help Links
 
 **Files:**
-- Modify: `Docs/User_Guides/Flashcards_Study_Guide.md`
+- Modify: `Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md`
 - Modify: `apps/packages/ui/src/components/Flashcards/constants/help-links.ts`
 - Modify: `apps/packages/ui/src/components/Flashcards/constants/__tests__/help-links.test.ts`
 - Modify: `apps/packages/ui/src/components/Flashcards/tabs/ImportExportTab.tsx`
@@ -564,6 +628,9 @@ Expected: FAIL because the new anchor and guide section do not exist yet.
 **Step 3: Write minimal implementation**
 
 ```typescript
+export const FLASHCARDS_HELP_DOC_BASE_URL =
+  "https://github.com/rmusser01/tldw_server/blob/HEAD/Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md"
+
 export const FLASHCARDS_HELP_LINKS = {
   overview: withAnchor("daily-study-workflow"),
   ratings: withAnchor("ratings-and-scheduling-basics"),
@@ -572,6 +639,13 @@ export const FLASHCARDS_HELP_LINKS = {
   structuredImport: withAnchor("structured-q-and-a-preview"),
   troubleshooting: withAnchor("troubleshooting")
 } as const
+```
+
+```typescript
+const DOC_PATH = path.resolve(
+  process.cwd(),
+  "../../../Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md"
+)
 ```
 
 ```markdown
@@ -611,7 +685,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add Docs/User_Guides/Flashcards_Study_Guide.md apps/packages/ui/src/components/Flashcards/constants/help-links.ts apps/packages/ui/src/components/Flashcards/constants/__tests__/help-links.test.ts apps/packages/ui/src/components/Flashcards/tabs/ImportExportTab.tsx
+git add Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md apps/packages/ui/src/components/Flashcards/constants/help-links.ts apps/packages/ui/src/components/Flashcards/constants/__tests__/help-links.test.ts apps/packages/ui/src/components/Flashcards/tabs/ImportExportTab.tsx
 git commit -m "docs(flashcards): document structured q and a preview import"
 ```
 
@@ -622,6 +696,7 @@ Run all targeted checks before calling the feature complete:
 ```bash
 source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Flashcards/test_structured_qa_import.py -v
 source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Flashcards/test_flashcards_endpoint_integration.py -k "structured_preview" -v
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Flashcards/test_flashcards_endpoint_integration.py -k "import and not structured_preview" -v
 bunx vitest run apps/packages/ui/src/services/__tests__/flashcards-structured-import.test.ts apps/packages/ui/src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx apps/packages/ui/src/components/Flashcards/constants/__tests__/help-links.test.ts
 source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/api/v1/endpoints/flashcards.py tldw_Server_API/app/core/Flashcards/structured_qa_import.py -f json -o /tmp/bandit_structured_qa_import.json
 ```
@@ -630,7 +705,7 @@ Expected:
 
 - All targeted pytest and Vitest suites pass.
 - Bandit reports no new issues in the touched backend files.
-- Existing CSV/JSON/APKG import tests still pass after adding the new mode.
+- Existing delimited/JSON/APKG import tests still pass after adding the new mode.
 
 ## Manual Smoke Checklist
 
