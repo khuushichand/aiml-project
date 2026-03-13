@@ -8,6 +8,7 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 from loguru import logger
+from PIL import Image
 
 # Keep this module self-contained and deterministic by disabling optional
 # reading-digest startup paths that pull heavyweight STT deps during app import.
@@ -23,6 +24,15 @@ from tldw_Server_API.tests.test_config import TestConfig
 
 # Explicit auth headers for single-user mode (required by get_request_user)
 AUTH_HEADERS = {"X-API-KEY": TestConfig.TEST_API_KEY}
+
+
+def _build_test_png_bytes() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGBA", (1, 1), (255, 0, 0, 255)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+PNG_1X1_BYTES = _build_test_png_bytes()
 
 
 @pytest.fixture(scope="function")
@@ -141,6 +151,150 @@ def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
                 conn.close()
     finally:
         zf.close()
+
+
+def test_upload_flashcard_asset_returns_markdown_snippet_and_content(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/assets",
+        files={"file": ("slide.png", PNG_1X1_BYTES, "image/png")},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["asset_uuid"]
+    assert payload["reference"] == f"flashcard-asset://{payload['asset_uuid']}"
+    assert payload["reference"] in payload["markdown_snippet"]
+    assert payload["mime_type"] == "image/png"
+    assert payload["byte_size"] == len(PNG_1X1_BYTES)
+    assert payload["width"] == 1
+    assert payload["height"] == 1
+
+    stored = flashcards_db.get_flashcard_asset(payload["asset_uuid"])
+    assert stored is not None
+    assert stored["card_uuid"] is None
+
+    content = client_with_flashcards_db.get(
+        f"/api/v1/flashcards/assets/{payload['asset_uuid']}/content",
+        headers=AUTH_HEADERS,
+    )
+    assert content.status_code == 200
+    assert content.headers["content-type"] == "image/png"
+    assert content.content == PNG_1X1_BYTES
+
+
+def test_upload_flashcard_asset_rejects_invalid_or_oversized_upload(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    invalid = client_with_flashcards_db.post(
+        "/api/v1/flashcards/assets",
+        files={"file": ("notes.txt", b"not-an-image", "text/plain")},
+        headers=AUTH_HEADERS,
+    )
+    assert invalid.status_code == 400
+
+    monkeypatch.setenv("FLASHCARD_ASSET_MAX_BYTES", "8")
+    oversized = client_with_flashcards_db.post(
+        "/api/v1/flashcards/assets",
+        files={"file": ("slide.png", PNG_1X1_BYTES, "image/png")},
+        headers=AUTH_HEADERS,
+    )
+    assert oversized.status_code == 400
+
+
+def test_create_flashcard_attaches_uploaded_asset_and_rejects_missing_refs(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    upload = client_with_flashcards_db.post(
+        "/api/v1/flashcards/assets",
+        files={"file": ("histology.png", PNG_1X1_BYTES, "image/png")},
+        headers=AUTH_HEADERS,
+    )
+    assert upload.status_code == 200
+    markdown_snippet = upload.json()["markdown_snippet"]
+    asset_uuid = upload.json()["asset_uuid"]
+
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "front": f"Question {markdown_snippet}",
+            "back": "Answer",
+            "notes": "With image context",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    card_uuid = created.json()["uuid"]
+    asset = flashcards_db.get_flashcard_asset(asset_uuid)
+    assert asset is not None
+    assert asset["card_uuid"] == card_uuid
+
+    missing = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "front": "Bad ![Missing](flashcard-asset://00000000-0000-0000-0000-000000000000)",
+            "back": "Answer",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert missing.status_code == 400
+
+
+def test_patch_and_bulk_patch_reject_invalid_asset_refs_without_rolling_back_siblings(
+    client_with_flashcards_db: TestClient,
+):
+    first = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "First", "back": "Back"},
+        headers=AUTH_HEADERS,
+    )
+    second = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "Second", "back": "Back"},
+        headers=AUTH_HEADERS,
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_card = first.json()
+    second_card = second.json()
+
+    invalid_patch = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/{first_card['uuid']}",
+        json={
+            "front": "Broken ![Missing](flashcard-asset://00000000-0000-0000-0000-000000000000)",
+            "expected_version": first_card["version"],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert invalid_patch.status_code == 400
+
+    bulk = client_with_flashcards_db.patch(
+        "/api/v1/flashcards/bulk",
+        json=[
+            {
+                "uuid": first_card["uuid"],
+                "back": "Saved sibling",
+                "expected_version": first_card["version"],
+            },
+            {
+                "uuid": second_card["uuid"],
+                "front": "Broken ![Missing](flashcard-asset://00000000-0000-0000-0000-000000000000)",
+                "expected_version": second_card["version"],
+            },
+        ],
+        headers=AUTH_HEADERS,
+    )
+    assert bulk.status_code == 200
+    payload = bulk.json()
+    assert payload["results"][0]["status"] == "updated"
+    assert payload["results"][0]["flashcard"]["back"] == "Saved sibling"
+    assert payload["results"][1]["status"] == "validation_error"
+    assert payload["results"][1]["error"]["invalid_fields"] == ["front"]
 
 
 def test_generate_flashcards_endpoint_returns_generated_cards(

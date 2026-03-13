@@ -7,7 +7,7 @@ import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -18,6 +18,7 @@ from tldw_Server_API.app.api.v1.schemas.flashcards import (
     FlashcardGenerateRequest,
     FlashcardGenerateResponse,
     FlashcardAnalyticsSummaryResponse,
+    FlashcardAssetMetadata,
     Flashcard,
     FlashcardBulkUpdateError,
     FlashcardBulkUpdateItem,
@@ -40,6 +41,12 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
+    InputError,
+)
+from tldw_Server_API.app.core.Flashcards.asset_refs import (
+    build_flashcard_asset_markdown,
+    build_flashcard_asset_reference,
+    extract_flashcard_asset_uuids,
 )
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 from tldw_Server_API.app.core.Flashcards.apkg_importer import (
@@ -47,6 +54,7 @@ from tldw_Server_API.app.core.Flashcards.apkg_importer import (
     import_rows_from_apkg_bytes,
 )
 from tldw_Server_API.app.core.Flashcards.structured_qa_import import parse_structured_qa_preview
+from tldw_Server_API.app.core.Utils.image_validation import validate_uploaded_image_bytes
 from tldw_Server_API.app.core.Workflows.adapters.content import run_flashcard_generate_adapter
 
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
@@ -210,6 +218,74 @@ def _coerce_bulk_update_error(
     )
 
 
+def _collect_flashcard_asset_refs_by_field(values: dict[str, Any]) -> dict[str, list[str]]:
+    refs_by_field: dict[str, list[str]] = {}
+    for field_name in ("front", "back", "extra", "notes"):
+        refs = extract_flashcard_asset_uuids(values.get(field_name))
+        if refs:
+            refs_by_field[field_name] = refs
+    return refs_by_field
+
+
+def _validate_flashcard_asset_refs(
+    refs_by_field: dict[str, list[str]],
+    db: CharactersRAGDB,
+    *,
+    card_uuid: str | None = None,
+) -> None:
+    invalid_fields: list[str] = []
+    problems: list[str] = []
+    seen: set[str] = set()
+
+    for field_name, asset_uuids in refs_by_field.items():
+        for asset_uuid in asset_uuids:
+            if asset_uuid in seen:
+                continue
+            seen.add(asset_uuid)
+            asset = db.get_flashcard_asset(asset_uuid)
+            if not asset:
+                invalid_fields.append(field_name)
+                problems.append(f"Unknown asset: {asset_uuid}")
+                continue
+            attached_card_uuid = asset.get("card_uuid")
+            if attached_card_uuid and attached_card_uuid != card_uuid:
+                invalid_fields.append(field_name)
+                problems.append(f"Asset already attached to another card: {asset_uuid}")
+
+    if problems:
+        deduped_fields = list(dict.fromkeys(invalid_fields))
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid flashcard asset reference",
+                "invalid_fields": deduped_fields,
+                "message": "; ".join(problems),
+            },
+        )
+
+
+def _reconcile_flashcard_assets_or_500(card_uuid: str, db: CharactersRAGDB) -> None:
+    card = db.get_flashcard(card_uuid)
+    if not card:
+        raise HTTPException(status_code=404, detail="Flashcard not found")
+    try:
+        db.reconcile_flashcard_asset_refs(
+            card_uuid,
+            front=card.get("front"),
+            back=card.get("back"),
+            extra=card.get("extra"),
+            notes=card.get("notes"),
+        )
+    except (ConflictError, InputError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid flashcard asset reference",
+                "message": str(exc),
+            },
+        ) from exc
+
+
 def _require_flashcards_admin(principal: AuthPrincipal) -> None:
     """Raise 403 if the principal lacks flashcards admin permission."""
     perms = {
@@ -265,10 +341,66 @@ def list_decks(db: CharactersRAGDB = Depends(get_chacha_db_for_user), include_de
         raise HTTPException(status_code=500, detail="Failed to list decks") from e
 
 
+@router.post("/assets", response_model=FlashcardAssetMetadata)
+async def upload_flashcard_asset(
+    file: UploadFile = File(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    file_bytes = await file.read()
+    is_valid, error_message, width, height = validate_uploaded_image_bytes(
+        file_bytes,
+        file.content_type or "",
+    )
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_message or "Invalid image upload")
+
+    original_filename = file.filename or "image"
+    alt_text = os.path.splitext(original_filename)[0] or "image"
+    try:
+        asset_uuid = db.add_flashcard_asset(
+            image_bytes=file_bytes,
+            mime_type=file.content_type or "application/octet-stream",
+            original_filename=original_filename,
+            width=width,
+            height=height,
+        )
+    except CharactersRAGDBError as exc:
+        logger.error(f"Failed to store flashcard asset: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to store flashcard asset") from exc
+
+    reference = build_flashcard_asset_reference(asset_uuid)
+    return FlashcardAssetMetadata(
+        asset_uuid=asset_uuid,
+        reference=reference,
+        markdown_snippet=build_flashcard_asset_markdown(asset_uuid, alt_text),
+        mime_type=file.content_type or "application/octet-stream",
+        byte_size=len(file_bytes),
+        width=width,
+        height=height,
+        original_filename=original_filename,
+    )
+
+
+@router.get("/assets/{asset_uuid}/content")
+def get_flashcard_asset_content(
+    asset_uuid: str,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    asset = db.get_flashcard_asset(asset_uuid)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Flashcard asset not found")
+    content = db.get_flashcard_asset_content(asset_uuid)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Flashcard asset content not found")
+    return Response(content=content, media_type=str(asset.get("mime_type") or "application/octet-stream"))
+
+
 @router.post("", response_model=Flashcard)
 def create_flashcard(payload: FlashcardCreate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
         data = payload.model_dump()
+        refs_by_field = _collect_flashcard_asset_refs_by_field(data)
+        _validate_flashcard_asset_refs(refs_by_field, db)
         # Convert tags list to tags_json string
         tags = data.pop("tags", None)
         if tags is not None:
@@ -307,6 +439,11 @@ def create_flashcard(payload: FlashcardCreate, db: CharactersRAGDB = Depends(get
         card = db.get_flashcard(card_uuid)
         if not card:
             raise HTTPException(status_code=500, detail="Failed to fetch created flashcard")
+        if refs_by_field:
+            _reconcile_flashcard_assets_or_500(card_uuid, db)
+            card = db.get_flashcard(card_uuid)
+            if not card:
+                raise HTTPException(status_code=500, detail="Failed to fetch created flashcard")
         return card
     except CharactersRAGDBError as e:
         logger.error(f"Failed to create flashcard: {e}")
@@ -322,6 +459,8 @@ def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB =
         deck_ids_to_validate: set[int] = set()
         for item in payload:
             data = item.model_dump()
+            refs_by_field = _collect_flashcard_asset_refs_by_field(data)
+            _validate_flashcard_asset_refs(refs_by_field, db)
             tags = data.pop("tags", None)
             if tags is not None:
                 data["tags_json"] = json.dumps(tags)
@@ -364,6 +503,7 @@ def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB =
                     db.set_flashcard_tags(u, tags)
                 except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as _e:
                     logger.warning(f"Failed to link tags for {u}: {_e}")
+            _reconcile_flashcard_assets_or_500(u, db)
         # Fetch created cards precisely by uuid (order-preserving)
         try:
             items = db.get_flashcards_by_uuids(uuids)
@@ -395,6 +535,16 @@ def update_flashcards_bulk(
                     **item.model_dump(exclude={"uuid"}, exclude_unset=True)
                 )
                 data, expected_version, tags = _prepare_flashcard_update(item.uuid, update_payload, db)
+                current = db.get_flashcard(item.uuid)
+                if not current:
+                    raise HTTPException(status_code=404, detail="Flashcard not found")
+                refs_by_field = _collect_flashcard_asset_refs_by_field(
+                    {
+                        key: data.get(key) if key in data else current.get(key)
+                        for key in ("front", "back", "extra", "notes")
+                    }
+                )
+                _validate_flashcard_asset_refs(refs_by_field, db, card_uuid=item.uuid)
                 ok = db.update_flashcard(item.uuid, data, expected_version, tags=tags)
                 if not ok:
                     results.append(
@@ -415,6 +565,18 @@ def update_flashcards_bulk(
                         )
                     )
                     continue
+                if refs_by_field:
+                    _reconcile_flashcard_assets_or_500(item.uuid, db)
+                    card = db.get_flashcard(item.uuid)
+                    if not card:
+                        results.append(
+                            FlashcardBulkUpdateResult(
+                                uuid=item.uuid,
+                                status="not_found",
+                                error=_coerce_bulk_update_error("not_found", "Flashcard not found"),
+                            )
+                        )
+                        continue
                 results.append(
                     FlashcardBulkUpdateResult(
                         uuid=item.uuid,
@@ -501,9 +663,21 @@ def get_flashcard(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_db_fo
 def update_flashcard(card_uuid: str, payload: FlashcardUpdate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
         data, expected_version, tags = _prepare_flashcard_update(card_uuid, payload, db)
+        current = db.get_flashcard(card_uuid)
+        if not current:
+            raise HTTPException(status_code=404, detail="Flashcard not found")
+        refs_by_field = _collect_flashcard_asset_refs_by_field(
+            {
+                key: data.get(key) if key in data else current.get(key)
+                for key in ("front", "back", "extra", "notes")
+            }
+        )
+        _validate_flashcard_asset_refs(refs_by_field, db, card_uuid=card_uuid)
         ok = db.update_flashcard(card_uuid, data, expected_version, tags=tags)
         if not ok:
             raise HTTPException(status_code=404, detail="Flashcard not found or not updated")
+        if refs_by_field:
+            _reconcile_flashcard_assets_or_500(card_uuid, db)
         card = db.get_flashcard(card_uuid)
         if not card:
             raise HTTPException(status_code=404, detail="Flashcard not found")

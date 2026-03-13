@@ -188,6 +188,17 @@ class FlashcardBulkUpdateResponse(BaseModel):
     results: list[FlashcardBulkUpdateResult] = Field(default_factory=list)
 
 
+class FlashcardAssetMetadata(BaseModel):
+    asset_uuid: UUID
+    reference: str
+    markdown_snippet: str
+    mime_type: str
+    byte_size: int
+    width: Optional[int] = None
+    height: Optional[int] = None
+    original_filename: Optional[str] = None
+
+
 class FlashcardResetSchedulingRequest(BaseModel):
     expected_version: int = Field(..., ge=1)
 

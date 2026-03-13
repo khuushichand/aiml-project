@@ -36,6 +36,7 @@ The library requires a `client_id` upon initialization, which is used to attribu
 changes in the `sync_log` and in individual records.
 """
 # Imports
+import hashlib  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 import sqlite3  # noqa: E402
@@ -84,6 +85,10 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (  # noq
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths  # noqa: E402
+from tldw_Server_API.app.core.Flashcards.asset_refs import (  # noqa: E402
+    extract_flashcard_asset_uuids,
+    sanitize_flashcard_text_for_search,
+)
 
 #
 ########################################################################################################################
@@ -4983,6 +4988,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
                     self._verify_required_fts_tables_sqlite(conn)
+                    self._ensure_flashcard_asset_schema_sqlite(conn)
+                    self._ensure_flashcard_fts_triggers_sqlite(conn)
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
                     self._ensure_notes_fts_triggers_sqlite(conn)
                     self._ensure_recent_persona_schema_sqlite(conn)
@@ -5513,6 +5520,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         f"Schema migration process completed, but final DB version is {final_version_check}, expected {target_version}. Manual check required.")
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
+                self._ensure_flashcard_asset_schema_sqlite(conn)
+                self._ensure_flashcard_fts_triggers_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
                 self._ensure_notes_fts_triggers_sqlite(conn)
                 # Seed/heal character_cards_fts before request traffic. Schema V4
@@ -5678,6 +5687,240 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring notes FTS triggers: {exc}") from exc  # noqa: TRY003
+
+    def _build_flashcard_search_shadow_fields(
+        self,
+        *,
+        front: str | None,
+        back: str | None,
+        notes: str | None,
+    ) -> tuple[str, str, str]:
+        """Return sanitized search shadow text for flashcard FTS."""
+        return (
+            sanitize_flashcard_text_for_search(front),
+            sanitize_flashcard_text_for_search(back),
+            sanitize_flashcard_text_for_search(notes),
+        )
+
+    def _ensure_flashcard_asset_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure flashcard asset storage and search shadow columns exist for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_assets(
+                  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                  uuid             TEXT UNIQUE NOT NULL,
+                  card_id          INTEGER REFERENCES flashcards(id) ON DELETE SET NULL,
+                  mime_type        TEXT NOT NULL,
+                  original_filename TEXT,
+                  byte_size        INTEGER NOT NULL,
+                  sha256           TEXT NOT NULL,
+                  image_data       BLOB NOT NULL,
+                  width            INTEGER,
+                  height           INTEGER,
+                  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted          BOOLEAN NOT NULL DEFAULT 0,
+                  client_id        TEXT NOT NULL DEFAULT 'unknown',
+                  version          INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcard_assets_uuid ON flashcard_assets(uuid)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_assets_card_id ON flashcard_assets(card_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_assets_deleted ON flashcard_assets(deleted)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_assets_card_deleted ON flashcard_assets(card_id, deleted)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard_assets table: {exc}") from exc  # noqa: TRY003
+
+        try:
+            flashcard_cols = {
+                str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()
+            }
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed reading flashcards schema: {exc}") from exc  # noqa: TRY003
+
+        if not flashcard_cols:
+            return
+
+        missing_shadow_cols: list[str] = []
+        for column_name in ("front_search", "back_search", "notes_search"):
+            if column_name in flashcard_cols:
+                continue
+            try:
+                conn.execute(f"ALTER TABLE flashcards ADD COLUMN {column_name} TEXT")
+            except sqlite3.Error as exc:
+                raise SchemaError(f"Failed adding flashcards.{column_name}: {exc}") from exc  # noqa: TRY003
+            missing_shadow_cols.append(column_name)
+
+        needs_backfill = bool(missing_shadow_cols)
+        if not needs_backfill:
+            try:
+                count_row = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                      FROM flashcards
+                     WHERE front_search IS NULL OR back_search IS NULL OR notes_search IS NULL
+                    """
+                ).fetchone()
+            except sqlite3.Error as exc:
+                raise SchemaError(f"Failed checking flashcard search shadow backfill: {exc}") from exc  # noqa: TRY003
+            needs_backfill = bool(count_row and int(count_row[0]) > 0)
+
+        if not needs_backfill:
+            return
+
+        try:
+            rows = conn.execute("SELECT id, front, back, notes FROM flashcards").fetchall()
+            params = []
+            for row in rows:
+                front_search, back_search, notes_search = self._build_flashcard_search_shadow_fields(
+                    front=row[1],
+                    back=row[2],
+                    notes=row[3],
+                )
+                params.append((front_search, back_search, notes_search, int(row[0])))
+            if params:
+                conn.executemany(
+                    """
+                    UPDATE flashcards
+                       SET front_search = ?, back_search = ?, notes_search = ?
+                     WHERE id = ?
+                    """,
+                    params,
+                )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed backfilling flashcard search shadow columns: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_flashcard_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Rebuild flashcard FTS around sanitized search shadow columns."""
+        try:
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS flashcards_ai;
+                DROP TRIGGER IF EXISTS flashcards_au;
+                DROP TRIGGER IF EXISTS flashcards_ad;
+                DROP TABLE IF EXISTS flashcards_fts;
+
+                CREATE VIRTUAL TABLE flashcards_fts
+                USING fts5(
+                  front_search, back_search, notes_search,
+                  content='flashcards',
+                  content_rowid='id'
+                );
+
+                CREATE TRIGGER flashcards_ai
+                AFTER INSERT ON flashcards BEGIN
+                  INSERT INTO flashcards_fts(rowid, front_search, back_search, notes_search)
+                  SELECT new.id, new.front_search, new.back_search, new.notes_search
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER flashcards_au
+                AFTER UPDATE ON flashcards BEGIN
+                  INSERT INTO flashcards_fts(flashcards_fts, rowid, front_search, back_search, notes_search)
+                  SELECT 'delete', old.id, old.front_search, old.back_search, old.notes_search
+                  WHERE old.deleted = 0;
+
+                  INSERT INTO flashcards_fts(rowid, front_search, back_search, notes_search)
+                  SELECT new.id, new.front_search, new.back_search, new.notes_search
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER flashcards_ad
+                AFTER DELETE ON flashcards BEGIN
+                  INSERT INTO flashcards_fts(flashcards_fts, rowid, front_search, back_search, notes_search)
+                  SELECT 'delete', old.id, old.front_search, old.back_search, old.notes_search
+                  WHERE old.deleted = 0;
+                END;
+                """
+            )
+            conn.execute("INSERT INTO flashcards_fts(flashcards_fts) VALUES('rebuild')")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcards FTS triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_flashcard_asset_schema_postgres(self, conn) -> None:
+        """Ensure flashcard asset storage and search shadow columns exist for PostgreSQL."""
+        try:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_assets(
+                  id BIGSERIAL PRIMARY KEY,
+                  uuid TEXT UNIQUE NOT NULL,
+                  card_id INTEGER REFERENCES flashcards(id) ON DELETE SET NULL,
+                  mime_type TEXT NOT NULL,
+                  original_filename TEXT,
+                  byte_size INTEGER NOT NULL,
+                  sha256 TEXT NOT NULL,
+                  image_data BYTEA NOT NULL,
+                  width INTEGER,
+                  height INTEGER,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS front_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS back_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS notes_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_assets_card_id ON flashcard_assets(card_id)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_assets_deleted ON flashcard_assets(deleted)",
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL flashcard asset schema: {exc}") from exc  # noqa: TRY003
+
+        try:
+            result = self.backend.execute(
+                "SELECT id, front, back, notes, front_search, back_search, notes_search FROM flashcards",
+                connection=conn,
+            )
+            rows = getattr(result, "rows", []) or []
+            for row in rows:
+                record = dict(row)
+                front_search, back_search, notes_search = self._build_flashcard_search_shadow_fields(
+                    front=record.get("front"),
+                    back=record.get("back"),
+                    notes=record.get("notes"),
+                )
+                if (
+                    record.get("front_search") == front_search
+                    and record.get("back_search") == back_search
+                    and record.get("notes_search") == notes_search
+                ):
+                    continue
+                self.backend.execute(
+                    """
+                    UPDATE flashcards
+                       SET front_search = %s,
+                           back_search = %s,
+                           notes_search = %s
+                     WHERE id = %s
+                    """,
+                    (front_search, back_search, notes_search, int(record["id"])),
+                    connection=conn,
+                )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed backfilling PostgreSQL flashcard search shadow columns: {exc}") from exc  # noqa: TRY003
 
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
@@ -5859,6 +6102,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     f"Database schema version ({current_version}) is newer than supported by code ({target_version})."
                 )
 
+            self._ensure_flashcard_asset_schema_postgres(conn)
+            self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
 
             if current_version < target_version:
@@ -16578,6 +16823,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         back = card_data['back']
         notes = card_data.get('notes')
         extra = card_data.get('extra')
+        front_search, back_search, notes_search = self._build_flashcard_search_shadow_fields(
+            front=front,
+            back=back,
+            notes=notes,
+        )
         is_cloze = 1 if card_data.get('is_cloze') else 0
         tags_json = card_data.get('tags_json')
         source_ref_type = card_data.get('source_ref_type', 'manual')
@@ -16604,12 +16854,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 insert_sql = (
                     """
                     INSERT INTO flashcards(
-                        uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
-                        source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days, repetitions,
-                        lapses, due_at, last_reviewed_at, created_at, last_modified,
+                        uuid, deck_id, front, back, notes, extra, front_search, back_search, notes_search, is_cloze,
+                        tags_json, source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days,
+                        repetitions, lapses, due_at, last_reviewed_at, created_at, last_modified,
                         deleted, client_id, version, model_type, reverse
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                 )
 
@@ -16620,6 +16870,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     back,
                     notes,
                     extra,
+                    front_search,
+                    back_search,
+                    notes_search,
                     bool(is_cloze),
                     tags_json,
                     source_ref_type,
@@ -16661,12 +16914,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 insert_sql = (
                     """
                     INSERT INTO flashcards(
-                        uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
-                        source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days, repetitions,
-                        lapses, due_at, last_reviewed_at, created_at, last_modified,
+                        uuid, deck_id, front, back, notes, extra, front_search, back_search, notes_search, is_cloze,
+                        tags_json, source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days,
+                        repetitions, lapses, due_at, last_reviewed_at, created_at, last_modified,
                         deleted, client_id, version, model_type, reverse
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                 )
 
@@ -16681,6 +16934,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     back = card_data['back']
                     notes = card_data.get('notes')
                     extra = card_data.get('extra')
+                    front_search, back_search, notes_search = self._build_flashcard_search_shadow_fields(
+                        front=front,
+                        back=back,
+                        notes=notes,
+                    )
                     is_cloze = bool(card_data.get('is_cloze'))
                     tags_json = card_data.get('tags_json')
                     source_ref_type = card_data.get('source_ref_type', 'manual')
@@ -16710,6 +16968,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             back,
                             notes,
                             extra,
+                            front_search,
+                            back_search,
+                            notes_search,
                             is_cloze,
                             tags_json,
                             source_ref_type,
@@ -16913,6 +17174,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if self.backend_type != BackendType.POSTGRESQL:
             return
         try:
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS front_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS back_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS notes_search TEXT",
+                connection=conn,
+            )
             # Add tsvector column
             self.backend.execute(
                 "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS flashcards_fts_tsv tsvector",
@@ -16923,7 +17196,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 (
                     "UPDATE flashcards "
                     "SET flashcards_fts_tsv = to_tsvector('english', "
-                    "coalesce(front,'') || ' ' || coalesce(back,'') || ' ' || coalesce(notes,''))"
+                    "coalesce(front_search,'') || ' ' || coalesce(back_search,'') || ' ' || coalesce(notes_search,''))"
                 ),
                 connection=conn,
             )
@@ -16933,31 +17206,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 connection=conn,
             )
             # Trigger to maintain tsvector
-            try:
-                # Check if trigger already exists for this table in current schema
-                exists_res = self.backend.execute(
-                    (
-                        "SELECT 1 FROM pg_trigger t "
-                        "JOIN pg_class c ON t.tgrelid = c.oid "
-                        "JOIN pg_namespace n ON c.relnamespace = n.oid "
-                        "WHERE t.tgname = 'flashcards_fts_tsv_update' AND c.relname = 'flashcards' "
-                        "AND n.nspname = current_schema()"
-                    ),
-                    connection=conn,
-                )
-                exists = bool(getattr(exists_res, 'rows', []) )
-            except _CHACHA_NONCRITICAL_EXCEPTIONS:
-                exists = False
-            if not exists:
-                self.backend.execute(
-                    (
-                        "CREATE TRIGGER flashcards_fts_tsv_update "
-                        "BEFORE INSERT OR UPDATE OF front, back, notes ON flashcards "
-                        "FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger("
-                        "flashcards_fts_tsv, 'pg_catalog.english', front, back, notes)"
-                    ),
-                    connection=conn,
-                )
+            self.backend.execute(
+                "DROP TRIGGER IF EXISTS flashcards_fts_tsv_update ON flashcards",
+                connection=conn,
+            )
+            self.backend.execute(
+                (
+                    "CREATE TRIGGER flashcards_fts_tsv_update "
+                    "BEFORE INSERT OR UPDATE OF front_search, back_search, notes_search ON flashcards "
+                    "FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger("
+                    "flashcards_fts_tsv, 'pg_catalog.english', front_search, back_search, notes_search)"
+                ),
+                connection=conn,
+            )
         except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             # If any statement fails due to existing objects, ignore and proceed
             logger.debug(f"_ensure_postgres_flashcards_tsvector: {e}")
@@ -17213,6 +17474,185 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 
+    def add_flashcard_asset(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        original_filename: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> str:
+        """Persist a managed flashcard image asset and return its UUID."""
+        if not image_bytes:
+            raise InputError("Flashcard asset image_bytes must not be empty")  # noqa: TRY003
+
+        asset_uuid = self._generate_uuid()
+        now = self._get_current_utc_timestamp_iso()
+        sha256 = hashlib.sha256(image_bytes).hexdigest()
+        try:
+            with self.transaction() as conn:
+                insert_sql = (
+                    """
+                    INSERT INTO flashcard_assets(
+                        uuid, card_id, mime_type, original_filename, byte_size, sha256,
+                        image_data, width, height, created_at, last_modified, deleted, client_id, version
+                    )
+                    VALUES(?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                )
+                params = (
+                    asset_uuid,
+                    mime_type,
+                    original_filename,
+                    len(image_bytes),
+                    sha256,
+                    image_bytes,
+                    width,
+                    height,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+                conn.execute(insert_sql, params)
+            return asset_uuid
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard asset: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard asset: {exc}") from exc  # noqa: TRY003
+
+    def get_flashcard_asset(self, asset_uuid: str) -> dict[str, Any] | None:
+        """Fetch flashcard asset metadata by UUID."""
+        query = """
+            SELECT fa.uuid, fa.mime_type, fa.original_filename, fa.byte_size, fa.sha256,
+                   fa.width, fa.height, fa.created_at, fa.last_modified, fa.deleted,
+                   fa.client_id, fa.version, f.uuid AS card_uuid
+              FROM flashcard_assets fa
+              LEFT JOIN flashcards f ON f.id = fa.card_id
+             WHERE fa.uuid = ? AND fa.deleted = 0
+        """
+        try:
+            cur = self.execute_query(query, (asset_uuid,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def get_flashcard_asset_content(self, asset_uuid: str) -> bytes | None:
+        """Fetch raw bytes for a flashcard asset by UUID."""
+        query = "SELECT image_data FROM flashcard_assets WHERE uuid = ? AND deleted = 0"
+        try:
+            cur = self.execute_query(query, (asset_uuid,))
+            row = cur.fetchone()
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+        if not row:
+            return None
+        blob = row[0]
+        if isinstance(blob, memoryview):
+            return blob.tobytes()
+        return bytes(blob) if blob is not None else None
+
+    def reconcile_flashcard_asset_refs(
+        self,
+        card_uuid: str,
+        *,
+        front: str | None,
+        back: str | None,
+        extra: str | None,
+        notes: str | None,
+    ) -> list[str]:
+        """Attach referenced assets to a card and detach removed assets."""
+        referenced_asset_uuids: list[str] = []
+        for text in (front, back, extra, notes):
+            for asset_uuid in extract_flashcard_asset_uuids(text):
+                if asset_uuid not in referenced_asset_uuids:
+                    referenced_asset_uuids.append(asset_uuid)
+
+        try:
+            with self.transaction() as conn:
+                card_row = conn.execute(
+                    "SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (card_uuid,),
+                ).fetchone()
+                if not card_row:
+                    raise CharactersRAGDBError("Flashcard not found or deleted")  # noqa: TRY003
+                card_id = int(card_row[0])
+
+                existing_asset_rows = conn.execute(
+                    "SELECT id, uuid, card_id FROM flashcard_assets WHERE deleted = 0"
+                ).fetchall()
+                assets_by_uuid = {str(row[1]): row for row in existing_asset_rows}
+                for asset_uuid in referenced_asset_uuids:
+                    asset_row = assets_by_uuid.get(asset_uuid)
+                    if not asset_row:
+                        raise InputError(f"Flashcard asset not found: {asset_uuid}")  # noqa: TRY003
+                    attached_card_id = asset_row[2]
+                    if attached_card_id is not None and int(attached_card_id) != card_id:
+                        raise ConflictError(
+                            "Flashcard asset is attached to a different card",
+                            entity="flashcard_assets",
+                            identifier=asset_uuid,
+                        )
+
+                now = self._get_current_utc_timestamp_iso()
+                for asset_uuid in referenced_asset_uuids:
+                    conn.execute(
+                        """
+                        UPDATE flashcard_assets
+                           SET card_id = ?, last_modified = ?, version = version + 1, client_id = ?
+                         WHERE uuid = ? AND deleted = 0
+                        """,
+                        (card_id, now, self.client_id, asset_uuid),
+                    )
+
+                existing_attached_rows = conn.execute(
+                    "SELECT uuid FROM flashcard_assets WHERE card_id = ? AND deleted = 0",
+                    (card_id,),
+                ).fetchall()
+                referenced_set = set(referenced_asset_uuids)
+                for row in existing_attached_rows:
+                    existing_uuid = str(row[0])
+                    if existing_uuid in referenced_set:
+                        continue
+                    conn.execute(
+                        """
+                        UPDATE flashcard_assets
+                           SET card_id = NULL, last_modified = ?, version = version + 1, client_id = ?
+                         WHERE uuid = ? AND deleted = 0
+                        """,
+                        (now, self.client_id, existing_uuid),
+                    )
+            return referenced_asset_uuids
+        except (BackendDatabaseError, sqlite3.Error) as exc:
+            raise CharactersRAGDBError(f"Failed to reconcile flashcard asset refs: {exc}") from exc  # noqa: TRY003
+
+    def cleanup_stale_flashcard_assets(self, *, older_than: timedelta | None = None) -> int:
+        """Soft-delete unattached flashcard assets older than the provided age."""
+        age = older_than or timedelta(hours=24)
+        cutoff = (datetime.now(timezone.utc) - age).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE flashcard_assets
+                       SET deleted = 1,
+                           last_modified = ?,
+                           version = version + 1,
+                           client_id = ?
+                     WHERE card_id IS NULL
+                       AND deleted = 0
+                       AND created_at <= ?
+                    """,
+                    (now, self.client_id, cutoff),
+                )
+                return int(cursor.rowcount or 0)
+        except (BackendDatabaseError, sqlite3.Error) as exc:
+            raise CharactersRAGDBError(f"Failed to cleanup stale flashcard assets: {exc}") from exc  # noqa: TRY003
+
     def update_flashcard(
         self,
         card_uuid: str,
@@ -17231,6 +17671,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if k in allowed:
                 set_parts.append(f"{k} = ?")
                 params.append(v)
+                if k == "front":
+                    set_parts.append("front_search = ?")
+                    params.append(sanitize_flashcard_text_for_search(v))
+                elif k == "back":
+                    set_parts.append("back_search = ?")
+                    params.append(sanitize_flashcard_text_for_search(v))
+                elif k == "notes":
+                    set_parts.append("notes_search = ?")
+                    params.append(sanitize_flashcard_text_for_search(v))
         norm_tags: list[str] | None = None
         if tags is not None:
             norm_tags = [t.strip() for t in tags if t and t.strip()]
