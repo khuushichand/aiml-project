@@ -124,7 +124,7 @@ function IncidentsPageContent() {
     let active = true;
     const loadAssignableUsers = async () => {
       try {
-        const payload = await api.getUsers({ limit: '100' });
+        const payload = await api.getUsers({ limit: '100', role: 'admin' });
         if (!active) return;
         setAssignableUsers(normalizeAssignableUsers(payload));
       } catch (err: unknown) {
