@@ -324,6 +324,25 @@ class StudyAssistantHistoryResponse(BaseModel):
     messages: list[StudyAssistantMessage] = Field(default_factory=list)
 
 
+StudyAssistantAction = Literal["explain", "mnemonic", "follow_up", "fact_check", "freeform"]
+
+
+class StudyAssistantFactCheckPayload(BaseModel):
+    verdict: Literal["correct", "partially_correct", "incorrect"]
+    corrections: list[str] = Field(default_factory=list)
+    missing_points: list[str] = Field(default_factory=list)
+    next_prompt: str = Field(default="What part would you like to review next?")
+
+
+class StudyAssistantRespondRequest(BaseModel):
+    action: StudyAssistantAction
+    message: Optional[str] = None
+    input_modality: Literal["text", "voice_transcript"] = "text"
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    expected_thread_version: Optional[int] = Field(None, ge=1)
+
+
 class FlashcardTagsUpdate(BaseModel):
     tags: list[str]
 
