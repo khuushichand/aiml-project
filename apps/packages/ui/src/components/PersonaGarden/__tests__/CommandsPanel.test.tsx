@@ -1,9 +1,19 @@
 import React from "react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
-  fetchWithAuth: vi.fn()
+  fetchWithAuth: vi.fn(),
+  serverCapabilities: {
+    capabilities: { hasMcp: true },
+    loading: false
+  },
+  fetchMcpToolCatalogs: vi.fn(),
+  fetchMcpTools: vi.fn(),
+  fetchMcpToolCatalogsViaDiscovery: vi.fn(),
+  fetchMcpModulesViaDiscovery: vi.fn(),
+  fetchMcpToolsViaDiscovery: vi.fn()
 }))
 
 vi.mock("react-i18next", () => ({
@@ -30,7 +40,38 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   }
 }))
 
+vi.mock("@/hooks/useServerCapabilities", () => ({
+  useServerCapabilities: () => mocks.serverCapabilities
+}))
+
+vi.mock("@/services/tldw/mcp", () => ({
+  fetchMcpToolCatalogs: (...args: unknown[]) =>
+    (mocks.fetchMcpToolCatalogs as (...args: unknown[]) => unknown)(...args),
+  fetchMcpTools: (...args: unknown[]) =>
+    (mocks.fetchMcpTools as (...args: unknown[]) => unknown)(...args),
+  fetchMcpToolCatalogsViaDiscovery: (...args: unknown[]) =>
+    (mocks.fetchMcpToolCatalogsViaDiscovery as (...args: unknown[]) => unknown)(...args),
+  fetchMcpModulesViaDiscovery: (...args: unknown[]) =>
+    (mocks.fetchMcpModulesViaDiscovery as (...args: unknown[]) => unknown)(...args),
+  fetchMcpToolsViaDiscovery: (...args: unknown[]) =>
+    (mocks.fetchMcpToolsViaDiscovery as (...args: unknown[]) => unknown)(...args)
+}))
+
 import { CommandsPanel } from "../CommandsPanel"
+
+const renderWithQueryClient = (ui: React.ReactNode) => {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false
+      }
+    }
+  })
+
+  return render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+  )
+}
 
 const existingCommand = {
   id: "cmd-search",
@@ -99,6 +140,26 @@ const connections = [
 describe("CommandsPanel", () => {
   beforeEach(() => {
     mocks.fetchWithAuth.mockReset()
+    mocks.serverCapabilities = {
+      capabilities: { hasMcp: true },
+      loading: false
+    }
+    mocks.fetchMcpToolCatalogs.mockReset()
+    mocks.fetchMcpTools.mockReset()
+    mocks.fetchMcpToolCatalogsViaDiscovery.mockReset()
+    mocks.fetchMcpModulesViaDiscovery.mockReset()
+    mocks.fetchMcpToolsViaDiscovery.mockReset()
+    mocks.fetchMcpToolCatalogsViaDiscovery.mockResolvedValue([
+      { id: 1, name: "Global Notes" }
+    ])
+    mocks.fetchMcpModulesViaDiscovery.mockResolvedValue(["alerts", "media", "notes"])
+    mocks.fetchMcpToolsViaDiscovery.mockResolvedValue([
+      { name: "notes.search", module: "notes", canExecute: true },
+      { name: "notes.create", module: "notes", canExecute: true },
+      { name: "media.search", module: "media", canExecute: true }
+    ])
+    mocks.fetchMcpToolCatalogs.mockResolvedValue([])
+    mocks.fetchMcpTools.mockResolvedValue([])
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
       if (
         path === "/api/v1/persona/profiles/persona-1/voice-commands" &&
@@ -196,7 +257,7 @@ describe("CommandsPanel", () => {
   })
 
   it("loads existing commands and creates a templated command", async () => {
-    render(
+    renderWithQueryClient(
       <CommandsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
@@ -238,7 +299,7 @@ describe("CommandsPanel", () => {
   })
 
   it("creates a connection-backed external command with method and path", async () => {
-    render(
+    renderWithQueryClient(
       <CommandsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
@@ -291,7 +352,7 @@ describe("CommandsPanel", () => {
   })
 
   it("applies the external api template with connection-ready defaults", async () => {
-    render(
+    renderWithQueryClient(
       <CommandsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
@@ -345,7 +406,7 @@ describe("CommandsPanel", () => {
   })
 
   it("loads a command into the editor and updates it", async () => {
-    render(
+    renderWithQueryClient(
       <CommandsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
@@ -375,7 +436,7 @@ describe("CommandsPanel", () => {
   })
 
   it("loads external request fields when editing a connection-backed custom command", async () => {
-    render(
+    renderWithQueryClient(
       <CommandsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
@@ -398,7 +459,7 @@ describe("CommandsPanel", () => {
   })
 
   it("surfaces missing connection commands and requires a valid replacement before saving", async () => {
-    render(
+    renderWithQueryClient(
       <CommandsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
@@ -457,7 +518,7 @@ describe("CommandsPanel", () => {
   it("opens a requested command in the editor when routed from test lab", async () => {
     const onOpenCommandHandled = vi.fn()
 
-    render(
+    renderWithQueryClient(
       <CommandsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
@@ -485,7 +546,7 @@ describe("CommandsPanel", () => {
   it("prefills a new command draft from a test lab phrase", async () => {
     const onDraftCommandPhraseHandled = vi.fn()
 
-    render(
+    renderWithQueryClient(
       <CommandsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
@@ -516,7 +577,7 @@ describe("CommandsPanel", () => {
     const onOpenCommandHandled = vi.fn()
     const onRerunAfterSave = vi.fn()
 
-    render(
+    renderWithQueryClient(
       <CommandsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
@@ -552,5 +613,68 @@ describe("CommandsPanel", () => {
       )
     )
     expect(onRerunAfterSave).toHaveBeenCalledWith("cmd-missing-connection")
+  })
+
+  it("creates an mcp tool command from picker selection instead of raw tool text", async () => {
+    renderWithQueryClient(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+      />
+    )
+
+    await screen.findByText("Search Notes")
+    fireEvent.change(screen.getByTestId("persona-commands-name-input"), {
+      target: { value: "Search Notes Picker" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-phrases-input"), {
+      target: { value: "search notes with picker" }
+    })
+    fireEvent.change(screen.getByTestId("persona-mcp-tool-picker-module-select"), {
+      target: { value: "notes" }
+    })
+    fireEvent.change(screen.getByTestId("persona-mcp-tool-picker-tool-select"), {
+      target: { value: "notes.search" }
+    })
+    fireEvent.click(screen.getByTestId("persona-commands-save"))
+
+    await waitFor(() =>
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/persona/profiles/persona-1/voice-commands",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.objectContaining({
+            name: "Search Notes Picker",
+            action_type: "mcp_tool",
+            action_config: expect.objectContaining({
+              tool_name: "notes.search"
+            })
+          })
+        })
+      )
+    )
+  })
+
+  it("rehydrates an existing mcp tool command into the picker", async () => {
+    renderWithQueryClient(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+      />
+    )
+
+    await screen.findByText("Search Notes")
+    fireEvent.click(screen.getByTestId("persona-commands-edit-cmd-search"))
+
+    await waitFor(() =>
+      expect(screen.getByTestId("persona-mcp-tool-picker-tool-select")).toHaveValue(
+        "notes.search"
+      )
+    )
+    expect(screen.getByTestId("persona-mcp-tool-picker-module-select")).toHaveValue(
+      "notes"
+    )
   })
 })

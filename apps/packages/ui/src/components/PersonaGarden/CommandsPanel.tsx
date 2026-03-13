@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next"
 
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 
+import { McpToolPicker } from "./McpToolPicker"
+
 type VoiceCommandActionType = "mcp_tool" | "workflow" | "custom" | "llm_chat"
 
 type PersonaVoiceCommand = {
@@ -1035,20 +1037,13 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
 
                   {formState.actionType === "mcp_tool" ? (
                     <>
-                      <label className="block text-xs text-text-muted">
-                        {t("sidepanel:personaGarden.commands.toolName", {
-                          defaultValue: "Tool name"
-                        })}
-                        <input
-                          data-testid="persona-commands-target-input"
-                          className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
-                          value={formState.toolName}
-                          onChange={(event) =>
-                            updateFormField("toolName", event.target.value)
-                          }
-                          placeholder="notes.search"
-                        />
-                      </label>
+                      <McpToolPicker
+                        value={formState.toolName}
+                        onChange={(nextValue) =>
+                          updateFormField("toolName", nextValue)
+                        }
+                        disabled={saving}
+                      />
                       <label className="block text-xs text-text-muted">
                         {t("sidepanel:personaGarden.commands.extractMode", {
                           defaultValue: "Phrase extraction"
