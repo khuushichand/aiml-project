@@ -21,6 +21,7 @@ import {
   addIncidentActionItem,
   buildPostmortemTimelineMessage,
   ensureIncidentWorkflowState,
+  incidentAssignmentWorkflowStateFromIncident,
   mergeIncidentWorkflowWithIncidents,
   removeIncidentActionItem,
   replaceIncidentWorkflowState,
@@ -255,12 +256,20 @@ function IncidentsPageContent() {
         assigned_to_user_id: assignedTo ? Number(assignedTo) : null,
         update_message: assignedTo ? `Assigned to ${assigneeLabel}` : 'Assignment cleared',
       });
-      setIncidentWorkflow((prev) => replaceIncidentWorkflowState(prev, updated));
+      setIncidentWorkflow((prev) => upsertIncidentWorkflowState(
+        prev,
+        incident.id,
+        incidentAssignmentWorkflowStateFromIncident(updated),
+      ));
       await reload();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to update assignment';
       showError(message);
-      setIncidentWorkflow((prev) => replaceIncidentWorkflowState(prev, incident));
+      setIncidentWorkflow((prev) => upsertIncidentWorkflowState(
+        prev,
+        incident.id,
+        incidentAssignmentWorkflowStateFromIncident(incident),
+      ));
     } finally {
       setIncidentUpdating(incident.id, false);
     }

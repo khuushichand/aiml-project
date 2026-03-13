@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 
-def _configure_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def _configure_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Any, Path]:
     from tldw_Server_API.app.services import admin_system_ops_service
 
     store_path = tmp_path / "system_ops.json"
@@ -13,7 +14,7 @@ def _configure_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return admin_system_ops_service, store_path
 
 
-def _create_incident(service):
+def _create_incident(service: Any) -> dict[str, Any]:
     return service.create_incident(
         title="Queue backlog",
         status="investigating",

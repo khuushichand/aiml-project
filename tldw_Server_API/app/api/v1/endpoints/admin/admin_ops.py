@@ -90,10 +90,10 @@ def _require_platform_admin(principal: AuthPrincipal) -> None:
 
 
 def _user_has_incident_admin_role(user: dict[str, Any], role_rows: list[dict[str, Any]]) -> bool:
+    """Return whether the user is eligible for incident assignment."""
+
     role_names = {
-        str(role.get("name") or "").strip().lower()
-        for role in role_rows
-        if str(role.get("name") or "").strip()
+        str(role.get("name") or "").strip().lower() for role in role_rows if str(role.get("name") or "").strip()
     }
     legacy_role = str(user.get("role") or "").strip().lower()
     if legacy_role:
@@ -102,6 +102,13 @@ def _user_has_incident_admin_role(user: dict[str, Any], role_rows: list[dict[str
 
 
 async def _resolve_incident_assignee(user_id: int) -> dict[str, Any]:
+    """Resolve persisted assignee fields for an incident update.
+
+    Raises:
+        ValueError: ``assignee_not_found`` when the user does not exist.
+        ValueError: ``incident_assignee_must_be_admin`` when the user is not admin-capable.
+    """
+
     repo = await AuthnzUsersRepo.from_pool()
     user = await repo.get_user_by_id(int(user_id))
     if not user:
@@ -112,11 +119,7 @@ async def _resolve_incident_assignee(user_id: int) -> dict[str, Any]:
     if not _user_has_incident_admin_role(user, role_rows):
         raise ValueError("incident_assignee_must_be_admin")
 
-    label = (
-        str(user.get("email") or "").strip()
-        or str(user.get("username") or "").strip()
-        or str(user["id"])
-    )
+    label = str(user.get("email") or "").strip() or str(user.get("username") or "").strip() or str(user["id"])
     return {
         "assigned_to_user_id": int(user["id"]),
         "assigned_to_label": label,
@@ -152,6 +155,7 @@ async def _emit_admin_audit_event(
         action=action,
         metadata=metadata,
     )
+
 
 @router.get("/maintenance", response_model=MaintenanceState)
 async def get_maintenance_mode(
@@ -374,6 +378,10 @@ async def update_incident(
     _require_platform_admin(principal)
     actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
     update_fields = payload.model_dump(exclude_unset=True)
+    workflow_fields: dict[str, Any] = {}
+    for field_name in ("root_cause", "impact", "action_items"):
+        if field_name in payload.model_fields_set:
+            workflow_fields[field_name] = update_fields[field_name]
     try:
         assignee_fields: dict[str, Any] = {}
         if "assigned_to_user_id" in payload.model_fields_set:
@@ -394,9 +402,7 @@ async def update_incident(
             summary=payload.summary,
             tags=payload.tags,
             **assignee_fields,
-            **({ "root_cause": update_fields["root_cause"] } if "root_cause" in payload.model_fields_set else {}),
-            **({ "impact": update_fields["impact"] } if "impact" in payload.model_fields_set else {}),
-            **({ "action_items": update_fields["action_items"] } if "action_items" in payload.model_fields_set else {}),
+            **workflow_fields,
             update_message=payload.update_message,
             actor=actor,
         )
@@ -488,6 +494,7 @@ async def delete_incident(
 # Pricing Catalog Management
 # ---------------------------------------------
 
+
 @router.post("/llm-usage/pricing/reload", response_model=dict)
 async def reload_llm_pricing_catalog() -> dict:
     """Reload the LLM pricing catalog from environment and config file (admin-only).
@@ -506,6 +513,7 @@ async def reload_llm_pricing_catalog() -> dict:
 # ---------------------------------------------
 # Chat Model Alias Cache Management
 # ---------------------------------------------
+
 
 @router.post("/chat/model-aliases/reload", response_model=dict)
 async def reload_chat_model_alias_caches() -> dict:

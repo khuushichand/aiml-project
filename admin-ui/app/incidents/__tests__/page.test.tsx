@@ -89,13 +89,13 @@ describe('IncidentsPage Stage 3 workflows', () => {
       items: [{
         id: 'inc-1',
         title: 'Queue latency spike',
-        status: 'open',
+        status: 'resolved',
         severity: 'high',
         summary: 'Elevated queue latency',
         tags: ['queue'],
         created_at: '2026-02-17T10:00:00Z',
         updated_at: '2026-02-17T10:00:00Z',
-        resolved_at: null,
+        resolved_at: '2026-02-17T10:00:00Z',
         assigned_to_user_id: null,
         assigned_to_label: null,
         root_cause: null,
@@ -111,13 +111,13 @@ describe('IncidentsPage Stage 3 workflows', () => {
     apiMock.updateIncident.mockResolvedValue({
       id: 'inc-1',
       title: 'Queue latency spike',
-      status: 'open',
+      status: 'resolved',
       severity: 'high',
       summary: 'Elevated queue latency',
       tags: ['queue'],
       created_at: '2026-02-17T10:00:00Z',
       updated_at: '2026-02-17T10:05:00Z',
-      resolved_at: null,
+      resolved_at: '2026-02-17T10:00:00Z',
       assigned_to_user_id: 2,
       assigned_to_label: 'bob@example.com',
       root_cause: null,
@@ -144,6 +144,126 @@ describe('IncidentsPage Stage 3 workflows', () => {
     });
     expect(apiMock.addIncidentEvent).not.toHaveBeenCalled();
     expect(reloadMock).toHaveBeenCalled();
+  });
+
+  it('preserves unsaved post-mortem draft when assignment changes', async () => {
+    usePagedResourceMock.mockReturnValue({
+      items: [{
+        id: 'inc-1',
+        title: 'Queue latency spike',
+        status: 'resolved',
+        severity: 'high',
+        summary: 'Elevated queue latency',
+        tags: ['queue'],
+        created_at: '2026-02-17T10:00:00Z',
+        updated_at: '2026-02-17T10:00:00Z',
+        resolved_at: '2026-02-17T10:00:00Z',
+        assigned_to_user_id: null,
+        assigned_to_label: null,
+        root_cause: null,
+        impact: null,
+        action_items: [],
+        timeline: [],
+      }],
+      total: 1,
+      loading: false,
+      error: '',
+      reload: reloadMock,
+    });
+    apiMock.updateIncident.mockResolvedValue({
+      id: 'inc-1',
+      title: 'Queue latency spike',
+      status: 'resolved',
+      severity: 'high',
+      summary: 'Elevated queue latency',
+      tags: ['queue'],
+      created_at: '2026-02-17T10:00:00Z',
+      updated_at: '2026-02-17T10:05:00Z',
+      resolved_at: '2026-02-17T10:00:00Z',
+      assigned_to_user_id: 2,
+      assigned_to_label: 'bob@example.com',
+      root_cause: null,
+      impact: null,
+      action_items: [],
+      timeline: [],
+    });
+
+    const user = userEvent.setup();
+    render(<IncidentsPage />);
+
+    const rootCause = await screen.findByTestId('incident-root-cause-inc-1');
+    const impact = screen.getByTestId('incident-impact-inc-1');
+
+    await user.type(rootCause, 'Keep this draft root cause');
+    await user.type(impact, 'Keep this draft impact');
+    await user.click(screen.getByRole('button', { name: 'Add Action Item' }));
+    const actionItemInput = screen.getByPlaceholderText('Describe follow-up action');
+    await user.type(actionItemInput, 'Keep this draft action item');
+
+    const assigneeSelect = screen.getByTestId('incident-assigned-to-inc-1');
+    await user.selectOptions(assigneeSelect, '2');
+
+    await waitFor(() => {
+      expect(apiMock.updateIncident).toHaveBeenCalledWith('inc-1', {
+        assigned_to_user_id: 2,
+        update_message: 'Assigned to bob',
+      });
+    });
+
+    expect((rootCause as HTMLTextAreaElement).value).toBe('Keep this draft root cause');
+    expect((impact as HTMLTextAreaElement).value).toBe('Keep this draft impact');
+    expect((actionItemInput as HTMLInputElement).value).toBe('Keep this draft action item');
+  });
+
+  it('preserves unsaved post-mortem draft when assignment update fails', async () => {
+    usePagedResourceMock.mockReturnValue({
+      items: [{
+        id: 'inc-1',
+        title: 'Queue latency spike',
+        status: 'resolved',
+        severity: 'high',
+        summary: 'Elevated queue latency',
+        tags: ['queue'],
+        created_at: '2026-02-17T10:00:00Z',
+        updated_at: '2026-02-17T10:00:00Z',
+        resolved_at: '2026-02-17T10:00:00Z',
+        assigned_to_user_id: 1,
+        assigned_to_label: 'alice@example.com',
+        root_cause: null,
+        impact: null,
+        action_items: [],
+        timeline: [],
+      }],
+      total: 1,
+      loading: false,
+      error: '',
+      reload: reloadMock,
+    });
+    apiMock.updateIncident.mockRejectedValue(new Error('Failed to update assignment'));
+
+    const user = userEvent.setup();
+    render(<IncidentsPage />);
+
+    const rootCause = await screen.findByTestId('incident-root-cause-inc-1');
+    const impact = screen.getByTestId('incident-impact-inc-1');
+
+    await user.type(rootCause, 'Retain this root cause draft');
+    await user.type(impact, 'Retain this impact draft');
+    await user.click(screen.getByRole('button', { name: 'Add Action Item' }));
+    const actionItemInput = screen.getByPlaceholderText('Describe follow-up action');
+    await user.type(actionItemInput, 'Retain this action item draft');
+
+    const assigneeSelect = screen.getByTestId('incident-assigned-to-inc-1');
+    await user.selectOptions(assigneeSelect, '2');
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith('Failed to update assignment');
+    });
+
+    expect((assigneeSelect as HTMLSelectElement).value).toBe('1');
+    expect((rootCause as HTMLTextAreaElement).value).toBe('Retain this root cause draft');
+    expect((impact as HTMLTextAreaElement).value).toBe('Retain this impact draft');
+    expect((actionItemInput as HTMLInputElement).value).toBe('Retain this action item draft');
   });
 
   it('renders backend workflow fields and assignee labels from the incident payload', async () => {

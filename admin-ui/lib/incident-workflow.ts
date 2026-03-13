@@ -48,6 +48,16 @@ export const replaceIncidentWorkflowState = (
   [incident.id]: incidentWorkflowStateFromIncident(incident),
 });
 
+export const incidentAssignmentWorkflowStateFromIncident = (
+  incident: IncidentItem
+): Pick<IncidentWorkflowState, 'assignedTo' | 'assignedToLabel'> => ({
+  assignedTo:
+    incident.assigned_to_user_id !== undefined && incident.assigned_to_user_id !== null
+      ? String(incident.assigned_to_user_id)
+      : undefined,
+  assignedToLabel: incident.assigned_to_label ?? undefined,
+});
+
 export const upsertIncidentWorkflowState = (
   map: IncidentWorkflowMap,
   incidentId: string,
