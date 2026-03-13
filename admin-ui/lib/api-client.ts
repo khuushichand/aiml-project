@@ -9,6 +9,9 @@ import type {
   BackupScheduleListResponse,
   BackupScheduleMutationResponse,
   BackupsResponse,
+  ByokValidationRunCreateRequest,
+  ByokValidationRunItem,
+  ByokValidationRunListResponse,
   EffectivePermissionsResponse,
   FeatureRegistryEntry,
   IncidentItem,
@@ -920,6 +923,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  createByokValidationRun: (data: ByokValidationRunCreateRequest) =>
+    requestJson<ByokValidationRunItem>('/admin/byok/validation-runs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getByokValidationRuns: (params?: { limit?: number; offset?: number }) => {
+    const queryString = buildQueryString(params);
+    return requestJson<ByokValidationRunListResponse>(
+      `/admin/byok/validation-runs${queryString ? `?${queryString}` : ''}`
+    );
+  },
+  getByokValidationRun: (runId: string) =>
+    requestJson<ByokValidationRunItem>(`/admin/byok/validation-runs/${encodeURIComponent(runId)}`),
 
   // ============================================
   // Security Health
