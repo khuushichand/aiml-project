@@ -12,6 +12,7 @@ const mockToggleSourceSelection = vi.fn()
 const mockToggleSourceFolderSelection = vi.fn()
 const mockSelectAllSources = vi.fn()
 const mockDeselectAllSources = vi.fn()
+const mockSetSelectedSourceIds = vi.fn()
 const mockSetSourceSearchQuery = vi.fn()
 const mockClearSourceFocusTarget = vi.fn()
 const mockOpenAddSourceModal = vi.fn()
@@ -66,6 +67,7 @@ const workspaceStoreState = {
   toggleSourceFolderSelection: mockToggleSourceFolderSelection,
   selectAllSources: mockSelectAllSources,
   deselectAllSources: mockDeselectAllSources,
+  setSelectedSourceIds: mockSetSelectedSourceIds,
   setSourceSearchQuery: mockSetSourceSearchQuery,
   clearSourceFocusTarget: mockClearSourceFocusTarget,
   openAddSourceModal: mockOpenAddSourceModal,
@@ -88,10 +90,23 @@ vi.mock("react-i18next", () => ({
         | {
             count?: number
             defaultValue?: string
-          }
+          },
+      interpolationValues?: {
+        count?: number
+      }
     ) => {
-      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
-      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      if (typeof defaultValueOrOptions === "string") {
+        return defaultValueOrOptions.replace(
+          "{{count}}",
+          String(interpolationValues?.count ?? "")
+        )
+      }
+      if (defaultValueOrOptions?.defaultValue) {
+        return defaultValueOrOptions.defaultValue.replace(
+          "{{count}}",
+          String(defaultValueOrOptions.count ?? "")
+        )
+      }
       return _key
     }
   })
@@ -146,6 +161,9 @@ describe("SourcesPane stage 4 filters and sort", () => {
     workspaceStoreState.sourceFocusTarget = null
     mockSetSourceSearchQuery.mockImplementation((value: string) => {
       workspaceStoreState.sourceSearchQuery = value
+    })
+    mockSetSelectedSourceIds.mockImplementation((ids: string[]) => {
+      workspaceStoreState.selectedSourceIds = ids
     })
     mockGetEffectiveSelectedSources.mockReturnValue([])
   })
@@ -235,6 +253,48 @@ describe("SourcesPane stage 4 filters and sort", () => {
       target: { value: "manual" }
     })
     expect(getRenderedSourceTitles()).toEqual(["Zulu Ready", "Alpha Error"])
+  })
+
+  it("uses select visible when advanced filters narrow the rendered list", () => {
+    render(<ControlledSourcesPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "Status Ready" }))
+
+    expect(screen.getByRole("checkbox", { name: "Select visible" })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select visible" }))
+
+    expect(mockSetSelectedSourceIds).toHaveBeenCalledWith(["s1"])
+  })
+
+  it("warns when bulk remove includes hidden selected sources", async () => {
+    workspaceStoreState.selectedSourceIds = ["s1", "s2"]
+    mockGetEffectiveSelectedSources.mockReturnValue([...workspaceStoreState.sources])
+
+    render(<ControlledSourcesPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "Status Ready" }))
+    fireEvent.click(screen.getByRole("button", { name: "Remove (2)" }))
+
+    expect(
+      await screen.findByText(/hidden by current filters/i)
+    ).toBeInTheDocument()
+  })
+
+  it("disables reorder controls while a temporary sort is active", () => {
+    render(<ControlledSourcesPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }))
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort by" }), {
+      target: { value: "name_asc" }
+    })
+
+    expect(screen.getByTestId("move-source-down-s1")).toBeDisabled()
+    expect(
+      screen.getByText(/temporary sort is active\. switch back to manual order/i)
+    ).toBeInTheDocument()
   })
 
   it("hides metadata-specific controls when no source exposes that field", () => {
