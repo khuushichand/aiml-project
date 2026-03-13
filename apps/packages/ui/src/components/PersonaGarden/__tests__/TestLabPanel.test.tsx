@@ -130,11 +130,14 @@ describe("TestLabPanel", () => {
   })
 
   it("surfaces broken connection dependencies for matched commands", async () => {
+    const onOpenCommand = vi.fn()
+
     render(
       <TestLabPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Garden Helper"
         isActive
+        onOpenCommand={onOpenCommand}
       />
     )
 
@@ -153,5 +156,8 @@ describe("TestLabPanel", () => {
       )
     ).toBeInTheDocument()
     expect(screen.getByText("Connection missing: conn-missing")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("persona-test-lab-open-command"))
+    expect(onOpenCommand).toHaveBeenCalledWith("cmd-alert")
   })
 })

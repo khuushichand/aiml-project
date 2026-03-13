@@ -319,6 +319,7 @@ const SidepanelPersona = ({
   const [selectedPersonaId, setSelectedPersonaId] =
     React.useState<string>(DEFAULT_PERSONA_ID)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
+  const [openCommandId, setOpenCommandId] = React.useState<string | null>(null)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
   const [sessionHistory, setSessionHistory] = React.useState<PersonaSessionSummary[]>([])
   const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
@@ -390,6 +391,21 @@ const SidepanelPersona = ({
     setPersonaStateContextEnabled(false)
     setPersonaStateContextProfileDefault(false)
   }, [isCompanionMode])
+
+  const handleOpenCommandFromTestLab = React.useCallback((commandId: string) => {
+    const normalizedCommandId = String(commandId || "").trim()
+    if (!normalizedCommandId) return
+    setOpenCommandId(normalizedCommandId)
+    setActiveTab("commands")
+  }, [])
+
+  const handleOpenCommandHandled = React.useCallback((commandId: string) => {
+    const normalizedCommandId = String(commandId || "").trim()
+    if (!normalizedCommandId) return
+    setOpenCommandId((current) =>
+      current === normalizedCommandId ? null : current
+    )
+  }, [])
 
   React.useEffect(() => {
     if (!isCompanionMode || capsLoading || !capabilities?.hasPersonalization) {
@@ -2089,6 +2105,8 @@ const SidepanelPersona = ({
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "commands"}
+          openCommandId={openCommandId}
+          onOpenCommandHandled={handleOpenCommandHandled}
         />
       )
     },
@@ -2100,6 +2118,7 @@ const SidepanelPersona = ({
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "test-lab"}
+          onOpenCommand={handleOpenCommandFromTestLab}
         />
       )
     },

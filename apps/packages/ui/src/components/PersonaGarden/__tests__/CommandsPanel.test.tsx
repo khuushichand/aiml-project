@@ -453,4 +453,29 @@ describe("CommandsPanel", () => {
       )
     )
   })
+
+  it("opens a requested command in the editor when routed from test lab", async () => {
+    const onOpenCommandHandled = vi.fn()
+
+    render(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        openCommandId="cmd-missing-connection"
+        onOpenCommandHandled={onOpenCommandHandled}
+      />
+    )
+
+    await screen.findByText("Broken Alerts Command")
+    await waitFor(() =>
+      expect(screen.getByTestId("persona-commands-name-input")).toHaveValue(
+        "Broken Alerts Command"
+      )
+    )
+    expect(screen.getByTestId("persona-commands-connection-select")).toHaveValue(
+      "conn-missing"
+    )
+    expect(onOpenCommandHandled).toHaveBeenCalledWith("cmd-missing-connection")
+  })
 })

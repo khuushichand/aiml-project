@@ -61,6 +61,8 @@ type CommandsPanelProps = {
   selectedPersonaId: string
   selectedPersonaName: string
   isActive?: boolean
+  openCommandId?: string | null
+  onOpenCommandHandled?: (commandId: string) => void
 }
 
 const REQUEST_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const
@@ -261,12 +263,15 @@ const toFormState = (command: PersonaVoiceCommand): CommandFormState => {
 export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   selectedPersonaId,
   selectedPersonaName,
-  isActive = false
+  isActive = false,
+  openCommandId = null,
+  onOpenCommandHandled
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const [commands, setCommands] = React.useState<PersonaVoiceCommand[]>([])
   const [connections, setConnections] = React.useState<PersonaConnectionSummary[]>([])
   const [loading, setLoading] = React.useState(false)
+  const [commandsLoaded, setCommandsLoaded] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [validationError, setValidationError] = React.useState<string | null>(null)
@@ -291,11 +296,13 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
       if (!isActive || !selectedPersonaId) {
         setCommands([])
         setConnections([])
+        setCommandsLoaded(false)
         setError(null)
         return
       }
 
       setLoading(true)
+      setCommandsLoaded(false)
       setError(null)
       try {
         const [commandsResp, connectionsResp] = await Promise.all([
@@ -337,11 +344,13 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
         if (!cancelled) {
           setCommands(nextCommands as PersonaVoiceCommand[])
           setConnections(nextConnections as PersonaConnectionSummary[])
+          setCommandsLoaded(true)
         }
       } catch (loadError) {
         if (!cancelled) {
           setCommands([])
           setConnections([])
+          setCommandsLoaded(false)
           setError(
             loadError instanceof Error
               ? loadError.message
@@ -388,6 +397,35 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     setValidationError(null)
     setError(null)
   }, [])
+
+  React.useEffect(() => {
+    const normalizedRequestedCommandId = String(openCommandId || "").trim()
+    if (
+      !isActive ||
+      !selectedPersonaId ||
+      !normalizedRequestedCommandId ||
+      !commandsLoaded
+    ) {
+      return
+    }
+    const requestedCommand = commands.find(
+      (command) => command.id === normalizedRequestedCommandId
+    )
+    if (requestedCommand) {
+      handleEdit(requestedCommand)
+    } else {
+      setError("Requested voice command could not be found.")
+    }
+    onOpenCommandHandled?.(normalizedRequestedCommandId)
+  }, [
+    commands,
+    commandsLoaded,
+    handleEdit,
+    isActive,
+    onOpenCommandHandled,
+    openCommandId,
+    selectedPersonaId
+  ])
 
   const handleToggle = React.useCallback(
     async (command: PersonaVoiceCommand) => {
