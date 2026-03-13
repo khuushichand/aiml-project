@@ -634,24 +634,11 @@ def update_incident(
                     updated_incident["assigned_to_label"] = None
                 else:
                     updated_incident["assigned_to_user_id"] = int(assigned_to_user_id)
-                    if assigned_to_label is _UNSET:
-                        updated_incident["assigned_to_label"] = (
-                            current["assigned_to_label"]
-                            if current.get("assigned_to_user_id") == updated_incident["assigned_to_user_id"]
-                            else None
-                        )
-                    else:
-                        updated_incident["assigned_to_label"] = (
-                            str(assigned_to_label).strip() or None
-                            if assigned_to_label is not None
-                            else None
-                        )
-            elif assigned_to_label is not _UNSET and current.get("assigned_to_user_id") is not None:
-                updated_incident["assigned_to_label"] = (
-                    str(assigned_to_label).strip() or None
-                    if assigned_to_label is not None
-                    else None
-                )
+                    updated_incident["assigned_to_label"] = (
+                        str(assigned_to_label).strip() or None
+                        if assigned_to_label is not None and assigned_to_label is not _UNSET
+                        else None
+                    )
             if root_cause is not _UNSET:
                 updated_incident["root_cause"] = (
                     str(root_cause).strip() or None

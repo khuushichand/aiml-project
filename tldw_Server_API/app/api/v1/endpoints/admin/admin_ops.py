@@ -375,9 +375,9 @@ async def update_incident(
     actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
     update_fields = payload.model_dump(exclude_unset=True)
     try:
-        assignee_user_id = update_fields.pop("assigned_to_user_id", None) if "assigned_to_user_id" in update_fields else None
         assignee_fields: dict[str, Any] = {}
-        if "assigned_to_user_id" in update_fields or "assigned_to_user_id" in payload.model_fields_set:
+        if "assigned_to_user_id" in payload.model_fields_set:
+            assignee_user_id = payload.assigned_to_user_id
             if assignee_user_id is None:
                 assignee_fields = {
                     "assigned_to_user_id": None,

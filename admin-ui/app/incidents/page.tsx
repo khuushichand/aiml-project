@@ -159,18 +159,11 @@ function IncidentsPageContent() {
     setIncidentWorkflow((prev) => upsertIncidentWorkflowState(prev, incidentId, nextState));
   }, []);
 
-  const getAssigneeLabel = useCallback((incident: IncidentItem, userId?: string, fallbackLabel?: string) => {
+  const getAssigneeLabel = useCallback((userId?: string, fallbackLabel?: string) => {
     if (!userId) return 'Unassigned';
     return (
       assignableUsers.find((user) => user.id === userId)?.label
       ?? fallbackLabel
-      ?? (
-        incident.assigned_to_user_id !== undefined
-        && incident.assigned_to_user_id !== null
-        && String(incident.assigned_to_user_id) === userId
-          ? incident.assigned_to_label ?? undefined
-          : undefined
-      )
       ?? `User ${userId}`
     );
   }, [assignableUsers]);
@@ -255,7 +248,7 @@ function IncidentsPageContent() {
   };
 
   const handleAssignmentChange = async (incident: IncidentItem, assignedTo: string) => {
-    const assigneeLabel = getAssigneeLabel(incident, assignedTo || undefined);
+    const assigneeLabel = getAssigneeLabel(assignedTo || undefined);
     try {
       setIncidentUpdating(incident.id, true);
       const updated = await api.updateIncident(incident.id, {
@@ -505,7 +498,7 @@ function IncidentsPageContent() {
                   ? assignableUsers.some((user) => user.id === currentAssigneeId)
                   : true;
                 const currentAssigneeLabel = currentAssigneeId
-                  ? getAssigneeLabel(incident, currentAssigneeId, workflowState.assignedToLabel)
+                  ? getAssigneeLabel(currentAssigneeId, workflowState.assignedToLabel)
                   : 'Unassigned';
                 return (
                   <Card key={incident.id}>
