@@ -5,6 +5,8 @@ describe('auth API key storage', () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
+    document.cookie = 'admin_session=; path=/; max-age=0';
+    document.cookie = 'admin_auth_mode=; path=/; max-age=0';
     vi.restoreAllMocks();
     vi.resetModules();
   });
@@ -29,6 +31,8 @@ describe('auth API key storage', () => {
   });
 
   it('clears existing API key when password login succeeds', async () => {
+    document.cookie = 'admin_session=1; path=/';
+    document.cookie = 'admin_auth_mode=jwt; path=/';
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(
         JSON.stringify({ token_type: 'bearer' }),
@@ -67,9 +71,29 @@ describe('auth API key storage', () => {
   });
 
   it('clears existing JWT when API key login succeeds', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({
-        user: {
+    document.cookie = 'admin_session=1; path=/';
+    document.cookie = 'admin_auth_mode=single_user; path=/';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({
+          user: {
+            id: 2,
+            uuid: 'user-2',
+            username: 'ops',
+            email: 'ops@example.com',
+            role: 'admin',
+            is_active: true,
+            is_verified: true,
+            storage_quota_mb: 1024,
+            storage_used_mb: 10,
+            created_at: '2026-02-27T00:00:00Z',
+            updated_at: '2026-02-27T00:00:00Z',
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      ))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({
           id: 2,
           uuid: 'user-2',
           username: 'ops',
@@ -81,10 +105,9 @@ describe('auth API key storage', () => {
           storage_used_mb: 10,
           created_at: '2026-02-27T00:00:00Z',
           updated_at: '2026-02-27T00:00:00Z',
-        },
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    ));
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      ));
     vi.stubGlobal('fetch', fetchMock);
 
     const auth = await import('./auth');
@@ -98,6 +121,42 @@ describe('auth API key storage', () => {
     expect(auth.getApiKey()).toBeNull();
     expect(sessionStorage.getItem('x_api_key')).toBeNull();
     expect(localStorage.getItem('user')).toContain('"username":"ops"');
+  });
+
+  it('treats API key login as successful when the validated user is returned before proxy warm-up settles', async () => {
+    document.cookie = 'admin_session=1; path=/';
+    document.cookie = 'admin_auth_mode=single_user; path=/';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({
+          user: {
+            id: 3,
+            uuid: 'user-3',
+            username: 'single_user',
+            email: '',
+            role: 'admin',
+            is_active: true,
+            is_verified: true,
+            storage_quota_mb: 1024,
+            storage_used_mb: 12,
+            created_at: '2026-02-27T00:00:00Z',
+            updated_at: '2026-02-27T00:00:00Z',
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      ))
+      .mockResolvedValue(new Response(
+        JSON.stringify({ detail: 'Authentication required' }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } }
+      ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const auth = await import('./auth');
+
+    const ok = await auth.loginWithApiKey('single-user-admin-key');
+
+    expect(ok).toBe(true);
+    expect(localStorage.getItem('user')).toContain('"username":"single_user"');
   });
 
   it('returns MFA challenge details without storing auth when login requires MFA', async () => {

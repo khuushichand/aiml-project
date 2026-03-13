@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildApiUrl } from '@/lib/api-config';
+import { buildApiUrlForRequest } from '@/lib/api-config';
 import { setJwtSessionCookies } from '@/lib/server-auth';
 
 type LoginResponsePayload = {
@@ -21,7 +21,7 @@ const sanitizePayload = (payload: LoginResponsePayload): Omit<LoginResponsePaylo
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const body = await request.text();
-  const response = await fetch(buildApiUrl('/auth/login'), {
+  const response = await fetch(buildApiUrlForRequest(request, '/auth/login'), {
     method: 'POST',
     headers: {
       'Content-Type': request.headers.get('content-type') ?? 'application/x-www-form-urlencoded',
