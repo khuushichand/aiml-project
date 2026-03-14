@@ -158,4 +158,5 @@ def test_list_attempt_remediation_conversions_returns_active_rows_and_superseded
     assert payload["superseded_count"] == 1
     assert payload["items"][0]["id"] == latest["id"]
     assert payload["items"][0]["status"] == "active"
+    assert payload["items"][0]["superseded_count"] == 1
     assert payload["items"][0]["flashcard_uuids_json"] == ["card-b"]

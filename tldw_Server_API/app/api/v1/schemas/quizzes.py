@@ -197,6 +197,7 @@ class QuizRemediationConversionSummary(BaseModel):
     question_id: int
     status: Literal["active", "superseded"]
     orphaned: bool = False
+    superseded_count: int = Field(0, ge=0)
     superseded_by_id: Optional[int] = None
     target_deck_id: Optional[int] = None
     target_deck_name_snapshot: Optional[str] = None

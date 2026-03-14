@@ -75,10 +75,22 @@ def _mark_orphaned_remediation_items(
     items: list[dict[str, Any]],
     db: CharactersRAGDB,
 ) -> list[dict[str, Any]]:
+    """Mark remediation items orphaned when all linked flashcards have been deleted."""
+    all_uuids = {
+        str(card_uuid)
+        for item in items
+        for card_uuid in (item.get("flashcard_uuids_json") or [])
+        if str(card_uuid).strip()
+    }
+    existing_uuids = {
+        str(card.get("uuid"))
+        for card in db.get_flashcards_by_uuids(sorted(all_uuids))
+        if str(card.get("uuid") or "").strip()
+    }
     marked_items: list[dict[str, Any]] = []
     for item in items:
         flashcard_uuids = list(item.get("flashcard_uuids_json") or [])
-        orphaned = bool(flashcard_uuids) and not any(db.get_flashcard(card_uuid) for card_uuid in flashcard_uuids)
+        orphaned = bool(flashcard_uuids) and not any(card_uuid in existing_uuids for card_uuid in flashcard_uuids)
         marked_item = dict(item)
         marked_item["orphaned"] = orphaned
         marked_items.append(marked_item)
@@ -434,7 +446,7 @@ def convert_attempt_remediation_conversions(
     except InputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ConflictError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except CharactersRAGDBError as exc:
         logger.error(f"Failed to convert remediation questions for attempt {attempt_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to convert remediation questions") from exc

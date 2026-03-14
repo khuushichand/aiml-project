@@ -195,6 +195,7 @@ def test_convert_quiz_remediation_questions_replace_active_supersedes_old_row(
 
     assert initial["results"][0]["status"] == "created"
     assert follow_up["results"][0]["status"] == "superseded_and_created"
+    assert follow_up["results"][0]["conversion"]["superseded_count"] == 1
     conversions = quizzes_db.list_attempt_remediation_conversions(attempt_id)
     assert conversions["count"] == 1
     assert conversions["superseded_count"] == 1

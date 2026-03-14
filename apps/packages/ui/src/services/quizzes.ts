@@ -226,6 +226,7 @@ export type QuizRemediationConversionSummary = {
   question_id: number
   status: "active" | "superseded"
   orphaned: boolean
+  superseded_count: number
   superseded_by_id?: number | null
   target_deck_id?: number | null
   target_deck_name_snapshot?: string | null

@@ -558,6 +558,7 @@ export function useConvertAttemptRemediationQuestionsMutation() {
       )
     ),
     onSuccess: (response: QuizRemediationConvertResponse, variables) => {
+      qc.invalidateQueries({ queryKey: ["flashcards:decks"], refetchType: "active" })
       qc.setQueryData<QuizRemediationConversionListResponse | undefined>(
         ["quizzes:attempt:remediation-conversions", variables.attemptId],
         (current) => {
@@ -576,7 +577,8 @@ export function useConvertAttemptRemediationQuestionsMutation() {
             }
           })
 
-          const supersededCount = nextItems.filter((item) => item.status === "superseded").length
+          const supersededCount = current.superseded_count
+            + response.results.filter((result) => result.status === "superseded_and_created").length
           return {
             attempt_id: current.attempt_id,
             items: nextItems,

@@ -14,7 +14,7 @@ os.environ.setdefault("TEST_MODE", "1")
 
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 from tldw_Server_API.app.services import quiz_generator
 from tldw_Server_API.tests.test_config import TestConfig
 
@@ -308,6 +308,7 @@ def test_get_attempt_remediation_conversions_returns_active_rows(
     assert payload["items"][0]["question_id"] == question_ids[0]
     assert payload["items"][0]["target_deck_id"] == conversion_payload["target_deck"]["id"]
     assert payload["items"][0]["orphaned"] is False
+    assert payload["items"][0]["superseded_count"] == 0
 
 
 def test_convert_remediation_questions_creates_new_deck(
@@ -437,11 +438,40 @@ def test_convert_remediation_questions_replace_active_returns_superseded_and_cre
     read_payload = read_response.json()
     assert read_payload["count"] == 1
     assert read_payload["superseded_count"] == 1
+    assert read_payload["items"][0]["superseded_count"] == 1
+
+
+def test_convert_remediation_questions_returns_409_for_conflict(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+    monkeypatch,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    deck_id = quizzes_db.add_deck("Renal Deck")
+
+    def raise_conflict(**_kwargs):
+        raise ConflictError("Active remediation conversion already exists.")
+
+    monkeypatch.setattr(quizzes_db, "convert_quiz_remediation_questions", raise_conflict)
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": [question_ids[0]],
+            "target_deck_id": deck_id,
+            "replace_active": False,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert "already exists" in response.json()["detail"].lower()
 
 
 def test_get_attempt_remediation_conversions_marks_orphaned_linked_flashcards(
     client_with_quizzes_db: TestClient,
     quizzes_db: CharactersRAGDB,
+    monkeypatch,
 ):
     attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
     conversion_payload = quizzes_db.convert_quiz_remediation_questions(
@@ -455,6 +485,19 @@ def test_get_attempt_remediation_conversions_marks_orphaned_linked_flashcards(
     assert flashcard is not None
     quizzes_db.soft_delete_flashcard(flashcard_uuid, expected_version=int(flashcard["version"]))
 
+    batch_lookup_calls: list[list[str]] = []
+    original_batch_lookup = quizzes_db.get_flashcards_by_uuids
+
+    def track_batch_lookup(uuids: list[str]):
+        batch_lookup_calls.append(list(uuids))
+        return original_batch_lookup(uuids)
+
+    def fail_single_lookup(_uuid: str):
+        raise AssertionError("Expected remediation orphan detection to use batch flashcard lookup.")
+
+    monkeypatch.setattr(quizzes_db, "get_flashcards_by_uuids", track_batch_lookup)
+    monkeypatch.setattr(quizzes_db, "get_flashcard", fail_single_lookup)
+
     response = client_with_quizzes_db.get(
         f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions",
         headers=AUTH_HEADERS,
@@ -464,6 +507,7 @@ def test_get_attempt_remediation_conversions_marks_orphaned_linked_flashcards(
     payload = response.json()
     assert payload["items"][0]["question_id"] == question_ids[0]
     assert payload["items"][0]["orphaned"] is True
+    assert batch_lookup_calls == [[flashcard_uuid]]
 
 
 def test_quiz_attempt_question_assistant_respond_persists_user_and_assistant_messages(

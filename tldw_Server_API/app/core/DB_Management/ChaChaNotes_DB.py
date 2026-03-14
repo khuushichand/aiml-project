@@ -19755,6 +19755,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             item["flashcard_uuids_json"] = flashcard_uuids
         else:
             item["flashcard_uuids_json"] = []
+        item["superseded_count"] = int(item.get("superseded_count") or 0)
         return item
 
     def _public_quiz_question(self, question: dict[str, Any]) -> dict[str, Any]:
@@ -20612,13 +20613,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         try:
             with self.transaction() as conn:
-                placeholders = ", ".join("?" for _ in ordered_question_ids)
                 active_rows = conn.execute(
-                    "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
-                    "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
-                    "source_ref_id, created_at, last_modified, client_id, version "
-                    f"FROM quiz_remediation_conversions WHERE attempt_id = ? AND status = ? AND question_id IN ({placeholders})",  # nosec B608
-                    (int(attempt_id), "active", *ordered_question_ids),
+                    "SELECT qrc.id, qrc.attempt_id, qrc.quiz_id, qrc.question_id, qrc.status, "
+                    "qrc.superseded_by_id, qrc.target_deck_id, qrc.target_deck_name_snapshot, "
+                    "qrc.flashcard_count, qrc.flashcard_uuids_json, qrc.source_ref_id, qrc.created_at, "
+                    "qrc.last_modified, qrc.client_id, qrc.version, "
+                    "(SELECT COUNT(*) FROM quiz_remediation_conversions history "
+                    " WHERE history.attempt_id = qrc.attempt_id AND history.question_id = qrc.question_id "
+                    "   AND history.status = ?) AS superseded_count "
+                    "FROM quiz_remediation_conversions qrc WHERE qrc.attempt_id = ? AND qrc.status = ?",
+                    ("superseded", int(attempt_id), "active"),
                 ).fetchall()
                 existing_by_question = {
                     int(item["question_id"]): item
@@ -20626,7 +20630,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         self._deserialize_quiz_remediation_conversion_row(row)
                         for row in active_rows
                     )
-                    if item is not None
+                    if item is not None and int(item["question_id"]) in ordered_question_ids
                 }
 
                 pending_entries: list[dict[str, Any]] = []
@@ -20736,6 +20740,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conversion = self._deserialize_quiz_remediation_conversion_row(conversion_row)
                     if not conversion:
                         raise CharactersRAGDBError("Failed to load remediation conversion after insert")  # noqa: TRY003
+                    prior_superseded_count = int(previous_active.get("superseded_count") or 0) if previous_active else 0
+                    conversion["superseded_count"] = prior_superseded_count + (
+                        1 if previous_active and replace_active else 0
+                    )
 
                     results_by_question[question_id] = {
                         "question_id": question_id,
@@ -20752,11 +20760,25 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     "results": ordered_results,
                     "created_flashcard_uuids": created_flashcard_uuids,
                 }
+        except sqlite3.IntegrityError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    f"Active remediation conversion already exists for attempt {attempt_id}.",
+                    entity="quiz_remediation_conversions",
+                    entity_id=str(attempt_id),
+                ) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to convert remediation questions: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    f"Active remediation conversion already exists for attempt {attempt_id}.",
+                    entity="quiz_remediation_conversions",
+                    entity_id=str(attempt_id),
+                ) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to convert remediation questions: {exc}") from exc  # noqa: TRY003
         except CharactersRAGDBError:  # noqa: TRY203
             raise
         except sqlite3.Error as exc:
-            raise CharactersRAGDBError(f"Failed to convert remediation questions: {exc}") from exc  # noqa: TRY003
-        except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to convert remediation questions: {exc}") from exc  # noqa: TRY003
 
     def create_quiz_remediation_conversion(
@@ -20881,12 +20903,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """List active remediation conversions for an attempt with superseded history count."""
         try:
             active_cursor = self.execute_query(
-                "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
-                "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
-                "source_ref_id, created_at, last_modified, client_id, version "
-                "FROM quiz_remediation_conversions WHERE attempt_id = ? AND status = ? "
-                "ORDER BY question_id ASC, created_at DESC, id DESC",
-                (int(attempt_id), "active"),
+                "SELECT qrc.id, qrc.attempt_id, qrc.quiz_id, qrc.question_id, qrc.status, "
+                "qrc.superseded_by_id, qrc.target_deck_id, qrc.target_deck_name_snapshot, "
+                "qrc.flashcard_count, qrc.flashcard_uuids_json, qrc.source_ref_id, qrc.created_at, "
+                "qrc.last_modified, qrc.client_id, qrc.version, "
+                "(SELECT COUNT(*) FROM quiz_remediation_conversions history "
+                " WHERE history.attempt_id = qrc.attempt_id AND history.question_id = qrc.question_id "
+                "   AND history.status = ?) AS superseded_count "
+                "FROM quiz_remediation_conversions qrc WHERE qrc.attempt_id = ? AND qrc.status = ? "
+                "ORDER BY qrc.question_id ASC, qrc.created_at DESC, qrc.id DESC",
+                ("superseded", int(attempt_id), "active"),
             )
             items = [
                 item

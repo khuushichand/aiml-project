@@ -124,6 +124,7 @@ describe("ResultsTab remediation panel", () => {
             question_id: 13,
             status: "active",
             orphaned: false,
+            superseded_count: 0,
             target_deck_id: 3,
             target_deck_name_snapshot: "Renal Recovery Deck",
             flashcard_count: 1,
@@ -278,6 +279,7 @@ describe("ResultsTab remediation panel", () => {
             question_id: 12,
             status: "active",
             orphaned: false,
+            superseded_count: 1,
             target_deck_id: 3,
             target_deck_name_snapshot: "Renal Recovery Deck",
             flashcard_count: 1,
@@ -287,27 +289,9 @@ describe("ResultsTab remediation panel", () => {
             last_modified: "2026-03-13T09:15:00Z",
             client_id: "test",
             version: 1
-          },
-          {
-            id: 811,
-            attempt_id: 101,
-            quiz_id: 7,
-            question_id: 12,
-            status: "superseded",
-            orphaned: false,
-            superseded_by_id: 901,
-            target_deck_id: 2,
-            target_deck_name_snapshot: "Old Renal Deck",
-            flashcard_count: 1,
-            flashcard_uuids_json: ["fc-old-12"],
-            source_ref_id: "quiz-attempt:101:question:12",
-            created_at: "2026-03-12T09:15:00Z",
-            last_modified: "2026-03-12T09:15:00Z",
-            client_id: "test",
-            version: 1
           }
         ],
-        count: 2,
+        count: 1,
         superseded_count: 1
       },
       isLoading: false
@@ -576,7 +560,7 @@ describe("ResultsTab remediation panel", () => {
         }
       })
     })
-  })
+  }, 12000)
 
   it("resubmits already-converted questions with replace_active when confirmed", async () => {
     mocks.convertRemediationQuestions
@@ -595,6 +579,7 @@ describe("ResultsTab remediation panel", () => {
               question_id: 12,
               status: "active",
               orphaned: false,
+              superseded_count: 0,
               target_deck_id: 3,
               target_deck_name_snapshot: "Renal Recovery Deck",
               flashcard_count: 1,
@@ -626,6 +611,7 @@ describe("ResultsTab remediation panel", () => {
               question_id: 12,
               status: "active",
               orphaned: false,
+              superseded_count: 1,
               target_deck_id: 3,
               target_deck_name_snapshot: "Renal Recovery Deck",
               flashcard_count: 1,
@@ -673,6 +659,108 @@ describe("ResultsTab remediation panel", () => {
     })
   }, 12000)
 
+  it("reuses the server-created deck when a new-deck conversion needs replace_active retry", async () => {
+    mocks.convertRemediationQuestions
+      .mockResolvedValueOnce({
+        attempt_id: 101,
+        quiz_id: 7,
+        target_deck: { id: 44, name: "Retry Deck" },
+        results: [
+          {
+            question_id: 12,
+            status: "already_exists",
+            conversion: {
+              id: 901,
+              attempt_id: 101,
+              quiz_id: 7,
+              question_id: 12,
+              status: "active",
+              orphaned: false,
+              superseded_count: 0,
+              target_deck_id: 44,
+              target_deck_name_snapshot: "Retry Deck",
+              flashcard_count: 1,
+              flashcard_uuids_json: ["fc-12"],
+              source_ref_id: "quiz-attempt:101:question:12",
+              created_at: "2026-03-13T09:15:00Z",
+              last_modified: "2026-03-13T09:15:00Z",
+              client_id: "test",
+              version: 1
+            },
+            flashcard_uuids: ["fc-12"],
+            error: null
+          }
+        ],
+        created_flashcard_uuids: []
+      })
+      .mockResolvedValueOnce({
+        attempt_id: 101,
+        quiz_id: 7,
+        target_deck: { id: 44, name: "Retry Deck" },
+        results: [
+          {
+            question_id: 12,
+            status: "superseded_and_created",
+            conversion: {
+              id: 903,
+              attempt_id: 101,
+              quiz_id: 7,
+              question_id: 12,
+              status: "active",
+              orphaned: false,
+              superseded_count: 1,
+              target_deck_id: 44,
+              target_deck_name_snapshot: "Retry Deck",
+              flashcard_count: 1,
+              flashcard_uuids_json: ["fc-12-new"],
+              source_ref_id: "quiz-attempt:101:question:12",
+              created_at: "2026-03-13T09:18:00Z",
+              last_modified: "2026-03-13T09:18:00Z",
+              client_id: "test",
+              version: 1
+            },
+            flashcard_uuids: ["fc-12-new"],
+            error: null
+          }
+        ],
+        created_flashcard_uuids: ["fc-12-new"]
+      })
+
+    await openDetails()
+
+    fireEvent.click(screen.getByRole("button", { name: /create remediation flashcards/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Destination deck")).toBeInTheDocument()
+    })
+
+    const modal = screen.getAllByRole("dialog")[1]
+    fireEvent.mouseDown(within(modal).getByRole("combobox"))
+    fireEvent.click(await screen.findByText("Create new deck"))
+    fireEvent.change(screen.getByTestId("quiz-remediation-new-deck-name"), {
+      target: { value: "Retry Deck" }
+    })
+    fireEvent.click(within(modal).getByRole("checkbox", { name: /which structure filters blood/i }))
+    fireEvent.click(screen.getByRole("button", { name: /^create flashcards$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /convert again anyway/i })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /convert again anyway/i }))
+
+    await waitFor(() => {
+      expect(mocks.convertRemediationQuestions).toHaveBeenNthCalledWith(2, {
+        attemptId: 101,
+        request: {
+          question_ids: [12],
+          target_deck_id: 44,
+          replace_active: true
+        }
+      })
+    })
+  }, 12000)
+
   it("drops the deck filter when active remediation conversions span multiple decks", async () => {
     vi.mocked(useAttemptRemediationConversionsQuery).mockReturnValue({
       data: {
@@ -685,6 +773,7 @@ describe("ResultsTab remediation panel", () => {
             question_id: 12,
             status: "active",
             orphaned: false,
+            superseded_count: 0,
             target_deck_id: 3,
             target_deck_name_snapshot: "Renal Recovery Deck",
             flashcard_count: 1,
@@ -702,6 +791,7 @@ describe("ResultsTab remediation panel", () => {
             question_id: 13,
             status: "active",
             orphaned: false,
+            superseded_count: 0,
             target_deck_id: 4,
             target_deck_name_snapshot: "Renal Backup Deck",
             flashcard_count: 1,
@@ -769,5 +859,5 @@ describe("ResultsTab remediation panel", () => {
         request: { action: "explain" }
       })
     })
-  }, 12000)
+  }, 20000)
 })

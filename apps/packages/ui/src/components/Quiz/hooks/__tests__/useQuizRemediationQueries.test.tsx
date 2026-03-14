@@ -41,6 +41,7 @@ vi.mock("@/services/quizzes", async () => {
           question_id: 12,
           status: "active",
           orphaned: false,
+          superseded_count: 1,
           target_deck_id: 9,
           target_deck_name_snapshot: "Renal Recovery",
           flashcard_count: 1,
@@ -53,7 +54,7 @@ vi.mock("@/services/quizzes", async () => {
         }
       ],
       count: 1,
-      superseded_count: 0
+      superseded_count: 1
     })),
     convertAttemptRemediationQuestions: vi.fn(async () => ({
       attempt_id: 301,
@@ -73,6 +74,7 @@ vi.mock("@/services/quizzes", async () => {
             question_id: 12,
             status: "active",
             orphaned: false,
+            superseded_count: 1,
             target_deck_id: 9,
             target_deck_name_snapshot: "Renal Recovery",
             flashcard_count: 1,
@@ -87,16 +89,17 @@ vi.mock("@/services/quizzes", async () => {
           error: null
         },
         {
-          question_id: 19,
-          status: "created",
-          conversion: {
-            id: 72,
-            attempt_id: 301,
-            quiz_id: 21,
             question_id: 19,
-            status: "active",
-            orphaned: false,
-            target_deck_id: 9,
+            status: "created",
+            conversion: {
+              id: 72,
+              attempt_id: 301,
+              quiz_id: 21,
+              question_id: 19,
+              status: "active",
+              orphaned: false,
+              superseded_count: 0,
+              target_deck_id: 9,
             target_deck_name_snapshot: "Renal Recovery",
             flashcard_count: 1,
             flashcard_uuids_json: ["fc-2"],
@@ -216,6 +219,7 @@ describe("useGenerateRemediationQuizMutation", () => {
           question_id: 12,
           status: "active",
           orphaned: false,
+          superseded_count: 1,
           target_deck_id: 9,
           target_deck_name_snapshot: "Renal Recovery",
           flashcard_count: 1,
@@ -228,7 +232,7 @@ describe("useGenerateRemediationQuizMutation", () => {
         }
       ],
       count: 1,
-      superseded_count: 0
+      superseded_count: 1
     })
 
     const { result } = renderHook(
@@ -255,6 +259,10 @@ describe("useGenerateRemediationQuizMutation", () => {
       const cached = queryClient.getQueryData<any>(["quizzes:attempt:remediation-conversions", 301])
       expect(cached?.items).toHaveLength(2)
       expect(cached?.items.some((item: any) => item.question_id === 19)).toBe(true)
+      expect(cached?.superseded_count).toBe(1)
+      expect(
+        cached?.items.find((item: any) => item.question_id === 12)?.superseded_count
+      ).toBe(1)
     })
   })
 })

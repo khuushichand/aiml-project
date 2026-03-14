@@ -138,7 +138,6 @@ interface ResultsTabProps {
 
 type RemediationConversionState = {
   active: QuizRemediationConversionSummary | null
-  supersededCount: number
 }
 
 export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
@@ -244,13 +243,9 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
   const remediationConversions = remediationConversionsQuery.data?.items ?? []
   const remediationConversionStateByQuestionId = React.useMemo(() => {
     return remediationConversions.reduce<Map<number, RemediationConversionState>>((acc, item) => {
-      const existing = acc.get(item.question_id) ?? { active: null, supersededCount: 0 }
       if (item.status === "active") {
-        existing.active = item
-      } else {
-        existing.supersededCount += 1
+        acc.set(item.question_id, { active: item })
       }
-      acc.set(item.question_id, existing)
       return acc
     }, new Map())
   }, [remediationConversions])
@@ -666,7 +661,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
           orphaned,
           convertedDeckName: activeConversion?.target_deck_name_snapshot ?? null,
           linkedFlashcardCount: activeConversion?.flashcard_count ?? 0,
-          hasSupersededHistory: (conversionState?.supersededCount ?? 0) > 0
+          hasSupersededHistory: (activeConversion?.superseded_count ?? 0) > 0
         }
       })
   }, [formatAnswerValue, remediationConversionStateByQuestionId, selectedAttemptDetails, t])
@@ -849,6 +844,11 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
         attemptId: selectedAttemptDetails.id,
         request
       })
+
+      if (response.target_deck?.id && (deckTarget === "__new__" || deckTarget == null)) {
+        setDeckTarget(response.target_deck.id)
+        setNewDeckName(response.target_deck.name)
+      }
 
       const createdResults = response.results.filter(
         (result) => result.status === "created" || result.status === "superseded_and_created"
