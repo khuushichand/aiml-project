@@ -150,4 +150,97 @@ describe("McpToolPicker", () => {
       expect(onChange).toHaveBeenCalledWith("media.search")
     )
   })
+
+  it("keeps the committed value and shows a warning when the selected module no longer contains it", async () => {
+    mocks.fetchMcpToolsViaDiscovery.mockImplementation(
+      async (params?: { module?: string }) => {
+        if (params?.module === "alerts") {
+          return [{ name: "alerts.send", module: "alerts", canExecute: true }]
+        }
+        if (params?.module === "notes") {
+          return [{ name: "notes.search", module: "notes", canExecute: true }]
+        }
+        return [
+          { name: "alerts.send", module: "alerts", canExecute: true },
+          { name: "notes.search", module: "notes", canExecute: true }
+        ]
+      }
+    )
+    const onChange = vi.fn()
+
+    renderWithQueryClient(
+      <McpToolPicker value="alerts.send" onChange={onChange} />
+    )
+
+    await screen.findByTestId("persona-mcp-tool-picker-module-select")
+
+    fireEvent.change(screen.getByTestId("persona-mcp-tool-picker-module-select"), {
+      target: { value: "notes" }
+    })
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Selected tool is no longer available in this module.")
+      ).toBeInTheDocument()
+    )
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it("can auto-clear stale values when explicitly enabled", async () => {
+    mocks.fetchMcpToolsViaDiscovery.mockImplementation(
+      async (params?: { module?: string }) => {
+        if (params?.module === "alerts") {
+          return [{ name: "alerts.send", module: "alerts", canExecute: true }]
+        }
+        if (params?.module === "notes") {
+          return [{ name: "notes.search", module: "notes", canExecute: true }]
+        }
+        return [
+          { name: "alerts.send", module: "alerts", canExecute: true },
+          { name: "notes.search", module: "notes", canExecute: true }
+        ]
+      }
+    )
+    const onChange = vi.fn()
+
+    renderWithQueryClient(
+      React.createElement(McpToolPicker as React.ComponentType<any>, {
+        value: "alerts.send",
+        onChange,
+        autoClearStaleTool: true
+      })
+    )
+
+    await screen.findByTestId("persona-mcp-tool-picker-module-select")
+
+    fireEvent.change(screen.getByTestId("persona-mcp-tool-picker-module-select"), {
+      target: { value: "notes" }
+    })
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(""))
+  })
+
+  it("does not emit duplicate-key warnings when tools share a name", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+    mocks.fetchMcpToolsViaDiscovery.mockResolvedValue([
+      { id: "tool-a", name: "shared.lookup", module: "notes", canExecute: true },
+      { id: "tool-b", name: "shared.lookup", module: "alerts", canExecute: true }
+    ])
+
+    renderWithQueryClient(<McpToolPicker value="" onChange={vi.fn()} />)
+
+    await screen.findByTestId("persona-mcp-tool-picker-tool-select")
+
+    const duplicateKeyWarning = consoleError.mock.calls.some((call) =>
+      call.some(
+        (entry) =>
+          typeof entry === "string" &&
+          entry.includes("Encountered two children with the same key")
+      )
+    )
+
+    expect(duplicateKeyWarning).toBe(false)
+
+    consoleError.mockRestore()
+  })
 })

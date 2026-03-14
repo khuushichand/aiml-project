@@ -17,6 +17,7 @@ type McpToolPickerProps = {
   value: string
   onChange: (value: string) => void
   disabled?: boolean
+  autoClearStaleTool?: boolean
 }
 
 const normalizeModuleList = (modules: string[] | null | undefined): string[] => {
@@ -38,6 +39,19 @@ const getToolName = (tool: McpToolDefinition): string =>
 const getToolModule = (tool: McpToolDefinition): string =>
   typeof tool?.module === "string" ? String(tool.module).trim() : ""
 
+const getToolOptionKey = (tool: McpToolDefinition, index: number): string => {
+  const toolName = getToolName(tool) || `tool-${index}`
+  const rawToolId = tool?.id
+  const rawCatalog = tool?.catalog
+  const uniqueSuffix =
+    typeof rawToolId === "string" || typeof rawToolId === "number"
+      ? String(rawToolId)
+      : typeof rawCatalog === "string" || typeof rawCatalog === "number"
+        ? String(rawCatalog)
+        : getToolModule(tool) || String(index)
+  return `${toolName}-${uniqueSuffix}`
+}
+
 const filterExecutableTools = (tools: McpToolDefinition[]): McpToolDefinition[] =>
   tools.filter((tool) => {
     if (!tool || typeof tool !== "object") return false
@@ -51,7 +65,8 @@ const deriveModulesFromTools = (tools: McpToolDefinition[]): string[] =>
 export const McpToolPicker: React.FC<McpToolPickerProps> = ({
   value,
   onChange,
-  disabled = false
+  disabled = false,
+  autoClearStaleTool = false
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
@@ -61,6 +76,7 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
   const [selectedModule, setSelectedModule] = React.useState("")
   const [manualMode, setManualMode] = React.useState(false)
   const [draftValue, setDraftValue] = React.useState(value)
+  const [showStaleToolWarning, setShowStaleToolWarning] = React.useState(false)
 
   const catalogsQuery = useQuery({
     queryKey: ["persona-garden", "mcp-tool-picker", "catalogs"],
@@ -151,6 +167,7 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
 
   React.useEffect(() => {
     setDraftValue(value)
+    setShowStaleToolWarning(false)
   }, [value])
 
   React.useEffect(() => {
@@ -159,6 +176,11 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
     }
   }, [mcpUnavailable])
 
+  // Loop safety: this effect only infers an initial module from a committed tool
+  // when MCP is available, the current value is non-empty, no module is selected,
+  // and tool options have loaded. When a match is found we setSelectedModule to
+  // narrow the picker; otherwise we fall back to manual mode. The guards prevent
+  // cascading re-renders once module state or tool options change.
   React.useEffect(() => {
     if (
       !hasMcp ||
@@ -188,9 +210,22 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
     )
     if (!matchesSelectedModule) {
       setDraftValue("")
-      onChange("")
+      setShowStaleToolWarning(true)
+      if (autoClearStaleTool) {
+        onChange("")
+      }
+      return
     }
-  }, [currentValue, hasMcp, onChange, selectedModule, toolOptions, toolsQuery.isLoading])
+    setShowStaleToolWarning(false)
+  }, [
+    autoClearStaleTool,
+    currentValue,
+    hasMcp,
+    onChange,
+    selectedModule,
+    toolOptions,
+    toolsQuery.isLoading
+  ])
 
   const handleCatalogChange = React.useCallback(
     (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -207,6 +242,7 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
 
   const handleModuleChange = React.useCallback(
     (event: React.ChangeEvent<HTMLSelectElement>) => {
+      setShowStaleToolWarning(false)
       setSelectedModule(event.target.value)
     },
     []
@@ -215,6 +251,7 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
   const handleToolChange = React.useCallback(
     (event: React.ChangeEvent<HTMLSelectElement>) => {
       const nextValue = event.target.value
+      setShowStaleToolWarning(false)
       setDraftValue(nextValue)
       onChange(nextValue)
     },
@@ -275,9 +312,9 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
             <button
               type="button"
               className="rounded-md border border-border px-2 py-1 text-xs text-text transition hover:bg-surface2"
-              onClick={() => setManualMode(false)}
-              disabled={disabled}
-            >
+            onClick={() => setManualMode(false)}
+            disabled={disabled}
+          >
               {t("sidepanel:personaGarden.commands.backToPicker", {
                 defaultValue: "Back to picker"
               })}
@@ -294,6 +331,7 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
             value={currentValue}
             onChange={(event) => {
               const nextValue = event.target.value
+              setShowStaleToolWarning(false)
               setDraftValue(nextValue)
               onChange(nextValue)
             }}
@@ -376,13 +414,21 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
           {toolOptions.map((tool) => {
             const toolName = getToolName(tool)
             return (
-              <option key={toolName} value={toolName}>
+              <option key={getToolOptionKey(tool, toolOptions.indexOf(tool))} value={toolName}>
                 {toolName}
               </option>
             )
           })}
         </select>
       </label>
+
+      {showStaleToolWarning ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800">
+          {t("sidepanel:personaGarden.commands.staleToolWarning", {
+            defaultValue: "Selected tool is no longer available in this module."
+          })}
+        </div>
+      ) : null}
 
       <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface px-3 py-2 text-xs text-text-muted">
         <span>
@@ -393,7 +439,10 @@ export const McpToolPicker: React.FC<McpToolPickerProps> = ({
         <button
           type="button"
           className="rounded-md border border-border px-2 py-1 text-xs text-text transition hover:bg-bg"
-          onClick={() => setManualMode(true)}
+          onClick={() => {
+            setShowStaleToolWarning(false)
+            setManualMode(true)
+          }}
           disabled={disabled}
         >
           {t("sidepanel:personaGarden.commands.enterManually", {
