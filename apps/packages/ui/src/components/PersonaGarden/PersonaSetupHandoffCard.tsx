@@ -4,9 +4,15 @@ import type { PersonaConfirmationMode } from "@/hooks/useResolvedPersonaVoiceDef
 import type { PersonaGardenTabKey } from "@/utils/persona-garden-route"
 
 export type SetupReviewSummary = {
-  starterCommands: { mode: "added"; count: number } | { mode: "skipped" }
+  starterCommands:
+    | { mode: "added"; count: number }
+    | { mode: "configured"; count: number }
+    | { mode: "skipped" }
   confirmationMode: PersonaConfirmationMode | null
-  connection: { mode: "created"; name: string } | { mode: "skipped" }
+  connection:
+    | { mode: "created"; name: string }
+    | { mode: "available"; name: string }
+    | { mode: "skipped" }
 }
 
 type PersonaSetupHandoffCardProps = {
@@ -37,12 +43,18 @@ function formatStarterCommandSummary(summary: SetupReviewSummary["starterCommand
   if (summary.mode === "added") {
     return `Added ${summary.count} starter command${summary.count === 1 ? "" : "s"}`
   }
+  if (summary.mode === "configured") {
+    return `${summary.count} command${summary.count === 1 ? "" : "s"} available`
+  }
   return "Skipped starter commands"
 }
 
 function formatConnectionSummary(summary: SetupReviewSummary["connection"]): string {
   if (summary.mode === "created") {
     return `Connection added: ${summary.name}`
+  }
+  if (summary.mode === "available") {
+    return `Connection available: ${summary.name}`
   }
   return "No external connection yet"
 }
@@ -64,11 +76,21 @@ export const PersonaSetupHandoffCard: React.FC<PersonaSetupHandoffCardProps> = (
           label: "Review starter commands",
           onClick: onOpenCommands
         }
+      : targetTab === "test-lab"
+        ? {
+            label: "Open Test Lab",
+            onClick: onOpenTestLab
+          }
       : targetTab === "live"
         ? {
             label: "Start live session",
             onClick: onOpenLive
           }
+        : targetTab === "connections"
+          ? {
+              label: "Review connections",
+              onClick: onOpenConnections
+            }
         : {
             label: "Adjust assistant defaults",
             onClick: onOpenProfiles

@@ -73,4 +73,26 @@ describe("PersonaSetupHandoffCard", () => {
     expect(screen.getByText("No external connection yet")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Start live session" })).toBeInTheDocument()
   })
+
+  it("uses a test-lab-aware primary action when setup returns to test lab", () => {
+    const onOpenTestLab = vi.fn()
+
+    render(
+      <PersonaSetupHandoffCard
+        targetTab="test-lab"
+        completionType="dry_run"
+        reviewSummary={defaultReviewSummary}
+        onDismiss={vi.fn()}
+        onOpenProfiles={vi.fn()}
+        onOpenTestLab={onOpenTestLab}
+        onOpenLive={vi.fn()}
+        onOpenCommands={vi.fn()}
+        onOpenConnections={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Open Test Lab" })[0])
+
+    expect(onOpenTestLab).toHaveBeenCalledTimes(1)
+  })
 })

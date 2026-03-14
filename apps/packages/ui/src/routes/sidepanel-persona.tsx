@@ -41,7 +41,10 @@ import {
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
-import { getPersonaStarterCommandTemplate } from "@/components/PersonaGarden/personaStarterCommandTemplates"
+import {
+  getPersonaStarterCommandTemplate,
+  PERSONA_STARTER_COMMAND_TEMPLATES
+} from "@/components/PersonaGarden/personaStarterCommandTemplates"
 import { buildPersonaSetupProgress } from "@/components/PersonaGarden/personaSetupProgress"
 import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerOnline } from "@/hooks/useServerOnline"
@@ -224,6 +227,60 @@ const DEFAULT_SETUP_REVIEW_SUMMARY: SetupReviewSummary = {
   starterCommands: { mode: "skipped" },
   confirmationMode: null,
   connection: { mode: "skipped" }
+}
+
+const SETUP_STARTER_COMMAND_DESCRIPTIONS = new Set(
+  PERSONA_STARTER_COMMAND_TEMPLATES.map((template) => template.commandDescription)
+)
+
+const isSetupCreatedStarterCommand = (value: unknown): boolean => {
+  if (!value || typeof value !== "object") return false
+  const record = value as Record<string, unknown>
+  const description = String(record.description || "").trim()
+  if (!description) return false
+  return (
+    SETUP_STARTER_COMMAND_DESCRIPTIONS.has(description) ||
+    / from assistant setup$/i.test(description)
+  )
+}
+
+const pickAvailableConnectionName = (value: unknown): string | null => {
+  if (!Array.isArray(value)) return null
+  const names = value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null
+      const record = entry as Record<string, unknown>
+      const name = String(record.name || "").trim()
+      const createdAt = String(record.created_at || record.last_modified || "").trim()
+      if (!name) return null
+      return {
+        name,
+        createdAt
+      }
+    })
+    .filter((entry): entry is { name: string; createdAt: string } => Boolean(entry))
+
+  if (names.length === 0) return null
+
+  return names
+    .slice()
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.name || null
+}
+
+const summarizeFallbackStarterCommands = (value: unknown): SetupReviewSummary["starterCommands"] => {
+  const commands = Array.isArray((value as { commands?: unknown[] } | null | undefined)?.commands)
+    ? ((value as { commands: unknown[] }).commands)
+    : []
+  const setupCreatedCount = commands.filter(isSetupCreatedStarterCommand).length
+
+  if (setupCreatedCount > 0) {
+    return {
+      mode: "configured",
+      count: setupCreatedCount
+    }
+  }
+
+  return { mode: "skipped" }
 }
 
 type PersonaStateDocsResponse = {
@@ -871,6 +928,50 @@ const SidepanelPersona = ({
     personaSetupWizard.currentStep === "test"
       ? null
       : setupStepErrors[personaSetupWizard.currentStep] || null
+  const resolveSetupReviewSummary = React.useCallback(
+    async (personaId: string): Promise<SetupReviewSummary> => {
+      if (setupReviewSummaryDraft.confirmationMode !== null) {
+        return setupReviewSummaryDraft
+      }
+
+      const fallbackSummary: SetupReviewSummary = {
+        starterCommands: { mode: "skipped" },
+        confirmationMode: savedPersonaVoiceDefaults?.confirmation_mode || null,
+        connection: { mode: "skipped" }
+      }
+
+      try {
+        const [commandsResult, connectionsResult] = await Promise.allSettled([
+          tldwClient.fetchWithAuth(
+            `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/voice-commands` as any,
+            { method: "GET" }
+          ),
+          tldwClient.fetchWithAuth(
+            `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/connections` as any,
+            { method: "GET" }
+          )
+        ])
+
+        if (commandsResult.status === "fulfilled" && commandsResult.value.ok) {
+          fallbackSummary.starterCommands = summarizeFallbackStarterCommands(
+            await commandsResult.value.json()
+          )
+        }
+
+        if (connectionsResult.status === "fulfilled" && connectionsResult.value.ok) {
+          const connectionName = pickAvailableConnectionName(await connectionsResult.value.json())
+          fallbackSummary.connection = connectionName
+            ? { mode: "available", name: connectionName }
+            : { mode: "skipped" }
+        }
+      } catch {
+        // Handoff summary enrichment is best-effort and should not block setup completion.
+      }
+
+      return fallbackSummary
+    },
+    [savedPersonaVoiceDefaults?.confirmation_mode, setupReviewSummaryDraft]
+  )
 
   React.useEffect(() => {
     const normalizedPersonaId = String(selectedPersonaId || "").trim()
@@ -2511,6 +2612,7 @@ const SidepanelPersona = ({
       setSetupWizardSaving(true)
       clearSetupStepError("test")
       try {
+        const resolvedReviewSummary = await resolveSetupReviewSummary(personaId)
         const completedSetup: PersonaSetupState = {
           status: "completed",
           version: 1,
@@ -2538,7 +2640,7 @@ const SidepanelPersona = ({
         setSetupHandoff({
           targetTab: handoffTargetTab,
           completionType: testType,
-          reviewSummary: setupReviewSummaryDraft
+          reviewSummary: resolvedReviewSummary
         })
         setSetupIntentPersonaId("")
         setSetupIntentTargetTab(null)
@@ -2558,8 +2660,8 @@ const SidepanelPersona = ({
       activeTab,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
+      resolveSetupReviewSummary,
       selectedPersonaId,
-      setupReviewSummaryDraft,
       setupIntentTargetTab,
       setSetupHandoff,
       setSetupStepError
@@ -3950,7 +4052,8 @@ const SidepanelPersona = ({
     {
       key: "connections",
       label: t("sidepanel:persona.tabConnections", "Connections"),
-      content: (
+      content: withSetupHandoff(
+        "connections",
         <ConnectionsPanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
