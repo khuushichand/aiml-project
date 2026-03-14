@@ -2506,6 +2506,17 @@ class McpHubService:
             owner_scope_id=owner_scope_id,
         )
 
+    async def get_acp_profile(self, profile_id: int) -> dict[str, Any] | None:
+        row = await self.repo.get_acp_profile(int(profile_id))
+        if not row:
+            return None
+        normalized = dict(row)
+        try:
+            normalized["profile"] = json.loads(str(normalized.get("profile_json") or "{}"))
+        except json.JSONDecodeError:
+            normalized["profile"] = {}
+        return normalized
+
     async def update_acp_profile(
         self,
         profile_id: int,
