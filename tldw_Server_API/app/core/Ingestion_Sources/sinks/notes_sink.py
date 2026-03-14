@@ -29,6 +29,19 @@ def _expected_version(binding: dict[str, Any]) -> int:
     return int(raw)
 
 
+def _folder_paths_from_relative_path(relative_path: str) -> list[str]:
+    normalized = str(relative_path or "").strip().replace("\\", "/").strip("/")
+    if not normalized:
+        return []
+    path = PurePosixPath(normalized)
+    folder_paths = [
+        str(parent)
+        for parent in reversed(path.parents)
+        if str(parent) not in {"", "."}
+    ]
+    return folder_paths
+
+
 def apply_notes_change(
     notes_db,
     *,
@@ -58,6 +71,8 @@ def apply_notes_change(
     body = str(text)
     relative_path = str(change.get("relative_path") or "").strip()
     title = _title_from_text(relative_path, body)
+    source_id = change.get("source_id")
+    folder_paths = _folder_paths_from_relative_path(relative_path)
 
     if binding:
         note_id = str(binding["note_id"])
@@ -66,7 +81,11 @@ def apply_notes_change(
             {"title": title, "content": body},
             expected_version=_expected_version(binding),
         )
+        if source_id is not None and hasattr(notes_db, "sync_note_source_folders"):
+            notes_db.sync_note_source_folders(note_id, int(source_id), folder_paths)
         return {"action": "updated", "note_id": note_id, "sync_status": "sync_managed"}
 
     note_id = notes_db.add_note(title=title, content=body)
+    if source_id is not None and hasattr(notes_db, "sync_note_source_folders"):
+        notes_db.sync_note_source_folders(note_id, int(source_id), folder_paths)
     return {"action": "created", "note_id": note_id, "sync_status": "sync_managed"}

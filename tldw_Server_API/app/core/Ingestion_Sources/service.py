@@ -375,20 +375,36 @@ async def update_source(
     existing = await get_source_by_id(db, source_id=source_id, user_id=user_id)
     if not existing:
         return {}
-    if _source_identity_patch_changed(existing, patch):
-        if existing.get("last_successful_snapshot_id") is not None:
-            raise IngestionSourceValidationError(
-                "Source identity is immutable after the first successful sync"
-            )
-        raise IngestionSourceValidationError("Source identity updates are not supported")
+    identity_changed = _source_identity_patch_changed(existing, patch)
+    if identity_changed and existing.get("last_successful_snapshot_id") is not None:
+        raise IngestionSourceValidationError(
+            "Source identity is immutable after the first successful sync"
+        )
 
     update_requested = any(
         key in patch and patch.get(key) is not None
-        for key in ("policy", "enabled", "schedule_enabled", "schedule")
+        for key in ("source_type", "sink_type", "config", "policy", "enabled", "schedule_enabled", "schedule")
     )
     if not update_requested:
         return existing
 
+    source_type_value = existing.get("source_type")
+    if "source_type" in patch and patch.get("source_type") is not None:
+        source_type_value = _normalize_choice(
+            patch.get("source_type"),
+            field_name="source_type",
+            allowed=SOURCE_TYPES,
+        )
+    sink_type_value = existing.get("sink_type")
+    if "sink_type" in patch and patch.get("sink_type") is not None:
+        sink_type_value = _normalize_choice(
+            patch.get("sink_type"),
+            field_name="sink_type",
+            allowed=SINK_TYPES,
+        )
+    config_value = existing.get("config") or {}
+    if "config" in patch and patch.get("config") is not None:
+        config_value = patch.get("config") if isinstance(patch.get("config"), dict) else {}
     policy_value = existing.get("policy")
     if "policy" in patch and patch.get("policy") is not None:
         policy_value = _normalize_choice(
@@ -410,18 +426,24 @@ async def update_source(
     await db.execute(
         """
         UPDATE ingestion_sources
-        SET policy = ?,
+        SET source_type = ?,
+            sink_type = ?,
+            policy = ?,
             enabled = ?,
             schedule_enabled = ?,
             schedule_config_json = ?,
+            config_json = ?,
             updated_at = ?
         WHERE id = ?
         """,
         (
+            str(source_type_value),
+            str(sink_type_value),
             str(policy_value),
             1 if enabled_value else 0,
             1 if schedule_enabled_value else 0,
             _json_dumps(schedule_config_value),
+            _json_dumps(config_value),
             _utc_now_text(),
             int(source_id),
         ),

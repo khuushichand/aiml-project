@@ -72,6 +72,24 @@ describe("SourceForm", () => {
     expect(screen.getByText("Upload archive after creation")).toBeInTheDocument()
   })
 
+  it("switches git repository fields between local and remote modes", async () => {
+    render(<SourceForm mode="create" />)
+
+    fireEvent.click(screen.getByRole("radio", { name: "Git repository" }))
+
+    expect(screen.getByLabelText("Repository path")).toBeInTheDocument()
+    expect(screen.getByLabelText("Branch, tag, or ref")).toBeInTheDocument()
+    expect(screen.getByLabelText("Root subpath")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("radio", { name: "Remote GitHub repository" }))
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Repository path")).not.toBeInTheDocument()
+    })
+    expect(screen.getByLabelText("GitHub repository URL")).toBeInTheDocument()
+    expect(screen.getByLabelText("Linked account ID")).toBeInTheDocument()
+  })
+
   it("renders inline validation errors from a failed create request", async () => {
     const mutateAsync = vi.fn(async () => {
       throw new Error("Path outside allowed roots")
@@ -110,6 +128,46 @@ describe("SourceForm", () => {
 
     await waitFor(() => {
       expect(routerMocks.navigate).toHaveBeenCalledWith("/sources/42")
+    })
+  })
+
+  it("submits git repository config when creating a source", async () => {
+    const mutateAsync = vi.fn(async () => ({ id: "42" }))
+    hookMocks.useCreateIngestionSourceMutation.mockReturnValue({
+      mutateAsync,
+      isPending: false
+    })
+
+    render(<SourceForm mode="create" />)
+
+    fireEvent.click(screen.getByRole("radio", { name: "Git repository" }))
+    fireEvent.change(screen.getByLabelText("Repository path"), {
+      target: { value: "/srv/repos/notes" }
+    })
+    fireEvent.change(screen.getByLabelText("Branch, tag, or ref"), {
+      target: { value: "main" }
+    })
+    fireEvent.change(screen.getByLabelText("Root subpath"), {
+      target: { value: "docs/notes" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create source" }))
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        source_type: "git_repository",
+        sink_type: "notes",
+        policy: "canonical",
+        enabled: true,
+        schedule_enabled: false,
+        schedule: {},
+        config: {
+          mode: "local_repo",
+          path: "/srv/repos/notes",
+          ref: "main",
+          root_subpath: "docs/notes",
+          respect_gitignore: true
+        }
+      })
     })
   })
 

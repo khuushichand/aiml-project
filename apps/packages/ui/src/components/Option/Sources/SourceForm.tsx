@@ -13,6 +13,8 @@ import type {
   IngestionSourceType
 } from "@/types/ingestion-sources"
 
+type GitRepositoryMode = "local_repo" | "remote_github_repo"
+
 type SourceFormValues = {
   source_type: IngestionSourceType
   sink_type: "media" | "notes"
@@ -20,6 +22,13 @@ type SourceFormValues = {
   enabled: boolean
   schedule_enabled: boolean
   path?: string
+  git_repository_mode?: GitRepositoryMode
+  repo_path?: string
+  repo_url?: string
+  ref?: string
+  root_subpath?: string
+  account_id?: string
+  respect_gitignore?: boolean
 }
 
 type SourceFormProps = {
@@ -34,19 +43,34 @@ const hasLockedSourceIdentity = (source?: IngestionSourceSummary | null): boolea
   return Boolean(source.last_successful_snapshot_id)
 }
 
-const getSourceTypeLabel = (sourceType: IngestionSourceType): string =>
-  sourceType === "archive_snapshot" ? "Archive snapshot" : "Local directory"
+const getSourceTypeLabel = (sourceType: IngestionSourceType): string => {
+  if (sourceType === "archive_snapshot") {
+    return "Archive snapshot"
+  }
+  if (sourceType === "git_repository") {
+    return "Git repository"
+  }
+  return "Local directory"
+}
 
 const getSinkTypeLabel = (sinkType: IngestionSourceSummary["sink_type"] | "media" | "notes"): string =>
   sinkType === "media" ? "Media" : "Notes"
+
+const getInitialGitRepositoryMode = (source?: IngestionSourceSummary | null): GitRepositoryMode =>
+  source?.source_type === "git_repository" && source.config?.mode === "remote_github_repo"
+    ? "remote_github_repo"
+    : "local_repo"
 
 export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
   const { t } = useTranslation(["sources", "common"])
   const navigate = useNavigate()
   const [form] = Form.useForm<SourceFormValues>()
   const initialSourceType = source?.source_type ?? "local_directory"
+  const initialGitRepositoryMode = getInitialGitRepositoryMode(source)
   const identityLocked = mode === "edit" && hasLockedSourceIdentity(source)
   const [sourceType, setSourceType] = React.useState<IngestionSourceType>(initialSourceType)
+  const [gitRepositoryMode, setGitRepositoryMode] =
+    React.useState<GitRepositoryMode>(initialGitRepositoryMode)
   const [submitError, setSubmitError] = React.useState<string | null>(null)
 
   const createMutation = useCreateIngestionSourceMutation()
@@ -55,16 +79,43 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
 
   React.useEffect(() => {
     setSourceType(initialSourceType)
+    setGitRepositoryMode(initialGitRepositoryMode)
     form.setFieldsValue({
       source_type: initialSourceType,
       sink_type: source?.sink_type ?? "notes",
       policy: source?.policy ?? "canonical",
       enabled: source?.enabled ?? true,
       schedule_enabled: source?.schedule_enabled ?? false,
-      path: typeof source?.config?.path === "string" ? source.config.path : ""
+      path: typeof source?.config?.path === "string" ? source.config.path : "",
+      git_repository_mode: initialGitRepositoryMode,
+      repo_path:
+        source?.source_type === "git_repository" && typeof source?.config?.path === "string"
+          ? source.config.path
+          : "",
+      repo_url:
+        source?.source_type === "git_repository" && typeof source?.config?.repo_url === "string"
+          ? source.config.repo_url
+          : "",
+      ref:
+        source?.source_type === "git_repository" && typeof source?.config?.ref === "string"
+          ? source.config.ref
+          : "",
+      root_subpath:
+        source?.source_type === "git_repository" && typeof source?.config?.root_subpath === "string"
+          ? source.config.root_subpath
+          : "",
+      account_id:
+        source?.source_type === "git_repository" && source?.config?.account_id != null
+          ? String(source.config.account_id)
+          : "",
+      respect_gitignore:
+        source?.source_type === "git_repository"
+          ? source.config?.respect_gitignore !== false
+          : true
     })
   }, [
     form,
+    initialGitRepositoryMode,
     initialSourceType,
     source?.config,
     source?.enabled,
@@ -76,22 +127,59 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
   const handleFinish = async (values: SourceFormValues) => {
     setSubmitError(null)
 
+    const effectiveSourceType = identityLocked && source ? source.source_type : sourceType
+    const effectiveGitRepositoryMode =
+      effectiveSourceType === "git_repository"
+        ? identityLocked && source && source.config?.mode === "remote_github_repo"
+          ? "remote_github_repo"
+          : values.git_repository_mode ?? gitRepositoryMode
+        : "local_repo"
+
     const payload: CreateIngestionSourceRequest = {
-      source_type: identityLocked && source ? source.source_type : sourceType,
+      source_type: effectiveSourceType,
       sink_type: identityLocked && source ? source.sink_type : values.sink_type,
       policy: values.policy,
       enabled: values.enabled,
-      schedule_enabled: values.schedule_enabled,
+      schedule_enabled: values.schedule_enabled ?? false,
       schedule: {},
-      config:
-        (identityLocked && source ? source.source_type : sourceType) === "local_directory"
-          ? {
-              path:
-                identityLocked && typeof source?.config?.path === "string"
-                  ? source.config.path
-                  : (values.path || "").trim()
+      config: (() => {
+        if (effectiveSourceType === "local_directory") {
+          return {
+            path:
+              identityLocked && typeof source?.config?.path === "string"
+                ? source.config.path
+                : (values.path || "").trim()
+          }
+        }
+        if (effectiveSourceType === "git_repository") {
+          const ref = (values.ref || "").trim()
+          const rootSubpath = (values.root_subpath || "").trim()
+          const accountId = (values.account_id || "").trim()
+          if (effectiveGitRepositoryMode === "remote_github_repo") {
+            return {
+              mode: "remote_github_repo",
+              repo_url:
+                identityLocked && typeof source?.config?.repo_url === "string"
+                  ? source.config.repo_url
+                  : (values.repo_url || "").trim(),
+              ...(accountId ? { account_id: Number(accountId) } : {}),
+              ...(ref ? { ref } : {}),
+              ...(rootSubpath ? { root_subpath: rootSubpath } : {})
             }
-          : {}
+          }
+          return {
+            mode: "local_repo",
+            path:
+              identityLocked && typeof source?.config?.path === "string"
+                ? source.config.path
+                : (values.repo_path || "").trim(),
+            ...(ref ? { ref } : {}),
+            ...(rootSubpath ? { root_subpath: rootSubpath } : {}),
+            respect_gitignore: values.respect_gitignore !== false
+          }
+        }
+        return {}
+      })()
     }
 
     try {
@@ -121,7 +209,32 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
           policy: source?.policy ?? "canonical",
           enabled: source?.enabled ?? true,
           schedule_enabled: source?.schedule_enabled ?? false,
-          path: typeof source?.config?.path === "string" ? source.config.path : ""
+          path: typeof source?.config?.path === "string" ? source.config.path : "",
+          git_repository_mode: initialGitRepositoryMode,
+          repo_path:
+            source?.source_type === "git_repository" && typeof source?.config?.path === "string"
+              ? source.config.path
+              : "",
+          repo_url:
+            source?.source_type === "git_repository" && typeof source?.config?.repo_url === "string"
+              ? source.config.repo_url
+              : "",
+          ref:
+            source?.source_type === "git_repository" && typeof source?.config?.ref === "string"
+              ? source.config.ref
+              : "",
+          root_subpath:
+            source?.source_type === "git_repository" && typeof source?.config?.root_subpath === "string"
+              ? source.config.root_subpath
+              : "",
+          account_id:
+            source?.source_type === "git_repository" && source?.config?.account_id != null
+              ? String(source.config.account_id)
+              : "",
+          respect_gitignore:
+            source?.source_type === "git_repository"
+              ? source.config?.respect_gitignore !== false
+              : true
         }}
         onFinish={(values) => {
           void handleFinish(values)
@@ -150,6 +263,14 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
                     <div>{source.config.path}</div>
                   </div>
                 ) : null}
+                {source.source_type === "git_repository" && typeof source.config?.repo_url === "string" ? (
+                  <div>
+                    <Typography.Text strong>
+                      {t("sources:form.repoUrl", "GitHub repository URL")}
+                    </Typography.Text>
+                    <div>{source.config.repo_url}</div>
+                  </div>
+                ) : null}
               </div>
             }
           />
@@ -166,6 +287,9 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
                   </Radio>
                   <Radio value="archive_snapshot">
                     {t("sources:form.archiveSnapshot", "Archive snapshot")}
+                  </Radio>
+                  <Radio value="git_repository">
+                    {t("sources:form.gitRepository", "Git repository")}
                   </Radio>
                 </Space>
               </Radio.Group>
@@ -215,10 +339,91 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
               )}
             </Typography.Text>
           </>
-        ) : (
+        ) : (identityLocked && source ? source.source_type : sourceType) === "git_repository" && !identityLocked ? (
+          <>
+            <Form.Item
+              name="git_repository_mode"
+              label={t("sources:form.gitRepositoryMode", "Repository mode")}>
+              <Radio.Group
+                onChange={(event) => setGitRepositoryMode(event.target.value as GitRepositoryMode)}>
+                <Space orientation="vertical">
+                  <Radio value="local_repo">
+                    {t("sources:form.localGitRepository", "Local checked-out repository")}
+                  </Radio>
+                  <Radio value="remote_github_repo">
+                    {t("sources:form.remoteGitRepository", "Remote GitHub repository")}
+                  </Radio>
+                </Space>
+              </Radio.Group>
+            </Form.Item>
+
+            {gitRepositoryMode === "local_repo" ? (
+              <>
+                <Form.Item
+                  name="repo_path"
+                  label={t("sources:form.repoPath", "Repository path")}
+                  rules={[
+                    {
+                      required: true,
+                      message: t("sources:form.repoPath", "Repository path")
+                    }
+                  ]}>
+                  <Input />
+                </Form.Item>
+                <Typography.Text type="secondary">
+                  {t(
+                    "sources:form.repoPathHelp",
+                    "Use a checked-out repository path on the tldw server host."
+                  )}
+                </Typography.Text>
+                <Form.Item
+                  name="respect_gitignore"
+                  label={t("sources:form.respectGitignore", "Respect .gitignore")}
+                  valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </>
+            ) : (
+              <>
+                <Form.Item
+                  name="repo_url"
+                  label={t("sources:form.repoUrl", "GitHub repository URL")}
+                  rules={[
+                    {
+                      required: true,
+                      message: t("sources:form.repoUrl", "GitHub repository URL")
+                    }
+                  ]}>
+                  <Input />
+                </Form.Item>
+                <Form.Item
+                  name="account_id"
+                  label={t("sources:form.accountId", "Linked account ID")}>
+                  <Input />
+                </Form.Item>
+              </>
+            )}
+
+            <Form.Item
+              name="ref"
+              label={t("sources:form.ref", "Branch, tag, or ref")}>
+              <Input />
+            </Form.Item>
+            <Form.Item
+              name="root_subpath"
+              label={t("sources:form.rootSubpath", "Root subpath")}>
+              <Input />
+            </Form.Item>
+          </>
+        ) : (identityLocked && source ? source.source_type : sourceType) === "archive_snapshot" ? (
           <Alert
             type="info"
             title={t("sources:form.archiveHint", "Upload archive after creation")}
+          />
+        ) : (
+          <Alert
+            type="info"
+            title={t("sources:form.gitRepositoryHint", "Git repository details are configured below.")}
           />
         )}
 
