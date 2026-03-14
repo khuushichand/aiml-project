@@ -682,6 +682,31 @@ const SidepanelPersona = ({
     loading: personaProfileLoading,
     setup: savedPersonaSetup
   })
+  React.useEffect(() => {
+    if (isCompanionMode || !personaSetupWizard.isSetupRequired || catalog.length > 0) {
+      return
+    }
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const response = await tldwClient.fetchWithAuth("/api/v1/persona/catalog" as any, {
+          method: "GET"
+        })
+        if (!response.ok) return
+        const payload = await response.json()
+        if (!cancelled) {
+          setCatalog(Array.isArray(payload) ? (payload as PersonaInfo[]) : [])
+        }
+      } catch {
+        // Best-effort only for setup persona choice.
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [catalog.length, isCompanionMode, personaSetupWizard.isSetupRequired])
   const assistantSetupProgressItems = React.useMemo(
     () =>
       buildPersonaSetupProgress({

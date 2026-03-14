@@ -758,6 +758,11 @@ describe("SidepanelPersona", () => {
 
     expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("voice")
     expect(screen.getByTestId("assistant-setup-post-target")).toHaveTextContent("profiles")
+    expect(screen.getByTestId("assistant-setup-progress-step-persona")).toHaveAttribute(
+      "data-status",
+      "completed"
+    )
+    expect(screen.getByText("Persona selected")).toBeInTheDocument()
     expect(screen.queryByText("Persona Profile")).not.toBeInTheDocument()
 
     mocks.location.search = "?persona_id=garden-helper&tab=live"
