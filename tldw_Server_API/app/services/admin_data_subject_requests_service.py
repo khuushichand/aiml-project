@@ -423,3 +423,160 @@ async def list_data_subject_requests(
         offset=offset,
         org_ids=org_ids,
     )
+
+
+# ---------------------------------------------------------------------------
+# DSR erasure execution helpers
+# ---------------------------------------------------------------------------
+
+def _sqlite_hard_delete_sync(path: Path, statements: list[tuple[str, tuple]]) -> int:
+    """Execute DELETE statements and return total rows affected."""
+    if not path.exists():
+        return 0
+    total = 0
+    with sqlite3.connect(path) as conn:
+        for sql, params in statements:
+            cursor = conn.execute(sql, params)
+            total += cursor.rowcount
+    return total
+
+
+async def _erase_media_records(user_id: int) -> int:
+    """Hard-delete all media records for a user."""
+    path = DatabasePaths.get_media_db_path(user_id)
+    return await asyncio.to_thread(
+        _sqlite_hard_delete_sync,
+        path,
+        [("DELETE FROM Media", ())],
+    )
+
+
+async def _erase_chat_messages(user_id: int) -> int:
+    """Hard-delete all chat conversations and messages for a user."""
+    path = DatabasePaths.get_chacha_db_path(user_id)
+    return await asyncio.to_thread(
+        _sqlite_hard_delete_sync,
+        path,
+        [
+            ("DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE client_id = ?)", (str(user_id),)),
+            ("DELETE FROM conversations WHERE client_id = ?", (str(user_id),)),
+        ],
+    )
+
+
+async def _erase_notes(user_id: int) -> int:
+    """Hard-delete all notes for a user."""
+    path = DatabasePaths.get_chacha_db_path(user_id)
+    return await asyncio.to_thread(
+        _sqlite_hard_delete_sync,
+        path,
+        [("DELETE FROM notes", ())],
+    )
+
+
+async def _erase_embeddings(user_id: int) -> int:
+    """Delete all ChromaDB collections for a user, returning count of deleted collections."""
+
+    def _erase_sync() -> int:
+        try:
+            manager = _get_chroma_manager_for_user(user_id)
+        except Exception as exc:
+            logger.warning("ChromaDB not available for user {} during erasure: {}", user_id, exc)
+            return 0
+        try:
+            collections = manager.list_collections()
+            count = 0
+            for col in collections:
+                try:
+                    manager.delete_collection(col.name)
+                    count += 1
+                except Exception as exc:
+                    logger.warning("Failed to delete collection '{}' for user {}: {}", col.name, user_id, exc)
+            return count
+        except Exception as exc:
+            logger.warning("Failed to list/delete collections for user {}: {}", user_id, exc)
+            return 0
+
+    return await asyncio.to_thread(_erase_sync)
+
+
+async def _erase_audit_events(user_id: int) -> int:
+    """Hard-delete audit events for a user."""
+    from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import _resolve_audit_storage_mode
+
+    shared_mode = _resolve_audit_storage_mode() == "shared"
+    path = (
+        DatabasePaths.get_shared_audit_db_path()
+        if shared_mode
+        else DatabasePaths.get_audit_db_path(user_id)
+    )
+    if shared_mode:
+        return await asyncio.to_thread(
+            _sqlite_hard_delete_sync,
+            path,
+            [("DELETE FROM audit_events WHERE tenant_user_id = ?", (str(user_id),))],
+        )
+    return await asyncio.to_thread(
+        _sqlite_hard_delete_sync,
+        path,
+        [("DELETE FROM audit_events", ())],
+    )
+
+
+_ERASURE_HANDLERS: dict[str, Any] = {
+    "media_records": _erase_media_records,
+    "chat_messages": _erase_chat_messages,
+    "notes": _erase_notes,
+    "embeddings": _erase_embeddings,
+    "audit_events": _erase_audit_events,
+}
+
+
+async def execute_dsr_erasure(
+    *,
+    request_id: int,
+    user_id: int,
+    selected_categories: list[str],
+    dsr_repo: AuthnzDataSubjectRequestsRepo,
+    principal: AuthPrincipal | None = None,
+) -> dict[str, Any]:
+    """Orchestrate DSR erasure across all selected categories.
+
+    Updates the DSR record status to ``executing`` before running handlers, then
+    transitions to ``completed`` or ``failed`` depending on outcome. Returns a
+    summary dict with per-category results.
+    """
+    # Mark as executing
+    await dsr_repo.update_request_status(request_id, "executing")
+
+    results: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+
+    for category in selected_categories:
+        handler = _ERASURE_HANDLERS.get(category)
+        if handler is None:
+            errors[category] = f"No erasure handler for category '{category}'"
+            continue
+        try:
+            count = await handler(user_id)
+            results[category] = {"deleted_count": count, "status": "ok"}
+        except Exception as exc:
+            logger.error("DSR erasure failed for category '{}' user {}: {}", category, user_id, exc)
+            errors[category] = str(exc)
+            results[category] = {"deleted_count": 0, "status": "error", "error": str(exc)}
+
+    # Determine final status
+    final_status = "completed" if not errors else "failed"
+    notes_text = None
+    if errors:
+        notes_text = f"Erasure errors: {errors}"
+
+    await dsr_repo.update_request_status(request_id, final_status, notes=notes_text)
+
+    return {
+        "request_id": request_id,
+        "user_id": user_id,
+        "status": final_status,
+        "categories": results,
+        "errors": errors,
+    }
