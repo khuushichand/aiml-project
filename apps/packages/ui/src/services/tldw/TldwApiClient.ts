@@ -130,10 +130,17 @@ const normalizeIngestionSourceSyncSummary = (
   }
 }
 
+const normalizeIngestionSourceType = (value: unknown): IngestionSourceSummary["source_type"] => {
+  if (value === "archive_snapshot" || value === "git_repository") {
+    return value
+  }
+  return "local_directory"
+}
+
 const normalizeIngestionSource = (source: any): IngestionSourceSummary => ({
   id: String(source?.id ?? ""),
   user_id: toFiniteNumber(source?.user_id),
-  source_type: source?.source_type === "archive_snapshot" ? "archive_snapshot" : "local_directory",
+  source_type: normalizeIngestionSourceType(source?.source_type),
   sink_type: source?.sink_type === "notes" ? "notes" : "media",
   policy: source?.policy === "import_only" ? "import_only" : "canonical",
   enabled: Boolean(source?.enabled),

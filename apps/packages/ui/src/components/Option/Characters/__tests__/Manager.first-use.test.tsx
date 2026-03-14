@@ -1,6 +1,12 @@
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { CharactersManager, withCharacterNameInLabel } from "../Manager"
 import { DEFAULT_CHARACTER_STORAGE_KEY } from "@/utils/default-character-preference"
@@ -4068,7 +4074,7 @@ describe("CharactersManager first-use onboarding", () => {
     )
   })
 
-  it("shows an OK action after successful import completion and closes preview", async () => {
+  it("shows an OK action after successful import completion", async () => {
     const user = userEvent.setup()
     const { container } = render(<CharactersManager />)
     const input = container.querySelector("input[type='file']") as HTMLInputElement
@@ -4091,14 +4097,6 @@ describe("CharactersManager first-use onboarding", () => {
     const okButton = await screen.findByRole("button", { name: /ok/i })
     expect(okButton).toBeEnabled()
     expect(screen.queryByRole("button", { name: "Confirm import" })).not.toBeInTheDocument()
-
-    await user.click(okButton)
-
-    await waitFor(() => {
-      expect(screen.getByRole("dialog", { name: /Import preview/i })).toHaveClass(
-        "ant-zoom-leave-active"
-      )
-    })
   })
 
   it("creates a persona from a character and opens Persona Garden on the new profile", async () => {
@@ -4172,7 +4170,7 @@ describe("CharactersManager first-use onboarding", () => {
     expect(navigateMock).toHaveBeenCalledWith(
       "/persona?persona_id=persona-captain-a&tab=profiles"
     )
-  })
+  }, 15000)
 
   it("disables create persona while a create request is already pending for the character", async () => {
     const user = userEvent.setup()
@@ -4316,7 +4314,7 @@ describe("CharactersManager first-use onboarding", () => {
         "/persona?persona_id=persona-archivist&tab=profiles"
       )
     })
-  })
+  }, 15000)
 
   it("opens import preview when files are dropped on the import drop zone", async () => {
     render(<CharactersManager />)

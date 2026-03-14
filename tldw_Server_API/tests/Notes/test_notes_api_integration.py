@@ -153,6 +153,10 @@ def reset_db_mock_calls():
     mock_chacha_db_instance.execute_query.side_effect = None
     mock_chacha_db_instance.link_note_to_keyword.side_effect = None
     mock_chacha_db_instance.get_keywords_for_note.side_effect = None
+    mock_chacha_db_instance.get_note_folders_for_note.side_effect = None
+    mock_chacha_db_instance.get_note_folders_for_note.return_value = []
+    mock_chacha_db_instance.get_note_folders_for_notes.side_effect = None
+    mock_chacha_db_instance.get_note_folders_for_notes.return_value = {}
     mock_chacha_db_instance.get_conversation_by_id.side_effect = None
     mock_chacha_db_instance.get_message_conversation_id.side_effect = None
     _stub_rate_limiter.reset()
@@ -216,6 +220,25 @@ def test_create_note(client: TestClient):
         message_id=None,
     )
     mock_chacha_db_instance.get_note_by_id.assert_called_once_with(note_id=note_id_val)
+
+
+def test_get_note_includes_folders(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    expected_db_client_id = "test_api_client_for_user_db"
+    mock_chacha_db_instance.get_note_by_id.return_value = create_timestamped_data(
+        {"id": note_id_val, "title": "Note", "content": "Body"},
+        expected_db_client_id,
+    )
+    mock_chacha_db_instance.get_keywords_for_note.return_value = []
+    mock_chacha_db_instance.get_note_folders_for_note.return_value = [
+        {"id": 1, "name": "docs", "path": "docs", "parent_id": None}
+    ]
+
+    response = client.get(f"/api/v1/notes/{note_id_val}")
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert data["folders"] == [{"id": 1, "name": "docs", "path": "docs", "parent_id": None}]
 
 
 def test_create_note_keyword_conflict_refetch(client: TestClient):

@@ -147,6 +147,15 @@ class NoteKeywordSyncStatus(BaseModel):
     )
 
 
+class NoteFolderResponse(BaseModel):
+    id: int = Field(..., description="Integer ID of the folder")
+    name: str = Field(..., description="Folder display name")
+    path: str = Field(..., description="Normalized relative folder path")
+    parent_id: int | None = Field(default=None, description="Parent folder ID, if any")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class NoteResponse(NoteBase):
     id: str = Field(..., description="UUID of the note")
     created_at: datetime = Field(..., description="Timestamp of note creation")
@@ -155,6 +164,7 @@ class NoteResponse(NoteBase):
     client_id: str = Field(..., description="Client ID that last modified the note")
     deleted: bool = Field(..., description="Whether the note is soft-deleted")
     keywords: list[KeywordResponse] | None = Field(default=None, description="Keywords linked to this note")
+    folders: list[NoteFolderResponse] | None = Field(default=None, description="Folders linked to this note")
     keyword_sync: NoteKeywordSyncStatus | None = Field(
         default=None,
         description="Present when note save succeeded but one or more keyword attach operations failed."

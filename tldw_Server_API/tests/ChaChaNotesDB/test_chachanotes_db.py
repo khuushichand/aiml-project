@@ -973,6 +973,48 @@ class TestNotes:
         titles = sorted([r['title'] for r in results])  # Sort for predictable assertion
         assert titles == ["Alpha Note", "Beta Note"]
 
+    def test_sync_note_source_folders_preserves_manual_and_other_sources(self, db_instance: CharactersRAGDB):
+        note_id = db_instance.add_note("Foldered Note", "Body")
+        assert note_id is not None
+
+        db_instance.sync_note_folders(note_id, ["manual"])
+        db_instance.sync_note_source_folders(note_id, source_id=11, folder_paths=["docs", "docs/api"])
+        db_instance.sync_note_source_folders(note_id, source_id=22, folder_paths=["guides"])
+
+        initial_paths = [row["path"] for row in db_instance.get_note_folders_for_note(note_id)]
+        assert initial_paths == ["docs", "docs/api", "guides", "manual"]
+
+        db_instance.sync_note_source_folders(
+            note_id,
+            source_id=11,
+            folder_paths=["docs", "docs/reference"],
+        )
+
+        updated_paths = [row["path"] for row in db_instance.get_note_folders_for_note(note_id)]
+        assert updated_paths == ["docs", "docs/reference", "guides", "manual"]
+
+    def test_sync_note_source_folders_reuses_case_insensitive_paths_without_stale_keys(self, db_instance: CharactersRAGDB):
+        note_id = db_instance.add_note("Case Foldered Note", "Body")
+        assert note_id is not None
+
+        db_instance.sync_note_source_folders(note_id, source_id=11, folder_paths=["Docs/API"])
+        db_instance.sync_note_source_folders(note_id, source_id=11, folder_paths=["docs/reference"])
+
+        updated_paths = [row["path"] for row in db_instance.get_note_folders_for_note(note_id)]
+        assert updated_paths == ["Docs", "Docs/reference"]
+
+        conn = db_instance.get_connection()
+        source_key_rows = conn.execute(
+            """
+            SELECT folder_key
+              FROM note_folder_source_keys
+             WHERE source_id = ?
+             ORDER BY folder_key
+            """,
+            (11,),
+        ).fetchall()
+        assert [row["folder_key"] for row in source_key_rows] == ["docs", "docs/reference"]
+
 
 class TestKeywordsAndCollections:
     def test_add_keyword(self, db_instance: CharactersRAGDB):
