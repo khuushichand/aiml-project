@@ -504,7 +504,8 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
       }
       const createdDeck = await createDeckMutation.mutateAsync({
         name,
-        scheduler_settings: schedulerSettings
+        scheduler_type: schedulerSettings.scheduler_type,
+        scheduler_settings: schedulerSettings.scheduler_settings
       })
       setStructuredTargetDeckId(createdDeck.id)
       return createdDeck.id
@@ -1313,7 +1314,10 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                   className="block text-xs"
                   data-testid="flashcards-structured-selected-deck-summary"
                 >
-                  {formatSchedulerSummary(structuredSelectedDeck.scheduler_settings)}
+                  {formatSchedulerSummary(
+                    structuredSelectedDeck.scheduler_type,
+                    structuredSelectedDeck.scheduler_settings
+                  )}
                 </Text>
               ) : null}
               <Button
@@ -2145,7 +2149,8 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
       }
       const createdDeck = await createDeckMutation.mutateAsync({
         name,
-        scheduler_settings: schedulerSettings
+        scheduler_type: schedulerSettings.scheduler_type,
+        scheduler_settings: schedulerSettings.scheduler_settings
       })
       setTargetDeckId(createdDeck.id)
       return createdDeck.id
@@ -2369,7 +2374,7 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
             className="block text-xs -mt-2 mb-2"
             data-testid="flashcards-generate-selected-deck-summary"
           >
-            {formatSchedulerSummary(selectedDeck.scheduler_settings)}
+            {formatSchedulerSummary(selectedDeck.scheduler_type, selectedDeck.scheduler_settings)}
           </Text>
         ) : null}
         <Form.Item

@@ -1,16 +1,23 @@
 import React from "react"
 
-import type { DeckSchedulerSettings } from "@/services/flashcards"
+import type {
+  DeckSchedulerSettingsEnvelope,
+  DeckSchedulerType,
+  FsrsSchedulerSettings
+} from "@/services/flashcards"
 import type {
   SchedulerPresetId,
   SchedulerSettingsDraft,
   SchedulerValidationErrors
 } from "../utils/scheduler-settings"
 import {
+  DEFAULT_FSRS_SCHEDULER_SETTINGS,
   DEFAULT_SCHEDULER_SETTINGS,
   applySchedulerPreset,
-  copySchedulerSettings,
+  copySchedulerSettingsEnvelope,
   createSchedulerDraft,
+  createFsrsSchedulerDraft,
+  createSm2SchedulerDraft,
   formatSchedulerSummary,
   validateSchedulerDraft
 } from "../utils/scheduler-settings"
@@ -19,73 +26,179 @@ export type DeckSchedulerDraftState = {
   draft: SchedulerSettingsDraft
   errors: SchedulerValidationErrors
   summary: string | null
-  updateField: <K extends keyof SchedulerSettingsDraft>(
+  replaceDraftState: (draft: SchedulerSettingsDraft) => void
+  updateSchedulerType: (schedulerType: DeckSchedulerType) => void
+  updateSm2Field: <K extends keyof SchedulerSettingsDraft["sm2_plus"]>(
     field: K,
-    value: SchedulerSettingsDraft[K]
+    value: SchedulerSettingsDraft["sm2_plus"][K]
+  ) => void
+  updateFsrsField: <K extends keyof SchedulerSettingsDraft["fsrs"]>(
+    field: K,
+    value: SchedulerSettingsDraft["fsrs"][K]
   ) => void
   applyPreset: (presetId: SchedulerPresetId) => void
   resetToDefaults: () => void
-  replaceDraft: (settings: DeckSchedulerSettings) => void
-  getValidatedSettings: () => DeckSchedulerSettings | null
+  replaceDraft: (config: {
+    schedulerType: DeckSchedulerType
+    settings: DeckSchedulerSettingsEnvelope
+  }) => void
+  getValidatedSettings: () => {
+    scheduler_type: DeckSchedulerType
+    scheduler_settings: DeckSchedulerSettingsEnvelope
+  } | null
   clearErrors: () => void
 }
 
 export const useDeckSchedulerDraft = (
-  initialSettings: DeckSchedulerSettings = DEFAULT_SCHEDULER_SETTINGS
+  initialConfig: {
+    schedulerType?: DeckSchedulerType
+    settings?: DeckSchedulerSettingsEnvelope
+  } = {}
 ): DeckSchedulerDraftState => {
   const [draft, setDraft] = React.useState<SchedulerSettingsDraft>(() =>
-    createSchedulerDraft(copySchedulerSettings(initialSettings))
+    createSchedulerDraft({
+      schedulerType: initialConfig.schedulerType ?? "sm2_plus",
+      settings: initialConfig.settings
+    })
   )
-  const [errors, setErrors] = React.useState<SchedulerValidationErrors>({})
+  const [errors, setErrors] = React.useState<SchedulerValidationErrors>({
+    sm2_plus: {},
+    fsrs: {}
+  })
 
-  const replaceDraft = React.useCallback((settings: DeckSchedulerSettings) => {
-    setDraft(createSchedulerDraft(copySchedulerSettings(settings)))
-    setErrors({})
+  const replaceDraft = React.useCallback(
+    (config: { schedulerType: DeckSchedulerType; settings: DeckSchedulerSettingsEnvelope }) => {
+      setDraft(
+        createSchedulerDraft({
+          schedulerType: config.schedulerType,
+          settings: copySchedulerSettingsEnvelope(config.settings)
+        })
+      )
+      setErrors({ sm2_plus: {}, fsrs: {} })
+    },
+    []
+  )
+
+  const replaceDraftState = React.useCallback((nextDraft: SchedulerSettingsDraft) => {
+    setDraft(nextDraft)
+    setErrors({ sm2_plus: {}, fsrs: {} })
   }, [])
 
-  const updateField = React.useCallback(
-    <K extends keyof SchedulerSettingsDraft>(field: K, value: SchedulerSettingsDraft[K]) => {
-      setDraft((current) => ({ ...current, [field]: value }))
+  const clearErrors = React.useCallback(() => {
+    setErrors({ sm2_plus: {}, fsrs: {} })
+  }, [])
+
+  const updateSchedulerType = React.useCallback((schedulerType: DeckSchedulerType) => {
+    setDraft((current) => ({ ...current, scheduler_type: schedulerType }))
+  }, [])
+
+  const updateSm2Field = React.useCallback(
+    <K extends keyof SchedulerSettingsDraft["sm2_plus"]>(
+      field: K,
+      value: SchedulerSettingsDraft["sm2_plus"][K]
+    ) => {
+      setDraft((current) => ({
+        ...current,
+        sm2_plus: {
+          ...current.sm2_plus,
+          [field]: value
+        }
+      }))
       setErrors((current) => {
-        if (!current[field as keyof SchedulerValidationErrors]) return current
-        const next = { ...current }
-        delete next[field as keyof SchedulerValidationErrors]
-        return next
+        if (!current.sm2_plus[field as keyof typeof current.sm2_plus]) return current
+        return {
+          ...current,
+          sm2_plus: {
+            ...current.sm2_plus,
+            [field]: undefined
+          }
+        }
+      })
+    },
+    []
+  )
+
+  const updateFsrsField = React.useCallback(
+    <K extends keyof SchedulerSettingsDraft["fsrs"]>(
+      field: K,
+      value: SchedulerSettingsDraft["fsrs"][K]
+    ) => {
+      setDraft((current) => ({
+        ...current,
+        fsrs: {
+          ...current.fsrs,
+          [field]: value
+        }
+      }))
+      setErrors((current) => {
+        if (!current.fsrs[field as keyof typeof current.fsrs]) return current
+        return {
+          ...current,
+          fsrs: {
+            ...current.fsrs,
+            [field]: undefined
+          }
+        }
       })
     },
     []
   )
 
   const applyPreset = React.useCallback((presetId: SchedulerPresetId) => {
-    setDraft(createSchedulerDraft(applySchedulerPreset(presetId)))
-    setErrors({})
+    setDraft((current) => {
+      const presetEnvelope = applySchedulerPreset(current.scheduler_type, presetId)
+      if (current.scheduler_type === "fsrs") {
+        return {
+          ...current,
+          fsrs: createFsrsSchedulerDraft(presetEnvelope.fsrs)
+        }
+      }
+      return {
+        ...current,
+        sm2_plus: createSm2SchedulerDraft(presetEnvelope.sm2_plus)
+      }
+    })
+    setErrors({ sm2_plus: {}, fsrs: {} })
   }, [])
 
   const resetToDefaults = React.useCallback(() => {
-    setDraft(createSchedulerDraft(DEFAULT_SCHEDULER_SETTINGS))
-    setErrors({})
+    setDraft((current) =>
+      current.scheduler_type === "fsrs"
+        ? {
+            ...current,
+            fsrs: createFsrsSchedulerDraft(DEFAULT_FSRS_SCHEDULER_SETTINGS)
+          }
+        : {
+            ...current,
+            sm2_plus: createSm2SchedulerDraft(DEFAULT_SCHEDULER_SETTINGS)
+          }
+    )
+    setErrors({ sm2_plus: {}, fsrs: {} })
   }, [])
 
   const getValidatedSettings = React.useCallback(() => {
     const parsed = validateSchedulerDraft(draft)
     setErrors(parsed.errors)
-    return parsed.settings
+    if (!parsed.settings) return null
+    return {
+      scheduler_type: parsed.schedulerType,
+      scheduler_settings: parsed.settings
+    }
   }, [draft])
-
-  const clearErrors = React.useCallback(() => {
-    setErrors({})
-  }, [])
 
   const summary = React.useMemo(() => {
     const parsed = validateSchedulerDraft(draft)
-    return parsed.settings ? formatSchedulerSummary(parsed.settings) : null
+    return parsed.settings ? formatSchedulerSummary(parsed.schedulerType, parsed.settings) : null
   }, [draft])
 
   return {
     draft,
     errors,
     summary,
-    updateField,
+    replaceDraftState,
+    updateSchedulerType,
+    updateSm2Field,
+    updateFsrsField,
     applyPreset,
     resetToDefaults,
     replaceDraft,

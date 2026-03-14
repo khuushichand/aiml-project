@@ -253,6 +253,14 @@ describe("ImageOcclusionTransferPanel", () => {
       leech_threshold: 10,
       enable_fuzz: false
     }
+    const fastAcquisitionEnvelope = {
+      sm2_plus: fastAcquisitionSettings,
+      fsrs: {
+        target_retention: 0.9,
+        maximum_interval_days: 36500,
+        enable_fuzz: false
+      }
+    }
     createDeckMutateAsync.mockResolvedValue({
       id: 9,
       name: "Occlusion deck",
@@ -260,8 +268,9 @@ describe("ImageOcclusionTransferPanel", () => {
       deleted: false,
       client_id: "test",
       version: 1,
-      scheduler_settings_json: JSON.stringify(fastAcquisitionSettings),
-      scheduler_settings: fastAcquisitionSettings
+      scheduler_type: "sm2_plus",
+      scheduler_settings_json: JSON.stringify(fastAcquisitionEnvelope),
+      scheduler_settings: fastAcquisitionEnvelope
     })
 
     render(<ImageOcclusionTransferPanel />)
@@ -285,7 +294,8 @@ describe("ImageOcclusionTransferPanel", () => {
     await waitFor(() =>
       expect(createDeckMutateAsync).toHaveBeenCalledWith({
         name: "Occlusion deck",
-        scheduler_settings: fastAcquisitionSettings
+        scheduler_type: "sm2_plus",
+        scheduler_settings: fastAcquisitionEnvelope
       })
     )
   })

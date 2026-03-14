@@ -201,7 +201,8 @@ export const ImageOcclusionTransferPanel: React.FC<ImageOcclusionTransferPanelPr
       }
       const createdDeck = await createDeckMutation.mutateAsync({
         name,
-        scheduler_settings: schedulerSettings
+        scheduler_type: schedulerSettings.scheduler_type,
+        scheduler_settings: schedulerSettings.scheduler_settings
       })
       setTargetDeckId(createdDeck.id)
       return createdDeck.id
@@ -472,7 +473,7 @@ export const ImageOcclusionTransferPanel: React.FC<ImageOcclusionTransferPanelPr
             className="block text-xs -mt-2 mb-2"
             data-testid="flashcards-occlusion-selected-deck-summary"
           >
-            {formatSchedulerSummary(selectedDeck.scheduler_settings)}
+            {formatSchedulerSummary(selectedDeck.scheduler_type, selectedDeck.scheduler_settings)}
           </Text>
         ) : null}
         <Form.Item

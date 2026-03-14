@@ -260,6 +260,11 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     return decksQuery.data.find((d) => d.id === reviewDeckId)?.name
   }, [reviewDeckId, decksQuery.data])
 
+  const activeSchedulerLabel = React.useMemo(() => {
+    if (!activeCard?.scheduler_type) return null
+    return activeCard.scheduler_type === "fsrs" ? "FSRS" : "SM-2+"
+  }, [activeCard?.scheduler_type])
+
   // Calculate intervals for current card
   const intervals = React.useMemo(() => {
     if (!activeCard) return null
@@ -894,6 +899,11 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                   card={activeCard}
                   testId="flashcards-review-queue-state"
                 />
+                {activeSchedulerLabel && (
+                  <Tag data-testid="flashcards-review-scheduler-type">
+                    {activeSchedulerLabel}
+                  </Tag>
+                )}
                 {activeCard.tags?.map((tag) => (
                   <Tag key={tag}>{tag}</Tag>
                 ))}

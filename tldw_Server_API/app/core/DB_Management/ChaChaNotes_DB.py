@@ -101,11 +101,79 @@ from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (  # noqa: E402
     simulate_review_transition,
     to_iso_z,
 )
+from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # noqa: E402
+    build_fsrs_next_interval_previews,
+    normalize_fsrs_settings,
+    simulate_fsrs_review_transition,
+)
 
 #
 ########################################################################################################################
 #
 # Functions:
+
+_SUPPORTED_FLASHCARD_SCHEDULERS = {"sm2_plus", "fsrs"}
+
+
+def _coerce_scheduler_type(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _SUPPORTED_FLASHCARD_SCHEDULERS else "sm2_plus"
+
+
+def _normalize_scheduler_settings_envelope(raw: Mapping[str, Any] | str | None) -> dict[str, Any]:
+    if raw is None:
+        source: dict[str, Any] = {}
+    elif isinstance(raw, str):
+        if not raw.strip():
+            source = {}
+        else:
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise SchedulerSettingsError("scheduler_settings must be a JSON object")
+            source = parsed
+    elif isinstance(raw, Mapping):
+        source = dict(raw)
+    else:
+        raise SchedulerSettingsError("scheduler_settings must be a mapping or JSON string")
+
+    if "sm2_plus" in source or "fsrs" in source:
+        sm2_source = source.get("sm2_plus")
+        fsrs_source = source.get("fsrs")
+    else:
+        sm2_source = source
+        fsrs_source = None
+
+    return {
+        "sm2_plus": normalize_scheduler_settings(sm2_source),
+        "fsrs": normalize_fsrs_settings(fsrs_source),
+    }
+
+
+def _simulate_scheduler_review_transition(
+    card: Mapping[str, Any],
+    *,
+    scheduler_type: str,
+    scheduler_settings_envelope: Mapping[str, Any],
+    rating: int,
+    now: datetime,
+) -> dict[str, Any]:
+    queue_state = coerce_queue_state(card)
+    if scheduler_type == "fsrs" and queue_state == "review":
+        return simulate_fsrs_review_transition(card, scheduler_settings_envelope["fsrs"], rating, now=now)
+    return simulate_review_transition(card, scheduler_settings_envelope["sm2_plus"], rating, now=now)
+
+
+def _build_scheduler_next_interval_previews(
+    card: Mapping[str, Any],
+    *,
+    scheduler_type: str,
+    scheduler_settings_envelope: Mapping[str, Any],
+    now: datetime,
+) -> dict[str, str]:
+    queue_state = coerce_queue_state(card)
+    if scheduler_type == "fsrs" and queue_state == "review":
+        return build_fsrs_next_interval_previews(card, scheduler_settings_envelope["fsrs"], now=now)
+    return build_next_interval_previews(card, scheduler_settings_envelope["sm2_plus"], now=now)
 
 # --- Order-by validation helpers (defense in depth) ---
 _ORDER_BY_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
@@ -6424,6 +6492,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
                   VALUES('decks',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
                          json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'scheduler_type',NEW.scheduler_type,
                                      'scheduler_settings_json',NEW.scheduler_settings_json,
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -6434,6 +6503,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 WHEN OLD.deleted = NEW.deleted AND (
                      OLD.name IS NOT NEW.name OR
                      OLD.description IS NOT NEW.description OR
+                     OLD.scheduler_type IS NOT NEW.scheduler_type OR
                      OLD.scheduler_settings_json IS NOT NEW.scheduler_settings_json OR
                      OLD.last_modified IS NOT NEW.last_modified OR
                      OLD.version IS NOT NEW.version)
@@ -6441,6 +6511,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
                   VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
                          json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'scheduler_type',NEW.scheduler_type,
                                      'scheduler_settings_json',NEW.scheduler_settings_json,
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -6463,6 +6534,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
                   VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
                          json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'scheduler_type',NEW.scheduler_type,
                                      'scheduler_settings_json',NEW.scheduler_settings_json,
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
@@ -6485,6 +6557,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                      'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
                                      'model_type',NEW.model_type,'reverse',NEW.reverse,
                                      'queue_state',NEW.queue_state,'step_index',NEW.step_index,'suspended_reason',NEW.suspended_reason,
+                                     'scheduler_state_json',NEW.scheduler_state_json,
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
                 END;
@@ -6514,6 +6587,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                      OLD.queue_state IS NOT NEW.queue_state OR
                      OLD.step_index IS NOT NEW.step_index OR
                      OLD.suspended_reason IS NOT NEW.suspended_reason OR
+                     OLD.scheduler_state_json IS NOT NEW.scheduler_state_json OR
                      OLD.last_modified IS NOT NEW.last_modified OR
                      OLD.version IS NOT NEW.version)
                 BEGIN
@@ -6527,6 +6601,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                      'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
                                      'model_type',NEW.model_type,'reverse',NEW.reverse,
                                      'queue_state',NEW.queue_state,'step_index',NEW.step_index,'suspended_reason',NEW.suspended_reason,
+                                     'scheduler_state_json',NEW.scheduler_state_json,
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
                 END;
@@ -6555,6 +6630,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                      'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
                                      'model_type',NEW.model_type,'reverse',NEW.reverse,
                                      'queue_state',NEW.queue_state,'step_index',NEW.step_index,'suspended_reason',NEW.suspended_reason,
+                                     'scheduler_state_json',NEW.scheduler_state_json,
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
                                      'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
                 END;
@@ -18809,9 +18885,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         name: str,
         description: str | None = None,
         scheduler_settings: Mapping[str, Any] | str | None = None,
+        *,
+        scheduler_type: str = "sm2_plus",
     ) -> int:
         """Create a deck and return its id."""
         now = self._get_current_utc_timestamp_iso()
+        scheduler_type = _coerce_scheduler_type(scheduler_type)
         scheduler_settings_json = scheduler_settings_to_json(scheduler_settings)
         try:
             with self.transaction() as conn:
@@ -18828,6 +18907,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         (
                             "UPDATE decks SET deleted = ?, last_modified = ?, version = ?, client_id = ?, "
                             "description = COALESCE(?, description), "
+                            "scheduler_type = COALESCE(?, scheduler_type), "
                             "scheduler_settings_json = COALESCE(?, scheduler_settings_json) "
                             "WHERE id = ? AND version = ?"
                         ),
@@ -18837,6 +18917,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             next_version,
                             self.client_id,
                             description,
+                            scheduler_type,
                             scheduler_settings_json,
                             deck_id,
                             current_version,
@@ -18857,7 +18938,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     name,
                     description,
                     scheduler_settings_json,
-                    "sm2_plus",
+                    scheduler_type,
                     now,
                     now,
                     self.client_id,
@@ -18924,6 +19005,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         name: str | None = None,
         description: str | None = None,
         scheduler_settings: Mapping[str, Any] | str | None = None,
+        scheduler_type: str | None = None,
         expected_version: int | None = None,
     ) -> bool:
         """Update mutable deck fields with optimistic locking."""
@@ -18938,6 +19020,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if scheduler_settings is not None:
             set_parts.append("scheduler_settings_json = ?")
             params.append(scheduler_settings_to_json(scheduler_settings))
+        if scheduler_type is not None:
+            set_parts.append("scheduler_type = ?")
+            params.append(_coerce_scheduler_type(scheduler_type))
         if not set_parts:
             if expected_version is None:
                 return True
@@ -19563,6 +19648,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     """
                     SELECT f.id, f.uuid, f.deck_id, f.ef, f.interval_days, f.repetitions, f.lapses,
                            f.due_at, f.last_reviewed_at, f.queue_state, f.step_index, f.suspended_reason,
+                           f.scheduler_state_json,
+                           COALESCE(d.scheduler_type, 'sm2_plus') AS scheduler_type,
                            COALESCE(d.scheduler_settings_json, ?) AS scheduler_settings_json
                       FROM flashcards f
                       LEFT JOIN decks d ON d.id = f.deck_id
@@ -19575,15 +19662,22 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 card_id = int(card['id'])
                 previous_queue_state = coerce_queue_state(dict(card))
                 previous_due_at = self._normalize_nullable_text(card["due_at"])
-                scheduler_settings = normalize_scheduler_settings(card["scheduler_settings_json"])
-                upd = simulate_review_transition(dict(card), scheduler_settings, int(rating), now=now_dt)
+                scheduler_type = _coerce_scheduler_type(card["scheduler_type"])
+                scheduler_settings = _normalize_scheduler_settings_envelope(card["scheduler_settings_json"])
+                upd = _simulate_scheduler_review_transition(
+                    dict(card),
+                    scheduler_type=scheduler_type,
+                    scheduler_settings_envelope=scheduler_settings,
+                    rating=int(rating),
+                    now=now_dt,
+                )
 
                 conn.execute(
                     """
                     UPDATE flashcards
                        SET ef = ?, interval_days = ?, repetitions = ?, lapses = ?,
                            due_at = ?, last_reviewed_at = ?, queue_state = ?, step_index = ?,
-                           suspended_reason = ?, last_modified = ?, version = version + 1, client_id = ?
+                           suspended_reason = ?, scheduler_state_json = ?, last_modified = ?, version = version + 1, client_id = ?
                      WHERE id = ? AND deleted = 0
                     """,
                     (
@@ -19596,6 +19690,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         upd["queue_state"],
                         upd["step_index"],
                         upd["suspended_reason"],
+                        upd.get("scheduler_state_json", "{}"),
                         now,
                         self.client_id,
                         card_id,
@@ -19605,10 +19700,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     """
                     INSERT INTO flashcard_reviews(
                         card_id, reviewed_at, rating, answer_time_ms, scheduled_interval_days,
-                        new_ef, new_repetitions, was_lapse, client_id,
+                        new_ef, new_repetitions, was_lapse, client_id, scheduler_type,
                         previous_queue_state, next_queue_state, previous_due_at, next_due_at
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         card_id,
@@ -19620,6 +19715,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         upd["repetitions"],
                         1 if upd["was_lapse"] else 0,
                         self.client_id,
+                        scheduler_type,
                         previous_queue_state,
                         upd["queue_state"],
                         previous_due_at,
@@ -19629,14 +19725,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 updated = conn.execute(
                     """
                     SELECT uuid, ef, interval_days, repetitions, lapses, due_at, last_reviewed_at,
-                           last_modified, version, queue_state, step_index, suspended_reason
+                           last_modified, version, queue_state, step_index, suspended_reason, scheduler_state_json
                       FROM flashcards
                      WHERE id = ?
                     """,
                     (card_id,)
                 ).fetchone()
                 updated_payload = dict(updated)
-                updated_payload["next_intervals"] = build_next_interval_previews(updated_payload, scheduler_settings, now=now_dt)
+                updated_payload["scheduler_type"] = scheduler_type
+                updated_payload["next_intervals"] = _build_scheduler_next_interval_previews(
+                    updated_payload,
+                    scheduler_type=scheduler_type,
+                    scheduler_settings_envelope=scheduler_settings,
+                    now=now_dt,
+                )
                 return updated_payload
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to review flashcard: {e}") from e  # noqa: TRY003
@@ -19807,7 +19909,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
-                   f.queue_state, f.step_index, f.suspended_reason,
+                   f.queue_state, f.step_index, f.suspended_reason, f.scheduler_state_json, d.scheduler_type,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
               FROM flashcards f
               LEFT JOIN decks d ON d.id = f.deck_id
@@ -21212,6 +21314,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         question_ids: list[int],
         target_deck_id: int | None = None,
         create_deck_name: str | None = None,
+        create_deck_scheduler_type: str | None = None,
         create_deck_scheduler_settings: Mapping[str, Any] | str | None = None,
         replace_active: bool = False,
     ) -> dict[str, Any]:
@@ -21275,6 +21378,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     created_deck_id = self.add_deck(
                         normalized_create_deck_name,
                         description=None,
+                        scheduler_type=_coerce_scheduler_type(create_deck_scheduler_type),
                         scheduler_settings=create_deck_scheduler_settings,
                     )
                     deck = self.get_deck(int(created_deck_id))

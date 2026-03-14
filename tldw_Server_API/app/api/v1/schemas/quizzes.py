@@ -3,7 +3,11 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .flashcards import DeckSchedulerSettings
+from .flashcards import (
+    DeckSchedulerSettingsEnvelope,
+    DeckSchedulerType,
+    _coerce_scheduler_settings_envelope,
+)
 
 
 class QuestionType(str, Enum):
@@ -226,8 +230,19 @@ class QuizRemediationConvertRequest(BaseModel):
     question_ids: list[int] = Field(..., min_length=1)
     target_deck_id: Optional[int] = Field(None, ge=1)
     create_deck_name: Optional[str] = None
-    create_deck_scheduler_settings: Optional[DeckSchedulerSettings] = None
+    create_deck_scheduler_type: Optional[DeckSchedulerType] = None
+    create_deck_scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
     replace_active: bool = False
+
+    @model_validator(mode="before")
+    def normalize_scheduler_settings(cls, data):
+        if not isinstance(data, dict):
+            return data
+        if "create_deck_scheduler_settings" in data:
+            data["create_deck_scheduler_settings"] = _coerce_scheduler_settings_envelope(
+                data.get("create_deck_scheduler_settings")
+            )
+        return data
 
     @model_validator(mode="after")
     def validate_deck_target(self) -> "QuizRemediationConvertRequest":
@@ -235,8 +250,8 @@ class QuizRemediationConvertRequest(BaseModel):
         has_create_deck = bool((self.create_deck_name or "").strip())
         if has_target_deck == has_create_deck:
             raise ValueError("Provide exactly one of target_deck_id or create_deck_name")
-        if self.create_deck_scheduler_settings is not None and not has_create_deck:
-            raise ValueError("create_deck_scheduler_settings requires create_deck_name")
+        if (self.create_deck_scheduler_settings is not None or self.create_deck_scheduler_type is not None) and not has_create_deck:
+            raise ValueError("create_deck scheduler options require create_deck_name")
         return self
 
 

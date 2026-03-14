@@ -3,9 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { FlashcardCreateDrawer } from "../FlashcardCreateDrawer"
 import { useCreateDeckMutation, useCreateFlashcardMutation, useDecksQuery } from "../../hooks"
-import type { DeckSchedulerSettings } from "@/services/flashcards"
+import type { DeckSchedulerSettings, DeckSchedulerSettingsEnvelope } from "@/services/flashcards"
 
 const uploadFlashcardAsset = vi.hoisted(() => vi.fn())
+
+const defaultFsrsSettings = {
+  target_retention: 0.9,
+  maximum_interval_days: 36500,
+  enable_fuzz: false
+}
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -163,6 +169,10 @@ describe("FlashcardCreateDrawer image insertion", () => {
       leech_threshold: 10,
       enable_fuzz: false
     }
+    const createdDeckEnvelope: DeckSchedulerSettingsEnvelope = {
+      sm2_plus: createdDeckSettings,
+      fsrs: defaultFsrsSettings
+    }
     createDeckMutateAsync.mockResolvedValue({
       id: 7,
       name: "New deck",
@@ -170,8 +180,9 @@ describe("FlashcardCreateDrawer image insertion", () => {
       deleted: false,
       client_id: "test",
       version: 1,
-      scheduler_settings_json: JSON.stringify(createdDeckSettings),
-      scheduler_settings: createdDeckSettings
+      scheduler_type: "sm2_plus",
+      scheduler_settings_json: JSON.stringify(createdDeckEnvelope),
+      scheduler_settings: createdDeckEnvelope
     })
 
     render(<FlashcardCreateDrawer open onClose={vi.fn()} onSuccess={vi.fn()} />)
@@ -188,7 +199,8 @@ describe("FlashcardCreateDrawer image insertion", () => {
     await waitFor(() =>
       expect(createDeckMutateAsync).toHaveBeenCalledWith({
         name: "New deck",
-        scheduler_settings: createdDeckSettings
+        scheduler_type: "sm2_plus",
+        scheduler_settings: createdDeckEnvelope
       })
     )
 

@@ -5,6 +5,9 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 
+DeckSchedulerType = Literal["sm2_plus", "fsrs"]
+
+
 class DeckSchedulerSettings(BaseModel):
     new_steps_minutes: list[int] = Field(default_factory=lambda: [1, 10])
     relearn_steps_minutes: list[int] = Field(default_factory=lambda: [10])
@@ -17,17 +20,54 @@ class DeckSchedulerSettings(BaseModel):
     enable_fuzz: bool = False
 
 
+class FsrsSchedulerSettings(BaseModel):
+    target_retention: float = 0.9
+    maximum_interval_days: int = 36500
+    enable_fuzz: bool = False
+
+
+class DeckSchedulerSettingsEnvelope(BaseModel):
+    sm2_plus: DeckSchedulerSettings = Field(default_factory=DeckSchedulerSettings)
+    fsrs: FsrsSchedulerSettings = Field(default_factory=FsrsSchedulerSettings)
+
+
+def _coerce_scheduler_settings_envelope(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return raw
+    if "sm2_plus" in raw or "fsrs" in raw:
+        return raw
+    return {"sm2_plus": raw}
+
+
 class DeckCreate(BaseModel):
     name: str = Field(..., description="Deck name (unique)")
     description: Optional[str] = Field(None, description="Deck description")
-    scheduler_settings: Optional[DeckSchedulerSettings] = None
+    scheduler_type: DeckSchedulerType = "sm2_plus"
+    scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
+
+    @model_validator(mode="before")
+    def _normalize_scheduler_settings(cls, data):
+        if not isinstance(data, dict):
+            return data
+        if "scheduler_settings" in data:
+            data["scheduler_settings"] = _coerce_scheduler_settings_envelope(data.get("scheduler_settings"))
+        return data
 
 
 class DeckUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    scheduler_settings: Optional[DeckSchedulerSettings] = None
+    scheduler_type: Optional[DeckSchedulerType] = None
+    scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
     expected_version: Optional[int] = Field(None, ge=1)
+
+    @model_validator(mode="before")
+    def _normalize_scheduler_settings(cls, data):
+        if not isinstance(data, dict):
+            return data
+        if "scheduler_settings" in data:
+            data["scheduler_settings"] = _coerce_scheduler_settings_envelope(data.get("scheduler_settings"))
+        return data
 
 
 class Deck(BaseModel):
@@ -39,8 +79,9 @@ class Deck(BaseModel):
     deleted: bool
     client_id: str
     version: int
+    scheduler_type: DeckSchedulerType = "sm2_plus"
     scheduler_settings_json: Optional[str] = None
-    scheduler_settings: DeckSchedulerSettings = Field(default_factory=DeckSchedulerSettings)
+    scheduler_settings: DeckSchedulerSettingsEnvelope = Field(default_factory=DeckSchedulerSettingsEnvelope)
 
     @model_validator(mode="before")
     def _populate_scheduler_settings(cls, data):
@@ -53,9 +94,9 @@ class Deck(BaseModel):
             try:
                 parsed = json.loads(raw)
                 if isinstance(parsed, dict):
-                    data["scheduler_settings"] = parsed
+                    data["scheduler_settings"] = _coerce_scheduler_settings_envelope(parsed)
             except Exception:
-                data["scheduler_settings"] = DeckSchedulerSettings().model_dump()
+                data["scheduler_settings"] = DeckSchedulerSettingsEnvelope().model_dump()
         return data
 
 
@@ -111,6 +152,7 @@ class Flashcard(BaseModel):
     version: int
     model_type: Literal['basic','basic_reverse','cloze']
     reverse: bool
+    scheduler_type: Optional[DeckSchedulerType] = None
     next_intervals: Optional[FlashcardReviewIntervalPreviews] = None
 
     @model_validator(mode="before")
@@ -156,6 +198,7 @@ class FlashcardReviewResponse(BaseModel):
     last_reviewed_at: Optional[str] = None
     last_modified: Optional[str] = None
     version: int
+    scheduler_type: DeckSchedulerType
     queue_state: Literal["new", "learning", "review", "relearning", "suspended"]
     step_index: Optional[int] = None
     suspended_reason: Optional[Literal["manual", "leech"]] = None

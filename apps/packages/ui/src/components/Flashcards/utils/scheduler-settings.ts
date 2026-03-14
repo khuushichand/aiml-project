@@ -1,8 +1,24 @@
-import type { DeckSchedulerSettings } from "@/services/flashcards"
+import type {
+  DeckSchedulerSettings,
+  DeckSchedulerSettingsEnvelope,
+  DeckSchedulerType,
+  FsrsSchedulerSettings
+} from "@/services/flashcards"
 
-export type SchedulerPresetId = "default" | "fast_acquisition" | "conservative_review"
+type SchedulerSettingsLike =
+  | DeckSchedulerSettingsEnvelope
+  | DeckSchedulerSettings
+  | null
+  | undefined
 
-export type SchedulerSettingsDraft = {
+export type SchedulerPresetId =
+  | "default"
+  | "fast_acquisition"
+  | "conservative_review"
+  | "high_retention"
+  | "long_horizon"
+
+export type Sm2SchedulerSettingsDraft = {
   new_steps_minutes: string
   relearn_steps_minutes: string
   graduating_interval_days: string
@@ -14,7 +30,22 @@ export type SchedulerSettingsDraft = {
   enable_fuzz: boolean
 }
 
-export type SchedulerValidationErrors = Partial<Record<keyof DeckSchedulerSettings, string>>
+export type FsrsSchedulerSettingsDraft = {
+  target_retention: string
+  maximum_interval_days: string
+  enable_fuzz: boolean
+}
+
+export type SchedulerSettingsDraft = {
+  scheduler_type: DeckSchedulerType
+  sm2_plus: Sm2SchedulerSettingsDraft
+  fsrs: FsrsSchedulerSettingsDraft
+}
+
+export type SchedulerValidationErrors = {
+  sm2_plus: Partial<Record<keyof DeckSchedulerSettings, string>>
+  fsrs: Partial<Record<keyof FsrsSchedulerSettings, string>>
+}
 
 export const DEFAULT_SCHEDULER_SETTINGS: DeckSchedulerSettings = {
   new_steps_minutes: [1, 10],
@@ -28,8 +59,47 @@ export const DEFAULT_SCHEDULER_SETTINGS: DeckSchedulerSettings = {
   enable_fuzz: false
 }
 
-export const SCHEDULER_PRESETS: Array<{
-  id: SchedulerPresetId
+export const DEFAULT_FSRS_SCHEDULER_SETTINGS: FsrsSchedulerSettings = {
+  target_retention: 0.9,
+  maximum_interval_days: 36500,
+  enable_fuzz: false
+}
+
+export const DEFAULT_SCHEDULER_SETTINGS_ENVELOPE: DeckSchedulerSettingsEnvelope = {
+  sm2_plus: DEFAULT_SCHEDULER_SETTINGS,
+  fsrs: DEFAULT_FSRS_SCHEDULER_SETTINGS
+}
+
+const isSchedulerEnvelope = (
+  settings: SchedulerSettingsLike
+): settings is DeckSchedulerSettingsEnvelope =>
+  typeof settings === "object" &&
+  settings !== null &&
+  "sm2_plus" in settings
+
+export const normalizeSchedulerSettingsEnvelope = (
+  settings: SchedulerSettingsLike
+): DeckSchedulerSettingsEnvelope => {
+  if (isSchedulerEnvelope(settings)) {
+    return {
+      sm2_plus: cloneSm2Settings(settings.sm2_plus),
+      fsrs: cloneFsrsSettings(settings.fsrs)
+    }
+  }
+  if (settings && typeof settings === "object") {
+    return {
+      sm2_plus: cloneSm2Settings(settings as DeckSchedulerSettings),
+      fsrs: cloneFsrsSettings(DEFAULT_FSRS_SCHEDULER_SETTINGS)
+    }
+  }
+  return {
+    sm2_plus: cloneSm2Settings(DEFAULT_SCHEDULER_SETTINGS),
+    fsrs: cloneFsrsSettings(DEFAULT_FSRS_SCHEDULER_SETTINGS)
+  }
+}
+
+const SM2_SCHEDULER_PRESETS: Array<{
+  id: Exclude<SchedulerPresetId, "high_retention" | "long_horizon">
   label: string
   description: string
   settings: DeckSchedulerSettings
@@ -74,16 +144,41 @@ export const SCHEDULER_PRESETS: Array<{
   }
 ]
 
-const formatStepSummary = (steps: number[]): string => {
-  if (!steps.length) return "none"
-  return steps.map((step) => `${step}m`).join(",")
-}
+const FSRS_SCHEDULER_PRESETS: Array<{
+  id: Exclude<SchedulerPresetId, "fast_acquisition" | "conservative_review">
+  label: string
+  description: string
+  settings: FsrsSchedulerSettings
+}> = [
+  {
+    id: "default",
+    label: "Default",
+    description: "Baseline FSRS settings",
+    settings: DEFAULT_FSRS_SCHEDULER_SETTINGS
+  },
+  {
+    id: "high_retention",
+    label: "High retention",
+    description: "Shorter review intervals with a higher recall target",
+    settings: {
+      target_retention: 0.95,
+      maximum_interval_days: 3650,
+      enable_fuzz: false
+    }
+  },
+  {
+    id: "long_horizon",
+    label: "Long horizon",
+    description: "Longer review growth for large mature decks",
+    settings: {
+      target_retention: 0.85,
+      maximum_interval_days: 36500,
+      enable_fuzz: true
+    }
+  }
+]
 
-export const formatSchedulerSummary = (settings: DeckSchedulerSettings): string => {
-  return `${formatStepSummary(settings.new_steps_minutes)} -> ${settings.graduating_interval_days}d / easy ${settings.easy_interval_days}d / leech ${settings.leech_threshold} / fuzz ${settings.enable_fuzz ? "on" : "off"}`
-}
-
-const cloneSettings = (settings: DeckSchedulerSettings): DeckSchedulerSettings => ({
+const cloneSm2Settings = (settings: DeckSchedulerSettings): DeckSchedulerSettings => ({
   new_steps_minutes: [...settings.new_steps_minutes],
   relearn_steps_minutes: [...settings.relearn_steps_minutes],
   graduating_interval_days: settings.graduating_interval_days,
@@ -95,7 +190,40 @@ const cloneSettings = (settings: DeckSchedulerSettings): DeckSchedulerSettings =
   enable_fuzz: settings.enable_fuzz
 })
 
-export const createSchedulerDraft = (settings: DeckSchedulerSettings): SchedulerSettingsDraft => ({
+const cloneFsrsSettings = (settings: FsrsSchedulerSettings): FsrsSchedulerSettings => ({
+  target_retention: settings.target_retention,
+  maximum_interval_days: settings.maximum_interval_days,
+  enable_fuzz: settings.enable_fuzz
+})
+
+export const copySchedulerSettings = (settings: DeckSchedulerSettings): DeckSchedulerSettings =>
+  cloneSm2Settings(settings)
+
+export const copySchedulerSettingsEnvelope = (
+  settings: SchedulerSettingsLike
+): DeckSchedulerSettingsEnvelope => normalizeSchedulerSettingsEnvelope(settings)
+
+const formatStepSummary = (steps: number[]): string => {
+  if (!steps.length) return "none"
+  return steps.map((step) => `${step}m`).join(",")
+}
+
+const formatTargetRetention = (value: number): string => `${Math.round(value * 100)}%`
+
+export const formatSchedulerSummary = (
+  schedulerType: DeckSchedulerType,
+  settings: SchedulerSettingsLike
+): string => {
+  const normalized = normalizeSchedulerSettingsEnvelope(settings)
+  if (schedulerType === "fsrs") {
+    return `Retention ${formatTargetRetention(normalized.fsrs.target_retention)} / max ${normalized.fsrs.maximum_interval_days}d / fuzz ${normalized.fsrs.enable_fuzz ? "on" : "off"}`
+  }
+
+  const sm2 = normalized.sm2_plus
+  return `${formatStepSummary(sm2.new_steps_minutes)} -> ${sm2.graduating_interval_days}d / easy ${sm2.easy_interval_days}d / leech ${sm2.leech_threshold} / fuzz ${sm2.enable_fuzz ? "on" : "off"}`
+}
+
+export const createSm2SchedulerDraft = (settings: DeckSchedulerSettings): Sm2SchedulerSettingsDraft => ({
   new_steps_minutes: settings.new_steps_minutes.join(", "),
   relearn_steps_minutes: settings.relearn_steps_minutes.join(", "),
   graduating_interval_days: String(settings.graduating_interval_days),
@@ -106,6 +234,55 @@ export const createSchedulerDraft = (settings: DeckSchedulerSettings): Scheduler
   leech_threshold: String(settings.leech_threshold),
   enable_fuzz: settings.enable_fuzz
 })
+
+export const createFsrsSchedulerDraft = (settings: FsrsSchedulerSettings): FsrsSchedulerSettingsDraft => ({
+  target_retention: String(settings.target_retention),
+  maximum_interval_days: String(settings.maximum_interval_days),
+  enable_fuzz: settings.enable_fuzz
+})
+
+export const createSchedulerDraft = ({
+  schedulerType = "sm2_plus",
+  settings = DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
+}: {
+  schedulerType?: DeckSchedulerType
+  settings?: SchedulerSettingsLike
+} = {}): SchedulerSettingsDraft => {
+  const envelope = normalizeSchedulerSettingsEnvelope(settings)
+  return {
+    scheduler_type: schedulerType,
+    sm2_plus: createSm2SchedulerDraft(envelope.sm2_plus),
+    fsrs: createFsrsSchedulerDraft(envelope.fsrs)
+  }
+}
+
+export const getSchedulerPresets = (schedulerType: DeckSchedulerType) =>
+  schedulerType === "fsrs" ? FSRS_SCHEDULER_PRESETS : SM2_SCHEDULER_PRESETS
+
+export const applySchedulerPreset = (
+  schedulerType: DeckSchedulerType,
+  presetId: SchedulerPresetId
+): DeckSchedulerSettingsEnvelope => {
+  const base = copySchedulerSettingsEnvelope(DEFAULT_SCHEDULER_SETTINGS_ENVELOPE)
+  if (schedulerType === "fsrs") {
+    const preset = FSRS_SCHEDULER_PRESETS.find((candidate) => candidate.id === presetId)
+    base.fsrs = cloneFsrsSettings(preset?.settings ?? DEFAULT_FSRS_SCHEDULER_SETTINGS)
+    return base
+  }
+  const preset = SM2_SCHEDULER_PRESETS.find((candidate) => candidate.id === presetId)
+  base.sm2_plus = cloneSm2Settings(preset?.settings ?? DEFAULT_SCHEDULER_SETTINGS)
+  return base
+}
+
+export const resetSchedulerDefaults = (
+  draft: SchedulerSettingsDraft
+): SchedulerSettingsDraft => {
+  const next = createSchedulerDraft({
+    schedulerType: draft.scheduler_type,
+    settings: copySchedulerSettingsEnvelope(DEFAULT_SCHEDULER_SETTINGS_ENVELOPE)
+  })
+  return next
+}
 
 export const parseSchedulerStepInput = (value: string): number[] => {
   const tokens = value
@@ -161,10 +338,10 @@ const parseFloatField = (value: string, fieldName: string): { value: number | nu
   return { value: parsed }
 }
 
-export const validateSchedulerDraft = (
-  draft: SchedulerSettingsDraft
-): { settings: DeckSchedulerSettings | null; errors: SchedulerValidationErrors } => {
-  const errors: SchedulerValidationErrors = {}
+const validateSm2Draft = (
+  draft: Sm2SchedulerSettingsDraft
+): { settings: DeckSchedulerSettings | null; errors: SchedulerValidationErrors["sm2_plus"] } => {
+  const errors: SchedulerValidationErrors["sm2_plus"] = {}
 
   const newSteps = validateStepField(draft.new_steps_minutes, "New steps")
   if (newSteps.error) errors.new_steps_minutes = newSteps.error
@@ -237,10 +414,65 @@ export const validateSchedulerDraft = (
   }
 }
 
-export const applySchedulerPreset = (presetId: SchedulerPresetId): DeckSchedulerSettings => {
-  const preset = SCHEDULER_PRESETS.find((candidate) => candidate.id === presetId)
-  return cloneSettings(preset?.settings ?? DEFAULT_SCHEDULER_SETTINGS)
+const validateFsrsDraft = (
+  draft: FsrsSchedulerSettingsDraft
+): { settings: FsrsSchedulerSettings | null; errors: SchedulerValidationErrors["fsrs"] } => {
+  const errors: SchedulerValidationErrors["fsrs"] = {}
+  const targetRetention = parseFloatField(draft.target_retention, "Target retention")
+  if (targetRetention.error) errors.target_retention = targetRetention.error
+
+  const maxInterval = parseIntegerField(draft.maximum_interval_days, "Maximum interval")
+  if (maxInterval.error) errors.maximum_interval_days = maxInterval.error
+
+  if ((targetRetention.value ?? 0) <= 0 || (targetRetention.value ?? 0) >= 1) {
+    errors.target_retention = "Target retention must be between 0 and 1"
+  }
+  if ((maxInterval.value ?? 0) < 1) {
+    errors.maximum_interval_days = "Maximum interval must be >= 1"
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return { settings: null, errors }
+  }
+
+  return {
+    settings: {
+      target_retention: targetRetention.value!,
+      maximum_interval_days: maxInterval.value!,
+      enable_fuzz: draft.enable_fuzz
+    },
+    errors
+  }
 }
 
-export const copySchedulerSettings = (settings: DeckSchedulerSettings): DeckSchedulerSettings =>
-  cloneSettings(settings)
+export const validateSchedulerDraft = (
+  draft: SchedulerSettingsDraft
+): {
+  schedulerType: DeckSchedulerType
+  settings: DeckSchedulerSettingsEnvelope | null
+  errors: SchedulerValidationErrors
+} => {
+  const sm2 = validateSm2Draft(draft.sm2_plus)
+  const fsrs = validateFsrsDraft(draft.fsrs)
+  const errors: SchedulerValidationErrors = {
+    sm2_plus: sm2.errors,
+    fsrs: fsrs.errors
+  }
+
+  if (!sm2.settings || !fsrs.settings) {
+    return {
+      schedulerType: draft.scheduler_type,
+      settings: null,
+      errors
+    }
+  }
+
+  return {
+    schedulerType: draft.scheduler_type,
+    settings: {
+      sm2_plus: sm2.settings,
+      fsrs: fsrs.settings
+    },
+    errors
+  }
+}
