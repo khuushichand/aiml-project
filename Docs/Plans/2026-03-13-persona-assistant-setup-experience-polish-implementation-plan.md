@@ -444,7 +444,7 @@ git commit -m "feat: add setup test outcomes and post-setup handoff"
 
 ### Task 6: Add Browser-Level Coverage For Happy Path And Retry Flow
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Create: `apps/extension/tests/e2e/persona-assistant-setup.spec.ts`
@@ -535,6 +535,8 @@ git commit -m "test: add persona setup wizard e2e coverage"
 ```
 
 ### Task 7: Final PR2 Verification And Plan Closeout
+
+**Status:** Complete
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-13-persona-assistant-setup-experience-polish-implementation-plan.md`
