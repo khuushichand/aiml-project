@@ -20,8 +20,8 @@ test.describe("Watchlist -> Ingest -> Notify journey", () => {
     skipIfServerUnavailable(serverInfo)
 
     await test.step("Navigate to watchlist and create an entry", async () => {
-      // Try navigating to the watchlist page
-      await page.goto("/watchlist", { waitUntil: "domcontentloaded" })
+      // Try navigating to the watchlists page (plural route)
+      await page.goto("/watchlists", { waitUntil: "domcontentloaded" })
       await page.waitForTimeout(2_000)
 
       // Check if the watchlist page exists
@@ -106,6 +106,8 @@ test.describe("Watchlist -> Ingest -> Notify journey", () => {
       const pageReady = await page.locator(
         "[data-testid='media-list'], [data-testid='empty-state'], .media-container"
       ).first().isVisible().catch(() => false)
+        || await page.getByText("Media Inspector").isVisible().catch(() => false)
+        || await page.getByPlaceholder(/search media/i).isVisible().catch(() => false)
 
       expect(pageReady).toBe(true)
     })

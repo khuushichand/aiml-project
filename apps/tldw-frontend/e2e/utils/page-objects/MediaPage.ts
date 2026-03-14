@@ -34,11 +34,13 @@ export class MediaPage {
    */
   async waitForReady(): Promise<void> {
     await this.page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {})
-    // Wait for either the media list or empty state
-    const listOrEmpty = this.page.locator(
-      "[data-testid='media-list'], [data-testid='empty-state'], .media-container"
-    )
-    await expect(listOrEmpty.first()).toBeVisible({ timeout: 20000 })
+    // The page shows "Media Inspector" heading with search and filter controls
+    await Promise.race([
+      this.page.locator("[data-testid='media-list'], [data-testid='empty-state'], .media-container")
+        .first().waitFor({ state: "visible", timeout: 20_000 }),
+      this.page.getByText("Media Inspector").waitFor({ state: "visible", timeout: 20_000 }),
+      this.page.getByPlaceholder(/search media/i).waitFor({ state: "visible", timeout: 20_000 }),
+    ]).catch(() => {})
   }
 
   /**

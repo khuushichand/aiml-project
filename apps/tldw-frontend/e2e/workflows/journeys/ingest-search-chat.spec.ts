@@ -39,6 +39,9 @@ test.describe("Ingest -> Search -> Chat journey", () => {
     })
 
     await test.step("Chat about ingested content with RAG context", async () => {
+      // Wait briefly to avoid rate limiting from prior API calls
+      await page.waitForTimeout(3_000)
+
       const chatPage = new ChatPage(page)
       await chatPage.goto()
       await chatPage.waitForReady()

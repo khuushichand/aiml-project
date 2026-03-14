@@ -44,6 +44,12 @@ export class ChatPage {
       this.page.getByTestId("chat-empty-connected").waitFor({ state: "visible", timeout: 20000 }),
       this.page.getByTestId("chat-input").waitFor({ state: "visible", timeout: 20000 }),
     ]).catch(() => {})
+    // Check for Next.js error overlay (e.g. rate_limited) and reload if found
+    const hasErrorOverlay = await this.page.locator("nextjs-portal").count().catch(() => 0)
+    if (hasErrorOverlay > 0) {
+      await this.page.reload({ waitUntil: "domcontentloaded" })
+      await this.page.waitForTimeout(2_000)
+    }
     // Dismiss any blocking modals
     await this.page.evaluate(() => {
       document.querySelectorAll('.ant-modal-root, .ant-modal-wrap, .ant-modal-mask').forEach(el => el.remove());
