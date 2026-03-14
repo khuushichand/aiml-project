@@ -1,0 +1,12 @@
+pack_id: researcher-pack
+pack_version: 1.0.0
+pack_schema_version: 1
+capability_taxonomy_version: 1
+adapter_contract_version: 1
+title: Researcher Pack
+description: Minimal governance pack fixture for validation tests.
+authors:
+  - codex
+compatible_runtime_targets:
+  - tldw
+  - acp
