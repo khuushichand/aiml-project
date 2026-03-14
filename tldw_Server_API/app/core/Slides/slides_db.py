@@ -48,6 +48,7 @@ class PresentationRow:
     marp_theme: str | None
     template_id: str | None
     settings: str | None
+    studio_data: str | None
     slides: str
     slides_text: str
     source_type: str | None
@@ -107,6 +108,7 @@ class SlidesDatabase:
                     marp_theme TEXT,
                     template_id TEXT,
                     settings TEXT,
+                    studio_data TEXT,
                     slides TEXT NOT NULL,
                     slides_text TEXT NOT NULL,
                     source_type TEXT,
@@ -181,6 +183,7 @@ class SlidesDatabase:
             )
             self._ensure_marp_theme_column(conn)
             self._ensure_template_id_column(conn)
+            self._ensure_studio_data_column(conn)
             conn.commit()
             self._schema_init_paths.add(self._db_path_str)
         except sqlite3.Error as exc:
@@ -257,6 +260,13 @@ class SlidesDatabase:
         conn.execute("ALTER TABLE presentations ADD COLUMN template_id TEXT")
 
     @staticmethod
+    def _ensure_studio_data_column(conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(presentations)").fetchall()
+        if any(col["name"] == "studio_data" for col in columns):
+            return
+        conn.execute("ALTER TABLE presentations ADD COLUMN studio_data TEXT")
+
+    @staticmethod
     def _fetch_presentation_by_id(
         conn: sqlite3.Connection, presentation_id: str, include_deleted: bool
     ) -> PresentationRow:
@@ -279,6 +289,7 @@ class SlidesDatabase:
             "marp_theme": row.marp_theme,
             "template_id": row.template_id,
             "settings": row.settings,
+            "studio_data": row.studio_data,
             "slides": row.slides,
             "custom_css": row.custom_css,
             "source_type": row.source_type,
@@ -317,6 +328,7 @@ class SlidesDatabase:
         theme: str,
         marp_theme: str | None,
         settings: str | None,
+        studio_data: str | None,
         template_id: str | None = None,
         slides: str,
         slides_text: str,
@@ -334,10 +346,10 @@ class SlidesDatabase:
                 conn.execute(
                     """
                     INSERT INTO presentations (
-                        id, title, description, theme, marp_theme, template_id, settings, slides, slides_text,
+                        id, title, description, theme, marp_theme, template_id, settings, studio_data, slides, slides_text,
                         source_type, source_ref, source_query, custom_css,
                         created_at, last_modified, deleted, client_id, version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
                     """,
                     (
                         pres_id,
@@ -347,6 +359,7 @@ class SlidesDatabase:
                         marp_theme,
                         template_id,
                         settings,
+                        studio_data,
                         slides,
                         slides_text,
                         source_type,
@@ -456,6 +469,7 @@ class SlidesDatabase:
             "marp_theme",
             "template_id",
             "settings",
+            "studio_data",
             "slides",
             "slides_text",
             "source_type",

@@ -173,6 +173,22 @@ class InvalidRetentionRangeError(AdminDataOpsError):
     """Raised when a retention policy update is out of range."""
 
 
+class ByokValidationError(AdminDataOpsError):
+    """Base exception for admin BYOK validation run errors."""
+
+
+class ByokValidationDisabledError(ByokValidationError):
+    """Raised when BYOK validation is disabled for the current deployment."""
+
+
+class ByokValidationActiveRunError(ByokValidationError):
+    """Raised when another BYOK validation run is already active."""
+
+
+class ByokValidationRunNotFoundError(ByokValidationError):
+    """Raised when a BYOK validation run id cannot be resolved."""
+
+
 class BundleError(AdminDataOpsError):
     """Base exception for backup bundle operations."""
 
