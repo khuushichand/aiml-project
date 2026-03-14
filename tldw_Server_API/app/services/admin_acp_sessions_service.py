@@ -64,6 +64,12 @@ class SessionRecord:
     workspace_id: str | None = None
     workspace_group_id: str | None = None
     scope_snapshot_id: str | None = None
+    policy_snapshot_version: str | None = None
+    policy_snapshot_fingerprint: str | None = None
+    policy_snapshot_refreshed_at: str | None = None
+    policy_summary: dict[str, Any] | None = None
+    policy_provenance_summary: dict[str, Any] | None = None
+    policy_refresh_error: str | None = None
     bootstrap_ready: bool = True
     needs_bootstrap: bool = False
     # Forking lineage
@@ -86,6 +92,12 @@ class SessionRecord:
             "workspace_id": self.workspace_id,
             "workspace_group_id": self.workspace_group_id,
             "scope_snapshot_id": self.scope_snapshot_id,
+            "policy_snapshot_version": self.policy_snapshot_version,
+            "policy_snapshot_fingerprint": self.policy_snapshot_fingerprint,
+            "policy_snapshot_refreshed_at": self.policy_snapshot_refreshed_at,
+            "policy_summary": self.policy_summary,
+            "policy_provenance_summary": self.policy_provenance_summary,
+            "policy_refresh_error": self.policy_refresh_error,
             "forked_from": self.forked_from,
         }
 
@@ -306,6 +318,12 @@ class ACPSessionStore:
             workspace_id=d.get("workspace_id"),
             workspace_group_id=d.get("workspace_group_id"),
             scope_snapshot_id=d.get("scope_snapshot_id"),
+            policy_snapshot_version=d.get("policy_snapshot_version"),
+            policy_snapshot_fingerprint=d.get("policy_snapshot_fingerprint"),
+            policy_snapshot_refreshed_at=d.get("policy_snapshot_refreshed_at"),
+            policy_summary=d.get("policy_summary"),
+            policy_provenance_summary=d.get("policy_provenance_summary"),
+            policy_refresh_error=d.get("policy_refresh_error"),
             bootstrap_ready=d.get("bootstrap_ready", True),
             needs_bootstrap=d.get("needs_bootstrap", False),
             forked_from=d.get("forked_from"),
@@ -392,6 +410,12 @@ class ACPSessionStore:
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
         scope_snapshot_id: str | None = None,
+        policy_snapshot_version: str | None = None,
+        policy_snapshot_fingerprint: str | None = None,
+        policy_snapshot_refreshed_at: str | None = None,
+        policy_summary: dict[str, Any] | None = None,
+        policy_provenance_summary: dict[str, Any] | None = None,
+        policy_refresh_error: str | None = None,
     ) -> SessionRecord:
         d = self._db.register_session(
             session_id=session_id,
@@ -405,9 +429,37 @@ class ACPSessionStore:
             workspace_id=workspace_id,
             workspace_group_id=workspace_group_id,
             scope_snapshot_id=scope_snapshot_id,
+            policy_snapshot_version=policy_snapshot_version,
+            policy_snapshot_fingerprint=policy_snapshot_fingerprint,
+            policy_snapshot_refreshed_at=policy_snapshot_refreshed_at,
+            policy_summary=policy_summary,
+            policy_provenance_summary=policy_provenance_summary,
+            policy_refresh_error=policy_refresh_error,
         )
         logger.debug("Registered ACP session {} for user {}", session_id, user_id)
         return self._dict_to_record(d)
+
+    async def update_policy_snapshot_state(
+        self,
+        session_id: str,
+        *,
+        policy_snapshot_version: str | None,
+        policy_snapshot_fingerprint: str | None,
+        policy_snapshot_refreshed_at: str | None,
+        policy_summary: dict[str, Any] | None,
+        policy_provenance_summary: dict[str, Any] | None,
+        policy_refresh_error: str | None,
+    ) -> SessionRecord | None:
+        self._db.update_policy_snapshot_state(
+            session_id,
+            policy_snapshot_version=policy_snapshot_version,
+            policy_snapshot_fingerprint=policy_snapshot_fingerprint,
+            policy_snapshot_refreshed_at=policy_snapshot_refreshed_at,
+            policy_summary=policy_summary,
+            policy_provenance_summary=policy_provenance_summary,
+            policy_refresh_error=policy_refresh_error,
+        )
+        return await self.get_session(session_id)
 
     async def close_session(self, session_id: str) -> None:
         self._db.close_session(session_id)

@@ -73,6 +73,65 @@ class TestSessionCRUD:
         assert rec["tags"] == ["workflow", "test"]
         assert rec["mcp_servers"] == [{"name": "fs", "type": "stdio"}]
 
+    def test_register_session_with_policy_snapshot_fields(self, db):
+        row = db.register_session(
+            session_id="s1",
+            user_id=1,
+            policy_snapshot_version="v1",
+            policy_snapshot_fingerprint="fingerprint-1",
+            policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+            policy_summary={"allowed_tools": 2, "denied_tools": 1},
+            policy_provenance_summary={"sources": ["mcp_hub"]},
+            policy_refresh_error="temporary mismatch",
+        )
+        assert row["policy_snapshot_version"] == "v1"
+        assert row["policy_snapshot_fingerprint"] == "fingerprint-1"
+        assert row["policy_snapshot_refreshed_at"] == "2026-03-14T12:00:00+00:00"
+        assert row["policy_summary"] == {"allowed_tools": 2, "denied_tools": 1}
+        assert row["policy_provenance_summary"] == {"sources": ["mcp_hub"]}
+        assert row["policy_refresh_error"] == "temporary mismatch"
+
+    def test_update_policy_snapshot_fields_can_set_and_clear_values(self, db):
+        db.register_session(session_id="s1", user_id=1)
+
+        db.update_policy_snapshot_state(
+            "s1",
+            policy_snapshot_version="v2",
+            policy_snapshot_fingerprint="fingerprint-2",
+            policy_snapshot_refreshed_at="2026-03-14T13:00:00+00:00",
+            policy_summary={"approval_required": True},
+            policy_provenance_summary={"resolved_capabilities": ["tool.invoke.research"]},
+            policy_refresh_error="refresh failed",
+        )
+
+        updated = db.get_session("s1")
+        assert updated["policy_snapshot_version"] == "v2"
+        assert updated["policy_snapshot_fingerprint"] == "fingerprint-2"
+        assert updated["policy_snapshot_refreshed_at"] == "2026-03-14T13:00:00+00:00"
+        assert updated["policy_summary"] == {"approval_required": True}
+        assert updated["policy_provenance_summary"] == {
+            "resolved_capabilities": ["tool.invoke.research"]
+        }
+        assert updated["policy_refresh_error"] == "refresh failed"
+
+        db.update_policy_snapshot_state(
+            "s1",
+            policy_snapshot_version=None,
+            policy_snapshot_fingerprint=None,
+            policy_snapshot_refreshed_at=None,
+            policy_summary=None,
+            policy_provenance_summary=None,
+            policy_refresh_error=None,
+        )
+
+        cleared = db.get_session("s1")
+        assert cleared["policy_snapshot_version"] is None
+        assert cleared["policy_snapshot_fingerprint"] is None
+        assert cleared["policy_snapshot_refreshed_at"] is None
+        assert cleared["policy_summary"] is None
+        assert cleared["policy_provenance_summary"] is None
+        assert cleared["policy_refresh_error"] is None
+
     def test_update_session_activity(self, db):
         db.register_session(session_id="s1", user_id=1)
         original = db.get_session("s1")

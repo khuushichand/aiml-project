@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection,
 )
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -41,7 +41,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     persona_id TEXT,
     workspace_id TEXT,
     workspace_group_id TEXT,
-    scope_snapshot_id TEXT
+    scope_snapshot_id TEXT,
+    policy_snapshot_version TEXT,
+    policy_snapshot_fingerprint TEXT,
+    policy_snapshot_refreshed_at TEXT,
+    policy_summary TEXT,
+    policy_provenance_summary TEXT,
+    policy_refresh_error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
@@ -92,11 +98,26 @@ CREATE INDEX IF NOT EXISTS idx_health_agent_time
 _BOOL_FIELDS = frozenset({"bootstrap_ready", "needs_bootstrap"})
 
 # Columns that are stored as JSON TEXT but should be returned as parsed objects
-_JSON_FIELDS = frozenset({"tags", "mcp_servers"})
+_JSON_LIST_FIELDS = frozenset({"tags", "mcp_servers"})
+_JSON_OBJECT_FIELDS = frozenset({"policy_summary", "policy_provenance_summary"})
 
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_sql: str,
+) -> None:
+    existing_columns = {
+        str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name in existing_columns:
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
 
 
 class ACPSessionsDB:
@@ -173,6 +194,43 @@ class ACPSessionsDB:
                     CREATE INDEX IF NOT EXISTS idx_health_agent_time
                         ON agent_health_history(agent_type, checked_at DESC);
                 """)
+            if current_version < 4:
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_snapshot_version",
+                    "policy_snapshot_version TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_snapshot_fingerprint",
+                    "policy_snapshot_fingerprint TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_snapshot_refreshed_at",
+                    "policy_snapshot_refreshed_at TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_summary",
+                    "policy_summary TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_provenance_summary",
+                    "policy_provenance_summary TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_refresh_error",
+                    "policy_refresh_error TEXT",
+                )
             conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.commit()
             self._initialized = True
@@ -188,12 +246,18 @@ class ACPSessionsDB:
         for field in _BOOL_FIELDS:
             if field in d:
                 d[field] = bool(d[field])
-        for field in _JSON_FIELDS:
+        for field in _JSON_LIST_FIELDS:
             if field in d and isinstance(d[field], str):
                 try:
                     d[field] = json.loads(d[field])
                 except (json.JSONDecodeError, TypeError):
                     d[field] = []
+        for field in _JSON_OBJECT_FIELDS:
+            if field in d and isinstance(d[field], str):
+                try:
+                    d[field] = json.loads(d[field])
+                except (json.JSONDecodeError, TypeError):
+                    d[field] = None
         return d
 
     # ------------------------------------------------------------------
@@ -213,6 +277,12 @@ class ACPSessionsDB:
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
         scope_snapshot_id: str | None = None,
+        policy_snapshot_version: str | None = None,
+        policy_snapshot_fingerprint: str | None = None,
+        policy_snapshot_refreshed_at: str | None = None,
+        policy_summary: dict[str, Any] | None = None,
+        policy_provenance_summary: dict[str, Any] | None = None,
+        policy_refresh_error: str | None = None,
         forked_from: str | None = None,
         needs_bootstrap: bool = False,
     ) -> dict[str, Any]:
@@ -226,8 +296,10 @@ class ACPSessionsDB:
                 created_at, last_activity_at,
                 tags, mcp_servers,
                 persona_id, workspace_id, workspace_group_id, scope_snapshot_id,
+                policy_snapshot_version, policy_snapshot_fingerprint, policy_snapshot_refreshed_at,
+                policy_summary, policy_provenance_summary, policy_refresh_error,
                 forked_from, needs_bootstrap
-            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id, user_id, agent_type, name, cwd,
@@ -235,11 +307,59 @@ class ACPSessionsDB:
                 json.dumps(tags or []),
                 json.dumps(mcp_servers or []),
                 persona_id, workspace_id, workspace_group_id, scope_snapshot_id,
+                policy_snapshot_version,
+                policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at,
+                json.dumps(policy_summary) if policy_summary is not None else None,
+                json.dumps(policy_provenance_summary)
+                if policy_provenance_summary is not None
+                else None,
+                policy_refresh_error,
                 forked_from, int(needs_bootstrap),
             ),
         )
         conn.commit()
         return self.get_session(session_id)  # type: ignore[return-value]
+
+    def update_policy_snapshot_state(
+        self,
+        session_id: str,
+        *,
+        policy_snapshot_version: str | None,
+        policy_snapshot_fingerprint: str | None,
+        policy_snapshot_refreshed_at: str | None,
+        policy_summary: dict[str, Any] | None,
+        policy_provenance_summary: dict[str, Any] | None,
+        policy_refresh_error: str | None,
+    ) -> None:
+        """Update persisted ACP policy snapshot metadata for a session."""
+        conn = self._get_conn()
+        conn.execute(
+            """
+            UPDATE sessions
+            SET policy_snapshot_version = ?,
+                policy_snapshot_fingerprint = ?,
+                policy_snapshot_refreshed_at = ?,
+                policy_summary = ?,
+                policy_provenance_summary = ?,
+                policy_refresh_error = ?,
+                last_activity_at = ?
+            WHERE session_id = ?
+            """,
+            (
+                policy_snapshot_version,
+                policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at,
+                json.dumps(policy_summary) if policy_summary is not None else None,
+                json.dumps(policy_provenance_summary)
+                if policy_provenance_summary is not None
+                else None,
+                policy_refresh_error,
+                _utcnow_iso(),
+                session_id,
+            ),
+        )
+        conn.commit()
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         """Fetch a single session by ID, or None if not found."""
