@@ -42,14 +42,7 @@ const Harness = () => {
 
   return (
     <div>
-      <DeckSchedulerSettingsEditor
-        draft={schedulerDraft.draft}
-        errors={schedulerDraft.errors}
-        summary={schedulerDraft.summary}
-        onFieldChange={schedulerDraft.updateField}
-        onApplyPreset={schedulerDraft.applyPreset}
-        onResetDefaults={schedulerDraft.resetToDefaults}
-      />
+      <DeckSchedulerSettingsEditor schedulerDraft={schedulerDraft} />
       <button
         type="button"
         onClick={() => {
@@ -88,6 +81,9 @@ describe("DeckSchedulerSettingsEditor", () => {
     })
     fireEvent.click(screen.getByRole("button", { name: /validate draft/i }))
 
+    expect(screen.getByTestId("deck-scheduler-editor-validated-json")).toHaveTextContent(
+      '"scheduler_type":"sm2_plus"'
+    )
     expect(screen.getByTestId("deck-scheduler-editor-validated-json")).toHaveTextContent(
       '"leech_threshold":12'
     )

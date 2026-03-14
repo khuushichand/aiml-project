@@ -259,6 +259,64 @@ describe("ExternalServersTab", () => {
     expect(await screen.findByText(/auth template updated/i)).toBeTruthy()
   })
 
+  it("preserves custom header targets for websocket auth templates", async () => {
+    const user = userEvent.setup()
+    mocks.listExternalServers.mockResolvedValueOnce([
+      {
+        id: "docs-websocket",
+        name: "Docs Websocket",
+        enabled: true,
+        owner_scope_type: "global",
+        transport: "websocket",
+        config: {},
+        secret_configured: false,
+        server_source: "managed",
+        binding_count: 1,
+        runtime_executable: true,
+        auth_template_present: false,
+        auth_template_valid: false,
+        auth_template_blocked_reason: "no_auth_template",
+        credential_slots: [
+          {
+            server_id: "docs-websocket",
+            slot_name: "token_readonly",
+            display_name: "Read-only token",
+            secret_kind: "bearer_token",
+            privilege_class: "read",
+            is_required: true,
+            secret_configured: false
+          }
+        ]
+      }
+    ])
+    mocks.getExternalServerAuthTemplate.mockResolvedValueOnce({
+      mode: "template",
+      mappings: []
+    })
+
+    render(<ExternalServersTab />)
+
+    expect((await screen.findAllByText("Docs Websocket")).length).toBeGreaterThan(0)
+    await user.click(screen.getByRole("button", { name: /add mapping/i }))
+    await user.type(screen.getByLabelText(/target name 1/i), "X-DOCS-TOKEN")
+    await user.type(screen.getByLabelText(/prefix 1/i), "Token ")
+    await user.click(screen.getByRole("button", { name: /save auth template/i }))
+
+    expect(mocks.updateExternalServerAuthTemplate).toHaveBeenCalledWith("docs-websocket", {
+      mode: "template",
+      mappings: [
+        {
+          slot_name: "token_readonly",
+          target_type: "header",
+          target_name: "X-DOCS-TOKEN",
+          prefix: "Token ",
+          suffix: "",
+          required: true
+        }
+      ]
+    })
+  })
+
   it("creates, edits, and deletes managed servers and credential slots", async () => {
     const user = userEvent.setup()
     render(<ExternalServersTab />)

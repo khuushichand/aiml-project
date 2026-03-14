@@ -25,6 +25,8 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
             'mcp_external_server_credential_slots',
             'mcp_external_server_secrets',
             'mcp_external_server_slot_secrets',
+            'mcp_governance_pack_objects',
+            'mcp_governance_packs',
             'mcp_permission_profiles',
             'mcp_policy_assignments',
             'mcp_policy_audit_history',
@@ -45,6 +47,8 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     assert "mcp_external_server_credential_slots" in names
     assert "mcp_external_server_secrets" in names
     assert "mcp_external_server_slot_secrets" in names
+    assert "mcp_governance_pack_objects" in names
+    assert "mcp_governance_packs" in names
     assert "mcp_permission_profiles" in names
     assert "mcp_policy_assignments" in names
     assert "mcp_policy_audit_history" in names
@@ -78,18 +82,84 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     override_column_names = {str(row["column_name"]) for row in override_column_rows}
     assert "is_active" in override_column_names
 
+    governance_pack_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_governance_packs'
+          AND column_name IN (
+            'pack_id',
+            'pack_version',
+            'bundle_digest',
+            'manifest_json',
+            'normalized_ir_json',
+            'owner_scope_type',
+            'owner_scope_id'
+          )
+        """
+    )
+    governance_pack_column_names = {str(row["column_name"]) for row in governance_pack_column_rows}
+    assert "pack_id" in governance_pack_column_names
+    assert "pack_version" in governance_pack_column_names
+    assert "bundle_digest" in governance_pack_column_names
+    assert "manifest_json" in governance_pack_column_names
+    assert "normalized_ir_json" in governance_pack_column_names
+    assert "owner_scope_type" in governance_pack_column_names
+    assert "owner_scope_id" in governance_pack_column_names
+
+    governance_object_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_governance_pack_objects'
+          AND column_name IN ('governance_pack_id', 'object_type', 'object_id', 'source_object_id')
+        """
+    )
+    governance_object_column_names = {str(row["column_name"]) for row in governance_object_column_rows}
+    assert "governance_pack_id" in governance_object_column_names
+    assert "object_type" in governance_object_column_names
+    assert "object_id" in governance_object_column_names
+    assert "source_object_id" in governance_object_column_names
+
     assignment_column_rows = await test_db_pool.fetch(
         """
         SELECT column_name
         FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name = 'mcp_policy_assignments'
-          AND column_name IN ('workspace_source_mode', 'workspace_set_object_id')
+          AND column_name IN ('workspace_source_mode', 'workspace_set_object_id', 'is_immutable')
         """
     )
     assignment_column_names = {str(row["column_name"]) for row in assignment_column_rows}
+    assert "is_immutable" in assignment_column_names
     assert "workspace_source_mode" in assignment_column_names
     assert "workspace_set_object_id" in assignment_column_names
+
+    profile_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_permission_profiles'
+          AND column_name IN ('is_immutable')
+        """
+    )
+    profile_column_names = {str(row["column_name"]) for row in profile_column_rows}
+    assert "is_immutable" in profile_column_names
+
+    approval_policy_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_approval_policies'
+          AND column_name IN ('is_immutable')
+        """
+    )
+    approval_policy_column_names = {str(row["column_name"]) for row in approval_policy_column_rows}
+    assert "is_immutable" in approval_policy_column_names
 
     workspace_set_column_rows = await test_db_pool.fetch(
         """

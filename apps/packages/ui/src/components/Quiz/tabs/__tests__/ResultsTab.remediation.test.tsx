@@ -545,16 +545,24 @@ describe("ResultsTab remediation panel", () => {
         request: {
           question_ids: [13],
           create_deck_name: "Missed Questions Deck",
+          create_deck_scheduler_type: "sm2_plus",
           create_deck_scheduler_settings: {
-            new_steps_minutes: [1, 5, 15],
-            relearn_steps_minutes: [10],
-            graduating_interval_days: 1,
-            easy_interval_days: 3,
-            easy_bonus: 1.15,
-            interval_modifier: 0.9,
-            max_interval_days: 3650,
-            leech_threshold: 10,
-            enable_fuzz: false
+            sm2_plus: {
+              new_steps_minutes: [1, 5, 15],
+              relearn_steps_minutes: [10],
+              graduating_interval_days: 1,
+              easy_interval_days: 3,
+              easy_bonus: 1.15,
+              interval_modifier: 0.9,
+              max_interval_days: 3650,
+              leech_threshold: 10,
+              enable_fuzz: false
+            },
+            fsrs: {
+              target_retention: 0.9,
+              maximum_interval_days: 36500,
+              enable_fuzz: false
+            }
           },
           replace_active: false
         }

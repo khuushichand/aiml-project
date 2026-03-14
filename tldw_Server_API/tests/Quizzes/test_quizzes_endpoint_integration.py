@@ -359,16 +359,24 @@ def test_convert_remediation_questions_creates_new_deck_with_scheduler_settings(
         json={
             "question_ids": question_ids,
             "create_deck_name": "Quiz Remediation Deck",
+            "create_deck_scheduler_type": "fsrs",
             "create_deck_scheduler_settings": {
-                "new_steps_minutes": [1, 5, 15],
-                "relearn_steps_minutes": [10],
-                "graduating_interval_days": 1,
-                "easy_interval_days": 3,
-                "easy_bonus": 1.15,
-                "interval_modifier": 0.9,
-                "max_interval_days": 3650,
-                "leech_threshold": 10,
-                "enable_fuzz": False,
+                "sm2_plus": {
+                    "new_steps_minutes": [1, 5, 15],
+                    "relearn_steps_minutes": [10],
+                    "graduating_interval_days": 1,
+                    "easy_interval_days": 3,
+                    "easy_bonus": 1.15,
+                    "interval_modifier": 0.9,
+                    "max_interval_days": 3650,
+                    "leech_threshold": 10,
+                    "enable_fuzz": False,
+                },
+                "fsrs": {
+                    "target_retention": 0.95,
+                    "maximum_interval_days": 1825,
+                    "enable_fuzz": True,
+                },
             },
             "replace_active": False,
         },
@@ -379,10 +387,13 @@ def test_convert_remediation_questions_creates_new_deck_with_scheduler_settings(
     payload = response.json()
     created_deck = quizzes_db.get_deck(payload["target_deck"]["id"])
     assert created_deck is not None
+    assert created_deck["scheduler_type"] == "fsrs"
     scheduler_settings = json.loads(created_deck["scheduler_settings_json"])
-    assert scheduler_settings["new_steps_minutes"] == [1, 5, 15]
-    assert scheduler_settings["easy_interval_days"] == 3
-    assert scheduler_settings["enable_fuzz"] is False
+    assert scheduler_settings["sm2_plus"]["new_steps_minutes"] == [1, 5, 15]
+    assert scheduler_settings["sm2_plus"]["easy_interval_days"] == 3
+    assert scheduler_settings["fsrs"]["target_retention"] == pytest.approx(0.95)
+    assert scheduler_settings["fsrs"]["maximum_interval_days"] == 1825
+    assert scheduler_settings["fsrs"]["enable_fuzz"] is True
 
 
 def test_convert_remediation_questions_returns_mixed_results_without_replace_active(

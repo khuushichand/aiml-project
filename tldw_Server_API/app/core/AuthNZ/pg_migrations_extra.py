@@ -230,6 +230,11 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        "ALTER TABLE mcp_permission_profiles "
+        "ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT FALSE",
+        (),
+    ),
+    (
         "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_path_scope_object "
         "ON mcp_permission_profiles(path_scope_object_id)",
         (),
@@ -390,6 +395,11 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT FALSE",
+        (),
+    ),
+    (
         "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_workspace_set_object "
         "ON mcp_policy_assignments(workspace_set_object_id)",
         (),
@@ -443,6 +453,73 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_approval_policies_scope "
         "ON mcp_approval_policies(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_approval_policies "
+        "ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT FALSE",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_packs (
+            id SERIAL PRIMARY KEY,
+            pack_id TEXT NOT NULL,
+            pack_version TEXT NOT NULL,
+            pack_schema_version INTEGER NOT NULL,
+            capability_taxonomy_version INTEGER NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            bundle_digest TEXT NOT NULL,
+            manifest_json TEXT NOT NULL DEFAULT '{}',
+            normalized_ir_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_packs_scope "
+        "ON mcp_governance_packs(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_scope_version "
+        "ON mcp_governance_packs(pack_id, pack_version, owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_objects (
+            id SERIAL PRIMARY KEY,
+            governance_pack_id INTEGER NOT NULL REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            object_type TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            source_object_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_objects_pack "
+        "ON mcp_governance_pack_objects(governance_pack_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_pack_source "
+        "ON mcp_governance_pack_objects(governance_pack_id, object_type, source_object_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_object "
+        "ON mcp_governance_pack_objects(object_type, object_id)",
         (),
     ),
     (

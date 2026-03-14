@@ -68,11 +68,14 @@ Open `Scheduler` from the top-level Flashcards tabs to edit deck-level review po
 What it includes:
 
 - A searchable deck list with compact scheduler summaries.
+- A scheduler-type selector for `SM-2+` or `FSRS` on each deck.
 - A per-deck editor for step timing, interval growth, leech handling, and fuzz.
 - Built-in presets:
   - `Default`: backend defaults for balanced daily review.
   - `Fast acquisition`: shorter early steps and shorter easy intervals.
   - `Conservative review`: slower acquisition and stronger long-term spacing.
+  - `High retention`: FSRS preset tuned for shorter review intervals.
+  - `Long horizon`: FSRS preset tuned for larger mature decks.
 - `Copy settings` to clone another deck's scheduler into the current draft.
 - `Reset to defaults` to restore the standard scheduler bundle.
 - Active-deck counts for `Due review`, `New`, `Learning`, and total due cards.
@@ -80,9 +83,11 @@ What it includes:
 Important behavior:
 
 - New decks start with the default scheduler settings.
+- New decks default to `SM-2+`, but you can switch them to `FSRS` before saving.
 - Scheduler edits are deck-scoped; they do not affect other decks unless you copy them.
 - Unsaved scheduler drafts are guarded when you switch decks or leave the `Scheduler` tab.
 - If another client updates the same deck first, the tab shows `Reload latest` and `Reapply my draft` actions.
+- Switching an existing deck to `FSRS` keeps review history intact and bootstraps FSRS state conservatively as cards are reviewed.
 
 ## Scheduler Settings During Deck Creation
 
@@ -99,6 +104,7 @@ How it works:
 
 - Existing deck selectors now include `Create new deck`.
 - Choosing that option opens a deck-name field plus the same scheduler preset/editor used by the scheduler UI.
+- The inline editor also lets you choose the scheduler type for the new deck.
 - Existing decks remain read-only in those flows and show a compact scheduler summary instead.
 - New decks created there start with exactly the scheduler settings you selected.
 
@@ -114,7 +120,7 @@ Later edits:
 
 ## Queue States
 
-Queue-state badges now appear on the active card in `Study`, on expanded cards in `Manage`, and on document-mode rows.
+Queue-state badges now appear on the active card in `Study`, on expanded cards in `Manage`, and on document-mode rows. The active card in `Study` also shows a small scheduler badge (`SM-2+` or `FSRS`) so you can see which policy is driving the interval previews.
 
 Meanings:
 

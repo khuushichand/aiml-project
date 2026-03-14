@@ -14,7 +14,7 @@ import {
   useImportLimitsQuery,
   usePreviewStructuredQaImportMutation
 } from "../../hooks"
-import type { DeckSchedulerSettings } from "@/services/flashcards"
+import type { DeckSchedulerSettings, DeckSchedulerSettingsEnvelope } from "@/services/flashcards"
 
 const messageSpies = {
   success: vi.fn(),
@@ -33,6 +33,11 @@ const generateMutateAsync = vi.hoisted(() => vi.fn())
 const previewStructuredMutateAsync = vi.hoisted(() => vi.fn())
 const invalidateQueriesMock = vi.hoisted(() => vi.fn())
 const useQueryMock = vi.hoisted(() => vi.fn())
+const defaultFsrsSettings = {
+  target_retention: 0.9,
+  maximum_interval_days: 36500,
+  enable_fuzz: false
+}
 
 vi.mock("@tanstack/react-query", async () => {
   const actual = await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query")
@@ -115,6 +120,11 @@ const fastAcquisitionSettings: DeckSchedulerSettings = {
   enable_fuzz: false
 }
 
+const fastAcquisitionEnvelope: DeckSchedulerSettingsEnvelope = {
+  sm2_plus: fastAcquisitionSettings,
+  fsrs: defaultFsrsSettings
+}
+
 describe("ImportExportTab deck creation flows", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -137,6 +147,7 @@ describe("ImportExportTab deck creation flows", () => {
           deleted: false,
           client_id: "test",
           version: 1,
+          scheduler_type: "sm2_plus",
           scheduler_settings_json: null,
           scheduler_settings: {
             new_steps_minutes: [1, 10],
@@ -198,8 +209,9 @@ describe("ImportExportTab deck creation flows", () => {
       deleted: false,
       client_id: "test",
       version: 1,
-      scheduler_settings_json: JSON.stringify(fastAcquisitionSettings),
-      scheduler_settings: fastAcquisitionSettings
+      scheduler_type: "sm2_plus",
+      scheduler_settings_json: JSON.stringify(fastAcquisitionEnvelope),
+      scheduler_settings: fastAcquisitionEnvelope
     })
     previewStructuredMutateAsync.mockResolvedValue({
       drafts: [
@@ -250,7 +262,8 @@ describe("ImportExportTab deck creation flows", () => {
     await waitFor(() =>
       expect(createDeckMutateAsync).toHaveBeenCalledWith({
         name: "Structured deck",
-        scheduler_settings: fastAcquisitionSettings
+        scheduler_type: "sm2_plus",
+        scheduler_settings: fastAcquisitionEnvelope
       })
     )
   })
@@ -263,8 +276,9 @@ describe("ImportExportTab deck creation flows", () => {
       deleted: false,
       client_id: "test",
       version: 1,
-      scheduler_settings_json: JSON.stringify(fastAcquisitionSettings),
-      scheduler_settings: fastAcquisitionSettings
+      scheduler_type: "sm2_plus",
+      scheduler_settings_json: JSON.stringify(fastAcquisitionEnvelope),
+      scheduler_settings: fastAcquisitionEnvelope
     })
     generateMutateAsync.mockResolvedValue({
       flashcards: [
@@ -302,7 +316,8 @@ describe("ImportExportTab deck creation flows", () => {
     await waitFor(() =>
       expect(createDeckMutateAsync).toHaveBeenCalledWith({
         name: "Generated deck",
-        scheduler_settings: fastAcquisitionSettings
+        scheduler_type: "sm2_plus",
+        scheduler_settings: fastAcquisitionEnvelope
       })
     )
   })

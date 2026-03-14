@@ -1,8 +1,9 @@
 import { bgRequest } from "@/services/background-proxy"
 import type { AllowedPath } from "@/services/tldw/openapi-guard"
 import { createResourceClient } from "@/services/resource-client"
-import type { DeckSchedulerSettings } from "@/services/flashcards"
 import type {
+  DeckSchedulerSettingsEnvelope,
+  DeckSchedulerType,
   StudyAssistantContextResponse,
   StudyAssistantRespondRequest,
   StudyAssistantRespondResponse
@@ -255,7 +256,8 @@ export type QuizRemediationConvertRequest = {
   question_ids: number[]
   target_deck_id?: number | null
   create_deck_name?: string | null
-  create_deck_scheduler_settings?: DeckSchedulerSettings | null
+  create_deck_scheduler_type?: DeckSchedulerType | null
+  create_deck_scheduler_settings?: DeckSchedulerSettingsEnvelope | null
   replace_active?: boolean
 }
 

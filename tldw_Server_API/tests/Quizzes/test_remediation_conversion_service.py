@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import uuid
 
@@ -153,6 +154,43 @@ def test_convert_quiz_remediation_questions_creates_new_deck_when_requested(quiz
     assert payload["results"][0]["conversion"]["status"] == "active"
     assert payload["created_flashcard_uuids"]
     assert quizzes_db.count_flashcards(deck_id=payload["target_deck"]["id"]) == 1
+
+
+def test_convert_quiz_remediation_questions_creates_fsrs_deck_when_requested(quizzes_db: CharactersRAGDB):
+    attempt_id, _quiz_id, missed_question_id, _correct_question_id = _create_attempt_with_one_miss_and_one_correct(quizzes_db)
+
+    payload = quizzes_db.convert_quiz_remediation_questions(
+        attempt_id=attempt_id,
+        question_ids=[missed_question_id],
+        create_deck_name="FSRS Remediation Deck",
+        create_deck_scheduler_type="fsrs",
+        create_deck_scheduler_settings={
+            "sm2_plus": {
+                "new_steps_minutes": [1, 5],
+                "relearn_steps_minutes": [10],
+                "graduating_interval_days": 1,
+                "easy_interval_days": 3,
+                "easy_bonus": 1.15,
+                "interval_modifier": 0.9,
+                "max_interval_days": 3650,
+                "leech_threshold": 10,
+                "enable_fuzz": False,
+            },
+            "fsrs": {
+                "target_retention": 0.95,
+                "maximum_interval_days": 1825,
+                "enable_fuzz": True,
+            },
+        },
+        replace_active=False,
+    )
+
+    created_deck = quizzes_db.get_deck(payload["target_deck"]["id"])
+    assert created_deck is not None
+    assert created_deck["scheduler_type"] == "fsrs"
+    scheduler_settings = json.loads(created_deck["scheduler_settings_json"])
+    assert scheduler_settings["fsrs"]["target_retention"] == pytest.approx(0.95)
+    assert scheduler_settings["fsrs"]["maximum_interval_days"] == 1825
 
 
 def test_convert_quiz_remediation_questions_preserves_dedupe_across_duplicate_misses(

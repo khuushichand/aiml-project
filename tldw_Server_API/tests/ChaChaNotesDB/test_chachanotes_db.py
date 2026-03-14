@@ -1134,6 +1134,58 @@ class TestKeywordsAndCollections:
 
 
 class TestSyncLog:
+    def test_sync_log_entry_on_create_deck_includes_scheduler_fields(self, db_instance: CharactersRAGDB):
+        initial_log_max_id = db_instance.get_latest_sync_log_change_id()
+        deck_id = db_instance.add_deck(
+            "Sync FSRS Deck",
+            scheduler_type="fsrs",
+            scheduler_settings={"fsrs": {"target_retention": 0.88, "maximum_interval_days": 7300}},
+        )
+
+        log_entries = db_instance.get_sync_log_entries(since_change_id=initial_log_max_id)
+        deck_log_entry = None
+        for entry in log_entries:
+            if entry["entity"] == "decks" and entry["entity_id"] == str(deck_id) and entry["operation"] == "create":
+                deck_log_entry = entry
+                break
+
+        assert deck_log_entry is not None
+        assert deck_log_entry["payload"]["scheduler_type"] == "fsrs"
+        settings = json.loads(deck_log_entry["payload"]["scheduler_settings_json"])
+        assert settings["sm2_plus"]["new_steps_minutes"] == [1, 10]
+        assert settings["fsrs"]["target_retention"] == pytest.approx(0.88)
+
+    def test_sync_log_entry_on_fsrs_review_includes_scheduler_state(self, db_instance: CharactersRAGDB):
+        deck_id = db_instance.add_deck("Review Sync Deck", scheduler_type="fsrs")
+        card_uuid = db_instance.add_flashcard(
+            {
+                "deck_id": deck_id,
+                "front": "Review sync",
+                "back": "Answer",
+                "queue_state": "review",
+                "interval_days": 12,
+                "repetitions": 7,
+                "lapses": 1,
+                "last_reviewed_at": "2026-03-01T00:00:00Z",
+                "due_at": "2026-03-13T00:00:00Z",
+            }
+        )
+
+        latest_change_id = db_instance.get_latest_sync_log_change_id()
+        db_instance.review_flashcard(card_uuid, rating=3, answer_time_ms=1500)
+
+        new_entries = db_instance.get_sync_log_entries(since_change_id=latest_change_id)
+        update_log_entry = None
+        for entry in new_entries:
+            if entry["entity"] == "flashcards" and entry["entity_id"] == card_uuid and entry["operation"] == "update":
+                update_log_entry = entry
+                break
+
+        assert update_log_entry is not None
+        assert update_log_entry["payload"]["scheduler_state_json"] != "{}"
+        state = json.loads(update_log_entry["payload"]["scheduler_state_json"])
+        assert state["stability"] > 0
+
     def test_sync_log_entry_on_add_character(self, db_instance: CharactersRAGDB):
         initial_log_max_id = db_instance.get_latest_sync_log_change_id()
         card_data = _create_sample_card_data("SyncLogChar")

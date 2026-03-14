@@ -457,11 +457,13 @@ export function useCreateDeckMutation() {
     mutationFn: (params: {
       name: string
       description?: string
+      scheduler_type?: Deck["scheduler_type"]
       scheduler_settings?: Deck["scheduler_settings"]
     }) =>
       createDeck({
         name: params.name.trim(),
         description: params.description?.trim() || undefined,
+        scheduler_type: params.scheduler_type,
         scheduler_settings: params.scheduler_settings
       }),
     onSuccess: () => {

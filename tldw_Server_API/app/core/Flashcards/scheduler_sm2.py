@@ -21,6 +21,12 @@ DEFAULT_SCHEDULER_SETTINGS: dict[str, Any] = {
     "enable_fuzz": False,
 }
 
+DEFAULT_FSRS_SETTINGS: dict[str, Any] = {
+    "target_retention": 0.9,
+    "maximum_interval_days": 36500,
+    "enable_fuzz": False,
+}
+
 
 class SchedulerSettingsError(ValueError):
     """Raised when deck scheduler settings are invalid."""
@@ -28,6 +34,17 @@ class SchedulerSettingsError(ValueError):
 
 def get_default_scheduler_settings() -> dict[str, Any]:
     return copy.deepcopy(DEFAULT_SCHEDULER_SETTINGS)
+
+
+def get_default_fsrs_settings() -> dict[str, Any]:
+    return copy.deepcopy(DEFAULT_FSRS_SETTINGS)
+
+
+def get_default_scheduler_settings_envelope() -> dict[str, Any]:
+    return {
+        "sm2_plus": get_default_scheduler_settings(),
+        "fsrs": get_default_fsrs_settings(),
+    }
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -61,7 +78,10 @@ def normalize_scheduler_settings(raw: Mapping[str, Any] | str | None) -> dict[st
         if not raw.strip():
             source = {}
         else:
-            parsed = json.loads(raw)
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise SchedulerSettingsError("scheduler_settings must be valid JSON") from exc
             if not isinstance(parsed, dict):
                 raise SchedulerSettingsError("scheduler_settings must be a JSON object")
             source = parsed
@@ -69,6 +89,9 @@ def normalize_scheduler_settings(raw: Mapping[str, Any] | str | None) -> dict[st
         source = dict(raw)
     else:
         raise SchedulerSettingsError("scheduler_settings must be a mapping or JSON string")
+
+    if isinstance(source.get("sm2_plus"), Mapping):
+        source = dict(source["sm2_plus"])
 
     settings = get_default_scheduler_settings()
     for key in settings:
@@ -130,7 +153,42 @@ def normalize_scheduler_settings(raw: Mapping[str, Any] | str | None) -> dict[st
 
 
 def scheduler_settings_to_json(raw: Mapping[str, Any] | str | None) -> str:
-    return json.dumps(normalize_scheduler_settings(raw), sort_keys=True)
+    envelope = get_default_scheduler_settings_envelope()
+    if raw is None:
+        return json.dumps(envelope, sort_keys=True)
+
+    if isinstance(raw, str):
+        if not raw.strip():
+            return json.dumps(envelope, sort_keys=True)
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise SchedulerSettingsError("scheduler_settings must be valid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise SchedulerSettingsError("scheduler_settings must be a JSON object")
+        raw = parsed
+
+    if not isinstance(raw, Mapping):
+        raise SchedulerSettingsError("scheduler_settings must be a mapping or JSON string")
+
+    raw_dict = dict(raw)
+    if "sm2_plus" in raw_dict or "fsrs" in raw_dict:
+        if isinstance(raw_dict.get("sm2_plus"), Mapping):
+            envelope["sm2_plus"] = normalize_scheduler_settings(raw_dict["sm2_plus"])
+        if "fsrs" in raw_dict:
+            from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # local import avoids module cycle
+                FsrsSettingsError,
+                normalize_fsrs_settings,
+            )
+
+            try:
+                envelope["fsrs"] = normalize_fsrs_settings(raw_dict.get("fsrs"))
+            except FsrsSettingsError as exc:
+                raise SchedulerSettingsError(str(exc)) from exc
+        return json.dumps(envelope, sort_keys=True)
+
+    envelope["sm2_plus"] = normalize_scheduler_settings(raw_dict)
+    return json.dumps(envelope, sort_keys=True)
 
 
 def coerce_queue_state(card: Mapping[str, Any]) -> str:

@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Flashcards.asset_refs import extract_flashcard_asset_uuids
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
+from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import SchedulerSettingsError
 from tldw_Server_API.tests.test_config import TestConfig
 
 # Explicit auth headers for single-user mode (required by get_request_user)
@@ -610,17 +611,27 @@ def test_deck_endpoints_expose_and_patch_scheduler_settings(
     )
     assert created.status_code == 200
     deck = created.json()
-    assert deck["scheduler_settings"]["new_steps_minutes"] == [1, 10]
-    assert deck["scheduler_settings"]["enable_fuzz"] is False
+    assert deck["scheduler_type"] == "sm2_plus"
+    assert deck["scheduler_settings"]["sm2_plus"]["new_steps_minutes"] == [1, 10]
+    assert deck["scheduler_settings"]["sm2_plus"]["enable_fuzz"] is False
+    assert deck["scheduler_settings"]["fsrs"]["target_retention"] == pytest.approx(0.9)
 
     updated = client_with_flashcards_db.patch(
         f"/api/v1/flashcards/decks/{deck['id']}",
         json={
             "description": "updated",
+            "scheduler_type": "fsrs",
             "scheduler_settings": {
-                "new_steps_minutes": [2, 20],
-                "relearn_steps_minutes": [15],
-                "easy_bonus": 1.5,
+                "sm2_plus": {
+                    "new_steps_minutes": [2, 20],
+                    "relearn_steps_minutes": [15],
+                    "easy_bonus": 1.5,
+                },
+                "fsrs": {
+                    "target_retention": 0.88,
+                    "maximum_interval_days": 7300,
+                    "enable_fuzz": True,
+                },
             },
             "expected_version": deck["version"],
         },
@@ -629,10 +640,14 @@ def test_deck_endpoints_expose_and_patch_scheduler_settings(
     assert updated.status_code == 200
     payload = updated.json()
     assert payload["description"] == "updated"
-    assert payload["scheduler_settings"]["new_steps_minutes"] == [2, 20]
-    assert payload["scheduler_settings"]["relearn_steps_minutes"] == [15]
-    assert payload["scheduler_settings"]["easy_bonus"] == pytest.approx(1.5)
-    assert payload["scheduler_settings"]["graduating_interval_days"] == 1
+    assert payload["scheduler_type"] == "fsrs"
+    assert payload["scheduler_settings"]["sm2_plus"]["new_steps_minutes"] == [2, 20]
+    assert payload["scheduler_settings"]["sm2_plus"]["relearn_steps_minutes"] == [15]
+    assert payload["scheduler_settings"]["sm2_plus"]["easy_bonus"] == pytest.approx(1.5)
+    assert payload["scheduler_settings"]["sm2_plus"]["graduating_interval_days"] == 1
+    assert payload["scheduler_settings"]["fsrs"]["target_retention"] == pytest.approx(0.88)
+    assert payload["scheduler_settings"]["fsrs"]["maximum_interval_days"] == 7300
+    assert payload["scheduler_settings"]["fsrs"]["enable_fuzz"] is True
 
     conflict = client_with_flashcards_db.patch(
         f"/api/v1/flashcards/decks/{deck['id']}",
@@ -695,10 +710,108 @@ def test_review_next_prefers_due_learning_before_due_review_and_new_cards(
     assert payload["selection_reason"] == "learning_due"
     assert payload["card"]["uuid"] == learning_due_uuid
     assert payload["card"]["queue_state"] == "learning"
+    assert payload["card"]["scheduler_type"] == "sm2_plus"
     assert payload["card"]["next_intervals"]["again"] == "1 min"
     assert payload["card"]["next_intervals"]["easy"] == "4 days"
     assert payload["card"]["uuid"] != review_due_uuid
     assert payload["card"]["uuid"] != new_uuid
+
+
+def test_fsrs_review_bootstraps_scheduler_state_and_returns_scheduler_type(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    created_deck = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={
+            "name": "FSRS Deck",
+            "scheduler_type": "fsrs",
+            "scheduler_settings": {
+                "fsrs": {
+                    "target_retention": 0.88,
+                    "maximum_interval_days": 7300,
+                    "enable_fuzz": False,
+                }
+            },
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert created_deck.status_code == 200
+    deck_id = created_deck.json()["id"]
+
+    card_uuid = flashcards_db.add_flashcard(
+        {
+            "deck_id": deck_id,
+            "front": "Existing review card",
+            "back": "Answer",
+            "queue_state": "review",
+            "interval_days": 12,
+            "repetitions": 7,
+            "lapses": 1,
+            "last_reviewed_at": "2026-03-01T00:00:00Z",
+            "due_at": "2026-03-13T00:00:00Z",
+        }
+    )
+
+    reviewed = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": card_uuid, "rating": 3, "answer_time_ms": 1800},
+        headers=AUTH_HEADERS,
+    )
+    assert reviewed.status_code == 200
+    payload = reviewed.json()
+
+    assert payload["scheduler_type"] == "fsrs"
+    assert payload["next_intervals"]["good"]
+
+    persisted = flashcards_db.get_flashcard(card_uuid)
+    assert persisted is not None
+    assert persisted["scheduler_state_json"] != "{}"
+
+    review_row = flashcards_db.execute_query(
+        "SELECT scheduler_type FROM flashcard_reviews fr JOIN flashcards f ON f.id = fr.card_id WHERE f.uuid = ? ORDER BY fr.id DESC LIMIT 1",
+        (card_uuid,),
+    ).fetchone()
+    assert review_row is not None
+    assert review_row["scheduler_type"] == "fsrs"
+
+
+def test_fsrs_review_returns_400_for_invalid_deck_settings(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+    monkeypatch,
+):
+    deck_id = flashcards_db.add_deck("Broken FSRS Deck", scheduler_type="fsrs")
+    card_uuid = flashcards_db.add_flashcard(
+        {
+            "deck_id": deck_id,
+            "front": "Broken review card",
+            "back": "Answer",
+            "queue_state": "review",
+            "interval_days": 12,
+            "repetitions": 7,
+            "lapses": 1,
+            "last_reviewed_at": "2026-03-01T00:00:00Z",
+            "due_at": "2026-03-13T00:00:00Z",
+        }
+    )
+
+    def raise_invalid_settings(raw):
+        raise SchedulerSettingsError("target_retention must be between 0 and 1")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB._normalize_scheduler_settings_envelope",
+        raise_invalid_settings,
+    )
+
+    reviewed = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": card_uuid, "rating": 3, "answer_time_ms": 1800},
+        headers=AUTH_HEADERS,
+    )
+
+    assert reviewed.status_code == 400
+    assert "target_retention" in reviewed.json()["detail"]
 
 
 def test_get_flashcard_assistant_returns_thread_messages_and_context(
@@ -1033,10 +1146,13 @@ def test_analytics_summary_honors_deck_filter(client_with_flashcards_db: TestCli
     assert payload["decks"][0]["deck_name"] == "DeckA"
 
 
-def test_reset_scheduling_resets_card_to_new_defaults(client_with_flashcards_db: TestClient):
+def test_reset_scheduling_resets_card_to_new_defaults(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
     r = client_with_flashcards_db.post(
         "/api/v1/flashcards/decks",
-        json={"name": "ResetDeck"},
+        json={"name": "ResetDeck", "scheduler_type": "fsrs"},
         headers=AUTH_HEADERS,
     )
     assert r.status_code == 200
@@ -1050,15 +1166,22 @@ def test_reset_scheduling_resets_card_to_new_defaults(client_with_flashcards_db:
     assert created.status_code == 200
     card = created.json()
     card_uuid = card["uuid"]
-
-    reviewed = client_with_flashcards_db.post(
-        "/api/v1/flashcards/review",
-        json={"card_uuid": card_uuid, "rating": 3, "answer_time_ms": 2100},
-        headers=AUTH_HEADERS,
-    )
-    assert reviewed.status_code == 200
-    reviewed_payload = reviewed.json()
-    assert reviewed_payload["repetitions"] >= 1
+    with flashcards_db.transaction() as conn:
+        conn.execute(
+            """
+            UPDATE flashcards
+               SET queue_state = 'review',
+                   interval_days = 12,
+                   repetitions = 7,
+                   lapses = 1,
+                   due_at = '2026-03-13T00:00:00Z',
+                   last_reviewed_at = '2026-03-01T00:00:00Z',
+                   scheduler_state_json = ?
+             WHERE uuid = ?
+            """,
+            ('{"stability": 12.5, "difficulty": 4.2, "retrievability": 0.86}', card_uuid),
+        )
+    assert flashcards_db.get_flashcard(card_uuid)["scheduler_state_json"] != "{}"
 
     current = client_with_flashcards_db.get(f"/api/v1/flashcards/id/{card_uuid}", headers=AUTH_HEADERS)
     assert current.status_code == 200
@@ -1078,6 +1201,9 @@ def test_reset_scheduling_resets_card_to_new_defaults(client_with_flashcards_db:
     assert payload["lapses"] == 0
     assert payload["last_reviewed_at"] is None
     assert payload["due_at"] is not None
+    persisted = flashcards_db.get_flashcard(card_uuid)
+    assert persisted is not None
+    assert persisted["scheduler_state_json"] == "{}"
 
     conflict = client_with_flashcards_db.post(
         f"/api/v1/flashcards/{card_uuid}/reset-scheduling",

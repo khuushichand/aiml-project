@@ -9,6 +9,10 @@ def _b64_key(byte_char: bytes) -> str:
     return base64.b64encode(byte_char * 32).decode("ascii")
 
 
+def _slot_secret(label: str) -> str:
+    return f"{label}-credential-value"
+
+
 @pytest.mark.asyncio
 async def test_managed_external_auth_bridge_hydrates_bearer_token(monkeypatch) -> None:
     monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
@@ -18,6 +22,7 @@ async def test_managed_external_auth_bridge_hydrates_bearer_token(monkeypatch) -
     )
 
     bridge = ManagedExternalAuthBridge()
+    secret_value = _slot_secret("primary")
     auth = await bridge.hydrate_runtime_auth(
         server_config={
             "transport": "websocket",
@@ -26,10 +31,10 @@ async def test_managed_external_auth_bridge_hydrates_bearer_token(monkeypatch) -
                 "auth": {"mode": "bearer_token"},
             },
         },
-        secret_payload={"secret": "super-secret-token"},
+        secret_payload={"secret": secret_value},
     )
 
-    assert auth["headers"]["Authorization"] == "Bearer super-secret-token"
+    assert auth["headers"]["Authorization"] == f"Bearer {secret_value}"
 
 
 @pytest.mark.asyncio
@@ -39,6 +44,7 @@ async def test_managed_external_auth_bridge_rejects_unsupported_auth_mode() -> N
     )
 
     bridge = ManagedExternalAuthBridge()
+    secret_value = _slot_secret("unsupported-mode")
 
     with pytest.raises(ValueError):
         await bridge.hydrate_runtime_auth(
@@ -48,7 +54,7 @@ async def test_managed_external_auth_bridge_rejects_unsupported_auth_mode() -> N
                     "auth": {"mode": "sigv4_env"},
                 },
             },
-            secret_payload={"secret": "super-secret-token"},
+            secret_payload={"secret": secret_value},
         )
 
 
@@ -62,6 +68,7 @@ async def test_managed_external_auth_bridge_hydrates_named_required_slot() -> No
         )
 
         bridge = ManagedExternalAuthBridge()
+        secret_value = _slot_secret("readonly")
         auth = await bridge.hydrate_runtime_auth(
             server_config={
                 "transport": "websocket",
@@ -82,12 +89,12 @@ async def test_managed_external_auth_bridge_hydrates_named_required_slot() -> No
             },
             secret_payload={
                 "slots": {
-                    "token_readonly": "super-secret-token",
+                    "token_readonly": secret_value,
                 }
             },
         )
 
-        assert auth["headers"]["Authorization"] == "Bearer super-secret-token"
+        assert auth["headers"]["Authorization"] == f"Bearer {secret_value}"
     finally:
         monkeypatch.undo()
 
@@ -99,6 +106,7 @@ async def test_managed_external_auth_bridge_hydrates_template_header_mapping() -
     )
 
     bridge = ManagedExternalAuthBridge()
+    secret_value = _slot_secret("template-header")
     auth = await bridge.hydrate_runtime_auth(
         server_config={
             "transport": "websocket",
@@ -119,10 +127,44 @@ async def test_managed_external_auth_bridge_hydrates_template_header_mapping() -
                 },
             },
         },
-        secret_payload={"slots": {"token_readonly": "super-secret-token"}},
+        secret_payload={"slots": {"token_readonly": secret_value}},
     )
 
-    assert auth["headers"]["Authorization"] == "Bearer super-secret-token"
+    assert auth["headers"]["Authorization"] == f"Bearer {secret_value}"
+
+
+@pytest.mark.asyncio
+async def test_managed_external_auth_bridge_preserves_custom_template_header_name() -> None:
+    from tldw_Server_API.app.services.mcp_hub_external_auth_service import (
+        ManagedExternalAuthBridge,
+    )
+
+    bridge = ManagedExternalAuthBridge()
+    secret_value = _slot_secret("custom-header")
+    auth = await bridge.hydrate_runtime_auth(
+        server_config={
+            "transport": "websocket",
+            "config": {
+                "websocket": {"url": "wss://docs.example/ws"},
+                "auth": {
+                    "mode": "template",
+                    "mappings": [
+                        {
+                            "slot_name": "token_readonly",
+                            "target_type": "header",
+                            "target_name": "X-DOCS-TOKEN",
+                            "prefix": "Token ",
+                            "suffix": "",
+                            "required": True,
+                        }
+                    ],
+                },
+            },
+        },
+        secret_payload={"slots": {"token_readonly": secret_value}},
+    )
+
+    assert auth["headers"] == {"X-DOCS-TOKEN": f"Token {secret_value}"}
 
 
 @pytest.mark.asyncio
@@ -132,6 +174,7 @@ async def test_managed_external_auth_bridge_hydrates_template_env_mapping() -> N
     )
 
     bridge = ManagedExternalAuthBridge()
+    secret_value = _slot_secret("template-env")
     auth = await bridge.hydrate_runtime_auth(
         server_config={
             "transport": "stdio",
@@ -152,10 +195,10 @@ async def test_managed_external_auth_bridge_hydrates_template_env_mapping() -> N
                 },
             },
         },
-        secret_payload={"slots": {"token_readonly": "super-secret-token"}},
+        secret_payload={"slots": {"token_readonly": secret_value}},
     )
 
-    assert auth["env"]["DOCS_TOKEN"] == "super-secret-token"
+    assert auth["env"]["DOCS_TOKEN"] == secret_value
 
 
 @pytest.mark.asyncio
@@ -165,6 +208,8 @@ async def test_managed_external_auth_bridge_rejects_duplicate_template_targets()
     )
 
     bridge = ManagedExternalAuthBridge()
+    readonly_secret = _slot_secret("readonly")
+    write_secret = _slot_secret("write")
 
     with pytest.raises(ValueError, match="duplicate"):
         await bridge.hydrate_runtime_auth(
@@ -197,8 +242,8 @@ async def test_managed_external_auth_bridge_rejects_duplicate_template_targets()
             },
             secret_payload={
                 "slots": {
-                    "token_readonly": "readonly-token",
-                    "token_write": "write-token",
+                    "token_readonly": readonly_secret,
+                    "token_write": write_secret,
                 }
             },
         )
@@ -211,6 +256,8 @@ async def test_managed_external_auth_bridge_prefers_template_shape_over_legacy_s
     )
 
     bridge = ManagedExternalAuthBridge()
+    legacy_secret = _slot_secret("legacy")
+    readonly_secret = _slot_secret("readonly")
     auth = await bridge.hydrate_runtime_auth(
         server_config={
             "transport": "websocket",
@@ -241,13 +288,13 @@ async def test_managed_external_auth_bridge_prefers_template_shape_over_legacy_s
         },
         secret_payload={
             "slots": {
-                "legacy_token": "legacy-token",
-                "token_readonly": "super-secret-token",
+                "legacy_token": legacy_secret,
+                "token_readonly": readonly_secret,
             }
         },
     )
 
-    assert auth["headers"]["Authorization"] == "Bearer super-secret-token"
+    assert auth["headers"]["Authorization"] == f"Bearer {readonly_secret}"
     assert "X-API-KEY" not in auth["headers"]
 
 

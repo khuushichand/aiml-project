@@ -1,5 +1,5 @@
 import React from "react"
-import { Alert, Button, Card, Checkbox, Empty, Input, List, Space, Typography } from "antd"
+import { Alert, Button, Card, Empty, Input, List, Space, Typography } from "antd"
 import { useTranslation } from "react-i18next"
 
 import {
@@ -7,20 +7,11 @@ import {
   useDueCountsQuery,
   useUpdateDeckMutation
 } from "../hooks/useFlashcardQueries"
+import { DeckSchedulerSettingsEditor } from "../components/DeckSchedulerSettingsEditor"
+import { useDeckSchedulerDraft } from "../hooks/useDeckSchedulerDraft"
 import type { Deck } from "@/services/flashcards"
-import type {
-  SchedulerSettingsDraft,
-  SchedulerValidationErrors
-} from "../utils/scheduler-settings"
-import {
-  SCHEDULER_PRESETS,
-  DEFAULT_SCHEDULER_SETTINGS,
-  applySchedulerPreset,
-  copySchedulerSettings,
-  createSchedulerDraft,
-  formatSchedulerSummary,
-  validateSchedulerDraft
-} from "../utils/scheduler-settings"
+import type { SchedulerSettingsDraft } from "../utils/scheduler-settings"
+import { createSchedulerDraft, formatSchedulerSummary } from "../utils/scheduler-settings"
 
 const { Text, Title } = Typography
 
@@ -47,18 +38,10 @@ const isVersionConflict = (error: unknown): boolean =>
   (error as { response?: { status?: number } }).response?.status === 409
 
 const cloneDraft = (draft: SchedulerSettingsDraft): SchedulerSettingsDraft => ({
-  ...draft
+  scheduler_type: draft.scheduler_type,
+  sm2_plus: { ...draft.sm2_plus },
+  fsrs: { ...draft.fsrs }
 })
-
-const discardFieldError = (
-  errors: SchedulerValidationErrors,
-  field: keyof SchedulerValidationErrors
-): SchedulerValidationErrors => {
-  if (!errors[field]) return errors
-  const next = { ...errors }
-  delete next[field]
-  return next
-}
 
 export const SchedulerTab: React.FC<SchedulerTabProps> = ({
   isActive = false,
@@ -68,15 +51,15 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
   const { t } = useTranslation(["option", "common"])
   const decksQuery = useDecksQuery()
   const updateDeckMutation = useUpdateDeckMutation()
+  const schedulerDraft = useDeckSchedulerDraft()
 
   const [searchText, setSearchText] = React.useState("")
   const [selectedDeckId, setSelectedDeckId] = React.useState<number | null>(null)
-  const [draft, setDraft] = React.useState<SchedulerSettingsDraft | null>(null)
   const [copyDeckId, setCopyDeckId] = React.useState("")
-  const [validationErrors, setValidationErrors] = React.useState<SchedulerValidationErrors>({})
   const [editorStatus, setEditorStatus] = React.useState<EditorStatus>("idle")
   const [baseDeckId, setBaseDeckId] = React.useState<number | null>(null)
   const [baseVersion, setBaseVersion] = React.useState<number | null>(null)
+  const [baseDraft, setBaseDraft] = React.useState<SchedulerSettingsDraft | null>(null)
   const [conflictDraft, setConflictDraft] = React.useState<SchedulerSettingsDraft | null>(null)
   const [saveError, setSaveError] = React.useState<string | null>(null)
 
@@ -108,16 +91,20 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
 
   const syncDraftFromDeck = React.useCallback(
     (deck: Deck, status: EditorStatus = "idle") => {
+      const nextDraft = createSchedulerDraft({
+        schedulerType: deck.scheduler_type,
+        settings: deck.scheduler_settings
+      })
+      schedulerDraft.replaceDraftState(nextDraft)
       setBaseDeckId(deck.id)
       setBaseVersion(deck.version)
-      setDraft(createSchedulerDraft(copySchedulerSettings(deck.scheduler_settings)))
+      setBaseDraft(cloneDraft(nextDraft))
       setCopyDeckId("")
-      setValidationErrors({})
       setConflictDraft(null)
       setSaveError(null)
       setEditorStatus(status)
     },
-    []
+    [schedulerDraft]
   )
 
   const refreshDeckFromServer = React.useCallback(
@@ -126,20 +113,30 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
       const refreshedDecks = response.data ?? decksQuery.data ?? []
       const latestDeck = refreshedDecks.find((deck) => deck.id === deckId) ?? null
       if (latestDeck) {
-        syncDraftFromDeck(latestDeck, status)
+        const latestDraft = createSchedulerDraft({
+          schedulerType: latestDeck.scheduler_type,
+          settings: latestDeck.scheduler_settings
+        })
+        schedulerDraft.replaceDraftState(latestDraft)
+        setBaseDeckId(latestDeck.id)
+        setBaseVersion(latestDeck.version)
+        setBaseDraft(cloneDraft(latestDraft))
+        setCopyDeckId("")
+        setConflictDraft(null)
+        setSaveError(null)
+        setEditorStatus(status)
       }
       return latestDeck
     },
-    [decksQuery, syncDraftFromDeck]
+    [decksQuery, schedulerDraft]
   )
 
   React.useEffect(() => {
     if (!activeDeck) {
       setBaseDeckId(null)
       setBaseVersion(null)
-      setDraft(null)
+      setBaseDraft(null)
       setCopyDeckId("")
-      setValidationErrors({})
       setConflictDraft(null)
       setSaveError(null)
       setEditorStatus("idle")
@@ -160,54 +157,55 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
     }
   }, [activeDeck, baseDeckId, baseVersion, editorStatus, syncDraftFromDeck])
 
-  const markDirty = React.useCallback(() => {
-    setEditorStatus("dirty")
-    setConflictDraft(null)
-    setSaveError(null)
-  }, [])
+  const draftChanged = React.useMemo(() => {
+    if (!baseDraft) return false
+    return JSON.stringify(schedulerDraft.draft) !== JSON.stringify(baseDraft)
+  }, [baseDraft, schedulerDraft.draft])
 
-  const updateDraftField = React.useCallback(
-    <K extends keyof SchedulerSettingsDraft>(field: K, value: SchedulerSettingsDraft[K]) => {
-      setDraft((current) => (current ? { ...current, [field]: value } : current))
-      setValidationErrors((current) => discardFieldError(current, field as keyof SchedulerValidationErrors))
-      markDirty()
-    },
-    [markDirty]
-  )
+  React.useEffect(() => {
+    if (editorStatus === "saving" || editorStatus === "conflict") return
+    if (draftChanged) {
+      setEditorStatus("dirty")
+    } else if (editorStatus === "dirty") {
+      setEditorStatus("idle")
+    }
+  }, [draftChanged, editorStatus])
 
   const otherDecks = React.useMemo(
     () => allDecks.filter((deck) => deck.id !== activeDeck?.id),
     [activeDeck?.id, allDecks]
   )
 
-  const draftPreview = React.useMemo(() => {
-    if (!draft) return null
-    const parsed = validateSchedulerDraft(draft)
-    return parsed.settings ? formatSchedulerSummary(parsed.settings) : null
-  }, [draft])
+  const draftPreview = schedulerDraft.summary
 
   const applyPreset = React.useCallback(
-    (presetId: (typeof SCHEDULER_PRESETS)[number]["id"]) => {
-      setDraft(createSchedulerDraft(applySchedulerPreset(presetId)))
-      setValidationErrors({})
-      markDirty()
+    (presetId: Parameters<typeof schedulerDraft.applyPreset>[0]) => {
+      schedulerDraft.applyPreset(presetId)
+      setConflictDraft(null)
+      setSaveError(null)
+      setEditorStatus("dirty")
     },
-    [markDirty]
+    [schedulerDraft]
   )
 
   const copyFromSelectedDeck = React.useCallback(() => {
     const sourceDeck = otherDecks.find((deck) => String(deck.id) === copyDeckId)
     if (!sourceDeck) return
-    setDraft(createSchedulerDraft(copySchedulerSettings(sourceDeck.scheduler_settings)))
-    setValidationErrors({})
-    markDirty()
-  }, [copyDeckId, markDirty, otherDecks])
+    schedulerDraft.replaceDraft({
+      schedulerType: sourceDeck.scheduler_type,
+      settings: sourceDeck.scheduler_settings
+    })
+    setConflictDraft(null)
+    setSaveError(null)
+    setEditorStatus("dirty")
+  }, [copyDeckId, otherDecks, schedulerDraft])
 
   const resetToDefaults = React.useCallback(() => {
-    setDraft(createSchedulerDraft(DEFAULT_SCHEDULER_SETTINGS))
-    setValidationErrors({})
-    markDirty()
-  }, [markDirty])
+    schedulerDraft.resetToDefaults()
+    setConflictDraft(null)
+    setSaveError(null)
+    setEditorStatus("dirty")
+  }, [schedulerDraft])
 
   const reloadLatest = React.useCallback(async () => {
     if (!activeDeck) return
@@ -226,18 +224,16 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
 
   const reapplyConflict = React.useCallback(() => {
     if (!conflictDraft) return
-    setDraft(cloneDraft(conflictDraft))
-    setValidationErrors({})
+    schedulerDraft.replaceDraftState(cloneDraft(conflictDraft))
     setEditorStatus("dirty")
     setSaveError(null)
-  }, [conflictDraft])
+  }, [conflictDraft, schedulerDraft])
 
   const handleSave = React.useCallback(async () => {
-    if (!activeDeck || !draft) return
+    if (!activeDeck) return
 
-    const parsed = validateSchedulerDraft(draft)
-    setValidationErrors(parsed.errors)
-    if (!parsed.settings) return
+    const parsed = schedulerDraft.getValidatedSettings()
+    if (!parsed) return
 
     setEditorStatus("saving")
     setSaveError(null)
@@ -246,14 +242,15 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
       const updatedDeck = await updateDeckMutation.mutateAsync({
         deckId: activeDeck.id,
         update: {
-          scheduler_settings: parsed.settings,
+          scheduler_type: parsed.scheduler_type,
+          scheduler_settings: parsed.scheduler_settings,
           expected_version: baseVersion ?? activeDeck.version
         }
       })
       syncDraftFromDeck(updatedDeck, "saved")
     } catch (error: unknown) {
       if (isVersionConflict(error)) {
-        const pendingDraft = cloneDraft(draft)
+        const pendingDraft = cloneDraft(schedulerDraft.draft)
 
         try {
           const latestDeck = await refreshDeckFromServer(activeDeck.id)
@@ -276,19 +273,9 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
         })
       )
     }
-  }, [activeDeck, baseVersion, draft, refreshDeckFromServer, syncDraftFromDeck, t, updateDeckMutation])
+  }, [activeDeck, baseVersion, refreshDeckFromServer, schedulerDraft, t, updateDeckMutation])
 
-  const renderFieldError = (field: keyof SchedulerValidationErrors) => {
-    const error = validationErrors[field]
-    if (!error) return null
-    return (
-      <Text type="danger" className="text-xs">
-        {error}
-      </Text>
-    )
-  }
-
-  const isDirty = editorStatus === "dirty" || editorStatus === "conflict"
+  const isDirty = draftChanged || editorStatus === "conflict"
 
   React.useEffect(() => {
     onDirtyChange?.(isDirty)
@@ -300,9 +287,8 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
     if (!activeDeck) {
       setBaseDeckId(null)
       setBaseVersion(null)
-      setDraft(null)
+      setBaseDraft(null)
       setCopyDeckId("")
-      setValidationErrors({})
       setConflictDraft(null)
       setSaveError(null)
       setEditorStatus("idle")
@@ -371,7 +357,7 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
                           <div className="text-xs text-text-muted">{deck.description}</div>
                         ) : null}
                         <div className="text-xs text-text-subtle">
-                          {formatSchedulerSummary(deck.scheduler_settings)}
+                          {formatSchedulerSummary(deck.scheduler_type, deck.scheduler_settings)}
                         </div>
                       </div>
                     </Button>
@@ -383,7 +369,7 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
         </Card>
 
         <Card size="small">
-          {activeDeck && draft ? (
+          {activeDeck ? (
             <Space orientation="vertical" size={16} className="w-full">
               <div>
                 <Title level={5} className="!mb-0">
@@ -432,6 +418,20 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
 
               {saveError && <Alert type="error" message={saveError} />}
 
+              {schedulerDraft.draft.scheduler_type === "fsrs" &&
+                activeDeck.scheduler_type !== "fsrs" && (
+                  <Alert
+                    type="info"
+                    message={t("option:flashcards.fsrsSwitchInfoTitle", {
+                      defaultValue: "Switching this deck to FSRS"
+                    })}
+                    description={t("option:flashcards.fsrsSwitchInfoBody", {
+                      defaultValue:
+                        "Existing cards keep their review history. FSRS state will be derived conservatively as cards are reviewed."
+                    })}
+                  />
+                )}
+
               <Card
                 size="small"
                 title={t("option:flashcards.schedulerSummaryCard", {
@@ -477,23 +477,6 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
                 title={t("option:flashcards.schedulerTools", { defaultValue: "Tools" })}
               >
                 <Space orientation="vertical" size={12} className="w-full">
-                  <div>
-                    <Text strong>
-                      {t("option:flashcards.schedulerPresets", { defaultValue: "Presets" })}
-                    </Text>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {SCHEDULER_PRESETS.map((preset) => (
-                        <Button
-                          key={preset.id}
-                          onClick={() => applyPreset(preset.id)}
-                          data-testid={`flashcards-scheduler-preset-${preset.id}`}
-                        >
-                          {preset.label}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-
                   <div className="flex flex-wrap items-end gap-2">
                     <label className="flex min-w-[220px] flex-col gap-1 text-sm text-text-muted">
                       <span>
@@ -533,115 +516,7 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
                 </Space>
               </Card>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="flex flex-col gap-1">
-                  <Text strong>
-                    {t("option:flashcards.schedulerFieldNewSteps", {
-                      defaultValue: "New steps (minutes)"
-                    })}
-                  </Text>
-                  <Input
-                    value={draft.new_steps_minutes}
-                    onChange={(event) => updateDraftField("new_steps_minutes", event.target.value)}
-                    data-testid="flashcards-scheduler-field-new-steps"
-                    aria-label="New steps"
-                    placeholder="1, 10"
-                  />
-                  {renderFieldError("new_steps_minutes")}
-                </label>
-
-                <label className="flex flex-col gap-1">
-                  <Text strong>
-                    {t("option:flashcards.schedulerFieldRelearnSteps", {
-                      defaultValue: "Relearn steps (minutes)"
-                    })}
-                  </Text>
-                  <Input
-                    value={draft.relearn_steps_minutes}
-                    onChange={(event) => updateDraftField("relearn_steps_minutes", event.target.value)}
-                    data-testid="flashcards-scheduler-field-relearn-steps"
-                    aria-label="Relearn steps"
-                    placeholder="10"
-                  />
-                  {renderFieldError("relearn_steps_minutes")}
-                </label>
-
-                <label className="flex flex-col gap-1">
-                  <Text strong>Graduating interval (days)</Text>
-                  <Input
-                    value={draft.graduating_interval_days}
-                    onChange={(event) => updateDraftField("graduating_interval_days", event.target.value)}
-                    data-testid="flashcards-scheduler-field-graduating-interval"
-                    aria-label="Graduating interval"
-                  />
-                  {renderFieldError("graduating_interval_days")}
-                </label>
-
-                <label className="flex flex-col gap-1">
-                  <Text strong>Easy interval (days)</Text>
-                  <Input
-                    value={draft.easy_interval_days}
-                    onChange={(event) => updateDraftField("easy_interval_days", event.target.value)}
-                    data-testid="flashcards-scheduler-field-easy-interval"
-                    aria-label="Easy interval"
-                  />
-                  {renderFieldError("easy_interval_days")}
-                </label>
-
-                <label className="flex flex-col gap-1">
-                  <Text strong>Easy bonus</Text>
-                  <Input
-                    value={draft.easy_bonus}
-                    onChange={(event) => updateDraftField("easy_bonus", event.target.value)}
-                    data-testid="flashcards-scheduler-field-easy-bonus"
-                    aria-label="Easy bonus"
-                  />
-                  {renderFieldError("easy_bonus")}
-                </label>
-
-                <label className="flex flex-col gap-1">
-                  <Text strong>Interval modifier</Text>
-                  <Input
-                    value={draft.interval_modifier}
-                    onChange={(event) => updateDraftField("interval_modifier", event.target.value)}
-                    data-testid="flashcards-scheduler-field-interval-modifier"
-                    aria-label="Interval modifier"
-                  />
-                  {renderFieldError("interval_modifier")}
-                </label>
-
-                <label className="flex flex-col gap-1">
-                  <Text strong>Max interval (days)</Text>
-                  <Input
-                    value={draft.max_interval_days}
-                    onChange={(event) => updateDraftField("max_interval_days", event.target.value)}
-                    data-testid="flashcards-scheduler-field-max-interval"
-                    aria-label="Max interval"
-                  />
-                  {renderFieldError("max_interval_days")}
-                </label>
-
-                <label className="flex flex-col gap-1">
-                  <Text strong>Leech threshold</Text>
-                  <Input
-                    value={draft.leech_threshold}
-                    onChange={(event) => updateDraftField("leech_threshold", event.target.value)}
-                    data-testid="flashcards-scheduler-field-leech-threshold"
-                    aria-label="Leech threshold"
-                  />
-                  {renderFieldError("leech_threshold")}
-                </label>
-              </div>
-
-              <Checkbox
-                checked={draft.enable_fuzz}
-                onChange={(event) => updateDraftField("enable_fuzz", event.target.checked)}
-                data-testid="flashcards-scheduler-field-enable-fuzz"
-              >
-                {t("option:flashcards.schedulerEnableFuzz", {
-                  defaultValue: "Enable review fuzz"
-                })}
-              </Checkbox>
+              <DeckSchedulerSettingsEditor schedulerDraft={schedulerDraft} advancedDefaultOpen />
 
               <div className="flex flex-wrap items-center gap-3">
                 <Button
@@ -653,14 +528,14 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
                     defaultValue: "Save changes"
                   })}
                 </Button>
-                {editorStatus === "dirty" && (
+                {draftChanged && editorStatus !== "conflict" && (
                   <Text type="warning">
                     {t("option:flashcards.schedulerDirtyState", {
                       defaultValue: "Unsaved changes"
                     })}
                   </Text>
                 )}
-                {editorStatus === "saved" && (
+                {editorStatus === "saved" && !draftChanged && (
                   <Text type="success">
                     {t("option:flashcards.schedulerSavedState", {
                       defaultValue: "All changes saved"
