@@ -13,6 +13,7 @@ export type PersonaLiveVoiceState =
   | "error"
 
 export type PersonaLiveVoiceRecoveryMode = "none" | "listening_stuck" | "thinking_stuck"
+export type PersonaLiveVadPreset = "conservative" | "balanced" | "fast" | "custom"
 
 type UsePersonaLiveVoiceControllerArgs = {
   ws: WebSocket | null
@@ -27,6 +28,46 @@ type PersonaLiveVoicePayload = Record<string, unknown> | null | undefined
 
 const LISTENING_RECOVERY_TIMEOUT_MS = 4_000
 const THINKING_RECOVERY_TIMEOUT_MS = 8_000
+
+const LIVE_VAD_PRESETS = {
+  conservative: {
+    autoCommitEnabled: true,
+    vadThreshold: 0.65,
+    minSilenceMs: 450,
+    turnStopSecs: 0.35,
+    minUtteranceSecs: 0.6
+  },
+  balanced: {
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
+  },
+  fast: {
+    autoCommitEnabled: true,
+    vadThreshold: 0.35,
+    minSilenceMs: 150,
+    turnStopSecs: 0.1,
+    minUtteranceSecs: 0.25
+  }
+} as const
+
+const isMatchingLiveVadPreset = (
+  candidate: {
+    autoCommitEnabled: boolean
+    vadThreshold: number
+    minSilenceMs: number
+    turnStopSecs: number
+    minUtteranceSecs: number
+  },
+  preset: (typeof LIVE_VAD_PRESETS)[keyof typeof LIVE_VAD_PRESETS]
+): boolean =>
+  candidate.autoCommitEnabled === preset.autoCommitEnabled &&
+  candidate.vadThreshold === preset.vadThreshold &&
+  candidate.minSilenceMs === preset.minSilenceMs &&
+  candidate.turnStopSecs === preset.turnStopSecs &&
+  candidate.minUtteranceSecs === preset.minUtteranceSecs
 
 const normalizeTtsProvider = (provider: string): string =>
   String(provider || "").trim().toLowerCase()
@@ -59,6 +100,21 @@ export const usePersonaLiveVoiceController = ({
   const [textOnlyDueToTtsFailure, setTextOnlyDueToTtsFailure] = React.useState(false)
   const [sessionAutoResume, setSessionAutoResume] = React.useState(resolvedDefaults.autoResume)
   const [sessionBargeIn, setSessionBargeIn] = React.useState(resolvedDefaults.bargeIn)
+  const [autoCommitEnabled, setAutoCommitEnabled] = React.useState(
+    LIVE_VAD_PRESETS.balanced.autoCommitEnabled
+  )
+  const [vadThreshold, setVadThreshold] = React.useState(
+    LIVE_VAD_PRESETS.balanced.vadThreshold
+  )
+  const [minSilenceMs, setMinSilenceMs] = React.useState(
+    LIVE_VAD_PRESETS.balanced.minSilenceMs
+  )
+  const [turnStopSecs, setTurnStopSecs] = React.useState(
+    LIVE_VAD_PRESETS.balanced.turnStopSecs
+  )
+  const [minUtteranceSecs, setMinUtteranceSecs] = React.useState(
+    LIVE_VAD_PRESETS.balanced.minUtteranceSecs
+  )
   const [recoveryMode, setRecoveryMode] =
     React.useState<PersonaLiveVoiceRecoveryMode>("none")
   const [listeningRecoveryRestartKey, setListeningRecoveryRestartKey] = React.useState(0)
@@ -80,6 +136,35 @@ export const usePersonaLiveVoiceController = ({
     () => normalizeTtsProvider(resolvedDefaults.ttsProvider),
     [resolvedDefaults.ttsProvider]
   )
+
+  const vadPreset = React.useMemo<PersonaLiveVadPreset>(() => {
+    const current = {
+      autoCommitEnabled,
+      vadThreshold,
+      minSilenceMs,
+      turnStopSecs,
+      minUtteranceSecs
+    }
+    if (isMatchingLiveVadPreset(current, LIVE_VAD_PRESETS.conservative)) {
+      return "conservative"
+    }
+    if (isMatchingLiveVadPreset(current, LIVE_VAD_PRESETS.balanced)) {
+      return "balanced"
+    }
+    if (isMatchingLiveVadPreset(current, LIVE_VAD_PRESETS.fast)) {
+      return "fast"
+    }
+    return "custom"
+  }, [autoCommitEnabled, minSilenceMs, minUtteranceSecs, turnStopSecs, vadThreshold])
+
+  const setVadPreset = React.useCallback((preset: Exclude<PersonaLiveVadPreset, "custom">) => {
+    const next = LIVE_VAD_PRESETS[preset]
+    setAutoCommitEnabled(next.autoCommitEnabled)
+    setVadThreshold(next.vadThreshold)
+    setMinSilenceMs(next.minSilenceMs)
+    setTurnStopSecs(next.turnStopSecs)
+    setMinUtteranceSecs(next.minUtteranceSecs)
+  }, [])
 
   const clearTransientWarning = React.useCallback(() => {
     if (textOnlyDueToTtsFailureRef.current) return
@@ -410,6 +495,11 @@ export const usePersonaLiveVoiceController = ({
   React.useEffect(() => {
     setSessionAutoResume(resolvedDefaults.autoResume)
     setSessionBargeIn(resolvedDefaults.bargeIn)
+    setAutoCommitEnabled(LIVE_VAD_PRESETS.balanced.autoCommitEnabled)
+    setVadThreshold(LIVE_VAD_PRESETS.balanced.vadThreshold)
+    setMinSilenceMs(LIVE_VAD_PRESETS.balanced.minSilenceMs)
+    setTurnStopSecs(LIVE_VAD_PRESETS.balanced.turnStopSecs)
+    setMinUtteranceSecs(LIVE_VAD_PRESETS.balanced.minUtteranceSecs)
     manualModeRequiredRef.current = false
     setManualModeRequired(false)
     textOnlyDueToTtsFailureRef.current = false
@@ -780,6 +870,12 @@ export const usePersonaLiveVoiceController = ({
     isListening: micActive,
     sessionAutoResume,
     sessionBargeIn,
+    autoCommitEnabled,
+    vadPreset,
+    vadThreshold,
+    minSilenceMs,
+    turnStopSecs,
+    minUtteranceSecs,
     textOnlyDueToTtsFailure,
     startListening,
     stopListening,
@@ -790,6 +886,12 @@ export const usePersonaLiveVoiceController = ({
     resetTurn,
     setSessionAutoResume,
     setSessionBargeIn,
+    setAutoCommitEnabled,
+    setVadPreset,
+    setVadThreshold,
+    setMinSilenceMs,
+    setTurnStopSecs,
+    setMinUtteranceSecs,
     handlePayload,
     handleBinaryPayload
   }

@@ -121,6 +121,107 @@ describe("usePersonaLiveVoiceController", () => {
     })
   })
 
+  it("initializes session turn detection to the balanced preset", () => {
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    const controller = result.current as any
+    expect(controller.vadPreset).toBe("balanced")
+    expect(controller.autoCommitEnabled).toBe(true)
+    expect(controller.vadThreshold).toBe(0.5)
+    expect(controller.minSilenceMs).toBe(250)
+    expect(controller.turnStopSecs).toBe(0.2)
+    expect(controller.minUtteranceSecs).toBe(0.4)
+  })
+
+  it("marks the preset as custom after an advanced runtime edit", () => {
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    act(() => {
+      ;(result.current as any).setVadThreshold(0.61)
+    })
+
+    expect((result.current as any).vadPreset).toBe("custom")
+    expect((result.current as any).vadThreshold).toBe(0.61)
+  })
+
+  it("resets session turn detection tuning on persona switch", () => {
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(
+      ({
+        sessionId,
+        personaId
+      }: {
+        sessionId: string
+        personaId: string
+      }) =>
+        usePersonaLiveVoiceController({
+          ws,
+          connected: true,
+          sessionId,
+          personaId,
+          resolvedDefaults,
+          canUseServerStt: true
+        }),
+      {
+        initialProps: {
+          sessionId: "sess-voice",
+          personaId: "persona-1"
+        }
+      }
+    )
+
+    act(() => {
+      ;(result.current as any).setVadPreset("fast")
+    })
+
+    expect((result.current as any).vadPreset).toBe("fast")
+    expect((result.current as any).minSilenceMs).toBe(150)
+
+    rerender({
+      sessionId: "sess-voice-2",
+      personaId: "persona-2"
+    })
+
+    expect((result.current as any).vadPreset).toBe("balanced")
+    expect((result.current as any).autoCommitEnabled).toBe(true)
+    expect((result.current as any).vadThreshold).toBe(0.5)
+    expect((result.current as any).minSilenceMs).toBe(250)
+    expect((result.current as any).turnStopSecs).toBe(0.2)
+    expect((result.current as any).minUtteranceSecs).toBe(0.4)
+  })
+
   it("streams persona audio chunks and does not send a routine manual commit when listening stops", async () => {
     const ws = {
       readyState: WebSocket.OPEN,
