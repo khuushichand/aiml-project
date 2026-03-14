@@ -14,8 +14,8 @@
 
 - Task 1: Complete
 - Task 2: Complete
-- Task 3: In Progress
-- Task 4: Not Started
+- Task 3: Complete
+- Task 4: In Progress
 - Task 5: Not Started
 - Task 6: Not Started
 - Task 6: Not Started
