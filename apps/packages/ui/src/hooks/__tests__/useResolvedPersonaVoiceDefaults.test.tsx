@@ -73,7 +73,12 @@ describe("useResolvedPersonaVoiceDefaults", () => {
         tts_provider: "openai",
         confirmation_mode: "always",
         voice_chat_trigger_phrases: ["bonjour helper"],
-        auto_resume: false
+        auto_resume: false,
+        auto_commit_enabled: false,
+        vad_threshold: 0.61,
+        min_silence_ms: 640,
+        turn_stop_secs: 0.48,
+        min_utterance_secs: 0.82
       })
     )
 
@@ -85,7 +90,12 @@ describe("useResolvedPersonaVoiceDefaults", () => {
       confirmationMode: "always",
       voiceChatTriggerPhrases: ["bonjour helper"],
       autoResume: false,
-      bargeIn: false
+      bargeIn: false,
+      autoCommitEnabled: false,
+      vadThreshold: 0.61,
+      minSilenceMs: 640,
+      turnStopSecs: 0.48,
+      minUtteranceSecs: 0.82
     })
   })
 
@@ -106,7 +116,12 @@ describe("useResolvedPersonaVoiceDefaults", () => {
       confirmationMode: "destructive_only",
       voiceChatTriggerPhrases: ["okay helper", "status check"],
       autoResume: false,
-      bargeIn: true
+      bargeIn: true,
+      autoCommitEnabled: true,
+      vadThreshold: 0.5,
+      minSilenceMs: 250,
+      turnStopSecs: 0.2,
+      minUtteranceSecs: 0.4
     })
   })
 })

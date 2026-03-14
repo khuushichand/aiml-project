@@ -18,6 +18,11 @@ export type PersonaVoiceDefaults = {
   voice_chat_trigger_phrases?: string[]
   auto_resume?: boolean | null
   barge_in?: boolean | null
+  auto_commit_enabled?: boolean | null
+  vad_threshold?: number | null
+  min_silence_ms?: number | null
+  turn_stop_secs?: number | null
+  min_utterance_secs?: number | null
 }
 
 export type ResolvedPersonaVoiceDefaults = {
@@ -29,6 +34,11 @@ export type ResolvedPersonaVoiceDefaults = {
   voiceChatTriggerPhrases: string[]
   autoResume: boolean
   bargeIn: boolean
+  autoCommitEnabled: boolean
+  vadThreshold: number
+  minSilenceMs: number
+  turnStopSecs: number
+  minUtteranceSecs: number
 }
 
 const DEFAULT_STT_LANGUAGE = "en-US"
@@ -36,6 +46,13 @@ const DEFAULT_TTS_PROVIDER = "browser"
 const DEFAULT_TLDW_VOICE = "af_heart"
 const DEFAULT_OPENAI_VOICE = "alloy"
 const DEFAULT_CONFIRMATION_MODE: PersonaConfirmationMode = "destructive_only"
+export const PERSONA_TURN_DETECTION_BALANCED_DEFAULTS = {
+  autoCommitEnabled: true,
+  vadThreshold: 0.5,
+  minSilenceMs: 250,
+  turnStopSecs: 0.2,
+  minUtteranceSecs: 0.4
+} as const
 
 const normalizeText = (value: string | null | undefined): string | null => {
   const trimmed = String(value || "").trim()
@@ -125,7 +142,27 @@ export const useResolvedPersonaVoiceDefaults = (
       bargeIn:
         typeof personaVoiceDefaults?.barge_in === "boolean"
           ? personaVoiceDefaults.barge_in
-          : Boolean(voiceChatBargeIn)
+          : Boolean(voiceChatBargeIn),
+      autoCommitEnabled:
+        typeof personaVoiceDefaults?.auto_commit_enabled === "boolean"
+          ? personaVoiceDefaults.auto_commit_enabled
+          : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.autoCommitEnabled,
+      vadThreshold:
+        typeof personaVoiceDefaults?.vad_threshold === "number"
+          ? personaVoiceDefaults.vad_threshold
+          : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.vadThreshold,
+      minSilenceMs:
+        typeof personaVoiceDefaults?.min_silence_ms === "number"
+          ? personaVoiceDefaults.min_silence_ms
+          : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.minSilenceMs,
+      turnStopSecs:
+        typeof personaVoiceDefaults?.turn_stop_secs === "number"
+          ? personaVoiceDefaults.turn_stop_secs
+          : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.turnStopSecs,
+      minUtteranceSecs:
+        typeof personaVoiceDefaults?.min_utterance_secs === "number"
+          ? personaVoiceDefaults.min_utterance_secs
+          : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.minUtteranceSecs
     }
   }, [
     elevenLabsVoiceId,
