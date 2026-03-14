@@ -28,4 +28,4 @@
 **Goal**: Re-run the affected suites, run Bandit on touched backend files, and push the fixes.
 **Success Criteria**: Local targeted verification is green and the branch is pushed to PR `#887`.
 **Tests**: Targeted pytest/vitest commands, smoke-focused checks if feasible, Bandit on touched backend paths.
-**Status**: In Progress
+**Status**: Complete
