@@ -1,6 +1,7 @@
 export { McpHubPage } from "./McpHubPage"
 export { AcpProfilesTab } from "./AcpProfilesTab"
 export { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
+export { GovernancePacksTab } from "./GovernancePacksTab"
 export { ToolCatalogsTab } from "./ToolCatalogsTab"
 export { ExternalServersTab } from "./ExternalServersTab"
 export { PermissionProfilesTab } from "./PermissionProfilesTab"

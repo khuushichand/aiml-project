@@ -3,6 +3,7 @@ import { Tabs, Typography } from "antd"
 
 import { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
 import { GovernanceAuditTab } from "./GovernanceAuditTab"
+import { GovernancePacksTab } from "./GovernancePacksTab"
 import { PathScopesTab } from "./PathScopesTab"
 import { PermissionProfilesTab } from "./PermissionProfilesTab"
 import { PolicyAssignmentsTab } from "./PolicyAssignmentsTab"
@@ -103,6 +104,11 @@ export const McpHubPage = () => {
             key: "audit",
             label: "Audit",
             children: <GovernanceAuditTab onOpen={handleOpen} />
+          },
+          {
+            key: "governance-packs",
+            label: "Governance Packs",
+            children: <GovernancePacksTab />
           },
           {
             key: "approvals",

@@ -43,6 +43,7 @@ export type McpHubGovernanceAuditTabKey =
   | "workspace-sets"
   | "shared-workspaces"
   | "audit"
+  | "governance-packs"
   | "approvals"
   | "tool-catalogs"
   | "credentials"
@@ -111,6 +112,7 @@ export type McpHubPermissionProfile = {
   path_scope_object_id?: number | null
   policy_document: McpHubPermissionPolicyDocument
   is_active: boolean
+  is_immutable?: boolean
   created_by?: number | null
   updated_by?: number | null
   created_at?: string | null
@@ -263,6 +265,7 @@ export type McpHubPolicyAssignment = {
   inline_policy_document: McpHubPermissionPolicyDocument
   approval_policy_id?: number | null
   is_active: boolean
+  is_immutable?: boolean
   has_override?: boolean
   override_id?: number | null
   override_active?: boolean
@@ -317,6 +320,7 @@ export type McpHubApprovalPolicy = {
   mode: McpHubApprovalMode
   rules: Record<string, unknown>
   is_active: boolean
+  is_immutable?: boolean
   created_by?: number | null
   updated_by?: number | null
   created_at?: string | null
@@ -638,6 +642,69 @@ export type McpHubGovernanceAuditFindingList = {
     error: number
     warning: number
   }
+}
+
+export type McpHubGovernancePackDocument = {
+  manifest: Record<string, unknown>
+  profiles: Record<string, unknown>[]
+  approvals: Record<string, unknown>[]
+  personas: Record<string, unknown>[]
+  assignments: Record<string, unknown>[]
+}
+
+export type McpHubGovernancePackManifest = {
+  pack_id: string
+  pack_version: string
+  title: string
+  description?: string | null
+}
+
+export type McpHubGovernancePackDryRunReport = {
+  manifest: McpHubGovernancePackManifest
+  digest: string
+  resolved_capabilities: string[]
+  unresolved_capabilities: string[]
+  warnings: string[]
+  blocked_objects: string[]
+  verdict: "importable" | "blocked"
+}
+
+export type McpHubGovernancePackDryRunResponse = {
+  report: McpHubGovernancePackDryRunReport
+}
+
+export type McpHubGovernancePackObjectProvenance = {
+  object_type: string
+  object_id: string
+  source_object_id: string
+}
+
+export type McpHubGovernancePackSummary = {
+  id: number
+  pack_id: string
+  pack_version: string
+  title: string
+  description?: string | null
+  owner_scope_type: McpHubScopeType
+  owner_scope_id?: number | null
+  bundle_digest: string
+  manifest: Record<string, unknown>
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubGovernancePackDetail = McpHubGovernancePackSummary & {
+  normalized_ir: Record<string, unknown>
+  imported_objects: McpHubGovernancePackObjectProvenance[]
+}
+
+export type McpHubGovernancePackImportResponse = {
+  governance_pack_id: number
+  imported_object_counts: Record<string, number>
+  blocked_objects: string[]
+  report: McpHubGovernancePackDryRunReport
 }
 
 const withQuery = (
@@ -1335,5 +1402,51 @@ export const listGovernanceAuditFindings = async (params: {
       scope_type: params.scope_type
     }),
     method: "GET"
+  })
+}
+
+export const listGovernancePacks = async (params: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+} = {}): Promise<McpHubGovernancePackSummary[]> => {
+  return await bgRequestClient<McpHubGovernancePackSummary[]>({
+    path: withQuery("/api/v1/mcp/hub/governance-packs", {
+      owner_scope_type: params.owner_scope_type,
+      owner_scope_id: params.owner_scope_id
+    }),
+    method: "GET"
+  })
+}
+
+export const getGovernancePackDetail = async (
+  governancePackId: number
+): Promise<McpHubGovernancePackDetail> => {
+  return await bgRequestClient<McpHubGovernancePackDetail>({
+    path: `/api/v1/mcp/hub/governance-packs/${governancePackId}`,
+    method: "GET"
+  })
+}
+
+export const dryRunGovernancePack = async (payload: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  pack: McpHubGovernancePackDocument
+}): Promise<McpHubGovernancePackDryRunResponse> => {
+  return await bgRequestClient<McpHubGovernancePackDryRunResponse>({
+    path: "/api/v1/mcp/hub/governance-packs/dry-run",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const importGovernancePack = async (payload: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  pack: McpHubGovernancePackDocument
+}): Promise<McpHubGovernancePackImportResponse> => {
+  return await bgRequestClient<McpHubGovernancePackImportResponse>({
+    path: "/api/v1/mcp/hub/governance-packs/import",
+    method: "POST",
+    body: payload
   })
 }

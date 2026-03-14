@@ -41,6 +41,18 @@ describe("PersonaPolicySummary", () => {
           profile_id: 5,
           override_id: 31,
           effect: "merged"
+        },
+        {
+          field: "governance_pack",
+          value: {
+            pack_id: "researcher-pack",
+            pack_version: "1.0.0"
+          },
+          source_kind: "profile",
+          assignment_id: 11,
+          profile_id: 5,
+          override_id: null,
+          effect: "replaced"
         }
       ]
     })
@@ -121,6 +133,7 @@ describe("PersonaPolicySummary", () => {
     expect(screen.getByText("Write token")).toBeTruthy()
     expect(screen.getAllByText(/disabled by assignment/i).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/missing secret/i).length).toBeGreaterThan(0)
+    expect(screen.getByText("Pack researcher-pack@1.0.0")).toBeTruthy()
     expect(screen.getByRole("link", { name: /open mcp hub/i })).toBeTruthy()
   })
 })
