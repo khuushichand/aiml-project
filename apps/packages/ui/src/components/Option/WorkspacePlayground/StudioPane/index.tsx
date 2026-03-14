@@ -517,8 +517,14 @@ const extractRequiredRagText = (response: unknown, label: string): string => {
   const candidate = isRecord(response) ? response : {}
   const generation =
     typeof candidate.generation === "string" ? candidate.generation.trim() : ""
+  const generatedAnswer =
+    typeof candidate.generated_answer === "string"
+      ? candidate.generated_answer.trim()
+      : ""
   const answer = typeof candidate.answer === "string" ? candidate.answer.trim() : ""
-  const text = generation || answer
+  const responseText =
+    typeof candidate.response === "string" ? candidate.response.trim() : ""
+  const text = generation || generatedAnswer || answer || responseText
 
   if (!text) {
     throw buildMissingContentError(label)

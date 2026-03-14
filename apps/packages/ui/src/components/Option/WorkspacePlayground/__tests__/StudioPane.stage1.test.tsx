@@ -474,6 +474,28 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockMessageSuccess).not.toHaveBeenCalled()
   })
 
+  it("still completes valid summary artifacts from generated_answer responses", async () => {
+    mockRagSearch.mockResolvedValue({ generated_answer: "Generated summary" })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "completed",
+        expect.objectContaining({
+          content: "Generated summary"
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).toHaveBeenCalledWith(
+      expect.stringContaining("generated successfully")
+    )
+  })
+
   it("still completes valid summary artifacts", async () => {
     mockRagSearch.mockResolvedValue({ generation: "Generated summary" })
 
