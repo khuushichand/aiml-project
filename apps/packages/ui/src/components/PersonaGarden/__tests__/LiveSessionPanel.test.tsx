@@ -5,6 +5,56 @@ import { describe, expect, it, vi } from "vitest"
 import { AssistantVoiceCard } from "../AssistantVoiceCard"
 import { LiveSessionPanel } from "../LiveSessionPanel"
 
+const defaultVoiceCardProps = () => ({
+  resolvedDefaults: {
+    sttLanguage: "en-US",
+    sttModel: "whisper-1",
+    ttsProvider: "openai",
+    ttsVoice: "alloy",
+    confirmationMode: "destructive_only" as const,
+    voiceChatTriggerPhrases: ["hey helper"],
+    autoResume: true,
+    bargeIn: false
+  },
+  connected: true,
+  state: "idle" as const,
+  speechAvailable: true,
+  isListening: false,
+  heardText: "",
+  lastCommittedText: "",
+  activeToolStatus: "",
+  pendingApprovalSummary: null as string | null,
+  warning: null as string | null,
+  recoveryMode: "none" as const,
+  manualModeRequired: false,
+  canSendNow: false,
+  textOnlyDueToTtsFailure: false,
+  sessionAutoResume: true,
+  sessionBargeIn: false,
+  autoCommitEnabled: true,
+  vadPreset: "balanced" as const,
+  vadThreshold: 0.5,
+  minSilenceMs: 250,
+  turnStopSecs: 0.2,
+  minUtteranceSecs: 0.4,
+  onToggleListening: vi.fn(),
+  onSendNow: vi.fn(),
+  onSessionAutoResumeChange: vi.fn(),
+  onSessionBargeInChange: vi.fn(),
+  onAutoCommitEnabledChange: vi.fn(),
+  onVadPresetChange: vi.fn(),
+  onVadThresholdChange: vi.fn(),
+  onMinSilenceMsChange: vi.fn(),
+  onTurnStopSecsChange: vi.fn(),
+  onMinUtteranceSecsChange: vi.fn(),
+  onKeepListening: vi.fn(),
+  onResetTurn: vi.fn(),
+  onWaitOnRecovery: vi.fn(),
+  onCopyLastCommandToComposer: vi.fn(),
+  onJumpToApproval: vi.fn(),
+  onReconnectPersonaSession: vi.fn()
+})
+
 describe("LiveSessionPanel", () => {
   it("renders the assistant voice card before status panels", () => {
     render(
@@ -25,54 +75,18 @@ describe("LiveSessionPanel", () => {
 
 describe("AssistantVoiceCard", () => {
   it("renders resolved defaults, session toggles, and warning state", () => {
-    const onToggleListening = vi.fn()
-    const onSendNow = vi.fn()
-    const onSessionAutoResumeChange = vi.fn()
-    const onSessionBargeInChange = vi.fn()
-    const onKeepListening = vi.fn()
-    const onResetTurn = vi.fn()
-    const onWaitOnRecovery = vi.fn()
-    const onCopyLastCommandToComposer = vi.fn()
-    const onReconnectPersonaSession = vi.fn()
+    const props = defaultVoiceCardProps()
+    props.state = "speaking"
+    props.heardText = "hey helper open notes"
+    props.lastCommittedText = "open notes"
+    props.warning = "Live TTS unavailable for this session. Continuing in text-only mode."
+    props.textOnlyDueToTtsFailure = true
+    props.manualModeRequired = true
+    props.canSendNow = true
+    props.sessionAutoResume = false
+    props.sessionBargeIn = true
 
-    render(
-      <AssistantVoiceCard
-        resolvedDefaults={{
-          sttLanguage: "en-US",
-          sttModel: "whisper-1",
-          ttsProvider: "openai",
-          ttsVoice: "alloy",
-          confirmationMode: "destructive_only",
-          voiceChatTriggerPhrases: ["hey helper"],
-          autoResume: true,
-          bargeIn: false
-        }}
-        state="speaking"
-        speechAvailable
-        isListening={false}
-        heardText="hey helper open notes"
-        lastCommittedText="open notes"
-        activeToolStatus=""
-        pendingApprovalSummary={null}
-        warning="Live TTS unavailable for this session. Continuing in text-only mode."
-        recoveryMode="none"
-        textOnlyDueToTtsFailure
-        manualModeRequired
-        canSendNow
-        sessionAutoResume={false}
-        sessionBargeIn
-        onToggleListening={onToggleListening}
-        onSendNow={onSendNow}
-        onSessionAutoResumeChange={onSessionAutoResumeChange}
-        onSessionBargeInChange={onSessionBargeInChange}
-        onKeepListening={onKeepListening}
-        onResetTurn={onResetTurn}
-        onWaitOnRecovery={onWaitOnRecovery}
-        onCopyLastCommandToComposer={onCopyLastCommandToComposer}
-        onJumpToApproval={vi.fn()}
-        onReconnectPersonaSession={onReconnectPersonaSession}
-      />
-    )
+    render(<AssistantVoiceCard {...props} />)
 
     expect(screen.getByText("Assistant Voice")).toBeInTheDocument()
     expect(screen.getByTestId("live-voice-trigger-phrases")).toHaveTextContent(
@@ -87,16 +101,87 @@ describe("AssistantVoiceCard", () => {
     expect(screen.getByTestId("live-voice-last-commit")).toHaveTextContent("open notes")
 
     fireEvent.click(screen.getByTestId("live-voice-start-stop"))
-    expect(onToggleListening).toHaveBeenCalledTimes(1)
+    expect(props.onToggleListening).toHaveBeenCalledTimes(1)
 
     fireEvent.click(screen.getByTestId("live-voice-send-now"))
-    expect(onSendNow).toHaveBeenCalledTimes(1)
+    expect(props.onSendNow).toHaveBeenCalledTimes(1)
 
     fireEvent.click(screen.getByTestId("live-voice-auto-resume"))
-    expect(onSessionAutoResumeChange).toHaveBeenCalledWith(true)
+    expect(props.onSessionAutoResumeChange).toHaveBeenCalledWith(true)
 
     fireEvent.click(screen.getByTestId("live-voice-barge-in"))
-    expect(onSessionBargeInChange).toHaveBeenCalledWith(false)
+    expect(props.onSessionBargeInChange).toHaveBeenCalledWith(false)
+  })
+
+  it("renders the turn detection section with auto-commit and presets", () => {
+    const props = defaultVoiceCardProps()
+
+    render(<AssistantVoiceCard {...props} />)
+
+    expect(screen.getByText("Turn detection")).toBeInTheDocument()
+    expect(screen.getByTestId("live-vad-auto-commit")).toBeInTheDocument()
+    expect(screen.getByTestId("live-vad-preset-conservative")).toBeInTheDocument()
+    expect(screen.getByTestId("live-vad-preset-balanced")).toBeInTheDocument()
+    expect(screen.getByTestId("live-vad-preset-fast")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("live-vad-auto-commit"))
+    expect(props.onAutoCommitEnabledChange).toHaveBeenCalledWith(false)
+
+    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
+    expect(props.onVadPresetChange).toHaveBeenCalledWith("fast")
+  })
+
+  it("shows the advanced drawer and current runtime values", () => {
+    const props = defaultVoiceCardProps()
+    props.vadThreshold = 0.61
+    props.minSilenceMs = 640
+    props.turnStopSecs = 0.48
+    props.minUtteranceSecs = 0.82
+
+    render(<AssistantVoiceCard {...props} />)
+
+    fireEvent.click(screen.getByTestId("live-vad-advanced-toggle"))
+
+    expect(screen.getByText("Speech threshold")).toBeInTheDocument()
+    expect(screen.getByTestId("live-vad-threshold")).toHaveValue(0.61)
+    expect(screen.getByTestId("live-vad-min-silence-ms")).toHaveValue(640)
+    expect(screen.getByTestId("live-vad-turn-stop-secs")).toHaveValue(0.48)
+    expect(screen.getByTestId("live-vad-min-utterance-secs")).toHaveValue(0.82)
+  })
+
+  it("disables turn detection tuning while disconnected or when manual mode is required", () => {
+    const disconnectedProps = defaultVoiceCardProps()
+    disconnectedProps.connected = false
+
+    const { rerender } = render(<AssistantVoiceCard {...disconnectedProps} />)
+
+    expect(screen.getByTestId("live-vad-auto-commit")).toBeDisabled()
+    fireEvent.click(screen.getByTestId("live-vad-advanced-toggle"))
+    expect(screen.getByText("Connect to tune live turn detection for this session.")).toBeInTheDocument()
+
+    const manualModeProps = defaultVoiceCardProps()
+    manualModeProps.manualModeRequired = true
+
+    rerender(<AssistantVoiceCard {...manualModeProps} />)
+
+    expect(screen.getByTestId("live-vad-auto-commit")).toBeDisabled()
+    expect(screen.getByTestId("live-vad-threshold")).toBeDisabled()
+    expect(
+      screen.getByText("Turn detection tuning will apply once server auto-commit is available again.")
+    ).toBeInTheDocument()
+  })
+
+  it("shows custom as the active preset when advanced values diverge", () => {
+    const props = defaultVoiceCardProps()
+    props.vadPreset = "custom"
+
+    render(<AssistantVoiceCard {...props} />)
+
+    expect(screen.getByTestId("live-vad-preset-custom")).toBeInTheDocument()
+    expect(screen.getByTestId("live-vad-preset-custom")).toHaveAttribute(
+      "data-active",
+      "true"
+    )
   })
 
   it("renders listening recovery copy and actions", () => {

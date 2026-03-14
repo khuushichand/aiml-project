@@ -3,12 +3,14 @@ import { Button, Checkbox, Tag, Typography } from "antd"
 
 import type { ResolvedPersonaVoiceDefaults } from "@/hooks/useResolvedPersonaVoiceDefaults"
 import type {
+  PersonaLiveVadPreset,
   PersonaLiveVoiceRecoveryMode,
   PersonaLiveVoiceState
 } from "@/hooks/usePersonaLiveVoiceController"
 
 type AssistantVoiceCardProps = {
   resolvedDefaults: ResolvedPersonaVoiceDefaults
+  connected?: boolean
   state: PersonaLiveVoiceState
   speechAvailable: boolean
   isListening: boolean
@@ -23,10 +25,22 @@ type AssistantVoiceCardProps = {
   textOnlyDueToTtsFailure: boolean
   sessionAutoResume: boolean
   sessionBargeIn: boolean
+  autoCommitEnabled?: boolean
+  vadPreset?: PersonaLiveVadPreset
+  vadThreshold?: number
+  minSilenceMs?: number
+  turnStopSecs?: number
+  minUtteranceSecs?: number
   onToggleListening: () => void
   onSendNow: () => void
   onSessionAutoResumeChange: (next: boolean) => void
   onSessionBargeInChange: (next: boolean) => void
+  onAutoCommitEnabledChange?: (next: boolean) => void
+  onVadPresetChange?: (next: Exclude<PersonaLiveVadPreset, "custom">) => void
+  onVadThresholdChange?: (next: number) => void
+  onMinSilenceMsChange?: (next: number) => void
+  onTurnStopSecsChange?: (next: number) => void
+  onMinUtteranceSecsChange?: (next: number) => void
   onKeepListening: () => void
   onResetTurn: () => void
   onWaitOnRecovery: () => void
@@ -38,8 +52,18 @@ type AssistantVoiceCardProps = {
 const formatTriggerPhrases = (phrases: string[]): string =>
   phrases.length ? phrases.join(", ") : "No trigger phrases configured"
 
+const TURN_DETECTION_PRESETS: Array<Exclude<PersonaLiveVadPreset, "custom">> = [
+  "conservative",
+  "balanced",
+  "fast"
+]
+
+const formatTurnDetectionPresetLabel = (preset: PersonaLiveVadPreset): string =>
+  preset === "custom" ? "Custom" : preset.slice(0, 1).toUpperCase() + preset.slice(1)
+
 export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   resolvedDefaults,
+  connected = true,
   state,
   speechAvailable,
   isListening,
@@ -54,10 +78,22 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   textOnlyDueToTtsFailure,
   sessionAutoResume,
   sessionBargeIn,
+  autoCommitEnabled = true,
+  vadPreset = "balanced",
+  vadThreshold = 0.5,
+  minSilenceMs = 250,
+  turnStopSecs = 0.2,
+  minUtteranceSecs = 0.4,
   onToggleListening,
   onSendNow,
   onSessionAutoResumeChange,
   onSessionBargeInChange,
+  onAutoCommitEnabledChange = () => undefined,
+  onVadPresetChange = () => undefined,
+  onVadThresholdChange = () => undefined,
+  onMinSilenceMsChange = () => undefined,
+  onTurnStopSecsChange = () => undefined,
+  onMinUtteranceSecsChange = () => undefined,
   onKeepListening,
   onResetTurn,
   onWaitOnRecovery,
@@ -65,6 +101,17 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   onJumpToApproval,
   onReconnectPersonaSession
 }) => {
+  const [advancedOpen, setAdvancedOpen] = React.useState(false)
+  const turnDetectionDisabled = !connected || manualModeRequired
+  const advancedInputsDisabled = turnDetectionDisabled || !autoCommitEnabled
+  const turnDetectionHelperText = !connected
+    ? "Connect to tune live turn detection for this session."
+    : manualModeRequired
+      ? "Turn detection tuning will apply once server auto-commit is available again."
+      : !autoCommitEnabled
+        ? "Auto-commit is off for this live session. Use Send now to commit heard speech."
+        : "Controls when speech auto-commits in this live session only."
+
   return (
     <div className="rounded-lg border border-border bg-surface p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -139,6 +186,129 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
         >
           Barge-in (session only)
         </Checkbox>
+      </div>
+
+      <div
+        data-testid="live-vad-section"
+        className="mt-3 rounded-md border border-border bg-surface2 p-3 text-xs text-text"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="font-medium text-text">Turn detection</div>
+            <div className="mt-1 text-text-muted">{turnDetectionHelperText}</div>
+          </div>
+          <Button
+            data-testid="live-vad-advanced-toggle"
+            size="small"
+            onClick={() => setAdvancedOpen((current) => !current)}
+          >
+            {advancedOpen ? "Hide advanced" : "Advanced"}
+          </Button>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-4">
+          <Checkbox
+            data-testid="live-vad-auto-commit"
+            checked={autoCommitEnabled}
+            disabled={turnDetectionDisabled}
+            onChange={(event) => onAutoCommitEnabledChange(event.target.checked)}
+          >
+            Auto-commit (session only)
+          </Checkbox>
+          <div className="flex flex-wrap items-center gap-2">
+            {TURN_DETECTION_PRESETS.map((preset) => {
+              const isActive = vadPreset === preset
+              return (
+                <Button
+                  key={preset}
+                  data-testid={`live-vad-preset-${preset}`}
+                  data-active={isActive ? "true" : "false"}
+                  size="small"
+                  type={isActive ? "primary" : "default"}
+                  disabled={advancedInputsDisabled}
+                  onClick={() => onVadPresetChange(preset)}
+                >
+                  {formatTurnDetectionPresetLabel(preset)}
+                </Button>
+              )
+            })}
+            {vadPreset === "custom" ? (
+              <Button
+                data-testid="live-vad-preset-custom"
+                data-active="true"
+                size="small"
+                type="primary"
+                disabled={advancedInputsDisabled}
+              >
+                Custom
+              </Button>
+            ) : null}
+          </div>
+        </div>
+
+        {advancedOpen ? (
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-text-muted">Speech threshold</span>
+              <input
+                data-testid="live-vad-threshold"
+                className="rounded border border-border bg-bg px-2 py-1 text-text"
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                disabled={advancedInputsDisabled}
+                value={vadThreshold}
+                onChange={(event) => onVadThresholdChange(Number(event.target.value))}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-text-muted">Silence before commit</span>
+              <input
+                data-testid="live-vad-min-silence-ms"
+                className="rounded border border-border bg-bg px-2 py-1 text-text"
+                type="number"
+                min={50}
+                max={10000}
+                step={10}
+                disabled={advancedInputsDisabled}
+                value={minSilenceMs}
+                onChange={(event) => onMinSilenceMsChange(Number(event.target.value))}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-text-muted">Minimum utterance</span>
+              <input
+                data-testid="live-vad-min-utterance-secs"
+                className="rounded border border-border bg-bg px-2 py-1 text-text"
+                type="number"
+                min={0}
+                max={10}
+                step={0.01}
+                disabled={advancedInputsDisabled}
+                value={minUtteranceSecs}
+                onChange={(event) => onMinUtteranceSecsChange(Number(event.target.value))}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-text-muted">Turn tail</span>
+              <input
+                data-testid="live-vad-turn-stop-secs"
+                className="rounded border border-border bg-bg px-2 py-1 text-text"
+                type="number"
+                min={0.05}
+                max={10}
+                step={0.01}
+                disabled={advancedInputsDisabled}
+                value={turnStopSecs}
+                onChange={(event) => onTurnStopSecsChange(Number(event.target.value))}
+              />
+            </label>
+            <div className="sm:col-span-2 text-text-muted">
+              Changes apply immediately and may affect the current live turn.
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {warning ? (
