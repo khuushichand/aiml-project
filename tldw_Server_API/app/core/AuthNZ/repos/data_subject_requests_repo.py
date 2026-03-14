@@ -194,6 +194,88 @@ class AuthnzDataSubjectRequestsRepo:
             logger.error(f"AuthnzDataSubjectRequestsRepo.create_or_get_request failed: {exc}")
             raise
 
+    _VALID_STATUSES = {"pending", "recorded", "executing", "completed", "failed"}
+
+    async def get_request_by_id(self, request_id: int) -> dict[str, Any] | None:
+        """Return a single DSR record by primary key, or None if not found."""
+        try:
+            async with self.db_pool.acquire() as conn:
+                if self._is_postgres_backend():
+                    row = await conn.fetchrow(
+                        "SELECT * FROM data_subject_requests WHERE id = $1",
+                        request_id,
+                    )
+                    return self._normalize_record(row) if row else None
+
+                cursor = await conn.execute(
+                    "SELECT * FROM data_subject_requests WHERE id = ?",
+                    (request_id,),
+                )
+                row = await cursor.fetchone()
+                return self._normalize_record(row) if row else None
+        except Exception as exc:
+            logger.error(f"AuthnzDataSubjectRequestsRepo.get_request_by_id failed: {exc}")
+            raise
+
+    async def update_request_status(
+        self,
+        request_id: int,
+        new_status: str,
+        *,
+        notes: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Update the status (and optionally notes) of a DSR record.
+
+        Returns the updated record as a dict, or None if *request_id* does not
+        exist.  Raises ``ValueError`` when *new_status* is not one of the
+        recognised lifecycle states.
+        """
+        if new_status not in self._VALID_STATUSES:
+            raise ValueError(
+                f"Invalid DSR status '{new_status}'. "
+                f"Must be one of: {', '.join(sorted(self._VALID_STATUSES))}"
+            )
+
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres_backend():
+                    if notes is not None:
+                        row = await conn.fetchrow(
+                            "UPDATE data_subject_requests SET status = $1, notes = $2 WHERE id = $3 RETURNING *",
+                            new_status,
+                            notes,
+                            request_id,
+                        )
+                    else:
+                        row = await conn.fetchrow(
+                            "UPDATE data_subject_requests SET status = $1 WHERE id = $2 RETURNING *",
+                            new_status,
+                            request_id,
+                        )
+                    return self._normalize_record(row) if row else None
+
+                if notes is not None:
+                    await conn.execute(
+                        "UPDATE data_subject_requests SET status = ?, notes = ? WHERE id = ?",
+                        (new_status, notes, request_id),
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE data_subject_requests SET status = ? WHERE id = ?",
+                        (new_status, request_id),
+                    )
+                cursor = await conn.execute(
+                    "SELECT * FROM data_subject_requests WHERE id = ?",
+                    (request_id,),
+                )
+                row = await cursor.fetchone()
+                return self._normalize_record(row) if row else None
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.error(f"AuthnzDataSubjectRequestsRepo.update_request_status failed: {exc}")
+            raise
+
     async def list_requests(
         self,
         *,
