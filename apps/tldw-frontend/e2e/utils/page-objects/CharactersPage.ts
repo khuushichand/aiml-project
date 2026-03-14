@@ -119,11 +119,12 @@ export class CharactersPage extends BasePage {
       await descInput.fill(opts.description)
     }
 
-    // Submit
+    // Submit — use force:true to bypass any overlay interception
     const submitBtn = this.createDrawer.getByRole("button", {
       name: /create character/i
     })
-    await submitBtn.click()
+    await submitBtn.scrollIntoViewIfNeeded()
+    await submitBtn.click({ force: true })
 
     // Wait for drawer to close (success) or stay open (validation error)
     await this.createDrawer

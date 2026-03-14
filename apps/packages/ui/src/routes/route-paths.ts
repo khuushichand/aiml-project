@@ -11,6 +11,12 @@ export const SOURCES_NEW_PATH = "/sources/new"
 export const SOURCES_DETAIL_PATH = "/sources/:sourceId"
 export const ADMIN_SOURCES_PATH = "/admin/sources"
 
+export const VIEWPORT_CONSTRAINED_PATHS = [
+  DOCUMENT_WORKSPACE_PATH,
+  WORKSPACE_PLAYGROUND_PATH,
+  "/media-multi",
+] as const
+
 export const LOREBOOK_DEBUG_FOCUS = "lorebook-debug"
 
 type BuildChatLorebookDebugPathOptions = {

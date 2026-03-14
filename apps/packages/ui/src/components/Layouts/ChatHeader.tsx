@@ -116,7 +116,7 @@ export function ChatHeader({
     <header
       data-istemporary-chat={temporaryChat}
       data-ischat-route="true"
-      className="z-30 flex w-full flex-col border-b border-border bg-surface/95 backdrop-blur data-[istemporary-chat='true']:bg-purple-900 data-[ischat-route='true']:bg-surface/95"
+      className="z-20 flex w-full flex-col border-b border-border bg-surface/95 backdrop-blur data-[istemporary-chat='true']:bg-purple-900 data-[ischat-route='true']:bg-surface/95"
     >
       <div className="flex w-full items-center justify-between gap-3 px-4 py-2">
         <div className="flex min-w-0 items-center gap-2">

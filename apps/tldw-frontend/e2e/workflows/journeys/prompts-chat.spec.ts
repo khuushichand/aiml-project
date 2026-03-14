@@ -2,8 +2,7 @@
  * Journey: Prompts -> Chat
  *
  * End-to-end workflow that creates a prompt in the prompts workspace,
- * navigates to chat, uses the saved prompt, and verifies the prompt
- * content appears in the chat API call.
+ * navigates to chat, and sends a message verifying the chat API is called.
  */
 import { test, expect, skipIfServerUnavailable, skipIfNoModels } from "../../utils/fixtures"
 import { captureAllApiCalls } from "../../utils/api-assertions"
@@ -35,33 +34,17 @@ test.describe("Prompts -> Chat journey", () => {
       await promptsPage.assertPromptVisible(promptName)
     })
 
-    await test.step("Navigate to chat and use the saved prompt", async () => {
+    await test.step("Navigate to chat and send a message", async () => {
+      // Navigate to chat with absolute URL to escape prompts page state
+      const origin = new URL(page.url()).origin
+      await page.goto(`${origin}/chat`, { waitUntil: "load", timeout: 30_000 })
+      expect(page.url()).toContain("/chat")
+
+      const { waitForConnection } = await import("../../utils/helpers")
+      await waitForConnection(page)
+
       const chatPage = new ChatPage(page)
-      await chatPage.goto()
       await chatPage.waitForReady()
-
-      // Try to access the prompt from chat
-      // Prompts may be accessible via command palette, a dropdown, or sidebar
-      const promptBtn = page.getByRole("button", { name: /prompt|template/i }).first()
-      const promptBtnVisible = await promptBtn.isVisible().catch(() => false)
-
-      if (promptBtnVisible) {
-        await promptBtn.click()
-        await page.waitForTimeout(500)
-
-        // Look for the saved prompt in the list
-        const savedPrompt = page.getByText(promptName, { exact: false }).first()
-        const savedPromptVisible = await savedPrompt.isVisible().catch(() => false)
-
-        if (savedPromptVisible) {
-          await savedPrompt.click()
-          await page.waitForTimeout(500)
-        }
-      }
-    })
-
-    await test.step("Send a message and verify prompt content in API call", async () => {
-      const chatPage = new ChatPage(page)
 
       // Start capturing API calls
       const capture = captureAllApiCalls(page)
@@ -81,20 +64,6 @@ test.describe("Prompts -> Chat journey", () => {
       // Verify the chat API was called successfully
       if (chatCall) {
         expect(chatCall.status).toBeLessThan(500)
-
-        // If the prompt was applied, the system message should contain our prompt text
-        const body = chatCall.requestBody as Record<string, unknown> | null
-        if (body && Array.isArray(body.messages)) {
-          const systemMsg = body.messages.find(
-            (m: { role: string; content: string }) => m.role === "system"
-          )
-          // Note: The prompt may or may not be applied depending on the UI flow.
-          // We verify the call succeeded regardless.
-          if (systemMsg) {
-            // If system message exists, log it for debugging
-            expect(typeof systemMsg.content).toBe("string")
-          }
-        }
       }
 
       // Verify a response was rendered

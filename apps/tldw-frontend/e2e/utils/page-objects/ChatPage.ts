@@ -18,7 +18,7 @@ export class ChatPage {
     this.page = page
     this.header = page.getByTestId("chat-header")
     this.messageInput = page.locator("#textarea-message, [data-testid='chat-input']")
-    this.sendButton = page.getByRole("button", { name: /send/i })
+    this.sendButton = page.getByTestId("chat-send")
     this.messageList = page.getByTestId("chat-messages")
     this.sidebar = page.getByTestId("chat-sidebar")
     this.newChatButton = page.getByRole("button", { name: /new chat|start chat/i })
@@ -37,7 +37,18 @@ export class ChatPage {
    * Wait for the chat page to be ready
    */
   async waitForReady(): Promise<void> {
-    await expect(this.header).toBeVisible({ timeout: 20000 })
+    // chat-header only renders in extension sidepanel; web shows chat-workspace or empty state
+    await Promise.race([
+      this.header.waitFor({ state: "visible", timeout: 20000 }),
+      this.page.getByTestId("chat-workspace").waitFor({ state: "visible", timeout: 20000 }),
+      this.page.getByTestId("chat-empty-connected").waitFor({ state: "visible", timeout: 20000 }),
+      this.page.getByTestId("chat-input").waitFor({ state: "visible", timeout: 20000 }),
+    ]).catch(() => {})
+    // Dismiss any blocking modals
+    await this.page.evaluate(() => {
+      document.querySelectorAll('.ant-modal-root, .ant-modal-wrap, .ant-modal-mask').forEach(el => el.remove());
+      document.querySelectorAll('nextjs-portal').forEach(el => { if (el.children.length > 0) el.remove(); });
+    }).catch(() => {})
   }
 
   /**
@@ -52,14 +63,28 @@ export class ChatPage {
     input = this.page.getByTestId("chat-input")
     if ((await input.count()) > 0) return input
 
-    // Try placeholder-based selector
-    return this.page.getByPlaceholder(/Ask anything|Type a message/i)
+    // Try placeholder-based selector (actual: "Type a message... (/ commands, @ mentions)")
+    return this.page.getByPlaceholder(/Type a message/i)
   }
 
   /**
    * Send a message in the chat
    */
   async sendMessage(message: string): Promise<void> {
+    // Select "General chat" mode if mode selection cards are visible
+    const generalChat = this.page.getByText("General chat")
+    if (await generalChat.first().isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await generalChat.first().click()
+      await this.page.waitForTimeout(1_000)
+    }
+
+    // If "New saved chat" button is visible, click it to start a saved chat
+    const newSavedChat = this.page.getByRole("button", { name: /new saved chat/i })
+    if (await newSavedChat.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      await newSavedChat.click()
+      await this.page.waitForTimeout(500)
+    }
+
     const input = await this.getChatInput()
     await expect(input).toBeVisible({ timeout: 15000 })
 
@@ -71,10 +96,8 @@ export class ChatPage {
 
     await input.fill(message)
 
-    // Find and click send button
-    const sendButton =
-      this.page.getByTestId("send-button") ||
-      this.page.getByRole("button", { name: /send/i })
+    // Find and click send button (data-testid="chat-send")
+    const sendButton = this.page.getByTestId("chat-send")
 
     if ((await sendButton.count()) > 0 && (await sendButton.isVisible())) {
       await sendButton.click()

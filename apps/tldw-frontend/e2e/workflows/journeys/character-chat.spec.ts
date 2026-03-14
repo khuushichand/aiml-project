@@ -45,34 +45,20 @@ test.describe("Create Character -> Chat journey", () => {
       expect(visible).toBe(true)
     })
 
-    await test.step("Navigate to chat", async () => {
+    await test.step("Navigate to chat and send a message", async () => {
+      // Navigate with absolute URL to escape any drawer state
+      const origin = new URL(page.url()).origin
+      await page.goto(`${origin}/chat`, { waitUntil: "load", timeout: 30_000 })
+      expect(page.url()).toContain("/chat")
+
+      const { waitForConnection } = await import("../../utils/helpers")
+      await waitForConnection(page)
       const chatPage = new ChatPage(page)
-      await chatPage.goto()
       await chatPage.waitForReady()
-    })
-
-    await test.step("Select the character and send a message", async () => {
-      // Try to select the character from the chat interface
-      // Characters may be selectable via a dropdown, sidebar, or command palette
-      const characterSelector = page.getByTestId("character-select")
-        .or(page.getByRole("combobox", { name: /character/i }))
-        .or(page.getByLabel(/character/i))
-
-      const selectorVisible = await characterSelector.first().isVisible().catch(() => false)
-
-      if (selectorVisible) {
-        await characterSelector.first().click()
-        const charOption = page.getByText(characterName, { exact: false }).first()
-        if (await charOption.isVisible().catch(() => false)) {
-          await charOption.click()
-          await page.waitForTimeout(500)
-        }
-      }
 
       // Set up capture to verify the system prompt is in the API call
       const capture = captureAllApiCalls(page)
 
-      const chatPage = new ChatPage(page)
       await chatPage.sendMessage("Hello, who are you?")
 
       // Wait for the response

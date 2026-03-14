@@ -171,6 +171,14 @@ export class PromptsWorkspacePage extends BasePage {
         .getByRole("button", { name: /save/i }).first()
       await saveBtn.click()
       await this.page.waitForTimeout(1_000)
+
+      // Close any auto-opened details drawer after save
+      await this.page.keyboard.press("Escape")
+      await this.page.waitForTimeout(300)
+      // Force-remove any lingering drawer/dialog portals
+      await this.page.evaluate(() => {
+        document.querySelectorAll('.ant-drawer-root, .ant-drawer-mask').forEach(el => el.remove())
+      }).catch(() => {})
     } else {
       // Drawer path (fallback)
       await expect(this.drawerNameInput).toBeVisible({ timeout: 10_000 })

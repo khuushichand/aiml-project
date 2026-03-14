@@ -139,19 +139,35 @@ export { expect }
 function extractModelIds(payload: any): string[] {
   const models: string[] = []
 
-  if (Array.isArray(payload)) {
-    for (const provider of payload) {
-      if (Array.isArray(provider?.models)) {
-        for (const model of provider.models) {
+  // Handle { providers: [{ name, models: [...] }, ...] } shape (actual API response)
+  const providers = Array.isArray(payload?.providers)
+    ? payload.providers
+    : Array.isArray(payload)
+      ? payload
+      : []
+
+  for (const provider of providers) {
+    if (Array.isArray(provider?.models)) {
+      for (const model of provider.models) {
+        if (typeof model === "string") {
+          models.push(model)
+        } else {
           const id = model?.id || model?.model || model?.name
           if (id) models.push(String(id))
         }
       }
     }
-  } else if (Array.isArray(payload?.models)) {
+  }
+
+  // Fallback: payload.models direct array
+  if (models.length === 0 && Array.isArray(payload?.models)) {
     for (const model of payload.models) {
-      const id = model?.id || model?.model || model?.name
-      if (id) models.push(String(id))
+      if (typeof model === "string") {
+        models.push(model)
+      } else {
+        const id = model?.id || model?.model || model?.name
+        if (id) models.push(String(id))
+      }
     }
   }
 

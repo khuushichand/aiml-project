@@ -15,34 +15,74 @@ export async function ingestAndWaitForReady(
   input: { url: string } | { file: string },
   timeoutMs = 120_000
 ): Promise<string> {
+  // Quick ingest is available from any page via the sidebar button
   await page.goto("/media", { waitUntil: "domcontentloaded" })
+  await waitForConnection(page)
+
+  // Open quick ingest wizard
+  const quickIngestBtn = page.getByTestId("open-quick-ingest")
+  if (!(await quickIngestBtn.isVisible({ timeout: 5_000 }).catch(() => false))) {
+    // Try sidebar button with text
+    const sidebarBtn = page.getByRole("button", { name: /quick ingest|add content/i }).first()
+    await sidebarBtn.click()
+  } else {
+    await quickIngestBtn.click()
+  }
+
+  // Wait for wizard modal to appear
+  await page.waitForTimeout(1_000)
 
   if ("url" in input) {
-    // Use quick ingest or URL input
-    const urlInput = page.getByPlaceholder(/URL|Enter URL|paste/i).first()
-    if (await urlInput.isVisible().catch(() => false)) {
-      await urlInput.fill(input.url)
+    // Find URL input in the wizard (textarea with https:// placeholder)
+    const urlInput = page.getByPlaceholder(/https:\/\//i).first()
+    if (!(await urlInput.isVisible({ timeout: 5_000 }).catch(() => false))) {
+      // Try any textarea in the modal
+      const textarea = page.locator(".ant-modal textarea, .ant-drawer textarea").first()
+      await textarea.fill(input.url)
     } else {
-      // Try quick ingest button
-      const quickIngestBtn = page.getByRole("button", { name: /quick ingest/i }).first()
-      if (await quickIngestBtn.isVisible().catch(() => false)) {
-        await quickIngestBtn.click()
-        const modalInput = page.getByPlaceholder(/URL|Enter URL|paste/i).first()
-        await modalInput.fill(input.url)
+      await urlInput.fill(input.url)
+    }
+
+    // Click "Add URLs" button to queue the URL (button text: "+ Add URLs")
+    const addUrlsBtn = page.getByRole("button", { name: /add url/i }).first()
+    if (await addUrlsBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await addUrlsBtn.click()
+      await page.waitForTimeout(1_000)
+    }
+
+    // Set up API expectation before proceeding through wizard steps
+    const apiCall = expectApiCall(page, {
+      method: "POST",
+      url: /\/api\/v1\/media/,
+    }, timeoutMs)
+
+    // The wizard has steps: Add → Configure → Review → Processing → Results
+    // Fast path: "Use defaults & process" skips Configure/Review (visible when ≤1 item)
+    const useDefaultsBtn = page.getByRole("button", { name: /use defaults/i })
+    if (await useDefaultsBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await useDefaultsBtn.click()
+    } else {
+      // Slow path: navigate through wizard steps
+      for (let step = 0; step < 4; step++) {
+        // Look for the run/process button (testid on ProcessButton component)
+        const runBtn = page.getByTestId("quick-ingest-run")
+        if (await runBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+          await runBtn.click()
+          break
+        }
+        // "Start Processing" on Review step, or "Configure"/"Next" on earlier steps
+        const nextBtn = page.getByRole("button", { name: /configure|next|review|proceed|start processing|ingest|run/i }).first()
+        if (await nextBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+          await nextBtn.click()
+          await page.waitForTimeout(1_000)
+        } else {
+          break
+        }
       }
     }
 
-    const apiCall = expectApiCall(page, {
-      method: "POST",
-      url: "/api/v1/media",
-    }, timeoutMs)
-
-    // Click submit/ingest button
-    const submitBtn = page.getByRole("button", { name: /ingest|submit|process|add/i }).first()
-    await submitBtn.click()
-
     const { response } = await apiCall
-    const body = await response.json()
+    const body = await response.json().catch(() => ({}))
     return body.media_id ?? body.id ?? "unknown"
   }
 
@@ -52,14 +92,19 @@ export async function ingestAndWaitForReady(
 
   const apiCall = expectApiCall(page, {
     method: "POST",
-    url: "/api/v1/media",
+    url: /\/api\/v1\/media/,
   }, timeoutMs)
 
-  const submitBtn = page.getByRole("button", { name: /upload|ingest|submit|process/i }).first()
-  await submitBtn.click()
+  const runBtn = page.getByTestId("quick-ingest-run")
+  if (await runBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await runBtn.click()
+  } else {
+    const submitBtn = page.getByRole("button", { name: /upload|ingest|submit|process/i }).first()
+    await submitBtn.click()
+  }
 
   const { response } = await apiCall
-  const body = await response.json()
+  const body = await response.json().catch(() => ({}))
   return body.media_id ?? body.id ?? "unknown"
 }
 
