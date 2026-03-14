@@ -5,6 +5,9 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from tldw_Server_API.app.core.DB_Management.Ingestion_Sources_DB import (
+    update_ingestion_source_record,
+)
 from tldw_Server_API.app.core.Ingestion_Sources.models import (
     SINK_TYPES,
     SOURCE_POLICIES,
@@ -435,30 +438,17 @@ async def update_source(
         schedule_config = patch.get("schedule")
         schedule_config_value = schedule_config if isinstance(schedule_config, dict) else {}
 
-    await db.execute(
-        """
-        UPDATE ingestion_sources
-        SET source_type = ?,
-            sink_type = ?,
-            policy = ?,
-            enabled = ?,
-            schedule_enabled = ?,
-            schedule_config_json = ?,
-            config_json = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            str(source_type_value),
-            str(sink_type_value),
-            str(policy_value),
-            1 if enabled_value else 0,
-            1 if schedule_enabled_value else 0,
-            _json_dumps(schedule_config_value),
-            _json_dumps(config_value),
-            _utc_now_text(),
-            int(source_id),
-        ),
+    await update_ingestion_source_record(
+        db,
+        source_id=int(source_id),
+        source_type=str(source_type_value),
+        sink_type=str(sink_type_value),
+        policy=str(policy_value),
+        enabled=bool(enabled_value),
+        schedule_enabled=bool(schedule_enabled_value),
+        schedule_config=schedule_config_value,
+        config=config_value,
+        updated_at=_utc_now_text(),
     )
     updated = await get_source_by_id(db, source_id=source_id, user_id=user_id)
     return updated or {}
