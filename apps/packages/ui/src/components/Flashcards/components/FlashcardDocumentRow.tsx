@@ -4,6 +4,7 @@ import type { TextAreaRef } from "antd/es/input/TextArea"
 
 import type { Deck, Flashcard, FlashcardBulkUpdateItem, FlashcardBulkUpdateResponse } from "@/services/flashcards"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
+import { FlashcardQueueStateBadge } from "../utils/queue-state-badges"
 import { useFlashcardDocumentRowState } from "../hooks/useFlashcardDocumentRowState"
 import type { DocumentQueryFilterContext } from "../utils/document-cache-policy"
 import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
@@ -242,6 +243,10 @@ export const FlashcardDocumentRow: React.FC<FlashcardDocumentRowProps> = ({
         )}
         <div className="flex flex-wrap gap-1.5">
           <Tag>{savedCard.model_type === "cloze" ? "Fill-in-blank" : savedCard.reverse ? "Reversible" : "Standard"}</Tag>
+          <FlashcardQueueStateBadge
+            card={savedCard}
+            testId={`flashcards-document-row-queue-state-${savedCard.uuid}`}
+          />
           <Tag color="blue">{deckLabel}</Tag>
           {(savedCard.tags || []).map((tag) => (
             <Tag key={`${savedCard.uuid}-${tag}`}>{tag}</Tag>

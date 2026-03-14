@@ -50,6 +50,7 @@ import { MarkdownWithBoundary, FlashcardActionsMenu, FlashcardEditDrawer, Flashc
 import { FlashcardDocumentView } from "../components/FlashcardDocumentView"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { formatCardType } from "../utils/model-type-labels"
+import { FlashcardQueueStateBadge } from "../utils/queue-state-badges"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
 import {
   formatFlashcardsUiErrorMessage,
@@ -1985,6 +1986,10 @@ export const ManageTab: React.FC<ManageTabProps> = ({
                           </Tag>
                         )}
                         <Tag>{formatCardType(item, t)}</Tag>
+                        <FlashcardQueueStateBadge
+                          card={item}
+                          testId={`flashcards-manage-queue-state-${item.uuid}`}
+                        />
                         {(item.tags || []).map((tg) => (
                           <Tag key={tg}>{tg}</Tag>
                         ))}

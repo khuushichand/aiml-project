@@ -6,6 +6,7 @@ import {
   createFlashcardsBulk,
   updateFlashcardsBulk,
   createDeck,
+  updateDeck,
   updateFlashcard,
   deleteFlashcard,
   resetFlashcardScheduling,
@@ -24,6 +25,7 @@ import {
   exportFlashcardsFile,
   getFlashcardsImportLimits,
   type Deck,
+  type DeckUpdate,
   type Flashcard,
   type StudyAssistantContextResponse,
   type StudyAssistantRespondRequest,
@@ -459,6 +461,28 @@ export function useCreateDeckMutation() {
     },
     onError: (error) => {
       console.error("Failed to create deck:", error)
+    }
+  })
+}
+
+/**
+ * Hook for updating a deck, including scheduler settings.
+ */
+export function useUpdateDeckMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:deck:update"],
+    mutationFn: (params: { deckId: number; update: DeckUpdate }) =>
+      updateDeck(params.deckId, params.update),
+    onSuccess: (deck) => {
+      qc.setQueryData<Deck[]>(["flashcards:decks"], (current) => {
+        if (!current) return current
+        return current.map((item) => (item.id === deck.id ? deck : item))
+      })
+    },
+    onError: (error) => {
+      console.error("Failed to update flashcard deck:", error)
     }
   })
 }

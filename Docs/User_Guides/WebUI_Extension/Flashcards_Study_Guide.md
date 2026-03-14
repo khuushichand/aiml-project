@@ -2,7 +2,7 @@
 
 _Last updated: 2026-03-13_
 
-This guide explains the Flashcards flow in `Study`, `Manage`, and `Transfer`, including scheduling basics, cloze syntax, and import/export formats.
+This guide explains the Flashcards flow in `Study`, `Manage`, `Transfer`, and `Scheduler`, including scheduling basics, queue states, cloze syntax, and import/export formats.
 
 ## Card Images
 
@@ -24,9 +24,48 @@ Why the 8 KB field limit did not increase:
 ## Daily Study Workflow
 
 1. Add cards through `Manage` (manual create), `Transfer` import, `Transfer` generate, or `Transfer` image occlusion.
-2. Open `Study` and review due cards.
-3. Reveal the answer, then rate recall (`Again`, `Hard`, `Good`, `Easy`).
-4. Repeat daily. The scheduler adjusts next due dates from your ratings.
+2. Open `Scheduler` when you want to tune a deck's spaced-repetition policy.
+3. Open `Study` and review due cards.
+4. Reveal the answer, then rate recall (`Again`, `Hard`, `Good`, `Easy`).
+5. Use `Manage` when you want to inspect queue state on expanded cards or document rows while cleaning up a deck.
+6. Repeat daily. The scheduler adjusts next due dates from your ratings.
+
+## Scheduler Tab
+
+Open `Scheduler` from the top-level Flashcards tabs to edit deck-level review policy.
+
+What it includes:
+
+- A searchable deck list with compact scheduler summaries.
+- A per-deck editor for step timing, interval growth, leech handling, and fuzz.
+- Built-in presets:
+  - `Default`: backend defaults for balanced daily review.
+  - `Fast acquisition`: shorter early steps and shorter easy intervals.
+  - `Conservative review`: slower acquisition and stronger long-term spacing.
+- `Copy settings` to clone another deck's scheduler into the current draft.
+- `Reset to defaults` to restore the standard scheduler bundle.
+- Active-deck counts for `Due review`, `New`, `Learning`, and total due cards.
+
+Important behavior:
+
+- New decks start with the default scheduler settings.
+- Scheduler edits are deck-scoped; they do not affect other decks unless you copy them.
+- Unsaved scheduler drafts are guarded when you switch decks or leave the `Scheduler` tab.
+- If another client updates the same deck first, the tab shows `Reload latest` and `Reapply my draft` actions.
+
+## Queue States
+
+Queue-state badges now appear on the active card in `Study`, on expanded cards in `Manage`, and on document-mode rows.
+
+Meanings:
+
+- `New`: the card has not graduated into regular review yet.
+- `Learning`: the card is moving through short learning steps.
+- `Review`: the card is on the long-term review schedule.
+- `Relearning`: the card lapsed and is moving through relearn steps.
+- `Suspended`: the card is out of automatic rotation.
+  - `Suspended (Leech)` means it hit the leech threshold.
+  - `Suspended (Manual)` means it was suspended intentionally.
 
 ## Ratings and Scheduling Basics
 

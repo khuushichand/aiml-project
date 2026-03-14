@@ -49,6 +49,7 @@ import {
 } from "../components"
 import { calculateIntervals } from "../utils/calculateIntervals"
 import { formatCardType } from "../utils/model-type-labels"
+import { FlashcardQueueStateBadge } from "../utils/queue-state-badges"
 import { buildReviewUndoState } from "../utils/review-undo"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
 import {
@@ -889,6 +890,10 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <Tag>{formatCardType(activeCard, t)}</Tag>
+                <FlashcardQueueStateBadge
+                  card={activeCard}
+                  testId="flashcards-review-queue-state"
+                />
                 {activeCard.tags?.map((tag) => (
                   <Tag key={tag}>{tag}</Tag>
                 ))}

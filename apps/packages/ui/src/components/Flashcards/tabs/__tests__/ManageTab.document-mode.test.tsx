@@ -171,6 +171,9 @@ const sampleCard: Flashcard = {
   lapses: 1,
   due_at: null,
   last_reviewed_at: null,
+  queue_state: "learning",
+  step_index: 1,
+  suspended_reason: null,
   last_modified: null,
   deleted: false,
   client_id: "test",
@@ -310,5 +313,25 @@ describe("ManageTab document mode", () => {
 
     expect(screen.getByTestId("flashcards-document-truncation-banner")).toBeInTheDocument()
     expect(screen.getByTestId("flashcards-select-all-across")).toBeDisabled()
+  })
+
+  it("shows queue state badges in expanded and document presentations only", async () => {
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive
+      />
+    )
+
+    fireEvent.click(screen.getByTestId("flashcards-density-toggle"))
+    expect(screen.getByTestId("flashcards-manage-queue-state-card-document-1")).toHaveTextContent(
+      "Learning"
+    )
+
+    fireEvent.click(screen.getByTestId("flashcards-density-toggle-document"))
+    expect(
+      await screen.findByTestId("flashcards-document-row-queue-state-card-document-1")
+    ).toHaveTextContent("Learning")
   })
 })
