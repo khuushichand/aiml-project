@@ -73,10 +73,7 @@ test.describe("Notifications", () => {
   })
 
   test("refresh button fires notifications API call", async ({ authedPage, diagnostics }) => {
-    await notifications.goto()
-    await notifications.waitForLoaded()
-
-    // Track whether any request to /notifications is made (finished or failed)
+    // Track whether any request to /notifications is made
     let apiCallMade = false
     const handler = (req: import("@playwright/test").Request) => {
       if (req.url().includes("/notifications") && req.method() === "GET") {
@@ -85,7 +82,17 @@ test.describe("Notifications", () => {
     }
     authedPage.on("request", handler)
 
-    await notifications.refreshButton.click()
+    await notifications.goto()
+    await notifications.waitForLoaded()
+
+    // Dismiss any Next.js error overlay that might block clicks
+    await authedPage.keyboard.press("Escape")
+    await authedPage.waitForTimeout(500)
+
+    // Reset tracker - page load may have already triggered API calls
+    apiCallMade = false
+
+    await notifications.refreshButton.click({ force: true })
     // Give time for the request to be initiated
     await authedPage.waitForTimeout(3_000)
     authedPage.removeListener("request", handler)

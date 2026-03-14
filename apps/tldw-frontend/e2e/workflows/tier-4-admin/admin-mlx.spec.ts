@@ -106,10 +106,11 @@ test.describe("Admin MLX", () => {
         return
       }
 
-      // Scroll buttons into view since they may be below the fold
+      // Scroll to Load Model button (may be below the fold)
+      await admin.mlxLoadButton.waitFor({ state: "attached", timeout: 10_000 }).catch(() => {})
       await admin.mlxLoadButton.scrollIntoViewIfNeeded().catch(() => {})
+      await authedPage.waitForTimeout(300)
       const loadVisible = await admin.mlxLoadButton.isVisible().catch(() => false)
-      await admin.mlxUnloadButton.scrollIntoViewIfNeeded().catch(() => {})
       const unloadVisible = await admin.mlxUnloadButton.isVisible().catch(() => false)
 
       expect(loadVisible).toBe(true)
@@ -158,17 +159,23 @@ test.describe("Admin MLX", () => {
     }) => {
       skipIfServerUnavailable(serverInfo)
 
-      // Set up API call expectation before navigation
-      const apiCall = expectApiCall(authedPage, {
-        url: /\/api\/v1\/llm\/providers\/mlx\/status/i,
-        method: "GET",
-      })
+      // Track whether any request to mlx status is made
+      let apiCallMade = false
+      const handler = (req: import("@playwright/test").Request) => {
+        if (/\/api\/v1\/llm\/providers\/mlx\/status/i.test(req.url()) && req.method() === "GET") {
+          apiCallMade = true
+        }
+      }
+      authedPage.on("request", handler)
 
       admin = new AdminPage(authedPage)
       await admin.gotoSection("mlx")
+      await admin.assertSectionReady("mlx")
 
-      // The page calls loadStatus() and loadProviders() on mount
-      await apiCall
+      authedPage.removeListener("request", handler)
+
+      // The page calls loadStatus() on mount
+      expect(apiCallMade).toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
