@@ -47,6 +47,24 @@ def test_process_audio_files_uses_check_transcription_model_status(monkeypatch, 
 
 
 @pytest.mark.unit
+def test_check_transcription_model_status_marks_uncached_whisper_usable(monkeypatch):
+    """Uncached Whisper models should remain request-usable via first-use download."""
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    monkeypatch.setattr(atlib, "parse_transcription_model", lambda _: ("whisper", "large-v3", None), raising=True)
+    monkeypatch.setattr(atlib, "validate_whisper_model_identifier", lambda value: value, raising=True)
+    monkeypatch.setattr(atlib, "check_model_exists", lambda _model_name: False, raising=True)
+
+    status = audio_files.check_transcription_model_status("whisper-large-v3")
+
+    assert status["provider"] == "whisper"
+    assert status["model"] == "large-v3"
+    assert status["available"] is False
+    assert status["usable"] is True
+    assert status["on_demand"] is True
+
+
+@pytest.mark.unit
 def test_default_title_from_audio_path_strips_hex_suffix():
     title = audio_files._default_title_from_audio_path("/tmp/My_Clip_ab12cd34.wav")  # nosec B108
     assert title == "My_Clip"

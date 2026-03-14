@@ -158,12 +158,12 @@ describe("CollectionsPlaygroundPage", () => {
     render(<CollectionsPlaygroundPage />)
 
     expect(
-      screen.getByText("Collections needs your credentials before it can load data.")
+      screen.getByText("Add your credentials before Collections can load data.")
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Open Settings" }))
     expect(navigateMock).toHaveBeenCalledWith("/settings/tldw")
     expect(
-      screen.queryByText("Server is offline. Please connect to use Collections.")
+      screen.queryByText("Can't reach your tldw server right now.")
     ).not.toBeInTheDocument()
   })
 
@@ -188,7 +188,7 @@ describe("CollectionsPlaygroundPage", () => {
     render(<CollectionsPlaygroundPage />)
 
     expect(
-      screen.getByText("Server is offline. Please connect to use Collections.")
+      screen.getByText("Can't reach your tldw server right now.")
     ).toBeInTheDocument()
   })
 

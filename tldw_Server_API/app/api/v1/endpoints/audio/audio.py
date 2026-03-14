@@ -1,8 +1,9 @@
 # audio.py
 # Description: Aggregate audio endpoints and WebSocket routes.
 import asyncio as asyncio
+import importlib
 import os
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from loguru import logger
@@ -10,11 +11,22 @@ from starlette import status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
+from tldw_Server_API.app.core.Audio.streaming_service import (
+    CHAT_HISTORY_MAX_MESSAGES,
+    _audio_ws_authenticate,
+    _stream_tts_to_websocket,
+)
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call_async as chat_api_call_async,
+)
+from tldw_Server_API.app.core.Metrics.metrics_manager import (
+    get_metrics_registry,
+)
 
 from . import (
     audio_health,
     audio_history,
-    audio_streaming,
     audio_tokenizer,
     audio_transcriptions,
     audio_tts,
@@ -35,12 +47,32 @@ router.include_router(audio_tts.router)
 router.include_router(audio_history.router)
 router.include_router(audio_tokenizer.router)
 router.include_router(audio_transcriptions.router)
-router.include_router(audio_streaming.router)
 router.include_router(audio_health.router)
 router.include_router(audio_voices.router)
 
+_AUDIO_STREAMING_MODULE = f"{__package__}.audio_streaming"
+
+
+def _load_audio_streaming() -> Any:
+    return importlib.import_module(_AUDIO_STREAMING_MODULE)
+
+
+def _streaming_attr(name: str) -> Any:
+    return getattr(_load_audio_streaming(), name)
+
+
+def _mount_streaming_routes() -> APIRouter:
+    try:
+        streaming_module = _load_audio_streaming()
+        router.include_router(streaming_module.router)
+        return streaming_module.ws_router
+    except Exception as exc:
+        logger.warning(f"Audio streaming routes unavailable; skipping import: {exc}")
+        return APIRouter()
+
+
 # Expose WebSocket router
-ws_router = audio_streaming.ws_router
+ws_router = _mount_streaming_routes()
 
 # Re-export selected endpoint callables for tests/backwards-compat imports
 create_speech = audio_tts.create_speech
@@ -53,10 +85,6 @@ decode_audio_tokenizer = audio_tokenizer.decode_audio_tokenizer
 create_transcription = audio_transcriptions.create_transcription
 create_translation = audio_transcriptions.create_translation
 segment_transcript = audio_transcriptions.segment_transcript
-audio_chat_turn = audio_streaming.audio_chat_turn
-streaming_status = audio_streaming.streaming_status
-streaming_limits = audio_streaming.streaming_limits
-test_streaming = audio_streaming.test_streaming
 get_tts_health = audio_health.get_tts_health
 get_stt_health = audio_health.get_stt_health
 upload_voice = audio_voices.upload_voice
@@ -185,21 +213,52 @@ def _get_failopen_cap_minutes() -> float:
     return 5.0
 
 
-# Re-export streaming helpers/classes for tests to monkeypatch
-websocket_audio_chat_stream = audio_streaming.websocket_audio_chat_stream
-websocket_tts = audio_streaming.websocket_tts
-websocket_tts_realtime = audio_streaming.websocket_tts_realtime
-websocket_transcribe = audio_streaming.websocket_transcribe
+async def audio_chat_turn(*args, **kwargs):
+    return await _streaming_attr("audio_chat_turn")(*args, **kwargs)
 
-_audio_ws_authenticate = audio_streaming._audio_ws_authenticate
-_stream_tts_to_websocket = audio_streaming._stream_tts_to_websocket
-CHAT_HISTORY_MAX_MESSAGES = audio_streaming.CHAT_HISTORY_MAX_MESSAGES
 
-get_api_keys = audio_streaming.get_api_keys
-chat_api_call_async = audio_streaming.chat_api_call_async
-get_metrics_registry = audio_streaming.get_metrics_registry
-UnifiedStreamingTranscriber = audio_streaming.UnifiedStreamingTranscriber
-SileroTurnDetector = audio_streaming.SileroTurnDetector
+async def streaming_status(*args, **kwargs):
+    return await _streaming_attr("streaming_status")(*args, **kwargs)
+
+
+async def streaming_limits(*args, **kwargs):
+    return await _streaming_attr("streaming_limits")(*args, **kwargs)
+
+
+async def test_streaming(*args, **kwargs):
+    return await _streaming_attr("test_streaming")(*args, **kwargs)
+
+
+async def websocket_audio_chat_stream(*args, **kwargs):
+    return await _streaming_attr("websocket_audio_chat_stream")(*args, **kwargs)
+
+
+async def websocket_tts(*args, **kwargs):
+    return await _streaming_attr("websocket_tts")(*args, **kwargs)
+
+
+async def websocket_tts_realtime(*args, **kwargs):
+    return await _streaming_attr("websocket_tts_realtime")(*args, **kwargs)
+
+
+async def websocket_transcribe(*args, **kwargs):
+    return await _streaming_attr("websocket_transcribe")(*args, **kwargs)
+
+
+def UnifiedStreamingTranscriber(*args, **kwargs):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+        UnifiedStreamingTranscriber as _impl,
+    )
+
+    return _impl(*args, **kwargs)
+
+
+def SileroTurnDetector(*args, **kwargs):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+        SileroTurnDetector as _impl,
+    )
+
+    return _impl(*args, **kwargs)
 
 # Re-export quota helpers for tests/monkeypatching
 from tldw_Server_API.app.core.Usage.audio_quota import (

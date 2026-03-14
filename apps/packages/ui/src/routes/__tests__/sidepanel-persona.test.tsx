@@ -4,6 +4,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const mocks = vi.hoisted(() => ({
   isOnline: true,
+  uxState: "connected_ok" as
+    | "connected_ok"
+    | "configuring_url"
+    | "configuring_auth"
+    | "error_auth"
+    | "error_unreachable"
+    | "unconfigured",
+  hasCompletedFirstRun: true,
   capabilitiesState: {
     capabilities: { hasPersona: true, hasPersonalization: true },
     loading: false
@@ -35,6 +43,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => mocks.isOnline
+}))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => ({
+    uxState: mocks.uxState,
+    hasCompletedFirstRun: mocks.hasCompletedFirstRun
+  })
 }))
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
@@ -236,6 +251,8 @@ describe("SidepanelPersona", () => {
     MockWebSocket.instances = []
     window.localStorage.clear()
     mocks.isOnline = true
+    mocks.uxState = "connected_ok"
+    mocks.hasCompletedFirstRun = true
     mocks.capabilitiesState.capabilities = {
       hasPersona: true,
       hasPersonalization: true
@@ -283,6 +300,50 @@ describe("SidepanelPersona", () => {
     expect(screen.getByText("Connect to use Persona")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
     expect(mocks.navigate).toHaveBeenCalledWith("/settings")
+  })
+
+  it("shows auth guidance instead of the generic offline copy when credentials are missing", () => {
+    mocks.isOnline = false
+    mocks.uxState = "error_auth"
+
+    render(<SidepanelPersona />)
+
+    expect(
+      screen.getByText("Add your credentials to use Persona")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("Connect to use Persona")
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(mocks.navigate).toHaveBeenCalledWith("/settings")
+  })
+
+  it("shows setup guidance when first-run onboarding is incomplete", () => {
+    mocks.isOnline = false
+    mocks.uxState = "unconfigured"
+    mocks.hasCompletedFirstRun = false
+
+    render(<SidepanelPersona />)
+
+    expect(
+      screen.getByText("Finish setup to use Persona")
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(mocks.navigate).toHaveBeenCalledWith("/settings")
+  })
+
+  it("shows an unreachable-server state instead of the generic offline copy", () => {
+    mocks.isOnline = false
+    mocks.uxState = "error_unreachable"
+
+    render(<SidepanelPersona />)
+
+    expect(
+      screen.getByText("Can't reach your tldw server right now")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("Connect to use Persona")
+    ).not.toBeInTheDocument()
   })
 
   it("shows unavailable state when persona capability is missing", () => {

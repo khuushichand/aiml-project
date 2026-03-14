@@ -333,7 +333,6 @@ export const HEADER_SHORTCUT_IDS = [
   "document-workspace",
   "repo2txt",
   "multi-item-review",
-  "content-review",
   "flashcards",
   "notes",
   "watchlists",

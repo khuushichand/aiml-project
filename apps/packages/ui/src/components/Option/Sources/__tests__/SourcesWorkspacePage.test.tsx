@@ -17,6 +17,10 @@ const onlineMocks = vi.hoisted(() => ({
   useServerOnline: vi.fn()
 }))
 
+const connectionMocks = vi.hoisted(() => ({
+  useConnectionUxState: vi.fn()
+}))
+
 const routerMocks = vi.hoisted(() => ({
   navigate: vi.fn()
 }))
@@ -38,6 +42,10 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => onlineMocks.useServerOnline()
+}))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => connectionMocks.useConnectionUxState()
 }))
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
@@ -69,6 +77,10 @@ describe("SourcesWorkspacePage", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     onlineMocks.useServerOnline.mockReturnValue(true)
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "connected_ok",
+      hasCompletedFirstRun: true
+    })
     capabilityMocks.useServerCapabilities.mockReturnValue({
       capabilities: { hasIngestionSources: true },
       loading: false
@@ -130,13 +142,29 @@ describe("SourcesWorkspacePage", () => {
     expect(routerMocks.navigate).toHaveBeenCalledWith("/sources/12")
   })
 
-  it("renders an offline state when the server is unavailable", () => {
-    onlineMocks.useServerOnline.mockReturnValue(false)
+  it("shows credential repair guidance when the server is reachable but auth is missing", () => {
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "error_auth",
+      hasCompletedFirstRun: true
+    })
 
     renderWorkspace(<SourcesWorkspacePage />)
 
     expect(
-      screen.getByText("Server is offline. Connect to manage ingestion sources.")
+      screen.getByText("Add your credentials before Sources can load data.")
+    ).toBeInTheDocument()
+  })
+
+  it("keeps the unreachable message for genuine connectivity failures", () => {
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "error_unreachable",
+      hasCompletedFirstRun: true
+    })
+
+    renderWorkspace(<SourcesWorkspacePage />)
+
+    expect(
+      screen.getByText("Can't reach your tldw server right now.")
     ).toBeInTheDocument()
   })
 

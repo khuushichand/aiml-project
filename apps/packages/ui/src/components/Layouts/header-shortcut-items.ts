@@ -180,13 +180,6 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelDefault: "Multi-Item Review"
       },
       {
-        id: "content-review",
-        to: "/content-review",
-        icon: FileText,
-        labelKey: "option:header.contentReview",
-        labelDefault: "Content Review"
-      },
-      {
         id: "collections",
         to: "/collections",
         icon: Library,

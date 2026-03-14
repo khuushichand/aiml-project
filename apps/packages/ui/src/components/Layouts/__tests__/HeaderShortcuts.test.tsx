@@ -19,7 +19,7 @@ const ALL_SHORTCUT_IDS = [
   "chat-dictionaries", "world-books", "workspace-playground",
   "knowledge-qa", "media", "document-workspace",
   "repo2txt",
-  "multi-item-review", "content-review", "collections",
+  "multi-item-review", "collections",
   "watchlists", "notes", "chatbooks-playground", "flashcards",
   "quizzes", "evaluations", "chunking-playground",
   "stt-playground", "tts-playground", "audiobook-studio",
@@ -139,6 +139,15 @@ describe("HeaderShortcuts launcher modal", () => {
     expect(screen.getByText("Prompts")).toBeInTheDocument()
     expect(screen.getByText("Repo2Txt")).toBeInTheDocument()
     expect(screen.getByText("Settings")).toBeInTheDocument()
+  })
+
+  it("does not show Content Review in the launcher modal", () => {
+    renderWithRouter(
+      <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
+    )
+
+    const listbox = screen.getByRole("listbox")
+    expect(within(listbox).queryByText("Content Review")).not.toBeInTheDocument()
   })
 
   it("filters items when category is clicked", () => {
