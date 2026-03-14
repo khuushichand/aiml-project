@@ -485,6 +485,28 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
             "last_test_type": "dry_run",
         }
 
+        completed_live = client.patch(
+            f"/api/v1/persona/profiles/{persona_id}",
+            json={
+                "setup": {
+                    "status": "completed",
+                    "version": 1,
+                    "current_step": "test",
+                    "completed_at": "2026-03-13T10:05:00Z",
+                    "last_test_type": "live_session",
+                }
+            },
+        )
+        assert completed_live.status_code == 200, completed_live.text
+        completed_live_payload = completed_live.json()
+        assert completed_live_payload["setup"] == {
+            "status": "completed",
+            "version": 1,
+            "current_step": "test",
+            "completed_at": "2026-03-13T10:05:00Z",
+            "last_test_type": "live_session",
+        }
+
     fastapi_app.dependency_overrides.clear()
 
 

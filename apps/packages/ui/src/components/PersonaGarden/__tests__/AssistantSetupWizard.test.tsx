@@ -149,4 +149,23 @@ describe("AssistantSetupWizard", () => {
     expect(screen.getByTestId("setup-safety-content")).toHaveTextContent("Safety step")
     expect(screen.queryByText("Setup step")).not.toBeInTheDocument()
   })
+
+  it("renders injected test-step content when the wizard reaches finish setup", () => {
+    render(
+      <AssistantSetupWizard
+        catalog={[{ id: "default_persona", name: "Default Persona" }]}
+        selectedPersonaId="default_persona"
+        currentStep="test"
+        postSetupTargetTab="profiles"
+        testStepContent={<div data-testid="setup-test-content">Test step</div>}
+        saving={false}
+        error={null}
+        onUsePersona={vi.fn()}
+        onCreatePersona={vi.fn()}
+      />
+    )
+
+    expect(screen.getByTestId("setup-test-content")).toHaveTextContent("Test step")
+    expect(screen.queryByText("Setup step")).not.toBeInTheDocument()
+  })
 })

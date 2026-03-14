@@ -30,6 +30,7 @@ import {
   type SetupSafetyConnectionDraft
 } from "@/components/PersonaGarden/SetupSafetyConnectionsStep"
 import { SetupStarterCommandsStep } from "@/components/PersonaGarden/SetupStarterCommandsStep"
+import { SetupTestAndFinishStep } from "@/components/PersonaGarden/SetupTestAndFinishStep"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
@@ -173,6 +174,13 @@ type PersonaProfileResponse = {
   use_persona_state_context_default?: boolean
   voice_defaults?: PersonaVoiceDefaults | null
   setup?: PersonaSetupState | null
+}
+
+type SetupWizardDryRunResult = {
+  heardText: string
+  matched: boolean
+  commandName?: string | null
+  failurePhase?: string | null
 }
 
 type PersonaStateDocsResponse = {
@@ -410,6 +418,14 @@ const SidepanelPersona = ({
   const [personaProfileLoading, setPersonaProfileLoading] = React.useState(false)
   const [setupWizardSaving, setSetupWizardSaving] = React.useState(false)
   const [setupWizardError, setSetupWizardError] = React.useState<string | null>(null)
+  const [setupWizardDryRunLoading, setSetupWizardDryRunLoading] = React.useState(false)
+  const [setupWizardDryRunError, setSetupWizardDryRunError] =
+    React.useState<string | null>(null)
+  const [setupWizardDryRunResult, setSetupWizardDryRunResult] =
+    React.useState<SetupWizardDryRunResult | null>(null)
+  const [setupWizardLiveSuccessText, setSetupWizardLiveSuccessText] =
+    React.useState<string | null>(null)
+  const setupWizardAwaitingLiveResponseRef = React.useRef(false)
   const [liveSessionVoiceDefaultsBaseline, setLiveSessionVoiceDefaultsBaseline] =
     React.useState<PersonaVoiceDefaults | null>(null)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
@@ -644,6 +660,17 @@ const SidepanelPersona = ({
     loading: personaProfileLoading,
     setup: savedPersonaSetup
   })
+
+  React.useEffect(() => {
+    if (!personaSetupWizard.isSetupRequired || personaSetupWizard.currentStep === "test") {
+      return
+    }
+    setSetupWizardDryRunLoading(false)
+    setSetupWizardDryRunError(null)
+    setSetupWizardDryRunResult(null)
+    setSetupWizardLiveSuccessText(null)
+    setupWizardAwaitingLiveResponseRef.current = false
+  }, [personaSetupWizard.currentStep, personaSetupWizard.isSetupRequired])
 
   const buildPersonaSetupInProgress = React.useCallback(
     (step: PersonaSetupState["current_step"] = "voice"): PersonaSetupState => ({
@@ -1141,6 +1168,17 @@ const SidepanelPersona = ({
       }
 
       if (eventType === "assistant_delta") {
+        if (
+          personaSetupWizard.isSetupRequired &&
+          personaSetupWizard.currentStep === "test" &&
+          setupWizardAwaitingLiveResponseRef.current
+        ) {
+          const textDelta = String(payload?.text_delta || "").trim()
+          if (textDelta) {
+            setSetupWizardLiveSuccessText(textDelta)
+            setupWizardAwaitingLiveResponseRef.current = false
+          }
+        }
         appendLog("assistant", String(payload?.text_delta || ""))
         return
       }
@@ -1251,7 +1289,7 @@ const SidepanelPersona = ({
         appendLog("notice", "Received persona TTS audio chunk")
       }
     },
-    [appendLog, liveVoiceController, sessionId]
+    [appendLog, liveVoiceController, personaSetupWizard.currentStep, personaSetupWizard.isSetupRequired, sessionId]
   )
 
   const applyPersonaStatePayload = React.useCallback((payload: PersonaStateDocsResponse) => {
@@ -2064,6 +2102,86 @@ const SidepanelPersona = ({
     [buildPersonaSetupInProgress, savedPersonaVoiceDefaults, selectedPersonaId]
   )
 
+  const completePersonaSetup = React.useCallback(
+    async (testType: "dry_run" | "live_session") => {
+      const personaId = String(selectedPersonaId || "").trim()
+      if (!personaId) return
+      setSetupWizardSaving(true)
+      setSetupWizardError(null)
+      try {
+        const completedSetup: PersonaSetupState = {
+          status: "completed",
+          version: 1,
+          current_step: "test",
+          completed_at: new Date().toISOString(),
+          last_test_type: testType
+        }
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+          {
+            method: "PATCH",
+            body: {
+              setup: completedSetup
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to complete assistant setup")
+        }
+        const payload = (await response.json()) as PersonaProfileResponse
+        setSavedPersonaSetup(payload?.setup || completedSetup)
+        setSetupWizardDryRunError(null)
+      } catch (setupError: any) {
+        setSetupWizardError(String(setupError?.message || "Failed to complete assistant setup"))
+      } finally {
+        setSetupWizardSaving(false)
+      }
+    },
+    [selectedPersonaId]
+  )
+
+  const handleRunSetupDryRun = React.useCallback(
+    async (heardText: string) => {
+      const personaId = String(selectedPersonaId || "").trim()
+      const normalizedHeardText = String(heardText || "").trim()
+      if (!personaId || !normalizedHeardText) return
+      setSetupWizardDryRunLoading(true)
+      setSetupWizardDryRunError(null)
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/voice-commands/test` as any,
+          {
+            method: "POST",
+            body: {
+              heard_text: normalizedHeardText
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to run setup dry-run")
+        }
+        const payload = (await response.json()) as {
+          heard_text?: string
+          matched?: boolean
+          command_name?: string | null
+          failure_phase?: string | null
+        }
+        setSetupWizardDryRunResult({
+          heardText: String(payload?.heard_text || normalizedHeardText),
+          matched: payload?.matched !== false,
+          commandName: payload?.command_name || null,
+          failurePhase: payload?.failure_phase || null
+        })
+      } catch (setupError: any) {
+        setSetupWizardDryRunResult(null)
+        setSetupWizardDryRunError(String(setupError?.message || "Failed to run setup dry-run"))
+      } finally {
+        setSetupWizardDryRunLoading(false)
+      }
+    },
+    [selectedPersonaId]
+  )
+
   const handleResumeSessionSelectionChange = React.useCallback(
     (value: string) => {
       const nextResumeSessionId = value === "__new__" ? "" : String(value)
@@ -2104,6 +2222,40 @@ const SidepanelPersona = ({
     personaStateContextEnabled,
     sessionId
   ])
+
+  const sendSetupLiveTestMessage = React.useCallback(
+    (text: string) => {
+      const trimmed = String(text || "").trim()
+      if (!trimmed || !connected || !sessionId || !wsRef.current) return
+      try {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "user_message",
+            session_id: sessionId,
+            text: trimmed,
+            use_memory_context: memoryEnabled,
+            use_companion_context: companionContextEnabled,
+            use_persona_state_context: personaStateContextEnabled,
+            memory_top_k: memoryTopK
+          })
+        )
+        setupWizardAwaitingLiveResponseRef.current = true
+        setSetupWizardLiveSuccessText(null)
+        appendLog("user", trimmed)
+      } catch (err: any) {
+        setSetupWizardError(String(err?.message || "Failed to send setup live test"))
+      }
+    },
+    [
+      appendLog,
+      companionContextEnabled,
+      connected,
+      memoryEnabled,
+      memoryTopK,
+      personaStateContextEnabled,
+      sessionId
+    ]
+  )
 
   const saveCompanionCheckIn = React.useCallback(async () => {
     const trimmed = input.trim()
@@ -3036,8 +3188,37 @@ const SidepanelPersona = ({
     </div>
   )
 
+  const setupLiveCompletionCard =
+    connected &&
+    personaSetupWizard.isSetupRequired &&
+    personaSetupWizard.currentStep === "test" ? (
+      <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-3 text-sm text-sky-100">
+        <div className="font-medium">Finish assistant setup from a live session</div>
+        <div className="mt-1 text-xs text-sky-100/80">
+          Send one live message with the normal composer. When the assistant responds,
+          finish setup from here.
+        </div>
+        {setupWizardLiveSuccessText ? (
+          <div className="mt-2 rounded-md border border-sky-500/30 bg-black/10 px-3 py-2 text-xs text-sky-50">
+            Live session responded: {setupWizardLiveSuccessText}
+          </div>
+        ) : null}
+        {setupWizardLiveSuccessText ? (
+          <Button
+            className="mt-3"
+            onClick={() => {
+              void completePersonaSetup("live_session")
+            }}
+          >
+            Finish setup from live session
+          </Button>
+        ) : null}
+      </div>
+    ) : null
+
   const composerPanel = (
     <div className="flex flex-col gap-2">
+      {setupLiveCompletionCard}
       {isCompanionMode && companionPrompts.length ? (
         <div
           className="flex flex-wrap gap-2"
@@ -3328,6 +3509,33 @@ const SidepanelPersona = ({
                     }
                     onContinue={(payload) => {
                       void handleSetupSafetyStepContinue(payload)
+                    }}
+                  />
+                ) : undefined
+              }
+              testStepContent={
+                personaSetupWizard.currentStep === "test" ? (
+                  <SetupTestAndFinishStep
+                    saving={setupWizardSaving}
+                    dryRunLoading={setupWizardDryRunLoading}
+                    dryRunError={setupWizardDryRunError}
+                    dryRunResult={setupWizardDryRunResult}
+                    liveConnected={connected}
+                    liveSuccessText={setupWizardLiveSuccessText}
+                    onRunDryRun={(heardText) => {
+                      void handleRunSetupDryRun(heardText)
+                    }}
+                    onConnectLive={() => {
+                      void connect()
+                    }}
+                    onSendLive={(text) => {
+                      sendSetupLiveTestMessage(text)
+                    }}
+                    onFinishWithDryRun={() => {
+                      void completePersonaSetup("dry_run")
+                    }}
+                    onFinishWithLiveSession={() => {
+                      void completePersonaSetup("live_session")
                     }}
                   />
                 ) : undefined

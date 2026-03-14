@@ -1233,6 +1233,267 @@ describe("SidepanelPersona", () => {
     )
   })
 
+  it("completes setup from a successful dry-run test and restores the requested tab", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "research_assistant", name: "Research Assistant" },
+            { id: "garden-helper", name: "Garden Helper" }
+          ]
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper/voice-commands/test") &&
+        String(init?.method || "").toUpperCase() === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            heard_text: init?.body?.heard_text || "",
+            matched: true,
+            command_name: "Search Notes",
+            fallback_to_persona_planner: false
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              confirmation_mode: "destructive_only"
+            },
+            setup: {
+              status: "in_progress",
+              version: 1,
+              current_step: "test",
+              completed_at: null,
+              last_test_type: null
+            }
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "").toUpperCase() === "PATCH" &&
+        init?.body?.setup
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              confirmation_mode: "destructive_only"
+            },
+            setup: init.body.setup
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({ ok: true, json: async () => [] })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() =>
+      expect(screen.getByText("Test and finish")).toBeInTheDocument()
+    )
+
+    fireEvent.change(screen.getByPlaceholderText("Try a spoken phrase"), {
+      target: { value: "search notes for embeddings" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Run dry-run test" }))
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Finish with dry-run test" })).toBeInTheDocument()
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish with dry-run test" }))
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
+    )
+    expect(screen.getByLabelText("STT language")).toHaveValue("en-US")
+
+    const completionPatchCall = mocks.fetchWithAuth.mock.calls.find(
+      ([calledPath, init]) =>
+        String(calledPath).includes("/persona/profiles/garden-helper") &&
+        String((init as { method?: string } | undefined)?.method || "").toUpperCase() ===
+          "PATCH" &&
+        (init as { body?: any } | undefined)?.body?.setup?.status === "completed"
+    )
+    expect(completionPatchCall?.[1]).toEqual(
+      expect.objectContaining({
+        method: "PATCH",
+        body: expect.objectContaining({
+          setup: expect.objectContaining({
+            status: "completed",
+            last_test_type: "dry_run"
+          })
+        })
+      })
+    )
+  })
+
+  it("completes setup from a successful live session test and restores the requested tab", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=live"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "research_assistant", name: "Research Assistant" },
+            { id: "garden-helper", name: "Garden Helper" }
+          ]
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              confirmation_mode: "destructive_only"
+            },
+            setup: {
+              status: "in_progress",
+              version: 1,
+              current_step: "test",
+              completed_at: null,
+              last_test_type: null
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({ ok: true, json: async () => [] })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-setup-live",
+            persona: { id: "garden-helper" }
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "").toUpperCase() === "PATCH" &&
+        init?.body?.setup
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              confirmation_mode: "destructive_only"
+            },
+            setup: init.body.setup
+          })
+        })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() =>
+      expect(screen.getByText("Test and finish")).toBeInTheDocument()
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect live session" }))
+    const ws = await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+      return MockWebSocket.instances[0]
+    })
+
+    act(() => {
+      ws.emitOpen()
+    })
+
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText("Try a live message")).toBeInTheDocument()
+    )
+
+    fireEvent.change(screen.getByPlaceholderText("Try a live message"), {
+      target: { value: "summarize my setup" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Send live test" }))
+
+    act(() => {
+      ws.emitMessage(
+        JSON.stringify({
+          event: "assistant_delta",
+          text_delta: "Your assistant setup is ready."
+        })
+      )
+    })
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Finish with live session" })).toBeInTheDocument()
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish with live session" }))
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
+    )
+    expect(screen.getByRole("tab", { name: "Live Session" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+
+    const completionPatchCall = mocks.fetchWithAuth.mock.calls.find(
+      ([calledPath, init]) =>
+        String(calledPath).includes("/persona/profiles/garden-helper") &&
+        String((init as { method?: string } | undefined)?.method || "").toUpperCase() ===
+          "PATCH" &&
+        (init as { body?: any } | undefined)?.body?.setup?.status === "completed"
+    )
+    expect(completionPatchCall?.[1]).toEqual(
+      expect.objectContaining({
+        method: "PATCH",
+        body: expect.objectContaining({
+          setup: expect.objectContaining({
+            status: "completed",
+            last_test_type: "live_session"
+          })
+        })
+      })
+    )
+  })
+
   it("records the current draft as a companion check-in", async () => {
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
       if (path.includes("/api/v1/companion/check-ins")) {

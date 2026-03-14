@@ -11,6 +11,7 @@ type AssistantSetupWizardProps = {
   voiceStepContent?: React.ReactNode
   commandsStepContent?: React.ReactNode
   safetyStepContent?: React.ReactNode
+  testStepContent?: React.ReactNode
   saving: boolean
   error: string | null
   onUsePersona: (personaId: string) => void
@@ -25,6 +26,7 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
   voiceStepContent,
   commandsStepContent,
   safetyStepContent,
+  testStepContent,
   saving,
   error,
   onUsePersona,
@@ -127,6 +129,8 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
         commandsStepContent
       ) : currentStep === "safety" && safetyStepContent ? (
         safetyStepContent
+      ) : currentStep === "test" && testStepContent ? (
+        testStepContent
       ) : (
         <div className="rounded-lg border border-border bg-surface2 p-3 text-sm text-text">
           Setup step <span className="font-medium">{currentStep}</span> will continue here.
