@@ -29,6 +29,7 @@ type EditorStatus = "idle" | "dirty" | "saving" | "saved" | "conflict"
 export interface SchedulerTabProps {
   isActive?: boolean
   onDirtyChange?: (dirty: boolean) => void
+  discardSignal?: number
 }
 
 const matchesDeckQuery = (deck: Deck, query: string): boolean => {
@@ -59,7 +60,11 @@ const discardFieldError = (
   return next
 }
 
-export const SchedulerTab: React.FC<SchedulerTabProps> = ({ isActive = false, onDirtyChange }) => {
+export const SchedulerTab: React.FC<SchedulerTabProps> = ({
+  isActive = false,
+  onDirtyChange,
+  discardSignal = 0
+}) => {
   const { t } = useTranslation(["option", "common"])
   const decksQuery = useDecksQuery()
   const updateDeckMutation = useUpdateDeckMutation()
@@ -75,26 +80,27 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({ isActive = false, on
   const [conflictDraft, setConflictDraft] = React.useState<SchedulerSettingsDraft | null>(null)
   const [saveError, setSaveError] = React.useState<string | null>(null)
 
+  const allDecks = decksQuery.data ?? []
   const visibleDecks = React.useMemo(
-    () => (decksQuery.data ?? []).filter((deck) => matchesDeckQuery(deck, searchText)),
-    [decksQuery.data, searchText]
+    () => allDecks.filter((deck) => matchesDeckQuery(deck, searchText)),
+    [allDecks, searchText]
   )
 
   React.useEffect(() => {
-    if (visibleDecks.length === 0) {
+    if (allDecks.length === 0) {
       setSelectedDeckId(null)
       return
     }
 
-    const stillVisible = selectedDeckId != null && visibleDecks.some((deck) => deck.id === selectedDeckId)
-    if (!stillVisible) {
-      setSelectedDeckId(visibleDecks[0]?.id ?? null)
+    const stillExists = selectedDeckId != null && allDecks.some((deck) => deck.id === selectedDeckId)
+    if (!stillExists) {
+      setSelectedDeckId(visibleDecks[0]?.id ?? allDecks[0]?.id ?? null)
     }
-  }, [selectedDeckId, visibleDecks])
+  }, [allDecks, selectedDeckId, visibleDecks])
 
   const activeDeck = React.useMemo(
-    () => visibleDecks.find((deck) => deck.id === selectedDeckId) ?? null,
-    [selectedDeckId, visibleDecks]
+    () => allDecks.find((deck) => deck.id === selectedDeckId) ?? null,
+    [allDecks, selectedDeckId]
   )
   const activeDeckCounts = useDueCountsQuery(activeDeck?.id, {
     enabled: isActive && !!activeDeck
@@ -112,6 +118,19 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({ isActive = false, on
       setEditorStatus(status)
     },
     []
+  )
+
+  const refreshDeckFromServer = React.useCallback(
+    async (deckId: number, status: EditorStatus = "idle") => {
+      const response = await decksQuery.refetch()
+      const refreshedDecks = response.data ?? decksQuery.data ?? []
+      const latestDeck = refreshedDecks.find((deck) => deck.id === deckId) ?? null
+      if (latestDeck) {
+        syncDraftFromDeck(latestDeck, status)
+      }
+      return latestDeck
+    },
+    [decksQuery, syncDraftFromDeck]
   )
 
   React.useEffect(() => {
@@ -157,8 +176,8 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({ isActive = false, on
   )
 
   const otherDecks = React.useMemo(
-    () => (decksQuery.data ?? []).filter((deck) => deck.id !== activeDeck?.id),
-    [activeDeck?.id, decksQuery.data]
+    () => allDecks.filter((deck) => deck.id !== activeDeck?.id),
+    [activeDeck?.id, allDecks]
   )
 
   const draftPreview = React.useMemo(() => {
@@ -190,10 +209,20 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({ isActive = false, on
     markDirty()
   }, [markDirty])
 
-  const reloadLatest = React.useCallback(() => {
+  const reloadLatest = React.useCallback(async () => {
     if (!activeDeck) return
-    syncDraftFromDeck(activeDeck)
-  }, [activeDeck, syncDraftFromDeck])
+    setSaveError(null)
+
+    try {
+      await refreshDeckFromServer(activeDeck.id)
+    } catch (_error) {
+      setSaveError(
+        t("option:flashcards.schedulerReloadError", {
+          defaultValue: "Failed to reload scheduler settings."
+        })
+      )
+    }
+  }, [activeDeck, refreshDeckFromServer, t])
 
   const reapplyConflict = React.useCallback(() => {
     if (!conflictDraft) return
@@ -225,12 +254,16 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({ isActive = false, on
     } catch (error: unknown) {
       if (isVersionConflict(error)) {
         const pendingDraft = cloneDraft(draft)
-        setBaseDeckId(activeDeck.id)
-        setBaseVersion(activeDeck.version)
-        setDraft(createSchedulerDraft(copySchedulerSettings(activeDeck.scheduler_settings)))
-        setCopyDeckId("")
-        setValidationErrors({})
-        setSaveError(null)
+
+        try {
+          const latestDeck = await refreshDeckFromServer(activeDeck.id)
+          if (!latestDeck) {
+            syncDraftFromDeck(activeDeck)
+          }
+        } catch (_refreshError) {
+          syncDraftFromDeck(activeDeck)
+        }
+
         setConflictDraft(pendingDraft)
         setEditorStatus("conflict")
         return
@@ -243,7 +276,7 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({ isActive = false, on
         })
       )
     }
-  }, [activeDeck, baseVersion, draft, syncDraftFromDeck, t, updateDeckMutation])
+  }, [activeDeck, baseVersion, draft, refreshDeckFromServer, syncDraftFromDeck, t, updateDeckMutation])
 
   const renderFieldError = (field: keyof SchedulerValidationErrors) => {
     const error = validationErrors[field]
@@ -260,6 +293,24 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({ isActive = false, on
   React.useEffect(() => {
     onDirtyChange?.(isDirty)
   }, [isDirty, onDirtyChange])
+
+  React.useEffect(() => {
+    if (discardSignal <= 0) return
+
+    if (!activeDeck) {
+      setBaseDeckId(null)
+      setBaseVersion(null)
+      setDraft(null)
+      setCopyDeckId("")
+      setValidationErrors({})
+      setConflictDraft(null)
+      setSaveError(null)
+      setEditorStatus("idle")
+      return
+    }
+
+    syncDraftFromDeck(activeDeck)
+  }, [activeDeck, discardSignal, syncDraftFromDeck])
 
   const confirmDiscardChanges = React.useCallback(() => {
     if (!isDirty) return true

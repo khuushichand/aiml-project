@@ -1,3 +1,4 @@
+import React from "react"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { FlashcardsManager } from "../FlashcardsManager"
@@ -55,13 +56,40 @@ vi.mock("../tabs", () => ({
     </div>
   ),
   ImportExportTab: () => <div data-testid="mock-transfer-tab">Transfer panel</div>,
-  SchedulerTab: (props: { onDirtyChange?: (dirty: boolean) => void }) => (
-    <div data-testid="mock-scheduler-tab">
-      Scheduler panel
-      <button onClick={() => props.onDirtyChange?.(true)}>Mark Scheduler Dirty</button>
-      <button onClick={() => props.onDirtyChange?.(false)}>Mark Scheduler Clean</button>
-    </div>
-  )
+  SchedulerTab: (props: {
+    onDirtyChange?: (dirty: boolean) => void
+    discardSignal?: number
+  }) => {
+    const [draftState, setDraftState] = React.useState("clean")
+
+    React.useEffect(() => {
+      setDraftState("clean")
+      props.onDirtyChange?.(false)
+    }, [props.discardSignal, props.onDirtyChange])
+
+    return (
+      <div data-testid="mock-scheduler-tab">
+        Scheduler panel
+        <span data-testid="mock-scheduler-draft-state">{draftState}</span>
+        <button
+          onClick={() => {
+            setDraftState("dirty")
+            props.onDirtyChange?.(true)
+          }}
+        >
+          Mark Scheduler Dirty
+        </button>
+        <button
+          onClick={() => {
+            setDraftState("clean")
+            props.onDirtyChange?.(false)
+          }}
+        >
+          Mark Scheduler Clean
+        </button>
+      </div>
+    )
+  }
 }))
 
 vi.mock("../components", () => ({
@@ -151,6 +179,7 @@ describe("FlashcardsManager consistency standards", () => {
     expect(screen.getByTestId("mock-scheduler-tab")).toBeInTheDocument()
 
     fireEvent.click(screen.getByText("Mark Scheduler Dirty"))
+    expect(screen.getByTestId("mock-scheduler-draft-state")).toHaveTextContent("dirty")
     fireEvent.click(screen.getByText("Manage"))
 
     expect(confirmSpy).toHaveBeenCalled()
@@ -159,6 +188,8 @@ describe("FlashcardsManager consistency standards", () => {
     confirmSpy.mockReturnValue(true)
     fireEvent.click(screen.getByText("Manage"))
     expect(screen.getByTestId("mock-manage-tab")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("Scheduler"))
+    expect(screen.getByTestId("mock-scheduler-draft-state")).toHaveTextContent("clean")
 
     confirmSpy.mockRestore()
   })

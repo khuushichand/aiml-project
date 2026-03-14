@@ -49,6 +49,7 @@ export const FlashcardsManager: React.FC = () => {
   const [openCreateSignal, setOpenCreateSignal] = React.useState(0)
   const [shortcutsModalOpen, setShortcutsModalOpen] = React.useState(false)
   const [schedulerDirty, setSchedulerDirty] = React.useState(false)
+  const [schedulerDiscardSignal, setSchedulerDiscardSignal] = React.useState(0)
 
   // Listen for "?" key to open keyboard shortcuts modal
   React.useEffect(() => {
@@ -107,6 +108,7 @@ export const FlashcardsManager: React.FC = () => {
         )
         if (!shouldDiscard) return
         setSchedulerDirty(false)
+        setSchedulerDiscardSignal((current) => current + 1)
       }
 
       setActiveTab(nextTab)
@@ -192,6 +194,7 @@ export const FlashcardsManager: React.FC = () => {
               <SchedulerTab
                 isActive={activeTab === "scheduler"}
                 onDirtyChange={setSchedulerDirty}
+                discardSignal={schedulerDiscardSignal}
               />
             )
           }

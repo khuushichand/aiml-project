@@ -46,6 +46,7 @@ vi.mock("../../hooks/useFlashcardQueries", () => ({
 }))
 
 const updateDeckMock = vi.fn()
+const refetchDecksMock = vi.fn()
 
 const biologyDeck = {
   id: 1,
@@ -89,15 +90,24 @@ const chemistryDeck = {
   }
 }
 
+let decksData = [biologyDeck, chemistryDeck]
+
 describe("SchedulerTab editor", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     updateDeckMock.mockReset()
+    refetchDecksMock.mockReset()
+    decksData = [biologyDeck, chemistryDeck]
 
-    vi.mocked(useDecksQuery).mockReturnValue({
-      data: [biologyDeck, chemistryDeck],
-      isLoading: false
-    } as any)
+    refetchDecksMock.mockImplementation(async () => ({ data: decksData }))
+    vi.mocked(useDecksQuery).mockImplementation(
+      () =>
+        ({
+          data: decksData,
+          isLoading: false,
+          refetch: refetchDecksMock
+        }) as any
+    )
     vi.mocked(useDueCountsQuery).mockReturnValue({
       data: {
         due: 3,
@@ -202,8 +212,23 @@ describe("SchedulerTab editor", () => {
     await screen.findByText(/deck settings changed elsewhere/i)
     expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("8")
 
+    decksData = [
+      {
+        ...biologyDeck,
+        version: 3,
+        scheduler_settings: {
+          ...biologyDeck.scheduler_settings,
+          leech_threshold: 12
+        }
+      },
+      chemistryDeck
+    ]
     fireEvent.click(screen.getByRole("button", { name: /reload latest/i }))
-    expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("8")
+
+    await waitFor(() => {
+      expect(refetchDecksMock).toHaveBeenCalled()
+      expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("12")
+    })
 
     fireEvent.change(screen.getByTestId("flashcards-scheduler-field-leech-threshold"), {
       target: { value: "9" }
@@ -213,6 +238,20 @@ describe("SchedulerTab editor", () => {
     await screen.findByText(/deck settings changed elsewhere/i)
     fireEvent.click(screen.getByRole("button", { name: /reapply my draft/i }))
     expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("9")
+  })
+
+  it("keeps the active draft when deck search hides the selected deck", () => {
+    render(<SchedulerTab isActive />)
+
+    fireEvent.change(screen.getByTestId("flashcards-scheduler-field-leech-threshold"), {
+      target: { value: "11" }
+    })
+    fireEvent.change(screen.getByPlaceholderText(/search decks/i), {
+      target: { value: "Chemistry" }
+    })
+
+    expect(screen.getByText("Biology Scheduler")).toBeInTheDocument()
+    expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("11")
   })
 
   it("loads active-deck counts only for the selected deck and guards dirty deck switches", async () => {
