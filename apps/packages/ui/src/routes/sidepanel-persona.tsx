@@ -326,6 +326,7 @@ const SidepanelPersona = ({
 
   const wsRef = React.useRef<WebSocket | null>(null)
   const manuallyClosingRef = React.useRef(false)
+  const runtimeApprovalCardRef = React.useRef<HTMLDivElement | null>(null)
 
   const [catalog, setCatalog] = React.useState<PersonaInfo[]>([])
   const [selectedPersonaId, setSelectedPersonaId] =
@@ -1678,6 +1679,33 @@ const SidepanelPersona = ({
     },
     [appendLog, connected, sessionId]
   )
+
+  const pendingApprovalSummary = React.useMemo(() => {
+    if (!pendingApprovals.length) return null
+    const primaryToolName = String(pendingApprovals[0]?.tool_name || "tool").trim() || "tool"
+    const additionalCount = pendingApprovals.length - 1
+    if (additionalCount <= 0) {
+      return `Waiting for approval: ${primaryToolName}`
+    }
+    return `Waiting for approval: ${primaryToolName} (+${additionalCount} more)`
+  }, [pendingApprovals])
+
+  const handleJumpToRuntimeApproval = React.useCallback(() => {
+    if (!pendingApprovals.length) return
+    const card = runtimeApprovalCardRef.current
+    if (!card) return
+    try {
+      card.scrollIntoView?.({ block: "start", behavior: "smooth" })
+    } catch {
+      // Ignore environments without scrollIntoView support.
+    }
+    const buttons = Array.from(card.querySelectorAll("button")) as HTMLButtonElement[]
+    const preferredButton =
+      buttons.find((button) =>
+        String(button.textContent || "").toLowerCase().includes("approve")
+      ) || buttons.find((button) => !button.disabled)
+    preferredButton?.focus()
+  }, [pendingApprovals])
   const personaUnsupported =
     !capsLoading &&
     capabilities &&
@@ -1827,6 +1855,7 @@ const SidepanelPersona = ({
       heardText={liveVoiceController.heardText}
       lastCommittedText={liveVoiceController.lastCommittedText}
       activeToolStatus={liveVoiceController.activeToolStatus}
+      pendingApprovalSummary={pendingApprovalSummary}
       warning={liveVoiceController.warning}
       recoveryMode={liveVoiceController.recoveryMode}
       manualModeRequired={liveVoiceController.manualModeRequired}
@@ -1842,12 +1871,17 @@ const SidepanelPersona = ({
       onResetTurn={liveVoiceController.resetTurn}
       onWaitOnRecovery={liveVoiceController.waitOnRecovery}
       onCopyLastCommandToComposer={handleCopyLastVoiceCommandToComposer}
+      onJumpToApproval={handleJumpToRuntimeApproval}
       onReconnectPersonaSession={handleReconnectPersonaSessionFromRecovery}
     />
   )
 
   const runtimeApprovalCard = pendingApprovals.length ? (
-    <div className="rounded-lg border border-warning/40 bg-warning/5 p-3">
+    <div
+      ref={runtimeApprovalCardRef}
+      data-testid="persona-runtime-approval-card"
+      className="rounded-lg border border-warning/40 bg-warning/5 p-3"
+    >
       <Typography.Text strong>
         {t("sidepanel:persona.runtimeApproval", "Runtime approval required")}
       </Typography.Text>

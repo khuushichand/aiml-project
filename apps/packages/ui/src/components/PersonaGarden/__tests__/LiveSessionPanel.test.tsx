@@ -53,6 +53,7 @@ describe("AssistantVoiceCard", () => {
         heardText="hey helper open notes"
         lastCommittedText="open notes"
         activeToolStatus=""
+        pendingApprovalSummary={null}
         warning="Live TTS unavailable for this session. Continuing in text-only mode."
         recoveryMode="none"
         textOnlyDueToTtsFailure
@@ -68,6 +69,7 @@ describe("AssistantVoiceCard", () => {
         onResetTurn={onResetTurn}
         onWaitOnRecovery={onWaitOnRecovery}
         onCopyLastCommandToComposer={onCopyLastCommandToComposer}
+        onJumpToApproval={vi.fn()}
         onReconnectPersonaSession={onReconnectPersonaSession}
       />
     )
@@ -120,6 +122,7 @@ describe("AssistantVoiceCard", () => {
         heardText="hey helper search my notes"
         lastCommittedText=""
         activeToolStatus=""
+        pendingApprovalSummary={null}
         warning={null}
         recoveryMode="listening_stuck"
         textOnlyDueToTtsFailure={false}
@@ -135,6 +138,7 @@ describe("AssistantVoiceCard", () => {
         onResetTurn={onResetTurn}
         onWaitOnRecovery={vi.fn()}
         onCopyLastCommandToComposer={vi.fn()}
+        onJumpToApproval={vi.fn()}
         onReconnectPersonaSession={onReconnectPersonaSession}
       />
     )
@@ -178,6 +182,7 @@ describe("AssistantVoiceCard", () => {
         heardText="hey helper search my notes"
         lastCommittedText="search my notes"
         activeToolStatus=""
+        pendingApprovalSummary={null}
         warning={null}
         recoveryMode="thinking_stuck"
         textOnlyDueToTtsFailure={false}
@@ -193,6 +198,7 @@ describe("AssistantVoiceCard", () => {
         onResetTurn={onResetTurn}
         onWaitOnRecovery={onWaitOnRecovery}
         onCopyLastCommandToComposer={onCopyLastCommandToComposer}
+        onJumpToApproval={vi.fn()}
         onReconnectPersonaSession={onReconnectPersonaSession}
       />
     )
@@ -234,6 +240,7 @@ describe("AssistantVoiceCard", () => {
         heardText=""
         lastCommittedText="search my notes"
         activeToolStatus="Running search_notes: Looking through your notes"
+        pendingApprovalSummary={null}
         warning={null}
         recoveryMode="none"
         textOnlyDueToTtsFailure={false}
@@ -249,6 +256,7 @@ describe("AssistantVoiceCard", () => {
         onResetTurn={vi.fn()}
         onWaitOnRecovery={vi.fn()}
         onCopyLastCommandToComposer={vi.fn()}
+        onJumpToApproval={vi.fn()}
         onReconnectPersonaSession={vi.fn()}
       />
     )
@@ -278,6 +286,7 @@ describe("AssistantVoiceCard", () => {
         heardText=""
         lastCommittedText="search my notes"
         activeToolStatus=""
+        pendingApprovalSummary={null}
         warning={null}
         recoveryMode="none"
         textOnlyDueToTtsFailure={false}
@@ -293,10 +302,108 @@ describe("AssistantVoiceCard", () => {
         onResetTurn={vi.fn()}
         onWaitOnRecovery={vi.fn()}
         onCopyLastCommandToComposer={vi.fn()}
+        onJumpToApproval={vi.fn()}
         onReconnectPersonaSession={vi.fn()}
       />
     )
 
     expect(screen.queryByText("Current action")).not.toBeInTheDocument()
+  })
+
+  it("renders approval summary text in the current action block", () => {
+    const onJumpToApproval = vi.fn()
+
+    render(
+      <AssistantVoiceCard
+        resolvedDefaults={{
+          sttLanguage: "en-US",
+          sttModel: "whisper-1",
+          ttsProvider: "openai",
+          ttsVoice: "alloy",
+          confirmationMode: "destructive_only",
+          voiceChatTriggerPhrases: ["hey helper"],
+          autoResume: true,
+          bargeIn: false
+        }}
+        state="thinking"
+        speechAvailable
+        isListening={false}
+        heardText=""
+        lastCommittedText="search my notes"
+        activeToolStatus=""
+        pendingApprovalSummary="Waiting for approval: search_notes (+1 more)"
+        warning={null}
+        recoveryMode="none"
+        textOnlyDueToTtsFailure={false}
+        manualModeRequired={false}
+        canSendNow={false}
+        sessionAutoResume
+        sessionBargeIn={false}
+        onToggleListening={vi.fn()}
+        onSendNow={vi.fn()}
+        onSessionAutoResumeChange={vi.fn()}
+        onSessionBargeInChange={vi.fn()}
+        onKeepListening={vi.fn()}
+        onResetTurn={vi.fn()}
+        onWaitOnRecovery={vi.fn()}
+        onCopyLastCommandToComposer={vi.fn()}
+        onJumpToApproval={onJumpToApproval}
+        onReconnectPersonaSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Current action")).toBeInTheDocument()
+    expect(
+      screen.getByText("Waiting for approval: search_notes (+1 more)")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+    expect(onJumpToApproval).toHaveBeenCalledTimes(1)
+  })
+
+  it("prefers approval summary over active tool status", () => {
+    render(
+      <AssistantVoiceCard
+        resolvedDefaults={{
+          sttLanguage: "en-US",
+          sttModel: "whisper-1",
+          ttsProvider: "openai",
+          ttsVoice: "alloy",
+          confirmationMode: "destructive_only",
+          voiceChatTriggerPhrases: ["hey helper"],
+          autoResume: true,
+          bargeIn: false
+        }}
+        state="thinking"
+        speechAvailable
+        isListening={false}
+        heardText=""
+        lastCommittedText="search my notes"
+        activeToolStatus="Running search_notes: Looking through your notes"
+        pendingApprovalSummary="Waiting for approval: search_notes"
+        warning={null}
+        recoveryMode="none"
+        textOnlyDueToTtsFailure={false}
+        manualModeRequired={false}
+        canSendNow={false}
+        sessionAutoResume
+        sessionBargeIn={false}
+        onToggleListening={vi.fn()}
+        onSendNow={vi.fn()}
+        onSessionAutoResumeChange={vi.fn()}
+        onSessionBargeInChange={vi.fn()}
+        onKeepListening={vi.fn()}
+        onResetTurn={vi.fn()}
+        onWaitOnRecovery={vi.fn()}
+        onCopyLastCommandToComposer={vi.fn()}
+        onJumpToApproval={vi.fn()}
+        onReconnectPersonaSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Waiting for approval: search_notes")).toBeInTheDocument()
+    expect(
+      screen.queryByText("Running search_notes: Looking through your notes")
+    ).not.toBeInTheDocument()
   })
 })

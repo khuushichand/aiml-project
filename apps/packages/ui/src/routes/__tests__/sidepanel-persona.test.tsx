@@ -1184,6 +1184,214 @@ describe("SidepanelPersona", () => {
     })
   })
 
+  it("shows a live approval summary and updates it as the queue changes", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-summary" })
+        })
+      }
+      if (path.includes("/mcp/hub/approval-decisions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 101,
+            approval_policy_id: init?.body?.approval_policy_id ?? 17,
+            tool_name: init?.body?.tool_name,
+            decision: init?.body?.decision
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-approval-summary",
+        plan_id: "plan-approval-summary",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "knowledge.search",
+        args: { query: "approval needed" },
+        why: "Need to search notes",
+        ok: false,
+        error: "Runtime approval required",
+        reason_code: "APPROVAL_REQUIRED",
+        approval: {
+          approval_policy_id: 17,
+          mode: "ask_outside_profile",
+          tool_name: "knowledge.search",
+          context_key: "ctx-1",
+          conversation_id: "sess-approval-summary",
+          scope_key: "tool:knowledge.search",
+          reason: "outside_profile",
+          duration_options: ["once"],
+          arguments_summary: { query: "approval needed" }
+        }
+      })
+    )
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-approval-summary",
+        plan_id: "plan-approval-summary",
+        step_idx: 1,
+        step_type: "mcp_tool",
+        tool: "notes.export",
+        args: { format: "md" },
+        why: "Need to export notes",
+        ok: false,
+        error: "Runtime approval required",
+        reason_code: "APPROVAL_REQUIRED",
+        approval: {
+          approval_policy_id: 18,
+          mode: "ask_outside_profile",
+          tool_name: "notes.export",
+          context_key: "ctx-2",
+          conversation_id: "sess-approval-summary",
+          scope_key: "tool:notes.export",
+          reason: "outside_profile",
+          duration_options: ["once"],
+          arguments_summary: { format: "md" }
+        }
+      })
+    )
+
+    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Deny" })[0])
+
+    await screen.findByText("Waiting for approval: notes.export")
+
+    fireEvent.click(screen.getByRole("button", { name: "Deny" }))
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Waiting for approval:/)
+      ).not.toBeInTheDocument()
+    })
+  })
+
+  it("jumps to the runtime approval card from the live voice card", async () => {
+    const scrollIntoViewMock = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoViewMock
+    })
+
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-jump" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-approval-jump",
+        plan_id: "plan-approval-jump",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "knowledge.search",
+        args: { query: "approval needed" },
+        why: "Need to search notes",
+        ok: false,
+        error: "Runtime approval required",
+        reason_code: "APPROVAL_REQUIRED",
+        approval: {
+          approval_policy_id: 17,
+          mode: "ask_outside_profile",
+          tool_name: "knowledge.search",
+          context_key: "ctx-jump",
+          conversation_id: "sess-approval-jump",
+          scope_key: "tool:knowledge.search",
+          reason: "outside_profile",
+          duration_options: ["once"],
+          arguments_summary: { query: "approval needed" }
+        }
+      })
+    )
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+
+    expect(scrollIntoViewMock).toHaveBeenCalled()
+    expect(screen.getByTestId("persona-runtime-approval-card")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Approve and retry" })).toHaveFocus()
+  })
+
   it("records deny as current-request-only and does not retry the tool", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",

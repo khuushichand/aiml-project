@@ -15,6 +15,7 @@ type AssistantVoiceCardProps = {
   heardText: string
   lastCommittedText: string
   activeToolStatus: string
+  pendingApprovalSummary: string | null
   warning: string | null
   recoveryMode: PersonaLiveVoiceRecoveryMode
   manualModeRequired: boolean
@@ -30,6 +31,7 @@ type AssistantVoiceCardProps = {
   onResetTurn: () => void
   onWaitOnRecovery: () => void
   onCopyLastCommandToComposer: () => void
+  onJumpToApproval: () => void
   onReconnectPersonaSession: () => void
 }
 
@@ -44,6 +46,7 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   heardText,
   lastCommittedText,
   activeToolStatus,
+  pendingApprovalSummary,
   warning,
   recoveryMode,
   manualModeRequired,
@@ -59,6 +62,7 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   onResetTurn,
   onWaitOnRecovery,
   onCopyLastCommandToComposer,
+  onJumpToApproval,
   onReconnectPersonaSession
 }) => {
   return (
@@ -146,7 +150,24 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
         </div>
       ) : null}
 
-      {state === "thinking" && String(activeToolStatus || "").trim() ? (
+      {String(pendingApprovalSummary || "").trim() ? (
+        <div
+          data-testid="live-voice-current-action"
+          className="mt-3 rounded-md border border-border bg-surface2 p-2 text-xs text-text"
+        >
+          <div className="text-text-muted">Current action</div>
+          <div className="mt-1 whitespace-pre-wrap">{pendingApprovalSummary}</div>
+          <div className="mt-2">
+            <Button
+              data-testid="live-voice-jump-to-approval"
+              size="small"
+              onClick={onJumpToApproval}
+            >
+              Jump to approval
+            </Button>
+          </div>
+        </div>
+      ) : state === "thinking" && String(activeToolStatus || "").trim() ? (
         <div
           data-testid="live-voice-current-action"
           className="mt-3 rounded-md border border-border bg-surface2 p-2 text-xs text-text"
