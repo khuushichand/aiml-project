@@ -125,6 +125,25 @@ describe("TldwApiClient ingestion sources contract", () => {
     )
   })
 
+  it("preserves git repository as a recognized source type", async () => {
+    mocks.bgRequest.mockResolvedValueOnce({
+      id: 8,
+      user_id: 3,
+      source_type: "git_repository",
+      sink_type: "notes",
+      policy: "import_only",
+      enabled: true,
+      schedule_enabled: false,
+      schedule_config: {},
+      config: { repo_url: "https://github.com/example/repo" }
+    })
+
+    const client = createClient()
+    const source = await client.getIngestionSource("8")
+
+    expect(source.source_type).toBe("git_repository")
+  })
+
   it("creates and updates ingestion sources with guarded JSON requests", async () => {
     mocks.bgRequest.mockResolvedValueOnce({
       id: 7,

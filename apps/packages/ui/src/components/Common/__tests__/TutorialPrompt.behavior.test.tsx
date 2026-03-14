@@ -17,8 +17,14 @@ const tutorialStoreState = {
   activeTutorialId: null as string | null
 }
 
-const hasTutorialsForRouteMock = vi.fn(() => true)
-const getPrimaryTutorialForRouteMock = vi.fn(() => ({
+const hasTutorialsForRouteMock = vi.fn<(route: string) => boolean>(() => true)
+const getPrimaryTutorialForRouteMock = vi.fn<
+  (route: string) => {
+    id: string
+    labelKey: string
+    labelFallback: string
+  }
+>(() => ({
   id: "playground-basics",
   labelKey: "tutorials:playground.basics.label",
   labelFallback: "Chat Basics"

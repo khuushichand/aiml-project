@@ -507,6 +507,17 @@ export const reportDeferredAssistantPresentationError = ({
   })
 }
 
+const resolveDeferredCharacterId = (value: string | number | null): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
 export const useServerChatLoader = ({
   ensureServerChatHistoryId,
   notification,
@@ -734,7 +745,7 @@ export const useServerChatLoader = ({
                   stage: "persona-profile",
                   assistantKind,
                   assistantId,
-                  characterId,
+                  characterId: resolveDeferredCharacterId(characterId),
                   error
                 })
                 if (!canCommitCurrentLoad()) {
@@ -776,7 +787,7 @@ export const useServerChatLoader = ({
                   stage: "character-profile",
                   assistantKind,
                   assistantId,
-                  characterId,
+                  characterId: resolveDeferredCharacterId(characterId),
                   error
                 })
               }
@@ -865,7 +876,7 @@ export const useServerChatLoader = ({
                   stage: "presentation-apply",
                   assistantKind,
                   assistantId,
-                  characterId,
+                  characterId: resolveDeferredCharacterId(characterId),
                   error
                 })
               })

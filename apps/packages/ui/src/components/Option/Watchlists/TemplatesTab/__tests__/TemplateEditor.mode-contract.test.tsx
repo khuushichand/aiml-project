@@ -4,6 +4,7 @@ import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { message } from "antd"
+import type { MessageType } from "antd/es/message/interface"
 import { TemplateEditor } from "../TemplateEditor"
 import type { WatchlistTemplate } from "@/types/watchlists"
 
@@ -50,6 +51,24 @@ const interpolate = (template: string, values?: Record<string, unknown>) => {
   })
 }
 
+const createMessageType = (): MessageType => {
+  const close = (() => undefined) as MessageType
+  close.then = ((onfulfilled, onrejected) =>
+    Promise.resolve(true).then(onfulfilled, onrejected)) as MessageType["then"]
+  return close
+}
+
+type MockTemplateCodeEditorHandle = {
+  insertSnippet: (snippet: string) => void
+  getValue: () => string
+}
+
+type MockTemplateCodeEditorProps = {
+  value?: string
+  onChange?: (value: string) => void
+  validationErrors?: Array<{ message: string }>
+}
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: translationMock.t
@@ -84,19 +103,10 @@ vi.mock("../TemplateSnippetPalette", () => ({
 
 vi.mock("../TemplateCodeEditor", async () => {
   const ReactModule = await import("react")
-  const TemplateCodeEditor = ReactModule.forwardRef(
-    (
-      {
-        value,
-        onChange,
-        validationErrors
-      }: {
-        value?: string
-        onChange?: (value: string) => void
-        validationErrors?: Array<{ message: string }>
-      },
-      ref: ReactModule.ForwardedRef<{ insertSnippet: (snippet: string) => void; getValue: () => string }>
-    ) => {
+  const TemplateCodeEditor = ReactModule.forwardRef<
+    MockTemplateCodeEditorHandle,
+    MockTemplateCodeEditorProps
+  >(({ value, onChange, validationErrors }, ref) => {
       const [internalValue, setInternalValue] = ReactModule.useState(String(value || ""))
 
       ReactModule.useEffect(() => {
@@ -132,8 +142,7 @@ vi.mock("../TemplateCodeEditor", async () => {
           </div>
         </div>
       )
-    }
-  )
+    })
 
   return {
     TemplateCodeEditor
@@ -149,6 +158,10 @@ const buildTemplate = (overrides: Partial<WatchlistTemplate> = {}): WatchlistTem
   version: 3,
   ...overrides
 })
+
+const openEditorTab = () => {
+  fireEvent.click(screen.getByRole("tab", { name: "Editor" }))
+}
 
 describe("TemplateEditor authoring mode contract", () => {
   beforeEach(() => {
@@ -220,6 +233,7 @@ describe("TemplateEditor authoring mode contract", () => {
     expect(
       screen.getByText("Basic mode is no-code: pick a recipe, edit text, and preview your output.")
     ).toBeInTheDocument()
+    openEditorTab()
     expect(screen.getByTestId("template-recipe-builder")).toBeInTheDocument()
     expect(screen.queryByRole("tab", { name: "Variables & Snippets" })).not.toBeInTheDocument()
     expect(screen.queryByText("Version tools")).not.toBeInTheDocument()
@@ -241,7 +255,7 @@ describe("TemplateEditor authoring mode contract", () => {
   })
 
   it("warns and reroutes to editor when switching from advanced docs to basic", async () => {
-    const infoSpy = vi.spyOn(message, "info").mockImplementation(() => () => undefined)
+    const infoSpy = vi.spyOn(message, "info").mockImplementation(() => createMessageType())
 
     render(<TemplateEditor open template={buildTemplate()} onClose={vi.fn()} />)
 
@@ -274,6 +288,7 @@ describe("TemplateEditor authoring mode contract", () => {
       expect(screen.getByText("Currently loaded: v3. Saving restores this content as a new latest version.")).toBeInTheDocument()
     })
 
+    openEditorTab()
     fireEvent.change(screen.getByTestId("template-code-editor"), {
       target: { value: "# Edited digest" }
     })
@@ -306,6 +321,7 @@ describe("TemplateEditor authoring mode contract", () => {
       expect(serviceMocks.fetchWatchlistRuns).toHaveBeenCalled()
     })
 
+    openEditorTab()
     fireEvent.click(screen.getByTestId("template-recipe-apply"))
 
     const nameInput = screen.getByLabelText("Template Name")
@@ -328,6 +344,7 @@ describe("TemplateEditor authoring mode contract", () => {
       expect(serviceMocks.fetchWatchlistRuns).toHaveBeenCalled()
     })
 
+    openEditorTab()
     fireEvent.change(screen.getByLabelText("Template Name"), {
       target: { value: "custom-template" }
     })
@@ -342,7 +359,7 @@ describe("TemplateEditor authoring mode contract", () => {
   })
 
   it("blocks save in basic mode when server-side validation fails", async () => {
-    const errorSpy = vi.spyOn(message, "error").mockImplementation(() => () => undefined)
+    const errorSpy = vi.spyOn(message, "error").mockImplementation(() => createMessageType())
     const onClose = vi.fn()
     serviceMocks.validateWatchlistTemplate.mockResolvedValueOnce({
       valid: false,
@@ -355,6 +372,7 @@ describe("TemplateEditor authoring mode contract", () => {
       expect(serviceMocks.fetchWatchlistRuns).toHaveBeenCalled()
     })
 
+    openEditorTab()
     fireEvent.click(screen.getByTestId("template-recipe-apply"))
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
@@ -383,6 +401,7 @@ describe("TemplateEditor authoring mode contract", () => {
       expect(serviceMocks.fetchWatchlistRuns).toHaveBeenCalled()
     })
 
+    openEditorTab()
     fireEvent.click(screen.getByTestId("template-recipe-apply"))
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
@@ -401,7 +420,7 @@ describe("TemplateEditor authoring mode contract", () => {
   })
 
   it("loads selected and latest template versions in advanced edit mode", async () => {
-    const successSpy = vi.spyOn(message, "success").mockImplementation(() => () => undefined)
+    const successSpy = vi.spyOn(message, "success").mockImplementation(() => createMessageType())
     serviceMocks.getWatchlistTemplate
       .mockResolvedValueOnce({
         name: "daily-brief",
@@ -431,6 +450,7 @@ describe("TemplateEditor authoring mode contract", () => {
       expect(screen.getByText("Currently loaded: v3. Saving restores this content as a new latest version.")).toBeInTheDocument()
     })
 
+    openEditorTab()
     fireEvent.mouseDown(screen.getByText("Select a historical version"))
     fireEvent.click(await screen.findByText("v2"))
     fireEvent.click(screen.getByRole("button", { name: "Load version" }))
@@ -462,7 +482,7 @@ describe("TemplateEditor authoring mode contract", () => {
   })
 
   it("blocks advanced-mode save on validation errors and surfaces editor markers", async () => {
-    const errorSpy = vi.spyOn(message, "error").mockImplementation(() => () => undefined)
+    const errorSpy = vi.spyOn(message, "error").mockImplementation(() => createMessageType())
     const onClose = vi.fn()
     serviceMocks.validateWatchlistTemplate.mockResolvedValueOnce({
       valid: false,
@@ -475,6 +495,7 @@ describe("TemplateEditor authoring mode contract", () => {
       expect(screen.getByText("Version tools")).toBeInTheDocument()
     })
 
+    openEditorTab()
     fireEvent.change(screen.getByTestId("template-code-editor"), {
       target: { value: "{% for item in items %}" }
     })
@@ -506,6 +527,7 @@ describe("TemplateEditor authoring mode contract", () => {
       expect(serviceMocks.fetchWatchlistRuns).toHaveBeenCalled()
     })
 
+    openEditorTab()
     expect(telemetryMock.trackWatchlistsPreventionTelemetry).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "watchlists_authoring_started",

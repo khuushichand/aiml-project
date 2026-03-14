@@ -37,6 +37,7 @@ import {
   applyVariantToMessage,
   normalizeMessageVariants
 } from "@/utils/message-variants"
+import { buildConversationShareUrl } from "@/components/Layouts/chat-share-links"
 import { PlaygroundMessage } from "@/components/Common/Playground/Message"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { buildChatLorebookDebugPath } from "@/routes/route-paths"
@@ -2339,7 +2340,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       const result = await tldwClient.createConversationShareLink(serverChatId, {
         label: "Workspace share"
       })
-      const shareUrl = result?.share_url || result?.url || result?.link
+      const shareUrl = buildConversationShareUrl(window.location.origin, {
+        share_path: result?.share_path ?? null,
+        token: result?.token ?? null
+      })
       if (shareUrl) {
         await navigator.clipboard.writeText(String(shareUrl))
         messageApi.success(

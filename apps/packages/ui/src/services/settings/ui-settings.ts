@@ -10,6 +10,10 @@ import {
   normalizeMediaChatHandoffPayload,
   type MediaChatHandoffPayload
 } from "@/services/tldw/media-chat-handoff"
+import {
+  normalizeWatchlistChatHandoffPayload,
+  type WatchlistChatHandoffPayload
+} from "@/services/tldw/watchlist-chat-handoff"
 import type { ThemeDefinition } from "@/themes/types"
 import { validateThemeDefinition } from "@/themes/validation"
 
@@ -333,7 +337,6 @@ export const HEADER_SHORTCUT_IDS = [
   "document-workspace",
   "repo2txt",
   "multi-item-review",
-  "content-review",
   "flashcards",
   "notes",
   "watchlists",
@@ -350,6 +353,7 @@ export const HEADER_SHORTCUT_IDS = [
   "kanban-playground",
   "data-tables",
   "audiobook-studio",
+  "presentation-studio",
   "acp-playground",
   "workflows",
   "admin-server",
@@ -682,6 +686,19 @@ export const DISCUSS_MEDIA_PROMPT_SETTING = defineSetting(
   {
     area: "local",
     localStorageKey: "tldw:discussMediaPrompt",
+    mirrorToLocalStorage: true
+  }
+)
+
+export type DiscussWatchlistPrompt = WatchlistChatHandoffPayload
+
+export const DISCUSS_WATCHLIST_PROMPT_SETTING = defineSetting(
+  "tldw:discussWatchlistPrompt",
+  undefined as DiscussWatchlistPrompt | undefined,
+  (value) => normalizeWatchlistChatHandoffPayload(value),
+  {
+    area: "local",
+    localStorageKey: "tldw:discussWatchlistPrompt",
     mirrorToLocalStorage: true
   }
 )

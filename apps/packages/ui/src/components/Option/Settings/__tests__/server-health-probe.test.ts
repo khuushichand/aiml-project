@@ -4,7 +4,10 @@ import { probeServerHealth } from "@/components/Option/Settings/server-health-pr
 
 describe("probeServerHealth", () => {
   it("calls /api/v1/health on the provided server origin", async () => {
-    const fetchFn = vi.fn(async () => new Response(null, { status: 200 }))
+    const fetchFn = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(null, { status: 200 })
+    )
 
     const resp = await probeServerHealth({
       serverUrl: "http://127.0.0.1:8000/",
@@ -13,11 +16,15 @@ describe("probeServerHealth", () => {
 
     expect(resp).toEqual({ ok: true, status: 200, error: undefined })
     expect(fetchFn).toHaveBeenCalledTimes(1)
-    expect(fetchFn.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8000/api/v1/health")
+    const [calledUrl] = fetchFn.mock.calls[0] ?? []
+    expect(calledUrl).toBe("http://127.0.0.1:8000/api/v1/health")
   })
 
   it("sends API key header in single-user mode when provided", async () => {
-    const fetchFn = vi.fn(async () => new Response(null, { status: 200 }))
+    const fetchFn = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(null, { status: 200 })
+    )
 
     await probeServerHealth({
       serverUrl: "http://127.0.0.1:8000",
@@ -26,13 +33,14 @@ describe("probeServerHealth", () => {
       fetchFn
     })
 
-    const options = fetchFn.mock.calls[0]?.[1] as RequestInit
+    const [, options] = fetchFn.mock.calls[0] ?? []
     expect(options?.headers).toMatchObject({ "X-API-KEY": "abc123" })
   })
 
   it("returns backend error text for non-2xx responses", async () => {
     const fetchFn = vi.fn(
-      async () => new Response("forbidden", { status: 403, statusText: "Forbidden" })
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("forbidden", { status: 403, statusText: "Forbidden" })
     )
 
     const resp = await probeServerHealth({
@@ -58,7 +66,7 @@ describe("probeServerHealth", () => {
   })
 
   it("maps network failures to status 0", async () => {
-    const fetchFn = vi.fn(async () => {
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       throw new Error("Failed to fetch")
     })
 

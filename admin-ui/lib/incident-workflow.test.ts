@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { IncidentItem } from '@/types/incidents';
 import {
   addIncidentActionItem,
   buildPostmortemTimelineMessage,
@@ -7,9 +8,28 @@ import {
   updateIncidentActionItem,
 } from './incident-workflow';
 
+const makeIncident = (overrides: Partial<IncidentItem> = {}): IncidentItem => ({
+  id: 'inc-1',
+  title: 'Queue latency spike',
+  status: 'open',
+  severity: 'high',
+  summary: 'Elevated queue latency',
+  tags: ['queue'],
+  created_at: '2026-03-12T12:00:00Z',
+  updated_at: '2026-03-12T12:00:00Z',
+  resolved_at: null,
+  timeline: [],
+  assigned_to_user_id: null,
+  assigned_to_label: null,
+  root_cause: null,
+  impact: null,
+  action_items: [],
+  ...overrides,
+});
+
 describe('incident workflow state helpers', () => {
   it('creates default incident workflow state when missing', () => {
-    const state = ensureIncidentWorkflowState({}, 'inc-1');
+    const state = ensureIncidentWorkflowState({}, makeIncident());
     expect(state.assignedTo).toBeUndefined();
     expect(state.rootCause).toBe('');
     expect(state.impact).toBe('');

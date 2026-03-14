@@ -98,7 +98,14 @@ vi.mock('@/context/demo-mode', () => ({
 }))
 
 vi.mock('@/hooks/useConnectionState', () => ({
-  useConnectionState: () => ({ serverUrl: 'http://localhost:8000' })
+  useConnectionState: () => ({ serverUrl: 'http://localhost:8000' }),
+  useConnectionUxState: () => ({
+    uxState: 'connected_ok',
+    hasCompletedFirstRun: true
+  }),
+  useConnectionActions: () => ({
+    checkOnce: vi.fn()
+  })
 }))
 
 vi.mock('@/hooks/useMessageOption', () => ({
@@ -430,7 +437,12 @@ describe('ViewMediaPage stage 13 error handling', () => {
     let stalePollCallback: (() => void) | null = null
     let applyStaleRefetch = false
     vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler) => {
-      stalePollCallback = typeof handler === 'function' ? handler : null
+      stalePollCallback =
+        typeof handler === 'function'
+          ? () => {
+              handler()
+            }
+          : null
       return 1 as unknown as ReturnType<typeof window.setInterval>
     })
 
@@ -512,7 +524,12 @@ describe('ViewMediaPage stage 13 error handling', () => {
     let stalePollCallback: (() => void) | null = null
     let applyStaleRefetch = false
     vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler) => {
-      stalePollCallback = typeof handler === 'function' ? handler : null
+      stalePollCallback =
+        typeof handler === 'function'
+          ? () => {
+              handler()
+            }
+          : null
       return 1 as unknown as ReturnType<typeof window.setInterval>
     })
 

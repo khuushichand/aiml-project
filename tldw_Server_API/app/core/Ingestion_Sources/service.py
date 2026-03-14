@@ -5,6 +5,9 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from tldw_Server_API.app.core.DB_Management.Ingestion_Sources_DB import (
+    update_ingestion_source_record,
+)
 from tldw_Server_API.app.core.Ingestion_Sources.models import (
     SINK_TYPES,
     SOURCE_POLICIES,
@@ -45,6 +48,13 @@ def _normalize_choice(value: Any, *, field_name: str, allowed: frozenset[str], d
     return raw
 
 
+def validate_source_sink_pair(*, source_type: str, sink_type: str) -> None:
+    if source_type == "git_repository" and sink_type != "notes":
+        raise IngestionSourceValidationError(
+            "Git repository sources currently support the notes sink only"
+        )
+
+
 def normalize_source_payload(data: dict[str, Any]) -> dict[str, Any]:
     source_type = _normalize_choice(
         data.get("source_type"),
@@ -62,6 +72,7 @@ def normalize_source_payload(data: dict[str, Any]) -> dict[str, Any]:
         allowed=SOURCE_POLICIES,
         default="canonical",
     )
+    validate_source_sink_pair(source_type=source_type, sink_type=sink_type)
     enabled_raw = data.get("enabled")
     enabled = True if enabled_raw is None else bool(enabled_raw)
     schedule_config = data.get("schedule") or data.get("schedule_config") or {}
@@ -375,20 +386,40 @@ async def update_source(
     existing = await get_source_by_id(db, source_id=source_id, user_id=user_id)
     if not existing:
         return {}
-    if _source_identity_patch_changed(existing, patch):
-        if existing.get("last_successful_snapshot_id") is not None:
-            raise IngestionSourceValidationError(
-                "Source identity is immutable after the first successful sync"
-            )
-        raise IngestionSourceValidationError("Source identity updates are not supported")
+    identity_changed = _source_identity_patch_changed(existing, patch)
+    if identity_changed and existing.get("last_successful_snapshot_id") is not None:
+        raise IngestionSourceValidationError(
+            "Source identity is immutable after the first successful sync"
+        )
 
     update_requested = any(
         key in patch and patch.get(key) is not None
-        for key in ("policy", "enabled", "schedule_enabled", "schedule")
+        for key in ("source_type", "sink_type", "config", "policy", "enabled", "schedule_enabled", "schedule")
     )
     if not update_requested:
         return existing
 
+    source_type_value = existing.get("source_type")
+    if "source_type" in patch and patch.get("source_type") is not None:
+        source_type_value = _normalize_choice(
+            patch.get("source_type"),
+            field_name="source_type",
+            allowed=SOURCE_TYPES,
+        )
+    sink_type_value = existing.get("sink_type")
+    if "sink_type" in patch and patch.get("sink_type") is not None:
+        sink_type_value = _normalize_choice(
+            patch.get("sink_type"),
+            field_name="sink_type",
+            allowed=SINK_TYPES,
+        )
+    validate_source_sink_pair(
+        source_type=str(source_type_value),
+        sink_type=str(sink_type_value),
+    )
+    config_value = existing.get("config") or {}
+    if "config" in patch and patch.get("config") is not None:
+        config_value = patch.get("config") if isinstance(patch.get("config"), dict) else {}
     policy_value = existing.get("policy")
     if "policy" in patch and patch.get("policy") is not None:
         policy_value = _normalize_choice(
@@ -407,24 +438,17 @@ async def update_source(
         schedule_config = patch.get("schedule")
         schedule_config_value = schedule_config if isinstance(schedule_config, dict) else {}
 
-    await db.execute(
-        """
-        UPDATE ingestion_sources
-        SET policy = ?,
-            enabled = ?,
-            schedule_enabled = ?,
-            schedule_config_json = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            str(policy_value),
-            1 if enabled_value else 0,
-            1 if schedule_enabled_value else 0,
-            _json_dumps(schedule_config_value),
-            _utc_now_text(),
-            int(source_id),
-        ),
+    await update_ingestion_source_record(
+        db,
+        source_id=int(source_id),
+        source_type=str(source_type_value),
+        sink_type=str(sink_type_value),
+        policy=str(policy_value),
+        enabled=bool(enabled_value),
+        schedule_enabled=bool(schedule_enabled_value),
+        schedule_config=schedule_config_value,
+        config=config_value,
+        updated_at=_utc_now_text(),
     )
     updated = await get_source_by_id(db, source_id=source_id, user_id=user_id)
     return updated or {}

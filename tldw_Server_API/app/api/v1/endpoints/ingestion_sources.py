@@ -29,6 +29,9 @@ from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
     persist_archive_artifact_from_file,
     validate_archive_upload_filename,
 )
+from tldw_Server_API.app.core.Ingestion_Sources.git_repository import (
+    validate_git_repository_source,
+)
 from tldw_Server_API.app.core.Ingestion_Sources.jobs import enqueue_ingestion_source_job
 from tldw_Server_API.app.core.Ingestion_Sources.local_directory import validate_local_directory_source
 from tldw_Server_API.app.core.Ingestion_Sources.service import (
@@ -42,6 +45,7 @@ from tldw_Server_API.app.core.Ingestion_Sources.service import (
     update_source,
     update_source_item_state,
     update_source_snapshot,
+    validate_source_sink_pair,
 )
 from tldw_Server_API.app.core.exceptions import IngestionSourceValidationError
 
@@ -113,14 +117,61 @@ async def _stream_archive_upload_to_temp_file(
 def _prepare_create_payload(payload: IngestionSourceCreateRequest) -> dict[str, Any]:
     """Normalize create payloads and validate local directory sources eagerly."""
     result = payload.model_dump()
+    validate_source_sink_pair(
+        source_type=str(payload.source_type),
+        sink_type=str(payload.sink_type),
+    )
     config = dict(result.get("config") or {})
-    if payload.source_type == "local_directory":
-        try:
-            config["path"] = str(validate_local_directory_source(config))
-        except ValueError as exc:
-            raise IngestionSourceValidationError(str(exc)) from exc
+    try:
+        config = _prepare_source_config(payload.source_type, config)
+    except ValueError as exc:
+        raise IngestionSourceValidationError(str(exc)) from exc
     result["config"] = config
     return result
+
+
+def _prepare_source_config(source_type: str, config: dict[str, Any]) -> dict[str, Any]:
+    if source_type == "local_directory":
+        normalized = dict(config)
+        normalized["path"] = str(validate_local_directory_source(normalized))
+        return normalized
+    if source_type == "git_repository":
+        return validate_git_repository_source(config)
+    return dict(config)
+
+
+def _prepare_patch_payload(
+    *,
+    existing: dict[str, Any],
+    payload: IngestionSourcePatchRequest,
+) -> dict[str, Any]:
+    patch = payload.model_dump(exclude_unset=True)
+    effective_source_type = str(
+        patch.get("source_type")
+        if patch.get("source_type") is not None
+        else existing.get("source_type") or ""
+    ).strip()
+    effective_sink_type = str(
+        patch.get("sink_type")
+        if patch.get("sink_type") is not None
+        else existing.get("sink_type") or ""
+    ).strip()
+    if effective_source_type and effective_sink_type:
+        validate_source_sink_pair(
+            source_type=effective_source_type,
+            sink_type=effective_sink_type,
+        )
+    if any(key in patch for key in ("source_type", "config")):
+        effective_config = (
+            dict(patch.get("config") or {})
+            if patch.get("config") is not None
+            else dict(existing.get("config") or {})
+        )
+        try:
+            patch["config"] = _prepare_source_config(effective_source_type, effective_config)
+        except ValueError as exc:
+            raise IngestionSourceValidationError(str(exc)) from exc
+    return patch
 
 
 @router.post(
@@ -174,10 +225,13 @@ async def patch_ingestion_source(
 ):
     """Update mutable ingestion source settings while enforcing identity immutability."""
     db_pool = await get_db_pool()
-    patch = payload.model_dump(exclude_unset=True)
     async with db_pool.transaction() as db:
         await ensure_ingestion_sources_schema(db)
+        existing = await get_source_by_id(db, source_id=source_id, user_id=int(current_user.id))
+        if not existing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source not found")
         try:
+            patch = _prepare_patch_payload(existing=existing, payload=payload)
             row = await update_source(
                 db,
                 source_id=source_id,
@@ -192,8 +246,6 @@ async def patch_ingestion_source(
                 else status.HTTP_400_BAD_REQUEST
             )
             raise HTTPException(status_code=status_code, detail=detail) from exc
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion source not found")
     return row
 
 

@@ -15,7 +15,7 @@ The OCR module integrates with media ingestion to extract text from scanned PDFs
 
 1) GET `/api/v1/ocr/backends`
    - Lists available OCR backends with basic health info.
-   - Returns a map keyed by backend name (e.g., `points`, `dots`) including minimal configuration details and reachability checks.
+   - Returns a map keyed by backend name (e.g., `mineru`, `points`, `dots`) including minimal configuration details and reachability checks.
    - Code: `tldw_Server_API/app/api/v1/endpoints/ocr.py:router.get("/backends")`
 
 2) POST `/api/v1/ocr/points/preload`
@@ -37,6 +37,14 @@ OCR is typically enabled via the media ingestion request options. Key fields (se
 - `ocr_prompt_preset` (str | null) - `general|doc|table|spotting|json` (backend-specific presets)
 
 Reference (code): `tldw_Server_API/app/api/v1/schemas/media_request_models.py`.
+
+### MinerU behavior
+
+- `ocr_backend=mineru` is supported only for PDF ingestion and OCR evaluation in v1.
+- MinerU is document-level, not per-page image OCR. The PDF pipeline runs it once for the whole PDF and stores the normalized result under `analysis_details.ocr.structured`.
+- MinerU appears in `GET /api/v1/ocr/backends` with capability flags such as `pdf_only`, `document_level`, and `opt_in_only`.
+- MinerU is excluded from `auto`, `auto_high_quality`, and `OCR.backend_priority` in v1.
+- `ocr_lang` and `ocr_dpi` are advisory for MinerU and are currently recorded in metadata but not used to drive the CLI invocation.
 
 ## Quick Examples
 
@@ -101,8 +109,37 @@ Example response excerpt (truncated)
 }
 ```
 
+MinerU PDF OCR example
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/media/process-pdfs \
+  -H "X-API-KEY: $TLDW_API_KEY" \
+  -F "enable_ocr=true" \
+  -F "ocr_backend=mineru" \
+  -F "ocr_mode=fallback" \
+  -F "ocr_output_format=markdown" \
+  -F "files=@/path/to/scanned-table.pdf"
+```
+
+Example MinerU discovery response excerpt (truncated)
+
+```json
+{
+  "mineru": {
+    "available": true,
+    "pdf_only": true,
+    "document_level": true,
+    "opt_in_only": true,
+    "mode": "cli",
+    "timeout_sec": 120,
+    "max_concurrency": 1
+  }
+}
+```
+
 ## Backend Notes
 
+- MinerU: document-level PDF OCR with bounded structured artifacts (`pages`, `tables`, artifact excerpts)
 - POINTS Reader: documentation coming soon
 - OCR Providers overview: documentation coming soon
 

@@ -1,11 +1,11 @@
 import React, { useEffect } from "react"
-import { Empty, Tabs } from "antd"
+import { Tabs } from "antd"
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
 import { BookOpen, Highlighter, FileText, ArrowLeftRight, CalendarClock } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { useServerOnline } from "@/hooks/useServerOnline"
 import { PageShell } from "@/components/Common/PageShell"
+import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { useCollectionsStore } from "@/store/collections"
 import type { CollectionsTab } from "@/types/collections"
 import { ReadingItemsList } from "./ReadingList/ReadingItemsList"
@@ -22,7 +22,6 @@ import { DigestSchedulesPanel } from "./Digests/DigestSchedulesPanel"
  */
 export const CollectionsPlaygroundPage: React.FC = () => {
   const { t } = useTranslation(["collections", "common"])
-  const isOnline = useServerOnline()
 
   const activeTab = useCollectionsStore((s) => s.activeTab)
   const setActiveTab = useCollectionsStore((s) => s.setActiveTab)
@@ -90,50 +89,50 @@ export const CollectionsPlaygroundPage: React.FC = () => {
     }
   ]
 
-  if (!isOnline) {
-    return (
+  return (
+    <WorkspaceConnectionGate
+      featureName={t("collections:title", "Collections")}
+      setupDescription={t(
+        "collections:setupRequiredDescription",
+        "Collections depends on your connected tldw server for reading items, templates, and digest schedules."
+      )}
+      authDescription={t(
+        "collections:authRequiredDescription",
+        "Open Settings to add or repair your tldw server credentials, then come back to Collections."
+      )}
+      maxWidthClassName="max-w-6xl"
+    >
       <PageShell className="py-6" maxWidthClassName="max-w-6xl">
-        <Empty
+        <div className="mb-6">
+          <h1 className="text-2xl font-semibold text-text">
+            {t("collections:title", "Collections")}
+          </h1>
+          <p className="mt-1 text-sm text-text-muted">
+            {t(
+              "collections:description",
+              "Save articles, create highlights, manage templates, and import/export your reading list."
+            )}
+          </p>
+        </div>
+
+        <DismissibleBetaAlert
+          storageKey="beta-dismissed:collections"
+          message={t("collections:betaNotice", "Beta Feature")}
           description={t(
-            "collections:offline",
-            "Server is offline. Please connect to use Collections."
+            "collections:betaDescription",
+            "Collections is currently in beta. Some features may require backend support."
           )}
+          className="mb-6"
+        />
+
+        <Tabs
+          activeKey={activeTab}
+          onChange={(key) => setActiveTab(key as CollectionsTab)}
+          items={tabItems}
+          className="collections-tabs"
         />
       </PageShell>
-    )
-  }
-
-  return (
-    <PageShell className="py-6" maxWidthClassName="max-w-6xl">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-text">
-          {t("collections:title", "Collections")}
-        </h1>
-        <p className="mt-1 text-sm text-text-muted">
-          {t(
-            "collections:description",
-            "Save articles, create highlights, manage templates, and import/export your reading list."
-          )}
-        </p>
-      </div>
-
-      <DismissibleBetaAlert
-        storageKey="beta-dismissed:collections"
-        message={t("collections:betaNotice", "Beta Feature")}
-        description={t(
-          "collections:betaDescription",
-          "Collections is currently in beta. Some features may require backend support."
-        )}
-        className="mb-6"
-      />
-
-      <Tabs
-        activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as CollectionsTab)}
-        items={tabItems}
-        className="collections-tabs"
-      />
-    </PageShell>
+    </WorkspaceConnectionGate>
   )
 }
 

@@ -117,6 +117,11 @@ async def test_admin_monitoring_repo_rule_state_and_event_round_trip_sqlite(tmp_
         assert event_rows[0]["action"] == "snoozed"
         assert event_rows[1]["action"] == "assigned"
 
+        cleared = await repo.clear_state_and_events()
+        assert cleared == {"deleted_states": 1, "deleted_events": 2}
+        assert await repo.list_alert_states(["alert:7"]) == []
+        assert await repo.list_alert_events(alert_identity="alert:7", limit=10) == []
+
         deleted = await repo.delete_rule(int(created_rule["id"]))
         assert deleted is True
         assert await repo.get_rule(int(created_rule["id"])) is None

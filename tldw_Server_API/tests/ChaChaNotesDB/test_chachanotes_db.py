@@ -18,7 +18,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError,
     SchemaError,
     InputError,
-    ConflictError
+    ConflictError,
+    TransactionContextManager,
 )
 #
 #######################################################################################################################
@@ -972,6 +973,48 @@ class TestNotes:
         titles = sorted([r['title'] for r in results])  # Sort for predictable assertion
         assert titles == ["Alpha Note", "Beta Note"]
 
+    def test_sync_note_source_folders_preserves_manual_and_other_sources(self, db_instance: CharactersRAGDB):
+        note_id = db_instance.add_note("Foldered Note", "Body")
+        assert note_id is not None
+
+        db_instance.sync_note_folders(note_id, ["manual"])
+        db_instance.sync_note_source_folders(note_id, source_id=11, folder_paths=["docs", "docs/api"])
+        db_instance.sync_note_source_folders(note_id, source_id=22, folder_paths=["guides"])
+
+        initial_paths = [row["path"] for row in db_instance.get_note_folders_for_note(note_id)]
+        assert initial_paths == ["docs", "docs/api", "guides", "manual"]
+
+        db_instance.sync_note_source_folders(
+            note_id,
+            source_id=11,
+            folder_paths=["docs", "docs/reference"],
+        )
+
+        updated_paths = [row["path"] for row in db_instance.get_note_folders_for_note(note_id)]
+        assert updated_paths == ["docs", "docs/reference", "guides", "manual"]
+
+    def test_sync_note_source_folders_reuses_case_insensitive_paths_without_stale_keys(self, db_instance: CharactersRAGDB):
+        note_id = db_instance.add_note("Case Foldered Note", "Body")
+        assert note_id is not None
+
+        db_instance.sync_note_source_folders(note_id, source_id=11, folder_paths=["Docs/API"])
+        db_instance.sync_note_source_folders(note_id, source_id=11, folder_paths=["docs/reference"])
+
+        updated_paths = [row["path"] for row in db_instance.get_note_folders_for_note(note_id)]
+        assert updated_paths == ["Docs", "Docs/reference"]
+
+        conn = db_instance.get_connection()
+        source_key_rows = conn.execute(
+            """
+            SELECT folder_key
+              FROM note_folder_source_keys
+             WHERE source_id = ?
+             ORDER BY folder_key
+            """,
+            (11,),
+        ).fetchall()
+        assert [row["folder_key"] for row in source_key_rows] == ["docs", "docs/reference"]
+
 
 class TestKeywordsAndCollections:
     def test_add_keyword(self, db_instance: CharactersRAGDB):
@@ -1251,6 +1294,37 @@ class TestTransactions:
         # Check that the first insert was rolled back
         assert len(db_instance.list_character_cards()) == initial_count
         assert db_instance.get_character_card_by_name(card_data_name) is None
+
+    def test_transaction_context_manager_uses_begin_immediate(self):
+        class _RecordingConnection:
+            def __init__(self) -> None:
+                self.in_transaction = False
+                self.statements: list[str] = []
+                self.committed = False
+                self.rolled_back = False
+
+            def execute(self, sql: str, *args):
+                self.statements.append(sql)
+                if sql == "BEGIN IMMEDIATE":
+                    self.in_transaction = True
+                return None
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def rollback(self) -> None:
+                self.rolled_back = True
+
+        conn = _RecordingConnection()
+        db = CharactersRAGDB.__new__(CharactersRAGDB)
+        db._ensure_sqlite_backend = lambda: None
+        db.get_connection = lambda: conn
+
+        with TransactionContextManager(db):
+            pass
+
+        assert conn.statements == ["BEGIN IMMEDIATE"]
+        assert conn.committed is True
 
 # More tests can be added for:
 # - Specific FTS trigger behavior (though search tests cover them indirectly)

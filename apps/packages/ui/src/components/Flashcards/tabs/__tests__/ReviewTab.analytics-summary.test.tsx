@@ -11,6 +11,8 @@ import {
   useCramQueueQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
+  useFlashcardAssistantQuery,
+  useFlashcardAssistantRespondMutation,
   useUpdateFlashcardMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
@@ -58,11 +60,32 @@ vi.mock("@/hooks/useAntdMessage", () => ({
   })
 }))
 
+vi.mock("@/hooks/useTTS", () => ({
+  useTTS: () => ({
+    speak: vi.fn(),
+    cancel: vi.fn(),
+    isSpeaking: false
+  })
+}))
+
+vi.mock("@/hooks/useSpeechRecognition", () => ({
+  useSpeechRecognition: () => ({
+    supported: false,
+    isListening: false,
+    transcript: "",
+    start: vi.fn(),
+    stop: vi.fn(),
+    resetTranscript: vi.fn()
+  })
+}))
+
 vi.mock("../../hooks", () => ({
   useDecksQuery: vi.fn(),
   useCramQueueQuery: vi.fn(),
   useReviewQuery: vi.fn(),
   useReviewFlashcardMutation: vi.fn(),
+  useFlashcardAssistantQuery: vi.fn(),
+  useFlashcardAssistantRespondMutation: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
   useResetFlashcardSchedulingMutation: vi.fn(),
   useDeleteFlashcardMutation: vi.fn(),
@@ -96,6 +119,15 @@ describe("ReviewTab analytics summary", () => {
     vi.mocked(useReviewQuery).mockReturnValue({ data: null } as any)
     vi.mocked(useReviewFlashcardMutation).mockReturnValue({
       mutateAsync: vi.fn()
+    } as any)
+    vi.mocked(useFlashcardAssistantQuery).mockReturnValue({
+      data: null,
+      isLoading: false,
+      isError: false
+    } as any)
+    vi.mocked(useFlashcardAssistantRespondMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
     } as any)
     vi.mocked(useUpdateFlashcardMutation).mockReturnValue({
       mutateAsync: vi.fn(),

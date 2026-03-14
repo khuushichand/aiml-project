@@ -51,6 +51,9 @@ from uuid import uuid4
 # 3rd-Party Imports
 import aiosqlite
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection_async,
+)
 from tldw_Server_API.app.core.testing import env_flag_enabled, is_truthy
 
 _AUDIT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
@@ -1102,10 +1105,7 @@ class UnifiedAuditService:
         async with aiosqlite.connect(self.db_path) as db:
             # Apply performance/safety PRAGMAs for SQLite
             try:
-                await db.execute("PRAGMA journal_mode=WAL;")
-                await db.execute("PRAGMA synchronous=NORMAL;")
-                await db.execute("PRAGMA temp_store=MEMORY;")
-                await db.execute("PRAGMA foreign_keys=ON;")
+                await configure_sqlite_connection_async(db)
                 # Enable incremental vacuum to reclaim space over time
                 with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                     await db.execute("PRAGMA auto_vacuum=INCREMENTAL;")
@@ -1920,11 +1920,7 @@ class UnifiedAuditService:
                 conn = await aiosqlite.connect(self.db_path)
                 try:
                     try:
-                        await conn.execute("PRAGMA journal_mode=WAL;")
-                        await conn.execute("PRAGMA synchronous=NORMAL;")
-                        await conn.execute("PRAGMA temp_store=MEMORY;")
-                        await conn.execute("PRAGMA foreign_keys=ON;")
-                        await conn.execute("PRAGMA busy_timeout=5000;")
+                        await configure_sqlite_connection_async(conn)
                     except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Failed to apply PRAGMAs on pooled audit DB connection: {e}")
                     # Return rows as mappings consistently across this service
@@ -1948,9 +1944,9 @@ class UnifiedAuditService:
         try:
             conn.row_factory = aiosqlite.Row
             with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
-                await conn.execute("PRAGMA query_only=ON;")
+                await configure_sqlite_connection_async(conn)
             with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
-                await conn.execute("PRAGMA busy_timeout=5000;")
+                await conn.execute("PRAGMA query_only=ON;")
             yield conn
         finally:
             with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
@@ -2356,11 +2352,7 @@ class UnifiedAuditService:
                         # Ephemeral connection per flush in tests to avoid persistent threads
                         async with aiosqlite.connect(self.db_path) as db:
                             try:
-                                await db.execute("PRAGMA journal_mode=WAL;")
-                                await db.execute("PRAGMA synchronous=NORMAL;")
-                                await db.execute("PRAGMA temp_store=MEMORY;")
-                                await db.execute("PRAGMA foreign_keys=ON;")
-                                await db.execute("PRAGMA busy_timeout=5000;")
+                                await configure_sqlite_connection_async(db)
                                 db.row_factory = aiosqlite.Row
                             except _AUDIT_NONCRITICAL_EXCEPTIONS:
                                 pass

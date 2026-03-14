@@ -1,6 +1,7 @@
 import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from "../utils/fixtures"
 import type { Page } from "@playwright/test"
 import { TEST_CONFIG, fetchWithApiKey } from "../utils/helpers"
+import { expectApiCall } from "../utils/api-assertions"
 
 interface SeededReadingItem {
   itemId: string
@@ -207,11 +208,17 @@ test.describe("Collections Stage 3 Skeleton", () => {
       authedPage.getByText(/Selected text captured|Selected text matches an existing highlight/i)
     ).toBeVisible({ timeout: 10_000 })
 
+    const highlightApiCall = expectApiCall(authedPage, {
+      method: "POST",
+      url: "/api/v1/reading/"
+    })
     await authedPage
       .locator(".reading-item-detail-drawer")
       .getByRole("button", { name: /Add Highlight|Update/i })
       .first()
       .click()
+    const { response: highlightResponse } = await highlightApiCall
+    expect(highlightResponse.status()).toBeLessThan(400)
     await expect(
       authedPage.getByText(/Selected text captured|Selected text matches an existing highlight/i)
     ).not.toBeVisible({ timeout: 10_000 })
@@ -272,10 +279,13 @@ test.describe("Collections Stage 3 Skeleton", () => {
     await authedPage.getByRole("button", { name: /Add Notes|Edit Notes/i }).click()
 
     const notesBox = authedPage.locator(".reading-item-detail-drawer textarea").first()
+    const saveApiCall = expectApiCall(authedPage, { url: "/api/v1/reading/" })
     await notesBox.fill(noteText)
 
     await expect(authedPage.getByText(/Unsaved changes/i)).toBeVisible({ timeout: 5_000 })
     await expect(authedPage.getByText(/All changes saved/i)).toBeVisible({ timeout: 12_000 })
+    const { response: saveResponse } = await saveApiCall
+    expect(saveResponse.status()).toBeLessThan(400)
 
     await authedPage.keyboard.press("Escape")
     await expect(authedPage.locator(".reading-item-detail-drawer")).not.toBeVisible({ timeout: 10_000 })

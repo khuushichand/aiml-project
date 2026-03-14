@@ -48,7 +48,7 @@ export const GeneralSettings = () => {
   const { changeLocale, locale, supportLanguage } = useI18n()
   const isOnline = useServerOnline()
   const navigate = useNavigate()
-  const { beginOnboarding } = useConnectionActions()
+  const { restartOnboarding } = useConnectionActions()
   const { completedTutorials, resetProgress: resetTutorialProgress } = useTutorialCompletion()
 
   return (
@@ -207,7 +207,7 @@ export const GeneralSettings = () => {
               ),
               onOk: async () => {
                 try {
-                  await beginOnboarding()
+                  await restartOnboarding()
                   notification.success({
                     message: t(
                       "generalSettings.settings.restartOnboarding.toast",

@@ -223,6 +223,24 @@ class AuthnzAdminMonitoringRepo:
             )
             return bool(getattr(cursor, "rowcount", 0))
 
+    async def clear_state_and_events(self) -> dict[str, int]:
+        """Delete all alert overlay rows and history events."""
+        async with self.db_pool.transaction() as conn:
+            if self._is_postgres_backend():
+                deleted_state_result = await conn.execute("DELETE FROM admin_alert_state")
+                deleted_events_result = await conn.execute("DELETE FROM admin_alert_events")
+                return {
+                    "deleted_states": int(str(deleted_state_result).split()[-1]),
+                    "deleted_events": int(str(deleted_events_result).split()[-1]),
+                }
+
+            deleted_state_cursor = await conn.execute("DELETE FROM admin_alert_state")
+            deleted_events_cursor = await conn.execute("DELETE FROM admin_alert_events")
+            return {
+                "deleted_states": int(getattr(deleted_state_cursor, "rowcount", 0) or 0),
+                "deleted_events": int(getattr(deleted_events_cursor, "rowcount", 0) or 0),
+            }
+
     async def list_alert_states(self, alert_identities: list[str]) -> list[dict[str, Any]]:
         """List overlay rows for the supplied alert identities."""
         if not alert_identities:

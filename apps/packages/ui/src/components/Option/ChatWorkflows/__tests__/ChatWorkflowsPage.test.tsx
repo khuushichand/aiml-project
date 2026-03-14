@@ -43,6 +43,10 @@ const state = vi.hoisted(() => {
   }
 })
 
+const connectionMocks = vi.hoisted(() => ({
+  useConnectionUxState: vi.fn()
+}))
+
 vi.mock("@/hooks/useChatWorkflows", () => ({
   useChatWorkflowTemplates: () => ({
     data: state.templates,
@@ -100,6 +104,10 @@ vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
 }))
 
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => connectionMocks.useConnectionUxState()
+}))
+
 vi.mock("@/hooks/useAntdNotification", () => ({
   useAntdNotification: () => state.notification
 }))
@@ -125,6 +133,10 @@ import { ChatWorkflowsPage } from "../ChatWorkflowsPage"
 describe("ChatWorkflowsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "connected_ok",
+      hasCompletedFirstRun: true
+    })
     state.createMutateAsync.mockResolvedValue({
       id: 2,
       title: "New workflow",

@@ -20,7 +20,7 @@ type UseDictionaryManagerFormDialogsParams = {
     cancelText: string
   }) => Promise<boolean>
   t: (key: string, fallbackOrOptions?: any) => string
-  dictionariesById: Record<number, any>
+  dictionariesById: Map<number, any>
   createDialogFocusReturnRef: React.MutableRefObject<HTMLElement | null>
   editDialogFocusReturnRef: React.MutableRefObject<HTMLElement | null>
   importDialogFocusReturnRef: React.MutableRefObject<HTMLElement | null>

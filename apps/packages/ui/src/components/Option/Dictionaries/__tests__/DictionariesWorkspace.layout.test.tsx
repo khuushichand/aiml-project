@@ -8,6 +8,18 @@ const { useLayoutUiStoreMock } = vi.hoisted(() => ({
   useLayoutUiStoreMock: vi.fn()
 }))
 
+const routerMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
+
+const connectionMocks = vi.hoisted(() => ({
+  useConnectionUxState: vi.fn()
+}))
+
+const demoModeMocks = vi.hoisted(() => ({
+  useDemoMode: vi.fn()
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
@@ -23,12 +35,20 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("react-router-dom", () => ({
+  useNavigate: () => routerMocks.navigate
+}))
+
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
 }))
 
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => connectionMocks.useConnectionUxState()
+}))
+
 vi.mock("@/context/demo-mode", () => ({
-  useDemoMode: () => ({ demoEnabled: false })
+  useDemoMode: () => demoModeMocks.useDemoMode()
 }))
 
 vi.mock("@/store/layout-ui", () => ({
@@ -61,6 +81,13 @@ vi.mock("@/components/Common/PageShell", () => ({
 describe("DictionariesWorkspace layout", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "connected_ok",
+      hasCompletedFirstRun: true
+    })
+    demoModeMocks.useDemoMode.mockReturnValue({
+      demoEnabled: false
+    })
   })
 
   it("uses full-width shell when the sidebar is collapsed", () => {
@@ -87,5 +114,36 @@ describe("DictionariesWorkspace layout", () => {
     const shell = screen.getByTestId("dictionaries-page-shell")
     expect(shell.className).toContain("max-w-5xl")
     expect(shell.className).not.toContain("max-w-none")
+  })
+
+  it("preserves demo copy when connection state is in demo mode", () => {
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "demo_mode",
+      hasCompletedFirstRun: true
+    })
+    demoModeMocks.useDemoMode.mockReturnValue({
+      demoEnabled: true
+    })
+
+    render(<DictionariesWorkspace />)
+
+    expect(
+      screen.getByText("Explore Chat dictionaries in demo mode")
+    ).toBeInTheDocument()
+  })
+
+  it("shows auth guidance instead of generic not-connected copy", () => {
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "error_auth",
+      hasCompletedFirstRun: true
+    })
+
+    render(<DictionariesWorkspace />)
+
+    expect(
+      screen.getByText(
+        "Add your credentials before Chat dictionaries can load data."
+      )
+    ).toBeInTheDocument()
   })
 })

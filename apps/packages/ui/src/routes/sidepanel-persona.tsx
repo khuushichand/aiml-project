@@ -40,6 +40,7 @@ import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import { getPersonaStarterCommandTemplate } from "@/components/PersonaGarden/personaStarterCommandTemplates"
 import { buildPersonaSetupProgress } from "@/components/PersonaGarden/personaSetupProgress"
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import {
@@ -128,6 +129,7 @@ type PersonaRuntimeApprovalPayload = {
   reason?: string | null
   duration_options?: string[]
   arguments_summary?: Record<string, unknown>
+  scope_context?: PersonaGovernanceScopeContext | null
 }
 
 type PersonaRuntimeApprovalDuration = "once" | "session" | "conversation"
@@ -143,6 +145,7 @@ type PersonaRuntimeApprovalRequest = {
   reason?: string | null
   duration_options: PersonaRuntimeApprovalDuration[]
   arguments_summary: Record<string, unknown>
+  scope_context?: PersonaGovernanceScopeContext | null
   selected_duration: PersonaRuntimeApprovalDuration
   session_id?: string | null
   plan_id?: string | null
@@ -152,6 +155,23 @@ type PersonaRuntimeApprovalRequest = {
   args?: Record<string, unknown>
   why?: string | null
   description?: string | null
+}
+
+type PersonaGovernanceScopeContext = {
+  server_id?: string | null
+  server_name?: string | null
+  requested_slots?: string[]
+  bound_slots?: string[]
+  missing_bound_slots?: string[]
+  missing_secret_slots?: string[]
+  workspace_id?: string | null
+  workspace_bundle_ids?: string[]
+  workspace_bundle_roots?: string[]
+  normalized_paths?: string[]
+  selected_workspace_trust_source?: string | null
+  selected_assignment_id?: number | null
+  blocked_reason?: string | null
+  reason?: string | null
 }
 
 type PersonaSessionSummary = {
@@ -321,6 +341,89 @@ const _approvalDecisionPayload = (
   return { duration: "once" }
 }
 
+const _normalizeStringList = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => String(entry || "").trim())
+    .filter((entry) => entry.length > 0)
+}
+
+const _coerceGovernanceContext = (value: unknown): PersonaGovernanceScopeContext | null => {
+  if (!value || typeof value !== "object") return null
+  const raw = value as Record<string, unknown>
+  const context: PersonaGovernanceScopeContext = {
+    server_id: raw.server_id ? String(raw.server_id) : null,
+    server_name: raw.server_name ? String(raw.server_name) : null,
+    requested_slots: _normalizeStringList(raw.requested_slots),
+    bound_slots: _normalizeStringList(raw.bound_slots),
+    missing_bound_slots: _normalizeStringList(raw.missing_bound_slots),
+    missing_secret_slots: _normalizeStringList(raw.missing_secret_slots),
+    workspace_id: raw.workspace_id ? String(raw.workspace_id) : null,
+    workspace_bundle_ids: _normalizeStringList(raw.workspace_bundle_ids),
+    workspace_bundle_roots: _normalizeStringList(raw.workspace_bundle_roots),
+    normalized_paths: _normalizeStringList(raw.normalized_paths),
+    selected_workspace_trust_source: raw.selected_workspace_trust_source
+      ? String(raw.selected_workspace_trust_source)
+      : null,
+    selected_assignment_id:
+      typeof raw.selected_assignment_id === "number"
+        ? raw.selected_assignment_id
+        : Number.isFinite(Number(raw.selected_assignment_id))
+          ? Number(raw.selected_assignment_id)
+          : null,
+    blocked_reason: raw.blocked_reason ? String(raw.blocked_reason) : null,
+    reason: raw.reason ? String(raw.reason) : null
+  }
+  const hasContent =
+    Boolean(
+      context.server_id ||
+      context.server_name ||
+      context.workspace_id ||
+      context.selected_workspace_trust_source ||
+      context.blocked_reason ||
+      context.reason
+    ) ||
+    Boolean(context.workspace_bundle_ids?.length) ||
+    Boolean(context.workspace_bundle_roots?.length) ||
+    Boolean(context.normalized_paths?.length) ||
+    Boolean(context.requested_slots?.length) ||
+    Boolean(context.bound_slots?.length) ||
+    Boolean(context.missing_bound_slots?.length) ||
+    Boolean(context.missing_secret_slots?.length)
+  return hasContent ? context : null
+}
+
+const _formatGovernanceDenyMessage = (
+  context: PersonaGovernanceScopeContext | null,
+  reasonCode: string | null
+): string | null => {
+  const normalizedReason = String(reasonCode || context?.blocked_reason || "")
+    .trim()
+    .toLowerCase()
+  if (normalizedReason === "required_slot_not_granted") {
+    const slots = context?.missing_bound_slots?.length
+      ? context.missing_bound_slots
+      : context?.requested_slots || []
+    return slots.length ? `Credential slots not granted: ${slots.join(", ")}` : null
+  }
+  if (normalizedReason === "required_slot_secret_missing") {
+    const slots = context?.missing_secret_slots?.length
+      ? context.missing_secret_slots
+      : context?.requested_slots || []
+    return slots.length ? `Credential secrets missing: ${slots.join(", ")}` : null
+  }
+  if (normalizedReason === "workspace_unresolvable_for_trust_source") {
+    return "Blocked: workspace is not resolvable through the required trust source."
+  }
+  if (normalizedReason === "path_matches_multiple_workspace_roots") {
+    return "Blocked: path matched multiple trusted workspace roots."
+  }
+  if (normalizedReason === "path_outside_workspace_bundle") {
+    return "Blocked: path falls outside the allowed workspace bundle."
+  }
+  return null
+}
+
 const _readBoolPreference = (key: string, fallback: boolean): boolean => {
   if (typeof window === "undefined") return fallback
   try {
@@ -360,9 +463,9 @@ const _confirmWithBrowserPrompt = (message: string): boolean => {
 
 const IDLE_ROUTE_BLOCKER: ReturnType<typeof useBlocker> = {
   state: "unblocked",
-  proceed: () => undefined,
-  reset: () => undefined
-}
+  proceed: undefined,
+  reset: undefined
+} as ReturnType<typeof useBlocker>
 
 const useCompatibleRouteBlocker = (
   when: boolean
@@ -391,6 +494,7 @@ const SidepanelPersona = ({
   const navigate = useNavigate()
   const location = useLocation()
   const isOnline = useServerOnline()
+  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const isCompanionMode = mode === "companion"
   const routeTitle = isCompanionMode
@@ -1405,6 +1509,7 @@ const SidepanelPersona = ({
             ? (payload.approval as PersonaRuntimeApprovalPayload)
             : null
         if (approvalPayload) {
+          const scopeContext = _coerceGovernanceContext(approvalPayload.scope_context)
           const durationOptions = Array.isArray(approvalPayload.duration_options)
             ? approvalPayload.duration_options
                 .map((entry) => String(entry || "").trim())
@@ -1439,6 +1544,7 @@ const SidepanelPersona = ({
               typeof approvalPayload.arguments_summary === "object"
                 ? (approvalPayload.arguments_summary as Record<string, unknown>)
                 : {},
+            scope_context: scopeContext,
             session_id: payload?.session_id ? String(payload.session_id) : sessionId,
             plan_id: payload?.plan_id ? String(payload.plan_id) : null,
             step_idx:
@@ -1463,6 +1569,17 @@ const SidepanelPersona = ({
             return [...next, request]
           })
           appendLog("notice", `Runtime approval required for ${request.tool_name}`)
+          return
+        }
+        const governanceContext = _coerceGovernanceContext(
+          payload?.external_access ?? payload?.path_scope
+        )
+        const externalDenyMessage = _formatGovernanceDenyMessage(
+          governanceContext,
+          payload?.reason_code ? String(payload.reason_code) : null
+        )
+        if (externalDenyMessage) {
+          appendLog("notice", externalDenyMessage)
           return
         }
         const output = payload?.output ?? payload?.result
@@ -2873,6 +2990,20 @@ const SidepanelPersona = ({
         </Typography.Text>
       </div>
     )
+  const settingsRoute = shell === "options" ? "/settings/tldw" : "/settings"
+  const diagnosticsRoute = shell === "options" ? "/settings/health" : settingsRoute
+  const settingsLabel = t("sidepanel:header.settingsShortLabel", "Settings")
+  const setupActionLabel =
+    shell === "options" && !hasCompletedFirstRun ? "Finish Setup" : settingsLabel
+  const openSettings = () => navigate(settingsRoute)
+  const openDiagnostics = () => navigate(diagnosticsRoute)
+  const openSetup = () => {
+    if (shell === "options" && !hasCompletedFirstRun) {
+      navigate("/")
+      return
+    }
+    openSettings()
+  }
   const selectedPersonaName =
     catalog.find((persona) => String(persona.id || "") === selectedPersonaId)?.name ||
     selectedPersonaId
@@ -3045,7 +3176,9 @@ const SidepanelPersona = ({
           {t("sidepanel:persona.connect", "Connect")}
         </Button>
       ) : (
-        <Button size="small" onClick={disconnect}>
+        <Button size="small" onClick={() => {
+          disconnect()
+        }}>
           {t("sidepanel:persona.disconnect", "Disconnect")}
         </Button>
       )}
@@ -3157,6 +3290,44 @@ const SidepanelPersona = ({
                 {approval.mode ? <Tag color="blue">{approval.mode}</Tag> : null}
                 {approval.reason ? <Tag color="red">{approval.reason}</Tag> : null}
               </div>
+              {approval.scope_context?.server_name ||
+              approval.scope_context?.server_id ||
+              approval.scope_context?.workspace_id ||
+              approval.scope_context?.workspace_bundle_ids?.length ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+                  {approval.scope_context?.server_name || approval.scope_context?.server_id ? (
+                    <Tag color="cyan">
+                      {approval.scope_context.server_name || approval.scope_context.server_id}
+                    </Tag>
+                  ) : null}
+                  {approval.scope_context?.workspace_id ? (
+                    <Tag color="cyan">{approval.scope_context.workspace_id}</Tag>
+                  ) : null}
+                  {(approval.scope_context?.workspace_bundle_ids || []).map((workspaceId) => (
+                    <Tag
+                      key={`${approval.key}-workspace-bundle-${workspaceId}`}
+                      color="purple"
+                    >
+                      {workspaceId}
+                    </Tag>
+                  ))}
+                  {approval.scope_context?.selected_workspace_trust_source ? (
+                    <Tag color="blue">
+                      {approval.scope_context.selected_workspace_trust_source}
+                    </Tag>
+                  ) : null}
+                  {(approval.scope_context.requested_slots || []).map((slotName) => (
+                    <Tag key={`${approval.key}-${slotName}`} color="geekblue">
+                      {slotName}
+                    </Tag>
+                  ))}
+                  {(approval.scope_context.normalized_paths || []).map((pathValue) => (
+                    <Tag key={`${approval.key}-path-${pathValue}`} color="magenta">
+                      {pathValue}
+                    </Tag>
+                  ))}
+                </div>
+              ) : null}
               {Object.keys(approval.arguments_summary).length ? (
                 <pre className="mt-2 overflow-auto rounded bg-bg p-2 text-[11px] text-text">
                   {JSON.stringify(approval.arguments_summary, null, 2)}
@@ -3758,6 +3929,95 @@ const SidepanelPersona = ({
       content: <PoliciesPanel hasPendingPlan={Boolean(pendingPlan)} />
     }
   ]
+  if (uxState === "error_auth" || uxState === "configuring_auth") {
+    return (
+      <div
+        data-testid="persona-route-root"
+        className={routeRootClassName}
+      >
+        {routeHeader}
+        <div className="p-4">
+          <FeatureEmptyState
+            title={
+              isCompanionMode
+                ? "Add your credentials to use Companion"
+                : "Add your credentials to use Persona"
+            }
+            description={
+              isCompanionMode
+                ? "Companion conversation needs a reachable tldw server plus valid credentials before a session can start."
+                : "Persona streaming needs a reachable tldw server plus valid credentials before a session can start."
+            }
+            primaryActionLabel={settingsLabel}
+            onPrimaryAction={openSettings}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (uxState === "unconfigured" || uxState === "configuring_url") {
+    return (
+      <div
+        data-testid="persona-route-root"
+        className={routeRootClassName}
+      >
+        {routeHeader}
+        <div className="p-4">
+          <FeatureEmptyState
+            title={
+              isCompanionMode
+                ? "Finish setup to use Companion"
+                : "Finish setup to use Persona"
+            }
+            description={
+              isCompanionMode
+                ? "Companion conversation depends on a configured tldw server before you can start a session."
+                : "Persona streaming depends on a configured tldw server before you can start a session."
+            }
+            primaryActionLabel={setupActionLabel}
+            onPrimaryAction={openSetup}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (uxState === "error_unreachable") {
+    return (
+      <div
+        data-testid="persona-route-root"
+        className={routeRootClassName}
+      >
+        {routeHeader}
+        <div className="p-4">
+          <FeatureEmptyState
+            title="Can't reach your tldw server right now"
+            description={
+              isCompanionMode
+                ? "Companion conversation depends on a reachable tldw server. Review your server status and URL before trying again."
+                : "Persona streaming depends on a reachable tldw server. Review your server status and URL before trying again."
+            }
+            primaryActionLabel={
+              shell === "options"
+                ? "Health & diagnostics"
+                : settingsLabel
+            }
+            onPrimaryAction={
+              shell === "options" ? openDiagnostics : openSettings
+            }
+            secondaryActionLabel={
+              shell === "options" ? settingsLabel : undefined
+            }
+            onSecondaryAction={
+              shell === "options" ? openSettings : undefined
+            }
+          />
+        </div>
+      </div>
+    )
+  }
+
   if (!isOnline) {
     return (
       <div
@@ -3780,8 +4040,8 @@ const SidepanelPersona = ({
                     "Persona streaming runs on your tldw server. Connect to a server to start a session."
                   )
             }
-            primaryActionLabel={t("sidepanel:header.settingsShortLabel", "Settings")}
-            onPrimaryAction={() => navigate("/settings")}
+            primaryActionLabel={settingsLabel}
+            onPrimaryAction={openSettings}
           />
         </div>
       </div>

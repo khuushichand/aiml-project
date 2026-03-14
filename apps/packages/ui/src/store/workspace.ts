@@ -30,9 +30,12 @@ import type {
   ArtifactStatus,
   ArtifactType,
   AudioGenerationSettings,
+  AudioTtsProvider,
   GeneratedArtifact,
   SavedWorkspace,
   WorkspaceBanner,
+  WorkspaceBannerImage,
+  WorkspaceBannerImageMimeType,
   WorkspaceCollection,
   WorkspaceConfig,
   WorkspaceNote,
@@ -138,6 +141,22 @@ type WorkspaceStorageRecoveryAttempt = {
 
 const WORKSPACE_STORAGE_RECOVERY_MIN_RECLAIM_BYTES = 64 * 1024
 const WORKSPACE_STORAGE_OVERSIZED_ARTIFACT_MIN_BYTES = 12 * 1024
+const AUDIO_TTS_PROVIDERS = new Set<AudioTtsProvider>([
+  "browser",
+  "elevenlabs",
+  "openai",
+  "tldw"
+])
+const AUDIO_OUTPUT_FORMATS = new Set<AudioGenerationSettings["format"]>([
+  "mp3",
+  "wav",
+  "opus",
+  "aac",
+  "flac"
+])
+const WORKSPACE_BANNER_IMAGE_MIME_TYPES = new Set<WorkspaceBannerImageMimeType>(
+  ["image/jpeg", "image/png", "image/webp"]
+)
 const WORKSPACE_SPLIT_INDEX_SCHEMA = "workspace_split_v1"
 const WORKSPACE_SPLIT_INDEX_VERSION = 1
 export const WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY =
@@ -228,6 +247,7 @@ type WorkspaceSplitIndexState = {
   workspaceId: string
   savedWorkspaces: SavedWorkspace[]
   archivedWorkspaces: SavedWorkspace[]
+  workspaceCollections: WorkspaceCollection[]
   workspaceIds: string[]
   workspaceSnapshots: Record<string, WorkspaceSnapshot>
   workspaceChatSessions: Record<string, PersistedWorkspaceChatSessionReference>
@@ -553,8 +573,24 @@ const readWorkspaceSnapshotFromStorage = (
 ): WorkspaceSnapshot | null => {
   const raw = localStorage.getItem(buildWorkspaceSnapshotStorageKey(workspaceId))
   const parsed = safeParseJson(raw)
-  return isRecord(parsed) ? (parsed as WorkspaceSnapshot) : null
+  return isRecord(parsed) ? (parsed as unknown as WorkspaceSnapshot) : null
 }
+
+const isAudioTtsProvider = (value: unknown): value is AudioTtsProvider =>
+  typeof value === "string" &&
+  AUDIO_TTS_PROVIDERS.has(value as AudioTtsProvider)
+
+const isAudioOutputFormat = (
+  value: unknown
+): value is AudioGenerationSettings["format"] =>
+  typeof value === "string" &&
+  AUDIO_OUTPUT_FORMATS.has(value as AudioGenerationSettings["format"])
+
+const isWorkspaceBannerImageMimeType = (
+  value: unknown
+): value is WorkspaceBannerImageMimeType =>
+  typeof value === "string" &&
+  WORKSPACE_BANNER_IMAGE_MIME_TYPES.has(value as WorkspaceBannerImageMimeType)
 
 const parseWorkspaceTimestamp = (value: unknown): number => {
   if (value instanceof Date) return value.getTime()
@@ -1166,6 +1202,7 @@ const buildWorkspaceSplitIndexEnvelope = (
       workspaceId: persistedState.workspaceId,
       savedWorkspaces: persistedState.savedWorkspaces,
       archivedWorkspaces: persistedState.archivedWorkspaces,
+      workspaceCollections: persistedState.workspaceCollections,
       workspaceIds,
       workspaceSnapshots: activeSnapshot,
       workspaceChatSessions: activeChatSession
@@ -1188,6 +1225,9 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
   const archivedWorkspaces = Array.isArray(stateCandidate.archivedWorkspaces)
     ? stateCandidate.archivedWorkspaces
     : []
+  const workspaceCollections = Array.isArray(stateCandidate.workspaceCollections)
+    ? (stateCandidate.workspaceCollections as WorkspaceCollection[])
+    : []
   const workspaceIds = Array.isArray(stateCandidate.workspaceIds)
     ? stateCandidate.workspaceIds.filter(
         (workspaceStorageId): workspaceStorageId is string =>
@@ -1208,7 +1248,8 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
     )
     const parsedSnapshot = safeParseJson(snapshotRaw)
     if (isRecord(parsedSnapshot)) {
-      snapshots[workspaceStorageId] = parsedSnapshot as WorkspaceSnapshot
+      snapshots[workspaceStorageId] =
+        parsedSnapshot as unknown as WorkspaceSnapshot
       if (hasWorkspaceArtifactPayloadPointers(parsedSnapshot)) {
         requiresIndexedDbHydration = true
       }
@@ -1234,7 +1275,7 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
     isRecord(stateCandidate.workspaceSnapshots[workspaceId])
   ) {
     snapshots[workspaceId] =
-      stateCandidate.workspaceSnapshots[workspaceId] as WorkspaceSnapshot
+      stateCandidate.workspaceSnapshots[workspaceId] as unknown as WorkspaceSnapshot
     if (hasWorkspaceArtifactPayloadPointers(snapshots[workspaceId])) {
       requiresIndexedDbHydration = true
     }
@@ -1261,7 +1302,8 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
   const baseState = {
     workspaceId,
     savedWorkspaces: savedWorkspaces as SavedWorkspace[],
-    archivedWorkspaces: archivedWorkspaces as SavedWorkspace[]
+    archivedWorkspaces: archivedWorkspaces as SavedWorkspace[],
+    workspaceCollections
   }
 
   if (!requiresIndexedDbHydration) {
@@ -2305,8 +2347,8 @@ export const estimateWorkspacePersistenceMetrics = (
   const rawWorkspaceSnapshotsBytes = estimateSerializedByteLength(
     payload.workspaceSnapshots
   )
-  const workspaceBannerBytes = isRecord(payload.workspaceSnapshots)
-    ? Object.values(payload.workspaceSnapshots as Record<string, unknown>).reduce(
+  const workspaceBannerBytes: number = isRecord(payload.workspaceSnapshots)
+    ? Object.values(payload.workspaceSnapshots as Record<string, unknown>).reduce<number>(
         (accumulator, snapshot) => {
           if (!isRecord(snapshot)) return accumulator
           return (
@@ -2807,7 +2849,7 @@ const normalizeWorkspaceSnapshotsForRehydrate = (
       if (!workspaceId) continue
       normalized[workspaceId] = reviveWorkspaceSnapshot(
         workspaceId,
-        entry as WorkspaceSnapshot
+        entry as unknown as WorkspaceSnapshot
       )
     }
     return normalized
@@ -2819,7 +2861,7 @@ const normalizeWorkspaceSnapshotsForRehydrate = (
     if (!isRecord(snapshot)) continue
     normalized[workspaceId] = reviveWorkspaceSnapshot(
       workspaceId,
-      snapshot as WorkspaceSnapshot
+      snapshot as unknown as WorkspaceSnapshot
     )
   }
 
@@ -2854,7 +2896,7 @@ const coerceAudioSettingsForRehydrate = (
 
   return {
     provider:
-      typeof candidate.provider === "string"
+      isAudioTtsProvider(candidate.provider)
         ? candidate.provider
         : DEFAULT_AUDIO_SETTINGS.provider,
     model:
@@ -2870,7 +2912,7 @@ const coerceAudioSettingsForRehydrate = (
         ? candidate.speed
         : DEFAULT_AUDIO_SETTINGS.speed,
     format:
-      typeof candidate.format === "string"
+      isAudioOutputFormat(candidate.format)
         ? candidate.format
         : DEFAULT_AUDIO_SETTINGS.format
   }
@@ -2884,16 +2926,14 @@ const coerceWorkspaceBannerForRehydrate = (
   }
 
   const imageCandidate = isRecord(candidate.image) ? candidate.image : null
-  const imageMimeType = imageCandidate?.mimeType
-  const isSupportedImageMimeType =
-    imageMimeType === "image/jpeg" ||
-    imageMimeType === "image/png" ||
-    imageMimeType === "image/webp"
+  const imageMimeType = isWorkspaceBannerImageMimeType(imageCandidate?.mimeType)
+    ? imageCandidate.mimeType
+    : null
 
-  const image =
+  const image: WorkspaceBannerImage | null =
     imageCandidate &&
     typeof imageCandidate.dataUrl === "string" &&
-    isSupportedImageMimeType &&
+    imageMimeType &&
     typeof imageCandidate.width === "number" &&
     Number.isFinite(imageCandidate.width) &&
     imageCandidate.width > 0 &&

@@ -42,6 +42,14 @@ const mocks = vi.hoisted(() => {
   }
 })
 
+const connectionMocks = vi.hoisted(() => ({
+  useConnectionUxState: vi.fn()
+}))
+
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
+
 const runA11yBaselineRules = async (context: Element) =>
   axe.run(context, {
     runOnly: {
@@ -86,7 +94,8 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
-vi.mock("antd", () => {
+vi.mock("antd", async () => {
+  const actual = await vi.importActual<typeof import("antd")>("antd")
   const Alert = ({
     title,
     description,
@@ -133,8 +142,16 @@ vi.mock("antd", () => {
         <div>{footer}</div>
       </div>
     ) : null
+  const Drawer = ({ open, title, children }: any) =>
+    open ? (
+      <div>
+        <h3>{title}</h3>
+        {children}
+      </div>
+    ) : null
 
   const Empty = ({ description }: any) => <div>{description}</div>
+  const Tooltip = ({ children }: any) => <>{children}</>
   const Button = ({ children, onClick, disabled, ...rest }: any) => (
     <button
       type="button"
@@ -145,7 +162,16 @@ vi.mock("antd", () => {
       {children}
     </button>
   )
-  return { Alert, Tabs, Empty, Button, Modal }
+  const Switch = ({ checked, onChange, ...rest }: any) => (
+    <button
+      type="button"
+      aria-label={rest["aria-label"] || "Toggle"}
+      aria-pressed={Boolean(checked)}
+      onClick={() => onChange?.(!checked)}
+      {...rest}
+    />
+  )
+  return { ...actual, Alert, Tabs, Empty, Button, Modal, Drawer, Tooltip, Switch }
 })
 
 vi.mock("@/hooks/useAntdNotification", () => ({
@@ -160,6 +186,20 @@ vi.mock("@/hooks/useAntdNotification", () => ({
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
 }))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => connectionMocks.useConnectionUxState()
+}))
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: () => navigationMocks.navigate
+  }
+})
 
 vi.mock("@/services/watchlists", () => ({
   fetchWatchlistRuns: (...args: any[]) => mocks.fetchWatchlistRunsMock(...args),
@@ -207,10 +247,17 @@ vi.mock("../SettingsTab/SettingsTab", () => ({
 vi.mock("../ItemsTab/ItemsTab", () => ({
   ItemsTab: () => <div>Items tab</div>
 }))
+vi.mock("../shared/WatchlistsHealthBar", () => ({
+  WatchlistsHealthBar: () => <div data-testid="watchlists-health-bar" />
+}))
 
 describe("WatchlistsPlaygroundPage help surfaces", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "connected_ok",
+      hasCompletedFirstRun: true
+    })
     mocks.state.activeTab = "sources"
     mocks.state.overviewHealth = {
       tabBadges: {
@@ -227,6 +274,7 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     localStorage.removeItem("watchlists:guided-tour:v1")
     localStorage.removeItem("watchlists:teach-points:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
+    localStorage.removeItem("watchlists:show-all-views:v1")
   })
 
   afterEach(() => {
@@ -236,6 +284,7 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     localStorage.removeItem("watchlists:guided-tour:v1")
     localStorage.removeItem("watchlists:teach-points:v1")
     localStorage.removeItem("watchlists:ia-experiment:v1")
+    localStorage.removeItem("watchlists:show-all-views:v1")
   })
 
   it("shows persistent docs links and tab-context help link", () => {
@@ -277,7 +326,8 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     }
   })
 
-  it("renders canonical tab and quick-action labels for the primary workflow", () => {
+  it("renders the full tab map and quick-action labels when show-all-views is enabled", () => {
+    localStorage.setItem("watchlists:show-all-views:v1", "true")
     render(<WatchlistsPlaygroundPage />)
 
     expect(screen.getByTestId("watchlists-tab-sources")).toHaveTextContent("Feeds")
@@ -403,6 +453,7 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
         outputs: 1
       }
     }
+    localStorage.setItem("watchlists:show-all-views:v1", "true")
 
     const { container } = render(<WatchlistsPlaygroundPage />)
 

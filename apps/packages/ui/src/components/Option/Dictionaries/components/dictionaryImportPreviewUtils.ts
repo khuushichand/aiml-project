@@ -63,7 +63,7 @@ function buildImportPreviewSummaryFromJSON(data: any) {
   const normalizedName =
     String(data?.name || "Imported Dictionary").trim() || "Imported Dictionary"
   const entries = Array.isArray(data?.entries) ? data.entries : []
-  const groups = Array.from(
+  const groups: string[] = Array.from(
     new Set(
       entries
         .map((entry: any) =>

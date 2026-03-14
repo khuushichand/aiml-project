@@ -539,6 +539,7 @@ describe("ItemsTab batch throughput controls", () => {
         tags: ["tech"],
         status: "ingested",
         reviewed: true,
+        queued_for_briefing: false,
         created_at: "2026-02-18T08:20:00Z",
         published_at: "2026-02-18T08:20:00Z"
       },
@@ -553,6 +554,7 @@ describe("ItemsTab batch throughput controls", () => {
         tags: ["tech"],
         status: "ingested",
         reviewed: false,
+        queued_for_briefing: false,
         created_at: "2026-02-18T08:10:00Z",
         published_at: "2026-02-18T08:10:00Z"
       },
@@ -567,6 +569,7 @@ describe("ItemsTab batch throughput controls", () => {
         tags: ["tech"],
         status: "ingested",
         reviewed: false,
+        queued_for_briefing: false,
         created_at: "2026-02-18T08:00:00Z",
         published_at: "2026-02-18T08:00:00Z"
       }
@@ -919,6 +922,7 @@ describe("ItemsTab batch throughput controls", () => {
       tags: ["ops"],
       status: "ingested",
       reviewed: false,
+      queued_for_briefing: false,
       created_at: "2026-02-18T10:00:00Z",
       published_at: "2026-02-18T10:00:00Z"
     }))
@@ -996,6 +1000,7 @@ describe("ItemsTab batch throughput controls", () => {
       tags: ["ops"],
       status: "ingested",
       reviewed: false,
+      queued_for_briefing: false,
       created_at: "2026-02-18T10:00:00Z",
       published_at: "2026-02-18T10:00:00Z"
     }))
@@ -1038,6 +1043,7 @@ describe("ItemsTab batch throughput controls", () => {
       tags: ["ops"],
       status: "ingested",
       reviewed: false,
+      queued_for_briefing: false,
       created_at: "2026-02-18T10:00:00Z",
       published_at: "2026-02-18T10:00:00Z"
     }))

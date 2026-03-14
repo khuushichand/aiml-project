@@ -8,6 +8,7 @@ class FakeNotesDB:
         self.updated_calls: list[dict[str, object]] = []
         self.added_calls: list[dict[str, object]] = []
         self.soft_deleted_calls: list[dict[str, object]] = []
+        self.source_folder_calls: list[dict[str, object]] = []
 
     def update_note(self, note_id: str, update_data: dict[str, object], expected_version: int):
         self.updated_calls.append(
@@ -31,6 +32,24 @@ class FakeNotesDB:
             }
         )
         return True
+
+    def sync_note_source_folders(self, note_id: str, source_id: int, folder_paths: list[str]):
+        self.source_folder_calls.append(
+            {
+                "note_id": note_id,
+                "source_id": source_id,
+                "folder_paths": folder_paths,
+            }
+        )
+        return [
+            {
+                "id": idx + 1,
+                "name": path.split("/")[-1],
+                "path": path,
+                "parent_id": None if "/" not in path else idx,
+            }
+            for idx, path in enumerate(folder_paths)
+        ]
 
 
 @pytest.fixture
@@ -88,5 +107,31 @@ def test_notes_sink_soft_deletes_note_for_canonical_upstream_delete(fake_notes_d
         {
             "note_id": "n-1",
             "expected_version": 3,
+        }
+    ]
+
+
+@pytest.mark.unit
+def test_notes_sink_syncs_source_managed_folders_from_relative_path(fake_notes_db):
+    from tldw_Server_API.app.core.Ingestion_Sources.sinks.notes_sink import apply_notes_change
+
+    result = apply_notes_change(
+        fake_notes_db,
+        binding=None,
+        change={
+            "event_type": "created",
+            "relative_path": "docs/api/a.md",
+            "text": "# A\n\nBody",
+            "source_id": 91,
+        },
+        policy="canonical",
+    )
+
+    assert result["action"] == "created"
+    assert fake_notes_db.source_folder_calls == [
+        {
+            "note_id": "n-2",
+            "source_id": 91,
+            "folder_paths": ["docs", "docs/api"],
         }
     ]

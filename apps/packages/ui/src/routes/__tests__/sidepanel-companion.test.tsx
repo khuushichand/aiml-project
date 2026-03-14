@@ -12,17 +12,17 @@ const mocks = vi.hoisted(() => ({
     capabilities: { hasPersonalization: boolean; hasPersona?: boolean } | null
     loading: boolean
   },
-  fetchPersonalizationProfile: vi.fn(),
-  updatePersonalizationOptIn: vi.fn(),
-  updateCompanionPreferences: vi.fn(),
+  fetchPersonalizationProfile: vi.fn(async (..._args: unknown[]) => null),
+  updatePersonalizationOptIn: vi.fn(async (..._args: unknown[]) => null),
+  updateCompanionPreferences: vi.fn(async (..._args: unknown[]) => null),
   isCompanionConsentRequiredError: vi.fn((error: { status?: number; message?: string }) => {
     return (
       error?.status === 409 &&
       String(error?.message || "").includes("Enable personalization before using companion.")
     )
   }),
-  fetchCompanionWorkspaceSnapshot: vi.fn(),
-  recordExplicitCompanionCapture: vi.fn()
+  fetchCompanionWorkspaceSnapshot: vi.fn(async (..._args: unknown[]) => null),
+  recordExplicitCompanionCapture: vi.fn(async (..._args: unknown[]) => null)
 }))
 
 vi.mock("@/hooks/useServerOnline", () => ({
@@ -43,8 +43,8 @@ vi.mock("@/services/companion", () => ({
   updatePersonalizationOptIn: (...args: unknown[]) => mocks.updatePersonalizationOptIn(...args),
   updateCompanionPreferences: (...args: unknown[]) =>
     mocks.updateCompanionPreferences(...args),
-  isCompanionConsentRequiredError: (...args: unknown[]) =>
-    mocks.isCompanionConsentRequiredError(...args),
+  isCompanionConsentRequiredError: (error?: unknown) =>
+    mocks.isCompanionConsentRequiredError(error as { status?: number; message?: string }),
   fetchCompanionWorkspaceSnapshot: (...args: unknown[]) =>
     mocks.fetchCompanionWorkspaceSnapshot(...args),
   recordExplicitCompanionCapture: (...args: unknown[]) =>

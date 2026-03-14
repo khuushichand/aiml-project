@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  type RunNotificationEvent,
   buildRunStateNotificationKey,
   dedupeRunNotificationEvents,
   getRunFailureHint,
@@ -180,24 +181,24 @@ describe("run notification helpers", () => {
 
   it("groups high-volume notification bursts without losing newest deep-link target", () => {
     const seen = new Set<string>()
-    const events = Array.from({ length: 120 }, (_, index) => ({
-      eventKey: buildRunStateNotificationKey(index + 1, "failed"),
-      kind: "failed" as const,
-      runId: index + 1,
-      hint: index === 0 ? "first hint" : null
-    }))
-      .concat([
-        {
-          eventKey: buildRunStateNotificationKey(8, "completed"),
-          kind: "completed" as const,
-          runId: 8
-        },
-        {
-          eventKey: buildRunStateNotificationKey(8, "completed"),
-          kind: "completed" as const,
-          runId: 8
-        }
-      ])
+    const events: RunNotificationEvent[] = [
+      ...Array.from({ length: 120 }, (_, index) => ({
+        eventKey: buildRunStateNotificationKey(index + 1, "failed"),
+        kind: "failed" as const,
+        runId: index + 1,
+        hint: index === 0 ? "first hint" : null
+      })),
+      {
+        eventKey: buildRunStateNotificationKey(8, "completed"),
+        kind: "completed" as const,
+        runId: 8
+      },
+      {
+        eventKey: buildRunStateNotificationKey(8, "completed"),
+        kind: "completed" as const,
+        runId: 8
+      }
+    ]
 
     const deduped = dedupeRunNotificationEvents(events, seen)
     const grouped = groupRunNotificationEvents(deduped)

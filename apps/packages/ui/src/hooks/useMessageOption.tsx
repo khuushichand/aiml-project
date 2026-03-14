@@ -1,13 +1,11 @@
 import React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useStoreMessageOption } from "~/store/option";
-import { generateID } from "@/db/dexie/helpers";
 import { useTranslation } from "react-i18next";
 import { usePageAssist } from "@/context";
 import { useWebUI } from "@/store/webui";
 import { useStorage } from "@plasmohq/storage/hook";
 import { useStoreChatModelSettings } from "@/store/model";
-import { UploadedFile } from "@/db/dexie/types";
 import { formatFileSize } from "@/utils/format";
 import { useAntdNotification } from "./useAntdNotification";
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState";
@@ -17,16 +15,15 @@ import { useServerChatLoader } from "@/hooks/chat/useServerChatLoader";
 import { useClearChat } from "@/hooks/chat/useClearChat";
 import { useCompareMode } from "@/hooks/chat/useCompareMode";
 import { useChatActions } from "@/hooks/chat/useChatActions";
+import { useSelectedModel } from "@/hooks/chat/useSelectedModel";
+import { usePromptPersistence } from "@/hooks/chat/usePromptPersistence";
+import { useRagSettings } from "@/hooks/chat/useRagSettings";
+import { useFileUpload } from "@/hooks/chat/useFileUpload";
 import { useSelectedAssistant } from "@/hooks/useSelectedAssistant";
 import type { Character } from "@/types/character";
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter";
 import { useSetting } from "@/hooks/useSetting";
 import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings";
-import {
-  DEFAULT_RAG_SETTINGS,
-  toRagAdvancedOptions,
-  type RagSettings,
-} from "@/services/rag/unified-rag";
 import {
   DEFAULT_MESSAGE_STEERING_PROMPTS,
   MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
@@ -197,51 +194,8 @@ export const useMessageOption = (
   } = useCompareMode({ historyId, forceEnabled: opts.forceCompareEnabled });
 
   const currentChatModelSettings = useStoreChatModelSettings();
-  const selectedModelFromStore = useStoreMessageOption((s) => s.selectedModel);
-  const setSelectedModelInStore = useStoreMessageOption(
-    (s) => s.setSelectedModel,
-  );
-  const [
-    storedSelectedModel,
-    setStoredSelectedModel,
-    selectedModelStorageMeta,
-  ] = useStorage<string | null>("selectedModel", null);
-  const normalizeSelectedModel = React.useCallback(
-    (value: string | null | undefined) => {
-      if (typeof value !== "string") return null;
-      const trimmed = value.trim();
-      return trimmed.length > 0 ? trimmed : null;
-    },
-    [],
-  );
-  const selectedModel = React.useMemo(
-    () =>
-      normalizeSelectedModel(selectedModelFromStore) ??
-      normalizeSelectedModel(storedSelectedModel),
-    [normalizeSelectedModel, selectedModelFromStore, storedSelectedModel],
-  );
-  const setSelectedModel = React.useCallback(
-    (
-      nextOrUpdater:
-        | string
-        | null
-        | ((current: string | null) => string | null),
-    ) => {
-      const resolved =
-        typeof nextOrUpdater === "function"
-          ? nextOrUpdater(selectedModel)
-          : nextOrUpdater;
-      const normalized = normalizeSelectedModel(resolved);
-      setSelectedModelInStore(normalized);
-      void setStoredSelectedModel(normalized);
-    },
-    [
-      normalizeSelectedModel,
-      selectedModel,
-      setSelectedModelInStore,
-      setStoredSelectedModel,
-    ],
-  );
+  const { selectedModel, setSelectedModel, selectedModelIsLoading } =
+    useSelectedModel();
   const [selectedCharacter, setSelectedCharacter] =
     useSelectedCharacter<Character | null>(null);
   const [selectedAssistant, setSelectedAssistant] = useSelectedAssistant(null);
@@ -252,10 +206,6 @@ export const useMessageOption = (
   const [speechToTextLanguage, setSpeechToTextLanguage] = useStorage(
     "speechToTextLanguage",
     "en-US",
-  );
-  const [storedRagSettings] = useStorage<RagSettings>(
-    "ragSearchSettingsV2",
-    DEFAULT_RAG_SETTINGS,
   );
   const [messageSteeringPrompts] = useStorage<MessageSteeringPromptTemplates>(
     MESSAGE_STEERING_PROMPTS_STORAGE_KEY,
@@ -304,26 +254,6 @@ export const useMessageOption = (
   );
 
   React.useEffect(() => {
-    const normalizedStoreModel = normalizeSelectedModel(selectedModelFromStore);
-    const normalizedStoredModel = normalizeSelectedModel(storedSelectedModel);
-
-    if (!normalizedStoreModel && normalizedStoredModel) {
-      setSelectedModelInStore(normalizedStoredModel);
-      return;
-    }
-
-    if (normalizedStoreModel !== normalizedStoredModel) {
-      void setStoredSelectedModel(normalizedStoreModel);
-    }
-  }, [
-    normalizeSelectedModel,
-    selectedModelFromStore,
-    setSelectedModelInStore,
-    setStoredSelectedModel,
-    storedSelectedModel,
-  ]);
-
-  React.useEffect(() => {
     const nextAssistantKey =
       selectedAssistant?.kind && selectedAssistant?.id
         ? `${selectedAssistant.kind}:${selectedAssistant.id}`
@@ -350,178 +280,37 @@ export const useMessageOption = (
     void ensureServerChatHistoryId(serverChatId, serverChatTitle || undefined);
   }, [ensureServerChatHistoryId, serverChatId, serverChatTitle, temporaryChat]);
 
-  // Persist prompt selections across views/contexts
-  const [storedSystemPrompt, setStoredSystemPrompt] = useStorage<string | null>(
-    "selectedSystemPrompt",
-    null,
-  );
-  const [storedQuickPrompt, setStoredQuickPrompt] = useStorage<string | null>(
-    "selectedQuickPrompt",
-    null,
-  );
-  const storedSystemPromptRef = React.useRef<string | null>(storedSystemPrompt);
-  const storedQuickPromptRef = React.useRef<string | null>(storedQuickPrompt);
+  usePromptPersistence({
+    selectedSystemPrompt,
+    setSelectedSystemPrompt,
+    selectedQuickPrompt,
+    setSelectedQuickPrompt,
+    logE2EDebug,
+  });
 
-  React.useEffect(() => {
-    if (storedSystemPrompt && storedSystemPrompt !== selectedSystemPrompt) {
-      logE2EDebug("syncSystem", {
-        storedSystemPrompt,
-        selectedSystemPrompt,
-      });
-      storedSystemPromptRef.current = storedSystemPrompt;
-      setSelectedSystemPrompt(storedSystemPrompt);
-    }
-  }, [selectedSystemPrompt, setSelectedSystemPrompt, storedSystemPrompt]);
-
-  React.useEffect(() => {
-    if (storedQuickPrompt && storedQuickPrompt !== selectedQuickPrompt) {
-      logE2EDebug("syncQuick", {
-        storedQuickPrompt,
-        selectedQuickPrompt,
-      });
-      storedQuickPromptRef.current = storedQuickPrompt;
-      setSelectedQuickPrompt(storedQuickPrompt);
-    }
-  }, [selectedQuickPrompt, setSelectedQuickPrompt, storedQuickPrompt]);
-
-  React.useEffect(() => {
-    const nextValue = selectedSystemPrompt ?? null;
-    if (nextValue === storedSystemPromptRef.current) {
-      return;
-    }
-    logE2EDebug("storeSystem", {
-      nextValue,
-      storedSystemPromptRef: storedSystemPromptRef.current,
-    });
-    storedSystemPromptRef.current = nextValue;
-    setStoredSystemPrompt(nextValue);
-  }, [selectedSystemPrompt, setStoredSystemPrompt]);
-
-  React.useEffect(() => {
-    const nextValue = selectedQuickPrompt ?? null;
-    if (nextValue === storedQuickPromptRef.current) {
-      return;
-    }
-    logE2EDebug("storeQuick", {
-      nextValue,
-      storedQuickPromptRef: storedQuickPromptRef.current,
-    });
-    storedQuickPromptRef.current = nextValue;
-    setStoredQuickPrompt(nextValue);
-  }, [selectedQuickPrompt, setStoredQuickPrompt]);
-
-  const lastHydratedRagDefaultsRef = React.useRef<string | null>(null);
-  React.useEffect(() => {
-    if (historyId || serverChatId || messages.length > 0) {
-      lastHydratedRagDefaultsRef.current = null;
-      return;
-    }
-
-    const normalizedSettings = {
-      ...DEFAULT_RAG_SETTINGS,
-      ...(storedRagSettings || {}),
-    };
-    const serialized = JSON.stringify(normalizedSettings);
-    if (serialized === lastHydratedRagDefaultsRef.current) {
-      return;
-    }
-    lastHydratedRagDefaultsRef.current = serialized;
-
-    const searchMode =
-      normalizedSettings.search_mode === "fts" ||
-      normalizedSettings.search_mode === "vector" ||
-      normalizedSettings.search_mode === "hybrid"
-        ? normalizedSettings.search_mode
-        : DEFAULT_RAG_SETTINGS.search_mode;
-    const topKValue =
-      typeof normalizedSettings.top_k === "number" &&
-      Number.isFinite(normalizedSettings.top_k)
-        ? normalizedSettings.top_k
-        : DEFAULT_RAG_SETTINGS.top_k;
-    const sourcesValue =
-      Array.isArray(normalizedSettings.sources) &&
-      normalizedSettings.sources.every((source) => typeof source === "string")
-        ? normalizedSettings.sources
-        : DEFAULT_RAG_SETTINGS.sources;
-
-    setRagSearchMode(searchMode);
-    setRagTopK(topKValue);
-    setRagEnableGeneration(Boolean(normalizedSettings.enable_generation));
-    setRagEnableCitations(Boolean(normalizedSettings.enable_citations));
-    setRagSources(sourcesValue);
-    setRagAdvancedOptions(toRagAdvancedOptions(normalizedSettings));
-  }, [
+  useRagSettings({
     historyId,
-    messages.length,
     serverChatId,
-    setRagAdvancedOptions,
-    setRagEnableCitations,
-    setRagEnableGeneration,
+    messagesLength: messages.length,
     setRagSearchMode,
-    setRagSources,
     setRagTopK,
-    storedRagSettings,
-  ]);
+    setRagEnableGeneration,
+    setRagEnableCitations,
+    setRagSources,
+    setRagAdvancedOptions,
+  });
 
-  const handleFileUpload = async (file: File) => {
-    try {
-      const isImage = file.type.startsWith("image/");
-
-      if (isImage) {
-        return file;
-      }
-
-      if (file.size > maxContextFileSizeBytes) {
-        notification.error({
-          message: t("upload.fileTooLargeTitle", "File Too Large"),
-          description: t("upload.fileTooLargeDescription", {
-            defaultValue: "File size must be less than {{size}}",
-            size: maxContextFileSizeLabel,
-          }),
-        });
-        return;
-      }
-
-      const fileId = generateID();
-
-      const { processFileUpload } = await import("~/utils/file-processor");
-      const source = await processFileUpload(file);
-
-      const uploadedFile: UploadedFile = {
-        id: fileId,
-        filename: file.name,
-        type: file.type,
-        content: source.content,
-        size: file.size,
-        uploadedAt: Date.now(),
-        processed: false,
-      };
-
-      setUploadedFiles([...uploadedFiles, uploadedFile]);
-      setContextFiles([...contextFiles, uploadedFile]);
-
-      return file;
-    } catch (error) {
-      console.error("Error uploading file:", error);
-      notification.error({
-        message: t("upload.uploadFailedTitle", "Upload Failed"),
-        description: t(
-          "upload.uploadFailedDescription",
-          "Failed to upload file. Please try again.",
-        ),
-      });
-      throw error;
-    }
-  };
-
-  const removeUploadedFile = async (fileId: string) => {
-    setUploadedFiles(uploadedFiles.filter((f) => f.id !== fileId));
-    setContextFiles(contextFiles.filter((f) => f.id !== fileId));
-  };
-
-  const clearUploadedFiles = () => {
-    setUploadedFiles([]);
-  };
+  const { handleFileUpload, removeUploadedFile, clearUploadedFiles } =
+    useFileUpload({
+      maxContextFileSizeBytes,
+      maxContextFileSizeLabel,
+      notification,
+      t,
+      uploadedFiles,
+      setUploadedFiles,
+      contextFiles,
+      setContextFiles,
+    });
 
   const handleSetFileRetrievalEnabled = async (enabled: boolean) => {
     setFileRetrievalEnabled(enabled);
@@ -649,7 +438,7 @@ export const useMessageOption = (
     stopStreamingRequest,
     clearChat,
     selectedModel,
-    selectedModelIsLoading: selectedModelStorageMeta.isLoading,
+    selectedModelIsLoading,
     setSelectedModel,
     chatMode,
     setChatMode,

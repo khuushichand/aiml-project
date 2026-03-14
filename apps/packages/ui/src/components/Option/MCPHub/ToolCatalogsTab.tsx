@@ -7,7 +7,7 @@ import {
   type McpHubToolRegistryModule
 } from "@/services/tldw/mcp-hub"
 
-import { getToolEntriesByModule } from "./policyHelpers"
+import { getPathScopeLabel, getToolEntriesByModule } from "./policyHelpers"
 
 export const ToolCatalogsTab = () => {
   const [entries, setEntries] = useState<McpHubToolRegistryEntry[]>([])
@@ -94,6 +94,12 @@ export const ToolCatalogsTab = () => {
                       {tool.mutates_state ? <Tag color="volcano">mutates</Tag> : null}
                       {tool.uses_network ? <Tag color="purple">network</Tag> : null}
                       {tool.uses_processes ? <Tag color="magenta">process</Tag> : null}
+                      {tool.uses_filesystem && tool.path_boundable ? (
+                        <Tag color="cyan">path-enforceable</Tag>
+                      ) : null}
+                      {tool.uses_filesystem && !tool.path_boundable ? (
+                        <Tag color="orange">approval fallback</Tag>
+                      ) : null}
                     </Space>
                     <Typography.Text type="secondary">
                       {tool.description || "No description"}
@@ -102,7 +108,18 @@ export const ToolCatalogsTab = () => {
                       {tool.capabilities.map((capability) => (
                         <Tag key={`${tool.tool_name}-${capability}`}>{capability}</Tag>
                       ))}
+                      {tool.path_boundable && tool.path_argument_hints.length > 0 ? (
+                        <Tag color="cyan">{`hints:${tool.path_argument_hints.join(", ")}`}</Tag>
+                      ) : null}
                     </Space>
+                    {tool.uses_filesystem && !tool.path_boundable ? (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message={`Path-scoped profiles fall back to approval for ${tool.display_name}.`}
+                        description={`This tool touches local files but is not yet marked as ${getPathScopeLabel("workspace_root")?.toLowerCase()} enforceable.`}
+                      />
+                    ) : null}
                     {tool.metadata_warnings.length > 0 ? (
                       <Alert type="warning" showIcon message={tool.metadata_warnings.join(" ")} />
                     ) : null}

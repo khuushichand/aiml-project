@@ -25,12 +25,13 @@ describe("ToolCatalogsTab", () => {
           risk_class: "low",
           capabilities: ["filesystem.read"],
           mutates_state: false,
-          uses_filesystem: false,
+          uses_filesystem: true,
           uses_processes: false,
           uses_network: false,
           uses_credentials: false,
           supports_arguments_preview: true,
-          path_boundable: false,
+          path_boundable: true,
+          path_argument_hints: ["path"],
           metadata_source: "explicit",
           metadata_warnings: []
         }
@@ -53,5 +54,7 @@ describe("ToolCatalogsTab", () => {
     expect(await screen.findByText("notes")).toBeTruthy()
     expect(screen.getByText("notes.search")).toBeTruthy()
     expect(screen.getByText("filesystem.read")).toBeTruthy()
+    expect(screen.getByText("path-enforceable")).toBeTruthy()
+    expect(screen.getByText("hints:path")).toBeTruthy()
   })
 })

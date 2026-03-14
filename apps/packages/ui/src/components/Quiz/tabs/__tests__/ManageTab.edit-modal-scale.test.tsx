@@ -160,7 +160,7 @@ describe("ManageTab edit modal scale", () => {
     const editModal = modalTitle.closest(".ant-modal") ?? document.querySelector(".ant-modal")
     expect(editModal).not.toBeNull()
     if (!editModal) return
-    const modalQueries = within(editModal)
+    const modalQueries = within(editModal as HTMLElement)
 
     expect(modalQueries.getByTestId("manage-questions-scroll-container")).toBeInTheDocument()
     expect(modalQueries.queryByText(/items\/page/i)).not.toBeInTheDocument()

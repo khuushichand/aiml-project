@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   connect: vi.fn(),
   tldwRequest: vi.fn(),
-  storageGet: vi.fn(async () => null),
+  storageGet: vi.fn(async (_key?: string) => null),
   storageSet: vi.fn(async () => undefined)
 }))
 
@@ -548,7 +548,8 @@ describe("background proxy fallback safety", () => {
     const { bgStream } = await importProxy()
     const consume = async () => {
       for await (const _chunk of bgStream({
-        path: "https://evil.example.net/api/v1/chat/completions",
+        path:
+          "https://evil.example.net/api/v1/chat/completions" as unknown as `/${string}`,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: { stream: true, messages: [] }
@@ -593,7 +594,8 @@ describe("background proxy fallback safety", () => {
 
     try {
       for await (const chunk of bgStream({
-        path: "https://api.example.com/api/v1/chat/completions",
+        path:
+          "https://api.example.com/api/v1/chat/completions" as unknown as `/${string}`,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: { stream: true, messages: [] }
@@ -604,7 +606,8 @@ describe("background proxy fallback safety", () => {
       vi.unstubAllGlobals()
     }
 
-    const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined
+    const fetchCalls = fetchSpy.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit?]>
+    const requestInit = fetchCalls[0]?.[1]
     const requestHeaders = (requestInit?.headers || {}) as Record<string, string>
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(requestHeaders["X-API-KEY"]).toBe("test-key-not-placeholder")
@@ -643,7 +646,8 @@ describe("background proxy fallback safety", () => {
     const { bgStream } = await importProxy()
     const consume = async () => {
       for await (const _chunk of bgStream({
-        path: "https://other.example.com/api/v1/chat/completions",
+        path:
+          "https://other.example.com/api/v1/chat/completions" as unknown as `/${string}`,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: { stream: true, messages: [] }

@@ -70,7 +70,14 @@ export const AgentRegistryPage: React.FC = () => {
     setError(null)
     try {
       const response = await restClient.getAvailableAgents()
-      setAgents(response.agents ?? [])
+      setAgents(
+        (response.agents ?? []).map((agent) => ({
+          type: agent.type,
+          name: agent.name,
+          description: agent.description,
+          status: agent.is_configured ? "available" : "requires_setup"
+        }))
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load agents")
     } finally {

@@ -58,7 +58,7 @@ interface BoardViewProps {
   onArchive?: () => void
   onQuickSetup?: () => void
   /** Expose triggers so the parent can start add-card / add-list from keyboard shortcuts */
-  shortcutHandlersRef?: React.RefObject<{
+  shortcutHandlersRef?: React.MutableRefObject<{
     startAddCard: () => void
     startAddList: () => void
   } | null>
@@ -140,44 +140,46 @@ export const BoardView = ({
       undoRef.current = action
       message.open({
         type: "success",
-        content: `"${action.label}" archived`,
-        duration: 10,
-        btn: (
-          <Button
-            type="link"
-            size="small"
-            onClick={() => {
-              const a = undoRef.current
-              if (!a) return
-              undoRef.current = null
-              if (a.type === "archive-card") {
-                unarchiveCard(a.entityId)
-                  .then(() => {
-                    queryClient.invalidateQueries({
-                      queryKey: ["kanban-board", board.id]
+        content: (
+          <div className="flex items-center gap-2">
+            <span>{`"${action.label}" archived`}</span>
+            <Button
+              type="link"
+              size="small"
+              onClick={() => {
+                const a = undoRef.current
+                if (!a) return
+                undoRef.current = null
+                if (a.type === "archive-card") {
+                  unarchiveCard(a.entityId)
+                    .then(() => {
+                      queryClient.invalidateQueries({
+                        queryKey: ["kanban-board", board.id]
+                      })
+                      message.success("Card restored")
                     })
-                    message.success("Card restored")
-                  })
-                  .catch(() => {
-                    message.error("Failed to restore card. Please try again.")
-                  })
-              } else if (a.type === "archive-list") {
-                unarchiveList(a.entityId)
-                  .then(() => {
-                    queryClient.invalidateQueries({
-                      queryKey: ["kanban-board", board.id]
+                    .catch(() => {
+                      message.error("Failed to restore card. Please try again.")
                     })
-                    message.success("List restored")
-                  })
-                  .catch(() => {
-                    message.error("Failed to restore list. Please try again.")
-                  })
-              }
-            }}
-          >
-            Undo
-          </Button>
-        )
+                } else if (a.type === "archive-list") {
+                  unarchiveList(a.entityId)
+                    .then(() => {
+                      queryClient.invalidateQueries({
+                        queryKey: ["kanban-board", board.id]
+                      })
+                      message.success("List restored")
+                    })
+                    .catch(() => {
+                      message.error("Failed to restore list. Please try again.")
+                    })
+                }
+              }}
+            >
+              Undo
+            </Button>
+          </div>
+        ),
+        duration: 10
       })
     },
     [board.id, queryClient]

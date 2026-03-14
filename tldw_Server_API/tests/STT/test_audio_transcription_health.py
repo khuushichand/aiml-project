@@ -99,3 +99,30 @@ def test_transcriptions_health_exposes_usable_for_non_whisper(monkeypatch, clien
     assert data.get("provider") == "parakeet"
     assert data.get("available") is False
     assert data.get("usable") is True
+
+
+@pytest.mark.unit
+def test_transcriptions_health_treats_on_demand_whisper_as_usable(monkeypatch, client: TestClient):
+    """Whisper models pending first-use download should still be reported as request-usable."""
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+
+    def fake_status(_model_name: str):
+        return {
+            "available": False,
+            "usable": True,
+            "provider": "whisper",
+            "model": "large-v3",
+            "on_demand": True,
+            "message": "Model large-v3 will download on first use.",
+        }
+
+    monkeypatch.setattr(audio_files, "check_transcription_model_status", fake_status)
+
+    r = client.get("/api/v1/audio/transcriptions/health", params={"model": "whisper-large-v3"})
+    assert r.status_code == 200
+    data = r.json()
+
+    assert data.get("provider") == "whisper"
+    assert data.get("available") is False
+    assert data.get("usable") is True
+    assert data.get("on_demand") is True

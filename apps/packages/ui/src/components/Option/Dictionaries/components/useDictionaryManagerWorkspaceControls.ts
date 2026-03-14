@@ -20,7 +20,7 @@ type UseDictionaryManagerWorkspaceControlsParams = {
     cancelText: string
   }) => Promise<boolean>
   t: (key: string, fallbackOrOptions?: any) => string
-  dictionariesById: Record<number, any>
+  dictionariesById: Map<number, any>
   duplicateDictionary: (record: any) => Promise<void>
   setStatsFor: React.Dispatch<React.SetStateAction<any | null>>
   setVersionHistoryFor: React.Dispatch<React.SetStateAction<any | null>>

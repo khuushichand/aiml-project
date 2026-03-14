@@ -287,8 +287,8 @@ def check_transcription_model_status(model_name: str) -> dict[str, Any]:
             "on_demand": False,
         }
 
-    # Whisper model readiness is local-cache based because the faster-whisper
-    # transcription route explicitly preflights and rejects unavailable models.
+    # Whisper model readiness is local-cache based, but uncached models remain
+    # usable because faster-whisper can download them lazily on first use.
     whisper_model_name = (parsed_model or requested_model or "").strip()
     try:
         whisper_model_name = validate_whisper_model_identifier(whisper_model_name)
@@ -314,7 +314,7 @@ def check_transcription_model_status(model_name: str) -> dict[str, Any]:
     else:
         return {
             'available': False,
-            'usable': False,
+            'usable': True,
             'message': (
                 f'Model {whisper_model_name} is not available locally and will be downloaded on first use. '
                 'This may take several minutes depending on model size and internet connection.'

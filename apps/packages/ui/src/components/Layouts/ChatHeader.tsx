@@ -46,6 +46,9 @@ type ChatHeaderProps = {
   commandKeyLabel: string
 }
 
+const toText = (value: unknown): string =>
+  typeof value === "string" ? value : String(value)
+
 export function ChatHeader({
   t,
   temporaryChat,
@@ -82,17 +85,17 @@ export function ChatHeader({
       : (logoImage as { src?: string })?.src ?? ""
   const showSidebarToggle = Boolean(onToggleSidebar)
   const sidebarLabel = sidebarCollapsed
-    ? t("common:chatSidebar.expand", "Expand sidebar")
-    : t("common:chatSidebar.collapse", "Collapse sidebar")
+    ? toText(t("common:chatSidebar.expand", "Expand sidebar"))
+    : toText(t("common:chatSidebar.collapse", "Collapse sidebar"))
   const shortcutsToggleLabel = shortcutsExpanded
-    ? t("option:header.hideShortcuts", "Hide shortcuts")
-    : t("option:header.showShortcuts", "Show shortcuts")
+    ? toText(t("option:header.hideShortcuts", "Hide shortcuts"))
+    : toText(t("option:header.showShortcuts", "Show shortcuts"))
   const canEditTitle =
     showChatTitle && !temporaryChat && historyId && historyId !== "temp"
   const isDarkTheme = themeMode !== "light"
   const themeToggleLabel = isDarkTheme
-    ? t("common:theme.switchToLight", "Switch to light theme")
-    : t("common:theme.switchToDark", "Switch to dark theme")
+    ? toText(t("common:theme.switchToLight", "Switch to light theme"))
+    : toText(t("common:theme.switchToDark", "Switch to dark theme"))
   const startSavedChat =
     onStartSavedChat ?? onClearChat
   const startTemporaryChat =
@@ -100,10 +103,12 @@ export function ChatHeader({
   const startCharacterChat =
     onStartCharacterChat ?? onClearChat
   const shareButtonLabel = shareStatusLabel
-    ? t("playground:header.shareStatusAria", "Share conversation ({{status}})", {
-        status: shareStatusLabel
-      } as any)
-    : t("playground:header.shareConversation", "Share conversation")
+    ? toText(
+        t("playground:header.shareStatusAria", "Share conversation ({{status}})", {
+          status: shareStatusLabel
+        } as any)
+      )
+    : toText(t("playground:header.shareConversation", "Share conversation"))
   const focusRingClasses =
     "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
@@ -120,10 +125,10 @@ export function ChatHeader({
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                aria-label={sidebarLabel as string}
+                aria-label={sidebarLabel}
                 data-testid="chat-header-sidebar-toggle"
                 className={`rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
-                title={sidebarLabel as string}
+                title={sidebarLabel}
               >
                 <Menu className="size-4" aria-hidden="true" />
               </button>
@@ -132,20 +137,20 @@ export function ChatHeader({
           <div className="flex items-center gap-2 text-text">
             <img
               src={logoSrc}
-              alt={t("common:pageAssist", "tldw Assistant")}
+              alt={toText(t("common:pageAssist", "tldw Assistant"))}
               className="h-5 w-auto"
             />
             <span className="text-sm font-medium">
-              {t("common:pageAssist", "tldw Assistant")}
+              {toText(t("common:pageAssist", "tldw Assistant"))}
             </span>
             <Tooltip title={shortcutsToggleLabel}>
               <button
                 type="button"
                 onClick={() => onToggleShortcuts(!shortcutsExpanded)}
-                aria-label={shortcutsToggleLabel as string}
+                aria-label={shortcutsToggleLabel}
                 aria-expanded={shortcutsExpanded}
                 className={`inline-flex items-center justify-center rounded-md p-1.5 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
-                title={shortcutsToggleLabel as string}
+                title={shortcutsToggleLabel}
                 data-testid="chat-toggle-shortcuts"
               >
                 <Signpost className="size-4" aria-hidden="true" />
@@ -189,31 +194,37 @@ export function ChatHeader({
                 }`}
                 title={
                   temporaryChat
-                    ? (t(
-                        "playground:header.modeTemporaryHelp",
-                        "Temporary chat. Messages are not saved."
-                      ) as string)
-                    : (t(
-                        "playground:header.modeSavedHelp",
-                        "Saved chat. History is persisted."
-                      ) as string)
+                    ? toText(
+                        t(
+                          "playground:header.modeTemporaryHelp",
+                          "Temporary chat. Messages are not saved."
+                        )
+                      )
+                    : toText(
+                        t(
+                          "playground:header.modeSavedHelp",
+                          "Saved chat. History is persisted."
+                        )
+                      )
                 }
               >
                 {temporaryChat
-                  ? t("playground:header.modeTemporary", "Temporary")
-                  : t("playground:header.modeSaved", "Saved")}
+                  ? toText(t("playground:header.modeTemporary", "Temporary"))
+                  : toText(t("playground:header.modeSaved", "Saved"))}
               </span>
               {activeCharacterName ? (
                 <span
                   className="inline-flex max-w-[180px] items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primaryStrong"
-                  title={t(
-                    "playground:header.modeCharacterHelp",
-                    "Character mode is active."
-                  ) as string}
+                  title={toText(
+                    t(
+                      "playground:header.modeCharacterHelp",
+                      "Character mode is active."
+                    )
+                  )}
                 >
                   <UserCircle2 className="size-3" aria-hidden="true" />
                   <span className="truncate">
-                    {t("playground:header.modeCharacter", "Character")}:{" "}
+                    {toText(t("playground:header.modeCharacter", "Character"))}:{" "}
                     {activeCharacterName}
                   </span>
                 </span>
@@ -221,7 +232,7 @@ export function ChatHeader({
               {shareStatusLabel ? (
                 <span
                   className="inline-flex max-w-[220px] items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primaryStrong"
-                  title={shareButtonLabel as string}
+                  title={shareButtonLabel}
                   data-testid="chat-header-share-status"
                 >
                   <Share2 className="size-3" aria-hidden="true" />
@@ -236,10 +247,10 @@ export function ChatHeader({
             type="button"
             onClick={onOpenCommandPalette}
             className={`hidden items-center gap-2 rounded-md px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text sm:inline-flex ${focusRingClasses}`}
-            title={t("common:search", "Search")}
+            title={toText(t("common:search", "Search"))}
           >
             <Search className="size-4" aria-hidden="true" />
-            <span>{t("common:search", "Search")}</span>
+            <span>{toText(t("common:search", "Search"))}</span>
             <span className="rounded border border-border px-1.5 py-0.5 text-xs text-text-subtle">
               {commandKeyLabel}K
             </span>
@@ -261,7 +272,7 @@ export function ChatHeader({
               type="button"
               onClick={startTemporaryChat}
               aria-label={t("playground:header.newTemporaryChat", "Temporary chat (not saved)") as string}
-              className={`inline-flex items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
+              className={`hidden items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text sm:inline-flex ${focusRingClasses}`}
               title={t("playground:header.newTemporaryChat", "Temporary chat (not saved)")}
             >
               {t("playground:header.temporaryShort", "Temp")}
@@ -272,7 +283,7 @@ export function ChatHeader({
               type="button"
               onClick={startCharacterChat}
               aria-label={t("playground:header.newCharacterChat", "Character chat") as string}
-              className={`inline-flex items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
+              className={`hidden items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text sm:inline-flex ${focusRingClasses}`}
               title={t("playground:header.newCharacterChat", "Character chat")}
             >
               {t("playground:header.characterShort", "Character")}
@@ -284,9 +295,9 @@ export function ChatHeader({
                 type="button"
                 onClick={onOpenShareModal}
                 disabled={shareButtonDisabled}
-                aria-label={shareButtonLabel as string}
+                aria-label={shareButtonLabel}
                 className={`inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text disabled:cursor-not-allowed disabled:opacity-60 ${focusRingClasses}`}
-                title={shareButtonLabel as string}
+                title={shareButtonLabel}
                 data-testid="chat-header-share-button"
               >
                 <Share2 className="size-4" aria-hidden="true" />
@@ -309,9 +320,9 @@ export function ChatHeader({
               <button
                 type="button"
                 onClick={onToggleTheme}
-                aria-label={themeToggleLabel as string}
+                aria-label={themeToggleLabel}
                 className={`inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
-                title={themeToggleLabel as string}
+                title={themeToggleLabel}
                 data-testid="chat-header-theme-toggle"
               >
                 {isDarkTheme ? (

@@ -1,17 +1,18 @@
 import React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import {
-  act,
-  fireEvent,
-  render as rtlRender,
-  screen,
-  waitFor,
-  within
-} from "@testing-library/react"
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react"
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
   isOnline: true,
+  uxState: "connected_ok" as
+    | "connected_ok"
+    | "configuring_url"
+    | "configuring_auth"
+    | "error_auth"
+    | "error_unreachable"
+    | "unconfigured",
+  hasCompletedFirstRun: true,
   capabilitiesState: {
     capabilities: { hasPersona: true, hasPersonalization: true },
     loading: false
@@ -43,6 +44,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => mocks.isOnline
+}))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => ({
+    uxState: mocks.uxState,
+    hasCompletedFirstRun: mocks.hasCompletedFirstRun
+  })
 }))
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
@@ -94,57 +102,7 @@ vi.mock("@/services/companion", () => ({
   fetchCompanionConversationPrompts: (...args: unknown[]) =>
     (mocks.fetchCompanionConversationPrompts as (...args: unknown[]) => unknown)(
       ...args
-  )
-}))
-
-vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
-  PERSONA_TURN_DETECTION_BALANCED_DEFAULTS: {
-    autoCommitEnabled: true,
-    vadThreshold: 0.5,
-    minSilenceMs: 250,
-    turnStopSecs: 0.2,
-    minUtteranceSecs: 0.4
-  },
-  useResolvedPersonaVoiceDefaults: (voiceDefaults?: Record<string, unknown> | null) => ({
-    sttLanguage: String(voiceDefaults?.stt_language || "en-US"),
-    sttModel: String(voiceDefaults?.stt_model || "whisper-1"),
-    ttsProvider: String(voiceDefaults?.tts_provider || "tldw"),
-    ttsVoice: String(voiceDefaults?.tts_voice || "af_heart"),
-    confirmationMode: String(
-      voiceDefaults?.confirmation_mode || "destructive_only"
-    ) as "always" | "destructive_only" | "never",
-    voiceChatTriggerPhrases:
-      Array.isArray(voiceDefaults?.voice_chat_trigger_phrases) &&
-      voiceDefaults.voice_chat_trigger_phrases.length > 0
-        ? (voiceDefaults.voice_chat_trigger_phrases as string[])
-        : ["hey helper"],
-    autoResume:
-      typeof voiceDefaults?.auto_resume === "boolean"
-        ? voiceDefaults.auto_resume
-        : true,
-    bargeIn:
-      typeof voiceDefaults?.barge_in === "boolean" ? voiceDefaults.barge_in : false,
-    autoCommitEnabled:
-      typeof voiceDefaults?.auto_commit_enabled === "boolean"
-        ? voiceDefaults.auto_commit_enabled
-        : true,
-    vadThreshold:
-      typeof voiceDefaults?.vad_threshold === "number"
-        ? voiceDefaults.vad_threshold
-        : 0.5,
-    minSilenceMs:
-      typeof voiceDefaults?.min_silence_ms === "number"
-        ? voiceDefaults.min_silence_ms
-        : 250,
-    turnStopSecs:
-      typeof voiceDefaults?.turn_stop_secs === "number"
-        ? voiceDefaults.turn_stop_secs
-        : 0.2,
-    minUtteranceSecs:
-      typeof voiceDefaults?.min_utterance_secs === "number"
-        ? voiceDefaults.min_utterance_secs
-        : 0.4
-  })
+    )
 }))
 
 vi.mock("@/components/Common/FeatureEmptyState", () => ({
@@ -233,6 +191,20 @@ vi.mock("antd", async () => {
 
 import SidepanelPersona from "../sidepanel-persona"
 
+const render = (ui: React.ReactNode) => {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false
+      }
+    }
+  })
+
+  return rtlRender(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+  )
+}
+
 class MockWebSocket {
   static instances: MockWebSocket[] = []
 
@@ -265,224 +237,6 @@ class MockWebSocket {
 const getSentPayloads = (ws: MockWebSocket) =>
   ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)))
 
-type MockPersonaVoiceDefaults = {
-  stt_language?: string
-  stt_model?: string
-  tts_provider?: string
-  tts_voice?: string
-  confirmation_mode?: "always" | "destructive_only" | "never"
-  voice_chat_trigger_phrases?: string[]
-  auto_resume?: boolean
-  barge_in?: boolean
-  auto_commit_enabled?: boolean
-  vad_threshold?: number
-  min_silence_ms?: number
-  turn_stop_secs?: number
-  min_utterance_secs?: number
-}
-
-const buildMockPersonaVoiceDefaults = (
-  overrides: Partial<MockPersonaVoiceDefaults> = {}
-): MockPersonaVoiceDefaults => ({
-  stt_language: "en-US",
-  stt_model: "whisper-1",
-  tts_provider: "tldw",
-  tts_voice: "af_heart",
-  confirmation_mode: "destructive_only",
-  voice_chat_trigger_phrases: ["hey helper"],
-  auto_resume: true,
-  barge_in: false,
-  ...overrides
-})
-
-const buildMockPersonaVoiceAnalytics = (personaId = "research_assistant") => ({
-  persona_id: personaId,
-  summary: {
-    total_events: 4,
-    direct_command_count: 3,
-    planner_fallback_count: 1,
-    success_rate: 75,
-    fallback_rate: 25,
-    avg_response_time_ms: 420
-  },
-  live_voice: {
-    total_committed_turns: 3,
-    vad_auto_commit_count: 2,
-    manual_commit_count: 1,
-    vad_auto_rate: 67,
-    manual_commit_rate: 33,
-    degraded_session_count: 0
-  },
-  commands: [],
-  fallbacks: {
-    total_invocations: 1,
-    success_count: 1,
-    error_count: 0,
-    avg_response_time_ms: 350,
-    last_used: "2026-03-13T18:00:00Z"
-  },
-  recent_live_sessions: [
-    {
-      session_id: "sess-analytics-1",
-      started_at: "2026-03-13T17:55:00Z",
-      ended_at: "2026-03-13T18:00:00Z",
-      auto_commit_enabled: true,
-      vad_threshold: 0.5,
-      min_silence_ms: 250,
-      turn_stop_secs: 0.2,
-      min_utterance_secs: 0.4,
-      turn_detection_changed_during_session: false,
-      total_committed_turns: 3,
-      vad_auto_commit_count: 2,
-      manual_commit_count: 1,
-      manual_mode_required_count: 0,
-      text_only_tts_count: 0,
-      listening_recovery_count: 0,
-      thinking_recovery_count: 0
-    }
-  ]
-})
-
-const mockPersonaLiveVoiceFetches = ({
-  sessionId,
-  voiceDefaults,
-  patchHandler
-}: {
-  sessionId: string
-  voiceDefaults: MockPersonaVoiceDefaults
-  patchHandler?: (body: { voice_defaults?: MockPersonaVoiceDefaults }) => MockPersonaVoiceDefaults
-}) => {
-  mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-    const method = String(init?.method || "GET").toUpperCase()
-    if (path.includes("/persona/catalog")) {
-      return Promise.resolve({
-        ok: true,
-        json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-      })
-    }
-    if (path.includes("/persona/profiles/research_assistant/state")) {
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          persona_id: "research_assistant",
-          soul_md: "persona soul",
-          identity_md: "persona identity",
-          heartbeat_md: "persona heartbeat"
-        })
-      })
-    }
-    if (path.includes("/persona/profiles/research_assistant")) {
-      if (method === "PATCH") {
-        const nextVoiceDefaults = patchHandler
-          ? patchHandler(init?.body || {})
-          : (init?.body?.voice_defaults as MockPersonaVoiceDefaults)
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: nextVoiceDefaults
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          id: "research_assistant",
-          use_persona_state_context_default: true,
-          voice_defaults: voiceDefaults
-        })
-      })
-    }
-    if (path.includes("/persona/sessions")) {
-      return Promise.resolve({
-        ok: true,
-        json: async () => []
-      })
-    }
-    if (path.includes("/persona/session")) {
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          session_id: sessionId,
-          persona: { id: "research_assistant" }
-        })
-      })
-    }
-    return Promise.resolve({
-      ok: false,
-      error: `unhandled path: ${path}`,
-      json: async () => ({})
-    })
-  })
-}
-
-type RuntimeApprovalOptions = {
-  sessionId: string
-  planId: string
-  stepIdx: number
-  tool: string
-  toolName?: string
-  args?: Record<string, unknown>
-  why?: string
-  contextKey?: string
-}
-
-const emitRuntimeApprovalRequired = (
-  ws: MockWebSocket,
-  {
-    sessionId,
-    planId,
-    stepIdx,
-    tool,
-    toolName = tool,
-    args = {},
-    why = "Need runtime approval",
-    contextKey
-  }: RuntimeApprovalOptions
-) => {
-  ws.emitMessage(
-    JSON.stringify({
-      event: "tool_result",
-      session_id: sessionId,
-      plan_id: planId,
-      step_idx: stepIdx,
-      step_type: "mcp_tool",
-      tool,
-      args,
-      why,
-      ok: false,
-      error: "Runtime approval required",
-      reason_code: "APPROVAL_REQUIRED",
-      approval: {
-        approval_policy_id: 17 + stepIdx,
-        mode: "ask_outside_profile",
-        tool_name: toolName,
-        context_key: contextKey || `ctx-${stepIdx}`,
-        conversation_id: sessionId,
-        scope_key: `tool:${toolName}`,
-        reason: "outside_profile",
-        duration_options: ["once"],
-        arguments_summary: args
-      }
-    })
-  )
-}
-
-const render = (ui: React.ReactElement) => {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false
-      }
-    }
-  })
-
-  return rtlRender(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
-  )
-}
-
 describe("SidepanelPersona", () => {
   const originalWebSocket = globalThis.WebSocket
   const originalResizeObserver = globalThis.ResizeObserver
@@ -512,6 +266,8 @@ describe("SidepanelPersona", () => {
     MockWebSocket.instances = []
     window.localStorage.clear()
     mocks.isOnline = true
+    mocks.uxState = "connected_ok"
+    mocks.hasCompletedFirstRun = true
     mocks.capabilitiesState.capabilities = {
       hasPersona: true,
       hasPersonalization: true
@@ -551,10 +307,6 @@ describe("SidepanelPersona", () => {
     })
   })
 
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
   it("shows connect empty state while offline and navigates to settings", () => {
     mocks.isOnline = false
     render(<SidepanelPersona />)
@@ -563,6 +315,50 @@ describe("SidepanelPersona", () => {
     expect(screen.getByText("Connect to use Persona")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
     expect(mocks.navigate).toHaveBeenCalledWith("/settings")
+  })
+
+  it("shows auth guidance instead of the generic offline copy when credentials are missing", () => {
+    mocks.isOnline = false
+    mocks.uxState = "error_auth"
+
+    render(<SidepanelPersona />)
+
+    expect(
+      screen.getByText("Add your credentials to use Persona")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("Connect to use Persona")
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(mocks.navigate).toHaveBeenCalledWith("/settings")
+  })
+
+  it("shows setup guidance when first-run onboarding is incomplete", () => {
+    mocks.isOnline = false
+    mocks.uxState = "unconfigured"
+    mocks.hasCompletedFirstRun = false
+
+    render(<SidepanelPersona />)
+
+    expect(
+      screen.getByText("Finish setup to use Persona")
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(mocks.navigate).toHaveBeenCalledWith("/settings")
+  })
+
+  it("shows an unreachable-server state instead of the generic offline copy", () => {
+    mocks.isOnline = false
+    mocks.uxState = "error_unreachable"
+
+    render(<SidepanelPersona />)
+
+    expect(
+      screen.getByText("Can't reach your tldw server right now")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("Connect to use Persona")
+    ).not.toBeInTheDocument()
   })
 
   it("shows unavailable state when persona capability is missing", () => {
@@ -580,12 +376,9 @@ describe("SidepanelPersona", () => {
     render(<SidepanelPersona />)
 
     expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
-    expect(screen.getByRole("tab", { name: "Commands" })).toBeInTheDocument()
-    expect(screen.getByRole("tab", { name: "Test Lab" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Live Session" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Profiles" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Voice & Examples" })).toBeInTheDocument()
-    expect(screen.getByRole("tab", { name: "Connections" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "State Docs" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Scopes" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Policies" })).toBeInTheDocument()
@@ -649,7 +442,7 @@ describe("SidepanelPersona", () => {
     )
 
     fireEvent.click(screen.getByRole("tab", { name: "Live Session" }))
-    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(mocks.fetchWithAuth).toHaveBeenCalled()
@@ -687,1069 +480,6 @@ describe("SidepanelPersona", () => {
     expect(
       screen.queryByTestId("persona-state-editor-toggle-button")
     ).not.toBeInTheDocument()
-  })
-
-  it("shows assistant setup overlay for incomplete persona setup and preserves the requested tab", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "garden-helper",
-            summary: { total_runs: 0, matched_runs: 0, fallback_runs: 0 }
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/garden-helper")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            setup: {
-              status: "in_progress",
-              version: 1,
-              current_step: "voice",
-              completed_steps: ["persona"],
-              completed_at: null,
-              last_test_type: null
-            },
-            version: 7
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: {
-          retry: false
-        }
-      }
-    })
-    const view = rtlRender(
-      <QueryClientProvider client={queryClient}>
-        <SidepanelPersona />
-      </QueryClientProvider>
-    )
-
-    await waitFor(() =>
-      expect(screen.getByTestId("assistant-setup-overlay")).toBeInTheDocument()
-    )
-
-    expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("voice")
-    expect(screen.getByTestId("assistant-setup-post-target")).toHaveTextContent("profiles")
-    expect(screen.getByTestId("assistant-setup-progress-step-persona")).toHaveAttribute(
-      "data-status",
-      "completed"
-    )
-    expect(screen.getByText("Persona selected")).toBeInTheDocument()
-    expect(screen.queryByText("Persona Profile")).not.toBeInTheDocument()
-
-    mocks.location.search = "?persona_id=garden-helper&tab=live"
-    view.rerender(
-      <QueryClientProvider client={queryClient}>
-        <SidepanelPersona />
-      </QueryClientProvider>
-    )
-    expect(screen.getByTestId("assistant-setup-post-target")).toHaveTextContent("profiles")
-  })
-
-  it("does not gate completed setup personas and keeps the requested tab active", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "garden-helper",
-            summary: { total_runs: 0, matched_runs: 0, fallback_runs: 0 }
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/garden-helper")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            setup: {
-              status: "completed",
-              version: 1,
-              current_step: "test",
-              completed_steps: ["persona", "voice", "commands", "safety", "test"],
-              completed_at: "2026-03-13T10:00:00Z",
-              last_test_type: "dry_run"
-            },
-            version: 8
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    render(<SidepanelPersona />)
-
-    await waitFor(() =>
-      expect(screen.getByText("Persona Profile")).toBeInTheDocument()
-    )
-
-    expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
-  })
-
-  it("reruns completed setup from the persona step with cleared completed_steps", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "garden-helper",
-            summary: { total_runs: 0, matched_runs: 0, fallback_runs: 0 }
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "GET").toUpperCase() === "GET"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            setup: {
-              status: "completed",
-              version: 1,
-              current_step: "test",
-              completed_steps: ["persona", "voice", "commands", "safety", "test"],
-              completed_at: "2026-03-13T10:00:00Z",
-              last_test_type: "dry_run"
-            },
-            version: 14
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "").toUpperCase() === "PATCH" &&
-        init?.body?.setup
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            setup: init.body.setup
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    render(<SidepanelPersona />)
-
-    await waitFor(() => expect(screen.getByText("Completed")).toBeInTheDocument())
-
-    fireEvent.click(screen.getByRole("button", { name: "Rerun setup" }))
-
-    await waitFor(() =>
-      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("persona")
-    )
-    expect(screen.getByTestId("assistant-setup-post-target")).toHaveTextContent("profiles")
-
-    const rerunPatchCall = mocks.fetchWithAuth.mock.calls.find(
-      ([calledPath, callInit]) =>
-        String(calledPath).includes("/persona/profiles/garden-helper") &&
-        String((callInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-          "PATCH"
-    )
-    expect(rerunPatchCall?.[0]).toContain("expected_version=14")
-    expect(rerunPatchCall?.[1]).toEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        body: expect.objectContaining({
-          setup: {
-            status: "in_progress",
-            version: 1,
-            current_step: "persona",
-            completed_steps: [],
-            completed_at: null,
-            last_test_type: null
-          }
-        })
-      })
-    )
-  })
-
-  it("advances setup from voice to commands after assistant defaults are saved", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=live"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "GET").toUpperCase() === "GET"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              stt_model: "whisper-1",
-              tts_provider: "tldw",
-              tts_voice: "af_heart",
-              confirmation_mode: "destructive_only",
-              voice_chat_trigger_phrases: ["hey helper"],
-              auto_resume: true,
-              barge_in: false,
-              auto_commit_enabled: true,
-              vad_threshold: 0.35,
-              min_silence_ms: 150,
-              turn_stop_secs: 0.1,
-              min_utterance_secs: 0.25
-            },
-            setup: {
-              status: "in_progress",
-              version: 1,
-              current_step: "voice",
-              completed_steps: ["persona"],
-              completed_at: null,
-              last_test_type: null
-            },
-            version: 11
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "").toUpperCase() === "PATCH" &&
-        init?.body?.voice_defaults
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            voice_defaults: init.body.voice_defaults,
-            setup: {
-              status: "in_progress",
-              version: 1,
-              current_step: "voice",
-              completed_steps: ["persona"],
-              completed_at: null,
-              last_test_type: null
-            }
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "").toUpperCase() === "PATCH" &&
-        init?.body?.setup
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            setup: init.body.setup
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    render(<SidepanelPersona />)
-
-    await waitFor(() =>
-      expect(screen.getByLabelText("STT language")).toHaveValue("en-US")
-    )
-
-    fireEvent.change(screen.getByLabelText("STT language"), {
-      target: { value: "fr-FR" }
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Save assistant defaults" }))
-
-    await waitFor(() =>
-      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("commands")
-    )
-
-    const setupPatchCall = mocks.fetchWithAuth.mock.calls.find(
-      ([calledPath, init]) =>
-        String(calledPath).includes("/persona/profiles/garden-helper") &&
-        String((init as { method?: string } | undefined)?.method || "").toUpperCase() ===
-          "PATCH" &&
-        Boolean((init as { body?: any } | undefined)?.body?.setup)
-    )
-    expect(setupPatchCall?.[1]).toEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        body: {
-          setup: {
-            status: "in_progress",
-            version: 1,
-            current_step: "commands",
-            completed_steps: ["persona", "voice"],
-            completed_at: null,
-            last_test_type: null
-          }
-        }
-      })
-    )
-    expect(setupPatchCall?.[0]).toContain("expected_version=11")
-  })
-
-  it("resets setup metadata without deleting existing persona resources", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=live"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "GET").toUpperCase() === "GET"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              confirmation_mode: "destructive_only"
-            },
-            setup: {
-              status: "in_progress",
-              version: 1,
-              current_step: "commands",
-              completed_steps: ["persona", "voice"],
-              completed_at: null,
-              last_test_type: null
-            },
-            version: 13
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "").toUpperCase() === "PATCH" &&
-        init?.body?.setup
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            voice_defaults: {
-              confirmation_mode: "destructive_only"
-            },
-            setup: init.body.setup
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    render(<SidepanelPersona />)
-
-    await waitFor(() =>
-      expect(screen.getByText("Starter commands")).toBeInTheDocument()
-    )
-
-    fireEvent.click(screen.getByRole("button", { name: "Reset setup" }))
-
-    await waitFor(() =>
-      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("persona")
-    )
-
-    const resetPatchCall = mocks.fetchWithAuth.mock.calls.find(
-      ([calledPath, callInit]) =>
-        String(calledPath).includes("/persona/profiles/garden-helper") &&
-        String((callInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-          "PATCH"
-    )
-    expect(resetPatchCall?.[0]).toContain("expected_version=13")
-    expect(resetPatchCall?.[1]).toEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        body: expect.objectContaining({
-          setup: {
-            status: "in_progress",
-            version: 1,
-            current_step: "persona",
-            completed_steps: [],
-            completed_at: null,
-            last_test_type: null
-          }
-        })
-      })
-    )
-    expect(
-      mocks.fetchWithAuth.mock.calls.some(
-        ([calledPath, callInit]) =>
-          String(calledPath).includes("/voice-commands") &&
-          String((callInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-            "DELETE"
-      )
-    ).toBe(false)
-    expect(
-      mocks.fetchWithAuth.mock.calls.some(
-        ([calledPath, callInit]) =>
-          String(calledPath).includes("/connections") &&
-          String((callInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-            "DELETE"
-      )
-    ).toBe(false)
-  })
-
-  it("creates a starter command from the setup step and advances to safety", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=live"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "GET").toUpperCase() === "GET"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            setup: {
-              status: "in_progress",
-              version: 1,
-              current_step: "commands",
-              completed_at: null,
-              last_test_type: null
-            }
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/garden-helper/voice-commands")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "cmd-search-notes"
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "").toUpperCase() === "PATCH" &&
-        init?.body?.setup
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            setup: init.body.setup
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    render(<SidepanelPersona />)
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Search Notes" })).toBeInTheDocument()
-    )
-
-    fireEvent.click(screen.getByRole("button", { name: "Search Notes" }))
-
-    await waitFor(() =>
-      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("safety")
-    )
-
-    const createCommandCall = mocks.fetchWithAuth.mock.calls.find(
-      ([calledPath]) =>
-        String(calledPath).includes("/persona/profiles/garden-helper/voice-commands")
-    )
-    expect(createCommandCall?.[1]).toEqual(
-      expect.objectContaining({
-        method: "POST",
-        body: expect.objectContaining({
-          name: "Search Notes",
-          action_type: "mcp_tool",
-          action_config: { tool_name: "notes.search" }
-        })
-      })
-    )
-  })
-
-  it("records an explicit safety choice without external connections and advances to test", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=live"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "GET").toUpperCase() === "GET"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              confirmation_mode: "destructive_only"
-            },
-            setup: {
-              status: "in_progress",
-              version: 1,
-              current_step: "safety",
-              completed_at: null,
-              last_test_type: null
-            }
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "").toUpperCase() === "PATCH" &&
-        init?.body?.voice_defaults
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            voice_defaults: init.body.voice_defaults,
-            setup: init.body.setup
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    render(<SidepanelPersona />)
-
-    await waitFor(() =>
-      expect(screen.getByText("Safety and connections")).toBeInTheDocument()
-    )
-
-    fireEvent.click(screen.getByRole("button", { name: "Ask for destructive actions" }))
-    fireEvent.click(screen.getByRole("button", { name: "No external connections for now" }))
-    fireEvent.click(screen.getByRole("button", { name: "Save safety choices" }))
-
-    await waitFor(() =>
-      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("test")
-    )
-
-    const safetyPatchCall = mocks.fetchWithAuth.mock.calls.find(
-      ([calledPath, init]) =>
-        String(calledPath).includes("/persona/profiles/garden-helper") &&
-        String((init as { method?: string } | undefined)?.method || "").toUpperCase() ===
-          "PATCH" &&
-        Boolean((init as { body?: any } | undefined)?.body?.voice_defaults)
-    )
-    expect(safetyPatchCall?.[1]).toEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        body: expect.objectContaining({
-          voice_defaults: expect.objectContaining({
-            confirmation_mode: "destructive_only"
-          }),
-          setup: {
-            status: "in_progress",
-            version: 1,
-            current_step: "test",
-            completed_steps: ["safety"],
-            completed_at: null,
-            last_test_type: null
-          }
-        })
-      })
-    )
-  })
-
-  it("creates an optional connection from the safety step and then advances to test", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=live"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "GET").toUpperCase() === "GET"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              confirmation_mode: "destructive_only"
-            },
-            setup: {
-              status: "in_progress",
-              version: 1,
-              current_step: "safety",
-              completed_at: null,
-              last_test_type: null
-            }
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/garden-helper/connections")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "conn-setup-1"
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "").toUpperCase() === "PATCH" &&
-        init?.body?.voice_defaults
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            voice_defaults: init.body.voice_defaults,
-            setup: init.body.setup
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    render(<SidepanelPersona />)
-
-    await waitFor(() =>
-      expect(screen.getByText("Safety and connections")).toBeInTheDocument()
-    )
-
-    fireEvent.click(screen.getByRole("button", { name: "Never ask" }))
-    fireEvent.click(screen.getByRole("button", { name: "Add one connection now" }))
-    fireEvent.change(screen.getByPlaceholderText("Connection name"), {
-      target: { value: "Slack Alerts" }
-    })
-    fireEvent.change(screen.getByPlaceholderText("Base URL"), {
-      target: { value: "https://hooks.example.com/incoming" }
-    })
-    fireEvent.change(screen.getByLabelText("Authentication"), {
-      target: { value: "bearer" }
-    })
-    fireEvent.change(screen.getByPlaceholderText("Secret (optional)"), {
-      target: { value: "token-123" }
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Save safety and connection" }))
-
-    await waitFor(() =>
-      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("test")
-    )
-
-    const connectionCall = mocks.fetchWithAuth.mock.calls.find(
-      ([calledPath]) =>
-        String(calledPath).includes("/persona/profiles/garden-helper/connections")
-    )
-    expect(connectionCall?.[1]).toEqual(
-      expect.objectContaining({
-        method: "POST",
-        body: expect.objectContaining({
-          name: "Slack Alerts",
-          base_url: "https://hooks.example.com/incoming",
-          auth_type: "bearer",
-          secret: "token-123"
-        })
-      })
-    )
-  })
-
-  it("completes setup from a successful dry-run test and restores the requested tab", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper/voice-commands/test") &&
-        String(init?.method || "").toUpperCase() === "POST"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            heard_text: init?.body?.heard_text || "",
-            matched: true,
-            command_name: "Search Notes",
-            fallback_to_persona_planner: false
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "GET").toUpperCase() === "GET"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              confirmation_mode: "destructive_only"
-            },
-            setup: {
-              status: "in_progress",
-              version: 1,
-              current_step: "test",
-              completed_at: null,
-              last_test_type: null
-            }
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "").toUpperCase() === "PATCH" &&
-        init?.body?.setup
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              confirmation_mode: "destructive_only"
-            },
-            setup: init.body.setup
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    render(<SidepanelPersona />)
-
-    await waitFor(() =>
-      expect(screen.getByText("Test and finish")).toBeInTheDocument()
-    )
-
-    fireEvent.change(screen.getByPlaceholderText("Try a spoken phrase"), {
-      target: { value: "search notes for embeddings" }
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Run dry-run test" }))
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Finish with dry-run test" })).toBeInTheDocument()
-    )
-
-    fireEvent.click(screen.getByRole("button", { name: "Finish with dry-run test" }))
-
-    await waitFor(() =>
-      expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
-    )
-    expect(screen.getByLabelText("STT language")).toHaveValue("en-US")
-    expect(screen.getByText("Assistant setup complete")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Adjust assistant defaults" })).toBeInTheDocument()
-
-    const completionPatchCall = mocks.fetchWithAuth.mock.calls.find(
-      ([calledPath, init]) =>
-        String(calledPath).includes("/persona/profiles/garden-helper") &&
-        String((init as { method?: string } | undefined)?.method || "").toUpperCase() ===
-          "PATCH" &&
-        (init as { body?: any } | undefined)?.body?.setup?.status === "completed"
-    )
-    expect(completionPatchCall?.[1]).toEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        body: expect.objectContaining({
-          setup: expect.objectContaining({
-            status: "completed",
-            last_test_type: "dry_run"
-          })
-        })
-      })
-    )
-  })
-
-  it("completes setup from a successful live session test and restores the requested tab", async () => {
-    mocks.location.search = "?persona_id=garden-helper&tab=live"
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: ""
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [
-            { id: "research_assistant", name: "Research Assistant" },
-            { id: "garden-helper", name: "Garden Helper" }
-          ]
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "GET").toUpperCase() === "GET"
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              confirmation_mode: "destructive_only"
-            },
-            setup: {
-              status: "in_progress",
-              version: 1,
-              current_step: "test",
-              completed_at: null,
-              last_test_type: null
-            }
-          })
-        })
-      }
-      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
-        return Promise.resolve({ ok: true, json: async () => [] })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-setup-live",
-            persona: { id: "garden-helper" }
-          })
-        })
-      }
-      if (
-        path.includes("/persona/profiles/garden-helper") &&
-        String(init?.method || "").toUpperCase() === "PATCH" &&
-        init?.body?.setup
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "garden-helper",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              confirmation_mode: "destructive_only"
-            },
-            setup: init.body.setup
-          })
-        })
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) })
-    })
-
-    render(<SidepanelPersona />)
-
-    await waitFor(() =>
-      expect(screen.getByText("Test and finish")).toBeInTheDocument()
-    )
-    expect(
-      screen.queryByText("Finish assistant setup from a live session")
-    ).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("button", { name: "Connect live session" }))
-    const ws = await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-      return MockWebSocket.instances[0]
-    })
-
-    act(() => {
-      ws.emitOpen()
-    })
-
-    await waitFor(() =>
-      expect(screen.getByPlaceholderText("Try a live message")).toBeInTheDocument()
-    )
-
-    fireEvent.change(screen.getByPlaceholderText("Try a live message"), {
-      target: { value: "summarize my setup" }
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Send live test" }))
-
-    act(() => {
-      ws.emitMessage(
-        JSON.stringify({
-          event: "assistant_delta",
-          text_delta: "Your assistant setup is ready."
-        })
-      )
-    })
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Finish with live session" })).toBeInTheDocument()
-    )
-
-    fireEvent.click(screen.getByRole("button", { name: "Finish with live session" }))
-
-    await waitFor(() =>
-      expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
-    )
-    expect(screen.getByRole("tab", { name: "Live Session" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    )
-    expect(
-      screen.queryByText("Finish assistant setup from a live session")
-    ).not.toBeInTheDocument()
-
-    const completionPatchCall = mocks.fetchWithAuth.mock.calls.find(
-      ([calledPath, init]) =>
-        String(calledPath).includes("/persona/profiles/garden-helper") &&
-        String((init as { method?: string } | undefined)?.method || "").toUpperCase() ===
-          "PATCH" &&
-        (init as { body?: any } | undefined)?.body?.setup?.status === "completed"
-    )
-    expect(completionPatchCall?.[1]).toEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        body: expect.objectContaining({
-          setup: expect.objectContaining({
-            status: "completed",
-            last_test_type: "live_session"
-          })
-        })
-      })
-    )
   })
 
   it("records the current draft as a companion check-in", async () => {
@@ -1915,7 +645,7 @@ describe("SidepanelPersona", () => {
 
     render(<SidepanelPersona mode="companion" />)
 
-    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
     })
@@ -2020,7 +750,7 @@ describe("SidepanelPersona", () => {
 
     render(<SidepanelPersona />)
 
-    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(mocks.fetchWithAuth).toHaveBeenCalled()
@@ -2178,7 +908,7 @@ describe("SidepanelPersona", () => {
 
     render(<SidepanelPersona />)
 
-    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
@@ -2488,13 +1218,13 @@ describe("SidepanelPersona", () => {
     })
   })
 
-  it("shows a live approval summary and updates it as the queue changes", async () => {
+  it("renders external runtime approval context with server and slot set", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
       authMode: "single-user",
       apiKey: "persona-key"
     })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
       if (path.includes("/persona/catalog")) {
         return Promise.resolve({
           ok: true,
@@ -2510,18 +1240,7 @@ describe("SidepanelPersona", () => {
       if (path.includes("/persona/session")) {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ session_id: "sess-approval-summary" })
-        })
-      }
-      if (path.includes("/mcp/hub/approval-decisions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: 101,
-            approval_policy_id: init?.body?.approval_policy_id ?? 17,
-            tool_name: init?.body?.tool_name,
-            decision: init?.body?.decision
-          })
+          json: async () => ({ session_id: "sess-ext-approval" })
         })
       }
       return Promise.resolve({
@@ -2544,81 +1263,38 @@ describe("SidepanelPersona", () => {
     ws.emitMessage(
       JSON.stringify({
         event: "tool_result",
-        session_id: "sess-approval-summary",
-        plan_id: "plan-approval-summary",
+        session_id: "sess-ext-approval",
         step_idx: 0,
         step_type: "mcp_tool",
-        tool: "knowledge.search",
+        tool: "ext.docs.search",
         args: { query: "approval needed" },
-        why: "Need to search notes",
         ok: false,
         error: "Runtime approval required",
         reason_code: "APPROVAL_REQUIRED",
         approval: {
           approval_policy_id: 17,
           mode: "ask_outside_profile",
-          tool_name: "knowledge.search",
-          context_key: "ctx-1",
-          conversation_id: "sess-approval-summary",
-          scope_key: "tool:knowledge.search",
-          reason: "outside_profile",
-          duration_options: ["once"],
-          arguments_summary: { query: "approval needed" }
+          tool_name: "ext.docs.search",
+          context_key: "user:1|group:|persona:research_assistant",
+          conversation_id: "sess-ext-approval",
+          scope_key: "tool:ext.docs.search|args:123",
+          reason: "external_confirmation_required",
+          duration_options: ["once", "session"],
+          arguments_summary: { query: "approval needed" },
+          scope_context: {
+            server_id: "docs",
+            requested_slots: ["token_readonly"]
+          }
         }
       })
     )
 
-    await screen.findByText("Waiting for approval: knowledge.search")
-
-    ws.emitMessage(
-      JSON.stringify({
-        event: "tool_result",
-        session_id: "sess-approval-summary",
-        plan_id: "plan-approval-summary",
-        step_idx: 1,
-        step_type: "mcp_tool",
-        tool: "notes.export",
-        args: { format: "md" },
-        why: "Need to export notes",
-        ok: false,
-        error: "Runtime approval required",
-        reason_code: "APPROVAL_REQUIRED",
-        approval: {
-          approval_policy_id: 18,
-          mode: "ask_outside_profile",
-          tool_name: "notes.export",
-          context_key: "ctx-2",
-          conversation_id: "sess-approval-summary",
-          scope_key: "tool:notes.export",
-          reason: "outside_profile",
-          duration_options: ["once"],
-          arguments_summary: { format: "md" }
-        }
-      })
-    )
-
-    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
-
-    fireEvent.click(screen.getAllByRole("button", { name: "Deny" })[0])
-
-    await screen.findByText("Waiting for approval: notes.export")
-
-    fireEvent.click(screen.getByRole("button", { name: "Deny" }))
-
-    await waitFor(() => {
-      expect(
-        screen.queryByText(/Waiting for approval:/)
-      ).not.toBeInTheDocument()
-    })
+    await screen.findByText("Runtime approval required")
+    await screen.findByText("docs")
+    await screen.findByText("token_readonly")
   })
 
-  it("jumps to the runtime approval card from the live voice card", async () => {
-    const scrollIntoViewMock = vi.fn()
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-      configurable: true,
-      value: scrollIntoViewMock
-    })
-
+  it("renders workspace runtime approval context with workspace and trust source", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
       authMode: "single-user",
@@ -2640,7 +1316,7 @@ describe("SidepanelPersona", () => {
       if (path.includes("/persona/session")) {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ session_id: "sess-approval-jump" })
+          json: async () => ({ session_id: "sess-workspace-approval" })
         })
       }
       return Promise.resolve({
@@ -2663,938 +1339,36 @@ describe("SidepanelPersona", () => {
     ws.emitMessage(
       JSON.stringify({
         event: "tool_result",
-        session_id: "sess-approval-jump",
-        plan_id: "plan-approval-jump",
+        session_id: "sess-workspace-approval",
         step_idx: 0,
         step_type: "mcp_tool",
-        tool: "knowledge.search",
-        args: { query: "approval needed" },
-        why: "Need to search notes",
+        tool: "files.read",
+        args: { path: "src/README.md" },
         ok: false,
         error: "Runtime approval required",
         reason_code: "APPROVAL_REQUIRED",
         approval: {
           approval_policy_id: 17,
           mode: "ask_outside_profile",
-          tool_name: "knowledge.search",
-          context_key: "ctx-jump",
-          conversation_id: "sess-approval-jump",
-          scope_key: "tool:knowledge.search",
-          reason: "outside_profile",
-          duration_options: ["once"],
-          arguments_summary: { query: "approval needed" }
+          tool_name: "files.read",
+          context_key: "user:1|group:|persona:research_assistant",
+          conversation_id: "sess-workspace-approval",
+          scope_key: "tool:files.read|args:123",
+          reason: "workspace_not_allowed_but_trusted",
+          duration_options: ["once", "session"],
+          arguments_summary: { path: "src/README.md" },
+          scope_context: {
+            workspace_id: "workspace-beta",
+            selected_workspace_trust_source: "shared_registry",
+            selected_assignment_id: 11
+          }
         }
       })
     )
 
-    await screen.findByText("Waiting for approval: knowledge.search")
-
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-
-    expect(scrollIntoViewMock).toHaveBeenCalled()
-    expect(screen.getByTestId("persona-runtime-approval-card")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Approve and retry" })).toHaveFocus()
-  })
-
-  it("scrolls and focuses the highlighted approval row instead of only the card root", async () => {
-    const cardScrollIntoViewMock = vi.fn()
-    const rowScrollIntoViewMock = vi.fn()
-
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-row-jump" })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-row-jump",
-      planId: "plan-approval-row-jump",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    const card = screen.getByTestId("persona-runtime-approval-card")
-    const row = screen.getByText("knowledge.search").closest("[data-approval-key]")
-    Object.defineProperty(card, "scrollIntoView", {
-      configurable: true,
-      value: cardScrollIntoViewMock
-    })
-    Object.defineProperty(row as HTMLElement, "scrollIntoView", {
-      configurable: true,
-      value: rowScrollIntoViewMock
-    })
-
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-
-    expect(rowScrollIntoViewMock).toHaveBeenCalled()
-    expect(cardScrollIntoViewMock).not.toHaveBeenCalled()
-    expect(within(row as HTMLElement).getByRole("button", { name: "Approve and retry" })).toHaveFocus()
-  })
-
-  it("highlights the first pending approval row after jump to approval", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-highlight" })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-highlight",
-      planId: "plan-approval-highlight",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-
-    const knowledgeRow = screen
-      .getByText("knowledge.search")
-      .closest("[data-approval-key]")
-    expect(knowledgeRow).toHaveAttribute("data-highlighted", "true")
-    expect(knowledgeRow).toHaveAttribute("data-highlight-phase", "landing_primary")
-    expect(within(knowledgeRow as HTMLElement).getByText("Needs your approval")).toBeInTheDocument()
-  })
-
-  it("replays the primary landing pulse when jump to approval is pressed again on the same row", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-highlight-replay" })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-highlight-replay",
-      planId: "plan-approval-highlight-replay",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-
-    const knowledgeRow = screen
-      .getByText("knowledge.search")
-      .closest("[data-approval-key]") as HTMLElement
-    const firstSequence = Number(knowledgeRow.getAttribute("data-highlight-seq"))
-
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-
-    expect(knowledgeRow).toHaveAttribute("data-highlight-phase", "landing_primary")
-    expect(Number(knowledgeRow.getAttribute("data-highlight-seq"))).toBeGreaterThan(
-      firstSequence
-    )
-  })
-
-  it("settles the landing pulse into a steady highlight after its timer elapses", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-highlight-steady" })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-highlight-steady",
-      planId: "plan-approval-highlight-steady",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    vi.useFakeTimers()
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-
-    const knowledgeRow = screen
-      .getByText("knowledge.search")
-      .closest("[data-approval-key]") as HTMLElement
-    expect(knowledgeRow).toHaveAttribute("data-highlight-phase", "landing_primary")
-
-    await act(async () => {
-      await vi.runAllTimersAsync()
-    })
-
-    expect(knowledgeRow).toHaveAttribute("data-highlight-phase", "steady")
-  })
-
-  it("keeps the current highlighted approval when a new approval arrives", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-highlight-queue" })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-highlight-queue",
-      planId: "plan-approval-highlight-queue",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-highlight-queue",
-      planId: "plan-approval-highlight-queue",
-      stepIdx: 1,
-      tool: "notes.export",
-      args: { format: "md" },
-      why: "Need to export notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
-
-    const knowledgeRow = screen
-      .getByText("knowledge.search")
-      .closest("[data-approval-key]")
-    const exportRow = screen
-      .getByText("notes.export")
-      .closest("[data-approval-key]")
-    expect(knowledgeRow).toHaveAttribute("data-highlighted", "true")
-    expect(exportRow).toHaveAttribute("data-highlighted", "false")
-  })
-
-  it("derives the live approval summary from the highlighted approval", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-highlight-summary" })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-highlight-summary",
-      planId: "plan-approval-highlight-summary",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-highlight-summary",
-      planId: "plan-approval-highlight-summary",
-      stepIdx: 1,
-      tool: "notes.export",
-      args: { format: "md" },
-      why: "Need to export notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-
-    const highlightedRow = screen
-      .getByText("knowledge.search")
-      .closest("[data-approval-key]")
-    expect(highlightedRow).toHaveAttribute("data-highlighted", "true")
-    expect(screen.getByTestId("live-voice-current-action")).toHaveTextContent(
-      "Waiting for approval: knowledge.search (+1 more)"
-    )
-  })
-
-  it("moves the highlight to the next pending approval after the active one is approved", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-advance-approve" })
-        })
-      }
-      if (path.includes("/mcp/hub/approval-decisions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: 200,
-            approval_policy_id: init?.body?.approval_policy_id ?? 17,
-            tool_name: init?.body?.tool_name,
-            decision: init?.body?.decision
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-advance-approve",
-      planId: "plan-approval-advance-approve",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-advance-approve",
-      planId: "plan-approval-advance-approve",
-      stepIdx: 1,
-      tool: "notes.export",
-      args: { format: "md" },
-      why: "Need to export notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-    fireEvent.click(within(screen.getByText("knowledge.search").closest("[data-approval-key]") as HTMLElement).getByRole("button", { name: "Approve and retry" }))
-
-    await screen.findByText("Waiting for approval: notes.export")
-    const exportRow = screen.getByText("notes.export").closest("[data-approval-key]")
-    expect(exportRow).toHaveAttribute("data-highlighted", "true")
-    expect(exportRow).toHaveAttribute("data-highlight-phase", "landing_secondary")
-  })
-
-  it("moves the highlight to the next pending approval after the active one is denied", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-advance-deny" })
-        })
-      }
-      if (path.includes("/mcp/hub/approval-decisions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: 201,
-            approval_policy_id: init?.body?.approval_policy_id ?? 17,
-            tool_name: init?.body?.tool_name,
-            decision: init?.body?.decision
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-advance-deny",
-      planId: "plan-approval-advance-deny",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-advance-deny",
-      planId: "plan-approval-advance-deny",
-      stepIdx: 1,
-      tool: "notes.export",
-      args: { format: "md" },
-      why: "Need to export notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-    fireEvent.click(within(screen.getByText("knowledge.search").closest("[data-approval-key]") as HTMLElement).getByRole("button", { name: "Deny" }))
-
-    await screen.findByText("Waiting for approval: notes.export")
-    const exportRow = screen.getByText("notes.export").closest("[data-approval-key]")
-    expect(exportRow).toHaveAttribute("data-highlighted", "true")
-    expect(exportRow).toHaveAttribute("data-highlight-phase", "landing_secondary")
-  })
-
-  it("shows a transient answered banner after the last highlighted approval is resolved", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-answered" })
-        })
-      }
-      if (path.includes("/mcp/hub/approval-decisions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: 202,
-            approval_policy_id: init?.body?.approval_policy_id ?? 17,
-            tool_name: init?.body?.tool_name,
-            decision: init?.body?.decision
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-answered",
-      planId: "plan-approval-answered",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-    vi.useFakeTimers()
-    fireEvent.click(within(screen.getByText("knowledge.search").closest("[data-approval-key]") as HTMLElement).getByRole("button", { name: "Deny" }))
-
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(screen.getByText("Answered: knowledge.search")).toBeInTheDocument()
-
-    await act(async () => {
-      vi.runAllTimers()
-      await Promise.resolve()
-    })
-
-    expect(screen.queryByText("Answered: knowledge.search")).not.toBeInTheDocument()
-  })
-
-  it("clears a stale answered snapshot if the same approval key reappears", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-snapshot" })
-        })
-      }
-      if (path.includes("/mcp/hub/approval-decisions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: 203,
-            approval_policy_id: init?.body?.approval_policy_id ?? 17,
-            tool_name: init?.body?.tool_name,
-            decision: init?.body?.decision
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-snapshot",
-      planId: "plan-approval-snapshot",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-    vi.useFakeTimers()
-    fireEvent.click(within(screen.getByText("knowledge.search").closest("[data-approval-key]") as HTMLElement).getByRole("button", { name: "Deny" }))
-
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(screen.getByText("Answered: knowledge.search")).toBeInTheDocument()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-snapshot",
-      planId: "plan-approval-snapshot",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(screen.getByText("Waiting for approval: knowledge.search")).toBeInTheDocument()
-    expect(screen.queryByText("Answered: knowledge.search")).not.toBeInTheDocument()
-  })
-
-  it("clears approval guidance on disconnect", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: "sess-approval-disconnect" })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-
-    emitRuntimeApprovalRequired(ws, {
-      sessionId: "sess-approval-disconnect",
-      planId: "plan-approval-disconnect",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-    expect(screen.getByText("Needs your approval")).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("persona-runtime-approval-card")).not.toBeInTheDocument()
-      expect(screen.queryByText("Needs your approval")).not.toBeInTheDocument()
-      expect(screen.queryByText(/Waiting for approval:/)).not.toBeInTheDocument()
-    })
-  })
-
-  it("clears approval guidance on reconnect and session reset", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    let sessionCounter = 0
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        sessionCounter += 1
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ session_id: `sess-approval-reset-${sessionCounter}` })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const firstWs = MockWebSocket.instances[0]
-    firstWs.emitOpen()
-
-    emitRuntimeApprovalRequired(firstWs, {
-      sessionId: "sess-approval-reset-1",
-      planId: "plan-approval-reset",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
-    expect(screen.getByText("Needs your approval")).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("persona-runtime-approval-card")).not.toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(2)
-    })
-
-    const secondWs = MockWebSocket.instances[1]
-    secondWs.emitOpen()
-
-    emitRuntimeApprovalRequired(secondWs, {
-      sessionId: "sess-approval-reset-2",
-      planId: "plan-approval-reset",
-      stepIdx: 0,
-      tool: "knowledge.search",
-      args: { query: "approval needed" },
-      why: "Need to search notes"
-    })
-
-    await screen.findByText("Waiting for approval: knowledge.search")
-    const resetRow = screen.getByText("knowledge.search").closest("[data-approval-key]")
-    expect(resetRow).toHaveAttribute("data-highlighted", "false")
-    expect(screen.queryByText("Needs your approval")).not.toBeInTheDocument()
+    await screen.findByText("Runtime approval required")
+    await screen.findByText("workspace-beta")
+    await screen.findByText("shared_registry")
   })
 
   it("records deny as current-request-only and does not retry the tool", async () => {
@@ -3704,6 +1478,315 @@ describe("SidepanelPersona", () => {
       const sentPayloads = getSentPayloads(ws)
       expect(sentPayloads.some((payload) => payload.type === "retry_tool_call")).toBe(false)
     })
+  })
+
+  it.each([
+    {
+      reasonCode: "required_slot_not_granted",
+      label: "Credential slots not granted: token_readonly",
+      payload: {
+        external_access: {
+          server_id: "docs",
+          missing_bound_slots: ["token_readonly"],
+          blocked_reason: "required_slot_not_granted"
+        }
+      }
+    },
+    {
+      reasonCode: "required_slot_secret_missing",
+      label: "Credential secrets missing: token_readonly",
+      payload: {
+        external_access: {
+          server_id: "docs",
+          missing_secret_slots: ["token_readonly"],
+          blocked_reason: "required_slot_secret_missing"
+        }
+      }
+    }
+  ])(
+    "renders explicit hard-deny external slot messaging for $reasonCode",
+    async ({ reasonCode, label, payload }) => {
+      mocks.getConfig.mockResolvedValue({
+        serverUrl: "http://127.0.0.1:8000",
+        authMode: "single-user",
+        apiKey: "persona-key"
+      })
+      mocks.fetchWithAuth.mockImplementation((path: string) => {
+        if (path.includes("/persona/catalog")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+          })
+        }
+        if (path.includes("/persona/sessions")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => []
+          })
+        }
+        if (path.includes("/persona/session")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ session_id: "sess-ext-deny" })
+          })
+        }
+        return Promise.resolve({
+          ok: false,
+          error: `unhandled path: ${path}`,
+          json: async () => ({})
+        })
+      })
+
+      render(<SidepanelPersona />)
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+      await waitFor(() => {
+        expect(MockWebSocket.instances).toHaveLength(1)
+      })
+
+      const ws = MockWebSocket.instances[0]
+      ws.emitOpen()
+
+      ws.emitMessage(
+        JSON.stringify({
+          event: "tool_result",
+          session_id: "sess-ext-deny",
+          step_idx: 0,
+          step_type: "mcp_tool",
+          tool: "ext.docs.search",
+          args: { query: "blocked" },
+          ok: false,
+          error: "Blocked external credential use",
+          reason_code: reasonCode,
+          ...payload
+        })
+      )
+
+      await screen.findByText(label)
+      expect(screen.queryByRole("button", { name: "Approve and retry" })).not.toBeInTheDocument()
+    }
+  )
+
+  it("renders explicit hard-deny workspace trust-source messaging without approval controls", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-workspace-deny" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-workspace-deny",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "files.read",
+        args: { path: "src/README.md" },
+        ok: false,
+        error: "Blocked path-scoped tool use",
+        reason_code: "workspace_unresolvable_for_trust_source",
+        path_scope: {
+          workspace_id: "workspace-missing",
+          selected_workspace_trust_source: "shared_registry",
+          reason: "workspace_unresolvable_for_trust_source"
+        }
+      })
+    )
+
+    await screen.findByText("Blocked: workspace is not resolvable through the required trust source.")
+    expect(screen.queryByRole("button", { name: "Approve and retry" })).not.toBeInTheDocument()
+  })
+
+  it("renders explicit hard-deny multi-root ambiguity messaging without approval controls", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-multiroot-deny" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-multiroot-deny",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "files.read",
+        args: { paths: ["/tmp/workspace-alpha/docs/shared.md"] },
+        ok: false,
+        error: "Blocked path-scoped tool use",
+        reason_code: "path_matches_multiple_workspace_roots",
+        path_scope: {
+          workspace_bundle_ids: ["workspace-alpha", "workspace-alpha-docs"],
+          normalized_paths: ["/tmp/workspace-alpha/docs/shared.md"],
+          reason: "path_matches_multiple_workspace_roots"
+        }
+      })
+    )
+
+    await screen.findByText("Blocked: path matched multiple trusted workspace roots.")
+    expect(screen.queryByRole("button", { name: "Approve and retry" })).not.toBeInTheDocument()
+  })
+
+  it("renders multi-root approval context with exact workspace bundle and path set", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-multiroot-approval" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    ws.emitMessage(
+      JSON.stringify({
+        event: "tool_result",
+        session_id: "sess-multiroot-approval",
+        step_idx: 0,
+        step_type: "mcp_tool",
+        tool: "files.read",
+        args: {
+          paths: [
+            "/tmp/workspace-alpha/src/README.md",
+            "/tmp/workspace-beta/docs/index.md"
+          ]
+        },
+        ok: false,
+        error: "Runtime approval required",
+        reason_code: "APPROVAL_REQUIRED",
+        approval: {
+          approval_policy_id: 17,
+          mode: "ask_outside_profile",
+          tool_name: "files.read",
+          context_key: "user:1|group:|persona:research_assistant",
+          conversation_id: "sess-multiroot-approval",
+          scope_key: "tool:files.read|args:456",
+          reason: "path_outside_allowlist_scope",
+          duration_options: ["once", "session"],
+          arguments_summary: {
+            paths: [
+              "/tmp/workspace-alpha/src/README.md",
+              "/tmp/workspace-beta/docs/index.md"
+            ]
+          },
+          scope_context: {
+            workspace_bundle_ids: ["workspace-alpha", "workspace-beta"],
+            normalized_paths: [
+              "/tmp/workspace-alpha/src/README.md",
+              "/tmp/workspace-beta/docs/index.md"
+            ],
+            reason: "path_outside_allowlist_scope"
+          }
+        }
+      })
+    )
+
+    await screen.findByText("Runtime approval required")
+    await screen.findByText("workspace-alpha")
+    await screen.findByText("workspace-beta")
+    await screen.findByText("/tmp/workspace-alpha/src/README.md")
+    await screen.findByText("/tmp/workspace-beta/docs/index.md")
   })
 
   it("renders policy metadata and keeps blocked steps out of approvals", async () => {
@@ -4287,1479 +2370,6 @@ describe("SidepanelPersona", () => {
       expect(
         String(statePutCall?.[0]).includes("/persona/profiles/research_assistant/state")
       ).toBe(false)
-    })
-  })
-
-  it("loads and saves persona assistant defaults from the Profiles tab", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      const method = String(init?.method || "GET").toUpperCase()
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        if (method === "PATCH") {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              id: "research_assistant",
-              use_persona_state_context_default: true,
-              voice_defaults: init?.body?.voice_defaults
-            })
-          })
-        }
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              stt_model: "whisper-1",
-              tts_provider: "tldw",
-              tts_voice: "af_heart",
-              confirmation_mode: "destructive_only",
-              voice_chat_trigger_phrases: ["hey helper"],
-              auto_resume: true,
-              barge_in: false
-            }
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-assistant-defaults",
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    MockWebSocket.instances[0].emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    fireEvent.click(screen.getByRole("tab", { name: "Profiles" }))
-    const profileTabPanel = screen.getByRole("tabpanel", { name: "Profiles" })
-
-    await waitFor(() => {
-      expect(within(profileTabPanel).getByLabelText("STT language")).toHaveValue(
-        "en-US"
-      )
-    })
-    expect(
-      within(profileTabPanel).getByText(
-        "Persona defaults stay separate from browser-wide fallback settings. The preview below shows the effective values after local fallback is applied."
-      )
-    ).toBeInTheDocument()
-
-    fireEvent.change(within(profileTabPanel).getByLabelText("STT language"), {
-      target: { value: "fr-FR" }
-    })
-    fireEvent.change(within(profileTabPanel).getByLabelText("Trigger phrases"), {
-      target: { value: "bonjour helper\nstatus helper" }
-    })
-    fireEvent.click(
-      within(profileTabPanel).getByRole("button", {
-        name: "Save assistant defaults"
-      })
-    )
-
-    await waitFor(() => {
-      const patchCall = mocks.fetchWithAuth.mock.calls.find(
-        ([calledPath, calledInit]) =>
-          String(calledPath).includes("/persona/profiles/research_assistant") &&
-          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-            "PATCH" &&
-          Boolean(
-            (calledInit as { body?: { voice_defaults?: unknown } } | undefined)?.body
-              ?.voice_defaults
-          )
-      )
-      expect(patchCall).toBeTruthy()
-      expect(
-        (
-          patchCall?.[1] as {
-            body?: {
-              voice_defaults?: {
-                stt_language?: string
-                voice_chat_trigger_phrases?: string[]
-              }
-            }
-          } | undefined
-        )?.body?.voice_defaults
-      ).toEqual(
-        expect.objectContaining({
-          stt_language: "fr-FR",
-          voice_chat_trigger_phrases: ["bonjour helper", "status helper"]
-        })
-      )
-    })
-
-    expect(within(profileTabPanel).getByText("Assistant defaults saved.")).toBeInTheDocument()
-  })
-
-  it("loads persona voice analytics from the Profiles tab", async () => {
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string }) => {
-      const method = String(init?.method || "GET").toUpperCase()
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/voice-analytics")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => buildMockPersonaVoiceAnalytics()
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: buildMockPersonaVoiceDefaults()
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-profiles-analytics",
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path} (${method})`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    MockWebSocket.instances[0].emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    fireEvent.click(screen.getByRole("tab", { name: "Profiles" }))
-
-    await waitFor(() => {
-      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
-        "/api/v1/persona/profiles/research_assistant/voice-analytics?days=7",
-        { method: "GET" }
-      )
-    })
-  })
-
-  it("sends persona voice_config on connect and when live session overrides change", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              stt_model: "whisper-1",
-              tts_provider: "tldw",
-              tts_voice: "af_heart",
-              confirmation_mode: "destructive_only",
-              voice_chat_trigger_phrases: ["hey helper"],
-              auto_resume: true,
-              barge_in: false
-            }
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-live-voice",
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    await waitFor(() => {
-      expect(getSentPayloads(ws)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "voice_config",
-            session_id: "sess-live-voice",
-            voice: expect.objectContaining({
-              trigger_phrases: ["hey helper"],
-              auto_resume: true,
-              barge_in: false
-            }),
-            stt: expect.objectContaining({
-              language: "en-US",
-              model: "whisper-1",
-              enable_vad: true,
-              vad_threshold: 0.5,
-              min_silence_ms: 250,
-              turn_stop_secs: 0.2,
-              min_utterance_secs: 0.4
-            }),
-            tts: expect.objectContaining({
-              provider: "tldw",
-              voice: "af_heart"
-            })
-          })
-        ])
-      )
-    })
-
-    fireEvent.click(screen.getByTestId("live-voice-auto-resume"))
-    fireEvent.click(screen.getByTestId("live-voice-barge-in"))
-
-    await waitFor(() => {
-      expect(getSentPayloads(ws)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "voice_config",
-            session_id: "sess-live-voice",
-            voice: expect.objectContaining({
-              auto_resume: false,
-              barge_in: true
-            })
-          })
-        ])
-      )
-    })
-  })
-
-  it("sends a fresh voice_config when the live turn detection preset changes", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              stt_model: "whisper-1",
-              tts_provider: "tldw",
-              tts_voice: "af_heart",
-              confirmation_mode: "destructive_only",
-              voice_chat_trigger_phrases: ["hey helper"],
-              auto_resume: true,
-              barge_in: false
-            }
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-live-vad-preset",
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
-
-    await waitFor(() => {
-      expect(getSentPayloads(ws)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "voice_config",
-            session_id: "sess-live-vad-preset",
-            stt: expect.objectContaining({
-              enable_vad: true,
-              vad_threshold: 0.35,
-              min_silence_ms: 150,
-              turn_stop_secs: 0.1,
-              min_utterance_secs: 0.25
-            })
-          })
-        ])
-      )
-    })
-  })
-
-  it("sends a fresh voice_config when auto-commit is turned off", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              stt_model: "whisper-1",
-              tts_provider: "tldw",
-              tts_voice: "af_heart",
-              confirmation_mode: "destructive_only",
-              voice_chat_trigger_phrases: ["hey helper"],
-              auto_resume: true,
-              barge_in: false
-            }
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-live-vad-auto-commit",
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    fireEvent.click(screen.getByTestId("live-vad-auto-commit"))
-
-    await waitFor(() => {
-      expect(getSentPayloads(ws)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "voice_config",
-            session_id: "sess-live-vad-auto-commit",
-            stt: expect.objectContaining({
-              enable_vad: false
-            })
-          })
-        ])
-      )
-    })
-  })
-
-  it("resets turn detection tuning to the session baseline after reconnect", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              stt_model: "whisper-1",
-              tts_provider: "tldw",
-              tts_voice: "af_heart",
-              confirmation_mode: "destructive_only",
-              voice_chat_trigger_phrases: ["hey helper"],
-              auto_resume: true,
-              barge_in: false
-            }
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-live-vad-reset",
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    const firstWs = MockWebSocket.instances[0]
-    firstWs.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
-    await waitFor(() => {
-      expect(getSentPayloads(firstWs)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "voice_config",
-            session_id: "sess-live-vad-reset",
-            stt: expect.objectContaining({
-              vad_threshold: 0.35,
-              min_silence_ms: 150,
-              turn_stop_secs: 0.1,
-              min_utterance_secs: 0.25
-            })
-          })
-        ])
-      )
-    })
-
-    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Connect/ })).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(2)
-    })
-    const secondWs = MockWebSocket.instances[1]
-    secondWs.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    await waitFor(() => {
-      expect(getSentPayloads(secondWs)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "voice_config",
-            session_id: "sess-live-vad-reset",
-            stt: expect.objectContaining({
-              enable_vad: true,
-              vad_threshold: 0.5,
-              min_silence_ms: 250,
-              turn_stop_secs: 0.2,
-              min_utterance_secs: 0.4
-            })
-          })
-        ])
-      )
-    })
-    expect(screen.getByTestId("live-vad-preset-balanced")).toHaveAttribute(
-      "data-active",
-      "true"
-    )
-  })
-
-  it("flushes live voice recovery counts when disconnecting a connected persona session", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      const method = String(init?.method || "GET").toUpperCase()
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/voice-analytics/live-sessions/")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-live-recovery-flush",
-            listening_recovery_count: init?.body?.listening_recovery_count ?? 0,
-            thinking_recovery_count: init?.body?.thinking_recovery_count ?? 0
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: buildMockPersonaVoiceDefaults()
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-live-recovery-flush",
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path} (${method})`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    MockWebSocket.instances[0].emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
-
-    await waitFor(() => {
-      const flushCall = mocks.fetchWithAuth.mock.calls.find(
-        ([calledPath, calledInit]) =>
-          String(calledPath).includes(
-            "/persona/profiles/research_assistant/voice-analytics/live-sessions/sess-live-recovery-flush"
-          ) &&
-          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-            "PUT"
-      )
-      expect(flushCall).toBeTruthy()
-      expect(
-        (flushCall?.[1] as { body?: Record<string, unknown> } | undefined)?.body
-      ).toEqual(
-        expect.objectContaining({
-          listening_recovery_count: 0,
-          thinking_recovery_count: 0,
-          finalize: true
-        })
-      )
-    })
-  })
-
-  it("flushes live voice recovery counts during unmount cleanup", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
-      const method = String(init?.method || "GET").toUpperCase()
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/voice-analytics/live-sessions/")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-live-recovery-unmount",
-            listening_recovery_count: init?.body?.listening_recovery_count ?? 0,
-            thinking_recovery_count: init?.body?.thinking_recovery_count ?? 0
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: buildMockPersonaVoiceDefaults()
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-live-recovery-unmount",
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path} (${method})`,
-        json: async () => ({})
-      })
-    })
-
-    const view = render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    MockWebSocket.instances[0].emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    view.unmount()
-
-    await waitFor(() => {
-      const flushCall = mocks.fetchWithAuth.mock.calls.find(
-        ([calledPath, calledInit]) =>
-          String(calledPath).includes(
-            "/persona/profiles/research_assistant/voice-analytics/live-sessions/sess-live-recovery-unmount"
-          ) &&
-          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-            "PUT"
-      )
-      expect(flushCall).toBeTruthy()
-      expect(
-        (flushCall?.[1] as { body?: Record<string, unknown> } | undefined)?.body
-      ).toEqual(
-        expect.objectContaining({
-          listening_recovery_count: 0,
-          thinking_recovery_count: 0,
-          finalize: true
-        })
-      )
-    })
-  })
-
-  it("initializes live turn detection from saved persona defaults on connect", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mockPersonaLiveVoiceFetches({
-      sessionId: "sess-live-saved-defaults",
-      voiceDefaults: buildMockPersonaVoiceDefaults({
-        auto_commit_enabled: false,
-        vad_threshold: 0.61,
-        min_silence_ms: 640,
-        turn_stop_secs: 0.48,
-        min_utterance_secs: 0.82
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    await waitFor(() => {
-      expect(getSentPayloads(ws)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "voice_config",
-            session_id: "sess-live-saved-defaults",
-            stt: expect.objectContaining({
-              enable_vad: false,
-              vad_threshold: 0.61,
-              min_silence_ms: 640,
-              turn_stop_secs: 0.48,
-              min_utterance_secs: 0.82
-            })
-          })
-        ])
-      )
-    })
-  })
-
-  it("shows save current settings as defaults when saved turn detection defaults are absent", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mockPersonaLiveVoiceFetches({
-      sessionId: "sess-live-save-cta-absent",
-      voiceDefaults: buildMockPersonaVoiceDefaults()
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    MockWebSocket.instances[0].emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Save current settings as defaults" })
-      ).toBeInTheDocument()
-    })
-  })
-
-  it("shows save current settings as defaults only when explicit saved turn detection defaults are different", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mockPersonaLiveVoiceFetches({
-      sessionId: "sess-live-save-cta-different",
-      voiceDefaults: buildMockPersonaVoiceDefaults({
-        auto_commit_enabled: true,
-        vad_threshold: 0.5,
-        min_silence_ms: 250,
-        turn_stop_secs: 0.2,
-        min_utterance_secs: 0.4
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    MockWebSocket.instances[0].emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    expect(
-      screen.queryByRole("button", { name: "Save current settings as defaults" })
-    ).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Save current settings as defaults" })
-      ).toBeInTheDocument()
-    })
-  })
-
-  it("saves merged voice defaults from the live session without dropping saved non-vad fields", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mockPersonaLiveVoiceFetches({
-      sessionId: "sess-live-save-merge",
-      voiceDefaults: buildMockPersonaVoiceDefaults({
-        stt_language: "fr-FR",
-        stt_model: "parakeet",
-        tts_provider: "openai",
-        tts_voice: "nova",
-        confirmation_mode: "always",
-        voice_chat_trigger_phrases: ["bonjour helper"],
-        auto_resume: false,
-        barge_in: true
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    MockWebSocket.instances[0].emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
-    fireEvent.click(screen.getByRole("button", { name: "Save current settings as defaults" }))
-
-    await waitFor(() => {
-      const patchCall = mocks.fetchWithAuth.mock.calls.find(
-        ([calledPath, calledInit]) =>
-          String(calledPath).includes("/persona/profiles/research_assistant") &&
-          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-            "PATCH" &&
-          Boolean(
-            (calledInit as { body?: { voice_defaults?: unknown } } | undefined)?.body
-              ?.voice_defaults
-          )
-      )
-      expect(patchCall).toBeTruthy()
-      expect(
-        (
-          patchCall?.[1] as {
-            body?: {
-              voice_defaults?: MockPersonaVoiceDefaults
-            }
-          } | undefined
-        )?.body?.voice_defaults
-      ).toEqual(
-        expect.objectContaining({
-          stt_language: "fr-FR",
-          stt_model: "parakeet",
-          tts_provider: "openai",
-          tts_voice: "nova",
-          confirmation_mode: "always",
-          voice_chat_trigger_phrases: ["bonjour helper"],
-          auto_resume: false,
-          barge_in: true,
-          auto_commit_enabled: true,
-          vad_threshold: 0.35,
-          min_silence_ms: 150,
-          turn_stop_secs: 0.1,
-          min_utterance_secs: 0.25
-        })
-      )
-    })
-  })
-
-  it("does not hot-reset the connected live session when assistant defaults are saved", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mockPersonaLiveVoiceFetches({
-      sessionId: "sess-live-save-no-reset",
-      voiceDefaults: buildMockPersonaVoiceDefaults()
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
-
-    await waitFor(() => {
-      expect(getSentPayloads(ws)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "voice_config",
-            session_id: "sess-live-save-no-reset",
-            stt: expect.objectContaining({
-              vad_threshold: 0.35,
-              min_silence_ms: 150,
-              turn_stop_secs: 0.1,
-              min_utterance_secs: 0.25
-            })
-          })
-        ])
-      )
-    })
-
-    const voiceConfigCountBeforeSave = getSentPayloads(ws).filter(
-      (payload) => payload.type === "voice_config"
-    ).length
-
-    fireEvent.click(screen.getByRole("button", { name: "Save current settings as defaults" }))
-
-    await waitFor(() => {
-      const patchCall = mocks.fetchWithAuth.mock.calls.find(
-        ([calledPath, calledInit]) =>
-          String(calledPath).includes("/persona/profiles/research_assistant") &&
-          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-            "PATCH"
-      )
-      expect(patchCall).toBeTruthy()
-    })
-
-    expect(
-      getSentPayloads(ws).filter((payload) => payload.type === "voice_config")
-    ).toHaveLength(voiceConfigCountBeforeSave)
-    expect(screen.getByTestId("live-vad-preset-fast")).toHaveAttribute(
-      "data-active",
-      "true"
-    )
-  })
-
-  it("uses updated saved turn detection defaults after reconnect", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    const savedVoiceDefaults = buildMockPersonaVoiceDefaults()
-    mockPersonaLiveVoiceFetches({
-      sessionId: "sess-live-reconnect-saved-defaults",
-      voiceDefaults: savedVoiceDefaults,
-      patchHandler: (body) => {
-        Object.assign(savedVoiceDefaults, body.voice_defaults || {})
-        return savedVoiceDefaults
-      }
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-    const firstWs = MockWebSocket.instances[0]
-    firstWs.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
-    fireEvent.click(screen.getByRole("button", { name: "Save current settings as defaults" }))
-
-    await waitFor(() => {
-      const patchCall = mocks.fetchWithAuth.mock.calls.find(
-        ([calledPath, calledInit]) =>
-          String(calledPath).includes("/persona/profiles/research_assistant") &&
-          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
-            "PATCH"
-      )
-      expect(patchCall).toBeTruthy()
-    })
-
-    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Connect/ })).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(2)
-    })
-    const secondWs = MockWebSocket.instances[1]
-    secondWs.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    await waitFor(() => {
-      expect(getSentPayloads(secondWs)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "voice_config",
-            session_id: "sess-live-reconnect-saved-defaults",
-            stt: expect.objectContaining({
-              enable_vad: true,
-              vad_threshold: 0.35,
-              min_silence_ms: 150,
-              turn_stop_secs: 0.1,
-              min_utterance_secs: 0.25
-            })
-          })
-        ])
-      )
-    })
-  })
-
-  it("does not append tool processing notices into the visible persona log", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: "sess-processing-notice",
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const ws = MockWebSocket.instances[0]
-    ws.emitOpen()
-    await screen.findByText("Persona stream connected")
-
-    act(() => {
-      ws.emitMessage(
-        JSON.stringify({
-          event: "notice",
-          reason_code: "VOICE_TURN_PROCESSING",
-          message: "Still processing this voice turn."
-        })
-      )
-    })
-
-    expect(
-      screen.queryByText("Still processing this voice turn.")
-    ).not.toBeInTheDocument()
-
-    act(() => {
-      ws.emitMessage(
-        JSON.stringify({
-          event: "notice",
-          reason_code: "VOICE_TOOL_EXECUTION_PROCESSING",
-          tool: "search_notes",
-          step_idx: 0,
-          message: "Tool execution is still in progress."
-        })
-      )
-    })
-
-    expect(
-      screen.queryByText("Tool execution is still in progress.")
-    ).not.toBeInTheDocument()
-  })
-
-  it("copies the last committed voice command into the composer and reconnects the persona session from recovery", async () => {
-    mocks.capabilitiesState.capabilities = {
-      hasPersona: true,
-      hasPersonalization: true,
-      hasAudio: true
-    } as any
-    mocks.getConfig.mockResolvedValue({
-      serverUrl: "http://127.0.0.1:8000",
-      authMode: "single-user",
-      apiKey: "persona-key"
-    })
-
-    const issuedSessionIds = ["sess-live-voice", "sess-live-voice-2"]
-    let sessionCallCount = 0
-
-    mocks.fetchWithAuth.mockImplementation((path: string) => {
-      if (path.includes("/persona/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant/state")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            persona_id: "research_assistant",
-            soul_md: "persona soul",
-            identity_md: "persona identity",
-            heartbeat_md: "persona heartbeat"
-          })
-        })
-      }
-      if (path.includes("/persona/profiles/research_assistant")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            id: "research_assistant",
-            use_persona_state_context_default: true,
-            voice_defaults: {
-              stt_language: "en-US",
-              stt_model: "whisper-1",
-              tts_provider: "tldw",
-              tts_voice: "af_heart",
-              confirmation_mode: "destructive_only",
-              voice_chat_trigger_phrases: ["hey helper"],
-              auto_resume: true,
-              barge_in: false
-            }
-          })
-        })
-      }
-      if (path.includes("/persona/sessions")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => []
-        })
-      }
-      if (path.includes("/persona/session")) {
-        const nextSessionId = issuedSessionIds[sessionCallCount] || `sess-live-voice-${sessionCallCount + 1}`
-        sessionCallCount += 1
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: nextSessionId,
-            persona: { id: "research_assistant" }
-          })
-        })
-      }
-      return Promise.resolve({
-        ok: false,
-        error: `unhandled path: ${path}`,
-        json: async () => ({})
-      })
-    })
-
-    render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
-
-    await waitFor(() => {
-      expect(MockWebSocket.instances).toHaveLength(1)
-    })
-
-    const firstWs = MockWebSocket.instances[0]
-    firstWs.emitOpen()
-    await screen.findByText("Persona stream connected")
-    vi.useFakeTimers()
-
-    firstWs.emitMessage(
-      JSON.stringify({
-        event: "notice",
-        reason_code: "VOICE_TURN_COMMITTED",
-        transcript: "search my notes",
-        commit_source: "vad_auto"
-      })
-    )
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(8000)
-    })
-
-    expect(screen.getByText("Assistant response is delayed")).toBeInTheDocument()
-
-    fireEvent.click(screen.getByTestId("live-voice-recovery-copy-command"))
-    expect(screen.getByPlaceholderText("Ask Persona...")).toHaveValue("search my notes")
-
-    vi.useRealTimers()
-    fireEvent.click(screen.getByTestId("live-voice-recovery-reconnect"))
-
-    await waitFor(() => {
-      expect(firstWs.close).toHaveBeenCalledTimes(1)
-      expect(MockWebSocket.instances).toHaveLength(2)
-    })
-
-    MockWebSocket.instances[1].emitOpen()
-    await waitFor(() => {
-      expect(
-        mocks.fetchWithAuth.mock.calls.filter(
-          ([path]) => String(path) === "/api/v1/persona/session"
-        )
-      ).toHaveLength(2)
     })
   })
 
@@ -6520,6 +3130,9 @@ describe("SidepanelPersona", () => {
     })
 
     render(<SidepanelPersona />)
+    const initialCreateSessionCalls = mocks.fetchWithAuth.mock.calls.filter(
+      ([path]) => String(path) === "/api/v1/persona/session"
+    ).length
     fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
       target: { value: "local draft soul" }
     })
@@ -6529,10 +3142,10 @@ describe("SidepanelPersona", () => {
       expect(confirmSpy).toHaveBeenCalled()
       expect(MockWebSocket.instances).toHaveLength(0)
     })
-    const connectSessionCall = mocks.fetchWithAuth.mock.calls.find(([path]) =>
-      String(path).includes("/persona/session")
+    const createSessionCalls = mocks.fetchWithAuth.mock.calls.filter(
+      ([path]) => String(path) === "/api/v1/persona/session"
     )
-    expect(connectSessionCall).toBeFalsy()
+    expect(createSessionCalls).toHaveLength(initialCreateSessionCalls)
     expect(String(confirmSpy.mock.calls[0]?.[0] || "")).toContain(
       "Connect and discard local drafts"
     )
@@ -6599,12 +3212,12 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
-    confirmSpy.mockClear()
 
     fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
       target: { value: "unsaved disconnect draft" }
     })
 
+    confirmSpy.mockClear()
     confirmSpy.mockReturnValueOnce(false)
     fireEvent.click(screen.getByRole("button", { name: /Disconnect/i }))
     await waitFor(() => {
@@ -6727,7 +3340,6 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
-    confirmSpy.mockClear()
 
     const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
     await waitFor(() => {
@@ -6740,6 +3352,7 @@ describe("SidepanelPersona", () => {
       target: { value: "unsaved local draft before restore" }
     })
 
+    confirmSpy.mockClear()
     confirmSpy.mockReturnValueOnce(false)
     fireEvent.click(screen.getByTestId("persona-state-restore-restore-guard-entry"))
     await waitFor(() => {

@@ -13,6 +13,95 @@ const flashcardsClient = createResourceClient({
   basePath: "/api/v1/flashcards" as AllowedPath
 })
 
+export type DeckSchedulerSettings = {
+  new_steps_minutes: number[]
+  relearn_steps_minutes: number[]
+  graduating_interval_days: number
+  easy_interval_days: number
+  easy_bonus: number
+  interval_modifier: number
+  max_interval_days: number
+  leech_threshold: number
+  enable_fuzz: boolean
+}
+
+export type FlashcardIntervalPreviews = {
+  again: string
+  hard: string
+  good: string
+  easy: string
+}
+
+export type StudyAssistantAction =
+  | "explain"
+  | "mnemonic"
+  | "follow_up"
+  | "fact_check"
+  | "freeform"
+
+export type StudyAssistantInputModality = "text" | "voice_transcript"
+
+export type StudyAssistantThreadSummary = {
+  id: number
+  context_type: "flashcard" | "quiz_attempt_question"
+  flashcard_uuid?: string | null
+  quiz_attempt_id?: number | null
+  question_id?: number | null
+  last_message_at?: string | null
+  message_count: number
+  deleted: boolean
+  client_id: string
+  version: number
+  created_at?: string | null
+  last_modified?: string | null
+}
+
+export type StudyAssistantMessage = {
+  id: number
+  thread_id: number
+  role: "user" | "assistant"
+  action_type: StudyAssistantAction
+  input_modality: StudyAssistantInputModality
+  content: string
+  structured_payload: Record<string, unknown>
+  context_snapshot: Record<string, unknown>
+  provider?: string | null
+  model?: string | null
+  created_at?: string | null
+  client_id: string
+}
+
+export type StudyAssistantFactCheckPayload = {
+  verdict: "correct" | "partially_correct" | "incorrect"
+  corrections: string[]
+  missing_points: string[]
+  next_prompt: string
+}
+
+export type StudyAssistantRespondRequest = {
+  action: StudyAssistantAction
+  message?: string | null
+  input_modality?: StudyAssistantInputModality
+  provider?: string | null
+  model?: string | null
+  expected_thread_version?: number | null
+}
+
+export type StudyAssistantContextResponse = {
+  thread: StudyAssistantThreadSummary
+  messages: StudyAssistantMessage[]
+  context_snapshot: Record<string, unknown>
+  available_actions: StudyAssistantAction[]
+}
+
+export type StudyAssistantRespondResponse = {
+  thread: StudyAssistantThreadSummary
+  user_message: StudyAssistantMessage
+  assistant_message: StudyAssistantMessage
+  structured_payload: Record<string, unknown>
+  context_snapshot: Record<string, unknown>
+}
+
 // Minimal client types based on openapi.json
 export type Deck = {
   id: number
@@ -23,6 +112,8 @@ export type Deck = {
   version: number
   created_at?: string | null
   last_modified?: string | null
+  scheduler_settings_json?: string | null
+  scheduler_settings: DeckSchedulerSettings
 }
 
 export type Flashcard = {
@@ -41,6 +132,9 @@ export type Flashcard = {
   due_at?: string | null
   created_at?: string | null
   last_reviewed_at?: string | null
+  queue_state: "new" | "learning" | "review" | "relearning" | "suspended"
+  step_index?: number | null
+  suspended_reason?: "manual" | "leech" | null
   last_modified?: string | null
   deleted: boolean
   client_id: string
@@ -51,6 +145,20 @@ export type Flashcard = {
   source_ref_id?: string | null
   conversation_id?: string | null
   message_id?: string | null
+  next_intervals?: FlashcardIntervalPreviews | null
+}
+
+export type DeckUpdate = {
+  name?: string | null
+  description?: string | null
+  scheduler_settings?: Partial<DeckSchedulerSettings> | null
+  expected_version?: number | null
+}
+
+export type DeckCreateInput = {
+  name: string
+  description?: string | null
+  scheduler_settings?: DeckSchedulerSettings | null
 }
 
 export type FlashcardCreate = {
@@ -78,6 +186,28 @@ export type FlashcardUpdate = {
   expected_version?: number | null
   model_type?: Flashcard["model_type"] | null
   reverse?: boolean | null
+}
+
+export type FlashcardBulkUpdateItem = FlashcardUpdate & {
+  uuid: string
+}
+
+export type FlashcardBulkUpdateError = {
+  code: "validation_error" | "not_found" | "conflict"
+  message: string
+  invalid_fields?: string[]
+  invalid_deck_ids?: number[]
+}
+
+export type FlashcardBulkUpdateResult = {
+  uuid: string
+  status: "updated" | "validation_error" | "not_found" | "conflict"
+  flashcard?: Flashcard | null
+  error?: FlashcardBulkUpdateError | null
+}
+
+export type FlashcardBulkUpdateResponse = {
+  results: FlashcardBulkUpdateResult[]
 }
 
 export type FlashcardResetSchedulingRequest = {
@@ -130,6 +260,15 @@ export type FlashcardReviewResponse = {
   last_reviewed_at?: string | null
   last_modified?: string | null
   version: number
+  queue_state: Flashcard["queue_state"]
+  step_index?: number | null
+  suspended_reason?: Flashcard["suspended_reason"]
+  next_intervals: FlashcardIntervalPreviews
+}
+
+export type FlashcardNextReviewResponse = {
+  card?: Flashcard | null
+  selection_reason?: "learning_due" | "review_due" | "new" | "none" | null
 }
 
 export type FlashcardsImportRequest = {
@@ -148,6 +287,10 @@ export type FlashcardsImportApkgRequest = {
   filename?: string | null
 }
 
+export type StructuredQaImportPreviewRequest = {
+  content: string
+}
+
 export type FlashcardsImportError = {
   line?: number | null
   index?: number | null
@@ -161,6 +304,23 @@ export type FlashcardsImportResponse = {
     deck_id: number
   }>
   errors: FlashcardsImportError[]
+}
+
+export type StructuredQaImportPreviewDraft = {
+  front: string
+  back: string
+  line_start: number
+  line_end: number
+  notes?: string | null
+  extra?: string | null
+  tags?: string[] | null
+}
+
+export type StructuredQaImportPreviewResponse = {
+  drafts: StructuredQaImportPreviewDraft[]
+  errors: Array<{ line?: number | null; error: string }>
+  detected_format: "qa_labels"
+  skipped_blocks: number
 }
 
 export type FlashcardsExportParams = {
@@ -202,10 +362,20 @@ export async function listDecks(options?: { signal?: AbortSignal }): Promise<Dec
 }
 
 export async function createDeck(
-  input: { name: string; description?: string | null },
+  input: DeckCreateInput,
   options?: { signal?: AbortSignal }
 ): Promise<Deck> {
   return await decksClient.create<Deck>(input, {
+    abortSignal: options?.signal
+  })
+}
+
+export async function updateDeck(
+  deck_id: number,
+  input: DeckUpdate,
+  options?: { signal?: AbortSignal }
+): Promise<Deck> {
+  return await decksClient.update<Deck>(String(deck_id), input, {
     abortSignal: options?.signal
   })
 }
@@ -240,8 +410,55 @@ export async function createFlashcard(
   })
 }
 
+export async function createFlashcardsBulk(
+  input: FlashcardCreate[]
+): Promise<FlashcardListResponse> {
+  return await bgRequest<FlashcardListResponse, AllowedPath, "POST">({
+    path: "/api/v1/flashcards/bulk",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
+export async function updateFlashcardsBulk(
+  input: FlashcardBulkUpdateItem[]
+): Promise<FlashcardBulkUpdateResponse> {
+  return await bgRequest<FlashcardBulkUpdateResponse, AllowedPath, "PATCH">({
+    path: "/api/v1/flashcards/bulk",
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
 export async function getFlashcard(card_uuid: string): Promise<Flashcard> {
   return await flashcardsClient.get<Flashcard>(card_uuid)
+}
+
+export async function getFlashcardAssistant(
+  card_uuid: string,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantContextResponse> {
+  return await bgRequest<StudyAssistantContextResponse, AllowedPath, "GET">({
+    path: `/api/v1/flashcards/${card_uuid}/assistant` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function respondFlashcardAssistant(
+  card_uuid: string,
+  input: StudyAssistantRespondRequest,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantRespondResponse> {
+  return await bgRequest<StudyAssistantRespondResponse, AllowedPath, "POST">({
+    path: `/api/v1/flashcards/${card_uuid}/assistant/respond` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input,
+    abortSignal: options?.signal
+  })
 }
 
 export async function updateFlashcard(card_uuid: string, input: FlashcardUpdate): Promise<void> {
@@ -276,6 +493,18 @@ export async function reviewFlashcard(input: FlashcardReviewRequest): Promise<Fl
   })
 }
 
+export async function getNextReviewCard(
+  deck_id?: number | null
+): Promise<FlashcardNextReviewResponse> {
+  const query = buildQuery({
+    deck_id
+  })
+  return await bgRequest<FlashcardNextReviewResponse, AllowedPath, "GET">({
+    path: `/api/v1/flashcards/review/next${query}` as AllowedPath,
+    method: "GET"
+  })
+}
+
 export async function generateFlashcards(
   input: FlashcardsGenerateRequest
 ): Promise<FlashcardsGenerateResponse> {
@@ -307,6 +536,28 @@ export async function importFlashcards(payload: FlashcardsImportRequest, overrid
   })
   const path = `/api/v1/flashcards/import${query}` as AllowedPath
   return await bgRequest<FlashcardsImportResponse, AllowedPath, "POST">({
+    path,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: payload
+  })
+}
+
+export async function previewStructuredQaImport(
+  payload: StructuredQaImportPreviewRequest,
+  overrides?: {
+    max_lines?: number | null
+    max_line_length?: number | null
+    max_field_length?: number | null
+  }
+): Promise<StructuredQaImportPreviewResponse> {
+  const query = buildQuery({
+    max_lines: overrides?.max_lines,
+    max_line_length: overrides?.max_line_length,
+    max_field_length: overrides?.max_field_length
+  })
+  const path = `/api/v1/flashcards/import/structured/preview${query}` as AllowedPath
+  return await bgRequest<StructuredQaImportPreviewResponse, AllowedPath, "POST">({
     path,
     method: "POST",
     headers: { "Content-Type": "application/json" },

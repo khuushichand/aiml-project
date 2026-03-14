@@ -166,7 +166,7 @@ test.describe("Workspace Playground Workflow", () => {
     await workspacePage.selectSourceById(firstSourceId)
     await workspacePage.expectSourceSelected(firstSourceId)
     await expect(
-      workspacePage.sourcesPanel.getByText(/1 selected/i)
+      workspacePage.sourcesPanel.getByText(/^1 selected$/)
     ).toBeVisible()
 
     await assertNoCriticalErrors(diagnostics)

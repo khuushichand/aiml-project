@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import configure_sqlite_connection
 
 from tldw_Server_API.app.core.Agent_Orchestration.models import (
     AgentProject,
@@ -136,10 +137,8 @@ class OrchestrationDB:
         if conn is None:
             os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
             conn = sqlite3.connect(self._db_path, timeout=10)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
             conn.row_factory = sqlite3.Row
+            configure_sqlite_connection(conn)
             self._conn_local.conn = conn
         return conn
 

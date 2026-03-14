@@ -1,3 +1,4 @@
+import importlib
 import os
 import sqlite3
 import pytest
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.DB_Management import sqlite_policy
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Embeddings.vector_store_meta_db import init_meta_db, register_store
 from tldw_Server_API.app.core.Embeddings.vector_store_batches_db import init_db as init_batches_db, _connect as batches_conn
@@ -66,3 +68,55 @@ def test_admin_users_list(client_admin, tmp_path):
     # Expect at least two users
     got = {row['user_id'] for row in data}
     assert '1' in got and '2' in got
+
+
+def test_vector_store_meta_db_uses_shared_sqlite_policy_helper():
+    meta_module = importlib.import_module(
+        "tldw_Server_API.app.core.Embeddings.vector_store_meta_db"
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_configure(conn, **kwargs):
+        calls.append(kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sqlite_policy, "configure_sqlite_connection", fake_configure)
+        meta_module = importlib.reload(meta_module)
+
+        conn = meta_module._connect("1")
+        conn.close()
+
+    importlib.reload(meta_module)
+
+    assert calls == [{
+        "busy_timeout_ms": 3000,
+        "temp_store": None,
+        "synchronous": None,
+        "foreign_keys": False,
+    }]
+
+
+def test_vector_store_batches_db_uses_shared_sqlite_policy_helper():
+    batches_module = importlib.import_module(
+        "tldw_Server_API.app.core.Embeddings.vector_store_batches_db"
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_configure(conn, **kwargs):
+        calls.append(kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sqlite_policy, "configure_sqlite_connection", fake_configure)
+        batches_module = importlib.reload(batches_module)
+
+        conn = batches_module._connect("1")
+        conn.close()
+
+    importlib.reload(batches_module)
+
+    assert calls == [{
+        "busy_timeout_ms": 3000,
+        "temp_store": None,
+        "synchronous": None,
+        "foreign_keys": False,
+    }]

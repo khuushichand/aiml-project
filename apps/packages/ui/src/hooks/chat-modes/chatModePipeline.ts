@@ -12,6 +12,7 @@ import {
   buildMessageVariant,
   getLastUserMessageId,
   normalizeMessageVariants,
+  applyVariantToMessage,
   type MessageVariant,
   updateActiveVariant
 } from "@/utils/message-variants"

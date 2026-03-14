@@ -1,3 +1,4 @@
+import type { ChatScope } from "@/types/chat-scope"
 import type {
   ArtifactStatus,
   ArtifactType,
@@ -141,4 +142,28 @@ export const isWorkspaceSyncPayload = (
   if (!Array.isArray(value.snapshot.currentNote.keywords)) return false
   if (typeof value.snapshot.currentNote.isDirty !== "boolean") return false
   return true
+}
+
+/**
+ * Validate that a cached serverChatId still belongs to the expected scope.
+ * Returns the cachedId if scope matches, null otherwise.
+ */
+export const validateCachedServerChatId = ({
+  cachedId,
+  serverScope,
+  expectedScope,
+}: {
+  cachedId: string | null
+  serverScope: { scope_type: string; workspace_id: string | null } | null
+  expectedScope: ChatScope
+}): string | null => {
+  if (!cachedId || !serverScope) return null
+  if (expectedScope.type === "global" && serverScope.scope_type === "global") return cachedId
+  if (
+    expectedScope.type === "workspace" &&
+    serverScope.scope_type === "workspace" &&
+    serverScope.workspace_id === expectedScope.workspaceId
+  )
+    return cachedId
+  return null
 }

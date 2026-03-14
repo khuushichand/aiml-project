@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
 
 _SCHEMA_VERSION = 3
 
@@ -121,9 +124,7 @@ class ACPSessionsDB:
             os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
             conn = sqlite3.connect(self._db_path, timeout=10)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
+            configure_sqlite_connection(conn)
             self._conn_local.conn = conn
         self._ensure_schema()
         return conn

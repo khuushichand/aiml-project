@@ -190,7 +190,8 @@ describe("DictionariesManager chat integration stage-1", () => {
 
     useMutationMock.mockImplementation((opts: any) => makeUseMutationResult(opts))
 
-    tldwClientMock.getChatSettings.mockImplementation(async (chatId: string) => {
+    tldwClientMock.getChatSettings.mockImplementation(async (...args: [string?]) => {
+      const chatId = args[0]
       if (chatId === "chat-001") {
         return {
           settings: {

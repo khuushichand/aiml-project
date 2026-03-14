@@ -207,7 +207,7 @@ describe("WorldBooksManager statistics stage-2 budget utilization", () => {
       total_content_length: 128,
       estimated_tokens: 60,
       token_estimation_method: "cl100k_base"
-    })
+    } as any)
 
     render(<WorldBooksManager />)
     await user.click(screen.getByRole("button", { name: "View world book statistics" }))
