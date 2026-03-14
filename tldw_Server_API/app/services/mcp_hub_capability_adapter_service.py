@@ -1,3 +1,5 @@
+"""Validate and persist scope-aware capability adapter mappings."""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -10,6 +12,7 @@ from tldw_Server_API.app.services.mcp_hub_tool_registry import McpHubToolRegistr
 
 _SUPPORTED_SCOPE_TYPES = frozenset({"global", "org", "team"})
 _SUPPORTED_ADAPTER_CONTRACT_VERSION = 1
+_UNSET = object()
 _SUPPORTED_ENVIRONMENT_REQUIREMENTS = frozenset(
     {
         "local_mapping_required",
@@ -58,10 +61,16 @@ def _unique(items: list[str]) -> list[str]:
 
 
 def _looks_like_exact_tool_reference(value: str) -> bool:
+    """Return True when the value is a concrete tool reference, not a wildcard."""
     candidate = str(value or "").strip()
     if not candidate:
         return False
     return bool(_EXACT_TOOL_REF_RE.fullmatch(candidate))
+
+
+def _coalesce_update_value(value: Any, existing_value: Any) -> Any:
+    """Preserve the stored value for omitted fields while allowing explicit nulls."""
+    return existing_value if value is _UNSET else value
 
 
 class McpHubCapabilityAdapterService:
@@ -140,16 +149,16 @@ class McpHubCapabilityAdapterService:
         self,
         capability_adapter_mapping_id: int,
         *,
-        mapping_id: str | None = None,
-        title: str | None = None,
-        description: str | None = None,
-        owner_scope_type: str | None = None,
-        owner_scope_id: int | None = None,
-        capability_name: str | None = None,
-        adapter_contract_version: int | None = None,
-        resolved_policy_document: dict[str, Any] | None = None,
-        supported_environment_requirements: list[str] | None = None,
-        is_active: bool | None = None,
+        mapping_id: str | None | object = _UNSET,
+        title: str | None | object = _UNSET,
+        description: str | None | object = _UNSET,
+        owner_scope_type: str | None | object = _UNSET,
+        owner_scope_id: int | None | object = _UNSET,
+        capability_name: str | None | object = _UNSET,
+        adapter_contract_version: int | None | object = _UNSET,
+        resolved_policy_document: dict[str, Any] | None | object = _UNSET,
+        supported_environment_requirements: list[str] | None | object = _UNSET,
+        is_active: bool | None | object = _UNSET,
     ) -> dict[str, Any]:
         existing = await self.repo.get_capability_adapter_mapping(capability_adapter_mapping_id)
         if existing is None:
@@ -157,29 +166,56 @@ class McpHubCapabilityAdapterService:
                 "mcp_capability_adapter_mapping",
                 identifier=str(capability_adapter_mapping_id),
             )
+
+        next_mapping_id = _coalesce_update_value(mapping_id, str(existing["mapping_id"]))
+        next_title = _coalesce_update_value(
+            title,
+            str(existing.get("title") or existing["mapping_id"]),
+        )
+        next_description = _coalesce_update_value(
+            description,
+            existing.get("description"),
+        )
+        next_owner_scope_type = _coalesce_update_value(
+            owner_scope_type,
+            str(existing["owner_scope_type"]),
+        )
+        next_owner_scope_id = _coalesce_update_value(
+            owner_scope_id,
+            existing.get("owner_scope_id"),
+        )
+        next_capability_name = _coalesce_update_value(
+            capability_name,
+            str(existing["capability_name"]),
+        )
+        next_adapter_contract_version = _coalesce_update_value(
+            adapter_contract_version,
+            int(existing["adapter_contract_version"]),
+        )
+        next_resolved_policy_document = _coalesce_update_value(
+            resolved_policy_document,
+            dict(existing.get("resolved_policy_document") or {}),
+        )
+        next_supported_environment_requirements = _coalesce_update_value(
+            supported_environment_requirements,
+            list(existing.get("supported_environment_requirements") or []),
+        )
+        next_is_active = _coalesce_update_value(
+            is_active,
+            bool(existing.get("is_active")),
+        )
+
         return await self.preview_mapping(
-            mapping_id=mapping_id if mapping_id is not None else str(existing["mapping_id"]),
-            owner_scope_type=owner_scope_type if owner_scope_type is not None else str(existing["owner_scope_type"]),
-            owner_scope_id=owner_scope_id if owner_scope_type is not None or owner_scope_id is not None else existing.get("owner_scope_id"),
-            capability_name=capability_name if capability_name is not None else str(existing["capability_name"]),
-            adapter_contract_version=(
-                adapter_contract_version
-                if adapter_contract_version is not None
-                else int(existing["adapter_contract_version"])
-            ),
-            resolved_policy_document=(
-                resolved_policy_document
-                if resolved_policy_document is not None
-                else dict(existing.get("resolved_policy_document") or {})
-            ),
-            supported_environment_requirements=(
-                supported_environment_requirements
-                if supported_environment_requirements is not None
-                else list(existing.get("supported_environment_requirements") or [])
-            ),
-            title=title if title is not None else str(existing.get("title") or existing["mapping_id"]),
-            description=description if description is not None else existing.get("description"),
-            is_active=bool(existing.get("is_active")) if is_active is None else bool(is_active),
+            mapping_id=next_mapping_id,
+            title=next_title,
+            description=next_description,
+            owner_scope_type=next_owner_scope_type,
+            owner_scope_id=next_owner_scope_id,
+            capability_name=next_capability_name,
+            adapter_contract_version=next_adapter_contract_version,
+            resolved_policy_document=next_resolved_policy_document,
+            supported_environment_requirements=next_supported_environment_requirements,
+            is_active=bool(next_is_active),
         )
 
     async def create_mapping(

@@ -241,7 +241,7 @@ class McpHubPolicyResolver:
         self,
         repo: McpHubRepo,
         capability_resolution_service: McpHubCapabilityResolutionService | None = None,
-    ):
+    ) -> None:
         self.repo = repo
         self.capability_resolution_service = capability_resolution_service or McpHubCapabilityResolutionService(
             repo=repo

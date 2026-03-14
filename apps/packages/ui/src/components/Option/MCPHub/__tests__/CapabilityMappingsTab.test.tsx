@@ -155,4 +155,25 @@ describe("CapabilityMappingsTab", () => {
     )
     expect(await screen.findByText("Docs Mapping")).toBeTruthy()
   })
+
+  it("rejects invalid owner scope ids before previewing", async () => {
+    const user = userEvent.setup()
+    render(<CapabilityMappingsTab />)
+
+    expect(await screen.findByText("Research Mapping")).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: /new mapping/i }))
+    await user.type(screen.getByLabelText("Mapping ID"), "docs.org")
+    await user.type(screen.getByLabelText("Capability Name"), "tool.invoke.docs")
+    await user.selectOptions(screen.getByLabelText("Owner Scope"), "org")
+    await user.type(screen.getByLabelText("Owner Scope ID"), "abc")
+    fireEvent.change(screen.getByLabelText("Resolved Policy JSON"), {
+      target: { value: JSON.stringify({ allowed_tools: ["docs.search"] }) }
+    })
+
+    await user.click(screen.getByRole("button", { name: /preview mapping/i }))
+
+    expect(await screen.findByText("Owner Scope ID must be a valid integer.")).toBeTruthy()
+    expect(mocks.previewCapabilityAdapterMapping).not.toHaveBeenCalled()
+  })
 })

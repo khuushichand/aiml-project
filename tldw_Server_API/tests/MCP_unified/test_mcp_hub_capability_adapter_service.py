@@ -10,6 +10,21 @@ from tldw_Server_API.app.core.exceptions import BadRequestError
 class _FakeRepo:
     def __init__(self) -> None:
         self.created_payloads: list[dict] = []
+        self.inventory = {
+            11: {
+                "id": 11,
+                "mapping_id": "research.team",
+                "title": "Research Team Mapping",
+                "description": "Maps research capability to search tools",
+                "owner_scope_type": "team",
+                "owner_scope_id": 21,
+                "capability_name": "tool.invoke.research",
+                "adapter_contract_version": 1,
+                "resolved_policy_document": {"allowed_tools": ["web.search"]},
+                "supported_environment_requirements": ["workspace_bounded_read"],
+                "is_active": True,
+            }
+        }
 
     async def create_capability_adapter_mapping(self, **kwargs):
         self.created_payloads.append(dict(kwargs))
@@ -30,6 +45,10 @@ class _FakeRepo:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    async def get_capability_adapter_mapping(self, capability_adapter_mapping_id: int):
+        row = self.inventory.get(int(capability_adapter_mapping_id))
+        return dict(row) if row is not None else None
 
 
 class _FakeToolRegistry:
@@ -180,3 +199,40 @@ async def test_preview_mapping_expands_module_ids_to_tool_names() -> None:
         "module_ids": ["docs"],
         "tool_names": ["docs.search"],
     }
+
+
+@pytest.mark.asyncio
+async def test_preview_update_preserves_existing_scope_id_when_omitted() -> None:
+    from tldw_Server_API.app.services.mcp_hub_capability_adapter_service import (
+        McpHubCapabilityAdapterService,
+    )
+
+    repo = _FakeRepo()
+    svc = McpHubCapabilityAdapterService(repo=repo, tool_registry=_FakeToolRegistry())
+
+    preview = await svc.preview_update(
+        11,
+        owner_scope_type="team",
+        title="Updated Team Mapping",
+    )
+
+    assert preview["normalized_mapping"]["owner_scope_type"] == "team"
+    assert preview["normalized_mapping"]["owner_scope_id"] == 21
+    assert preview["affected_scope_summary"]["display_scope"] == "team:21"
+
+
+@pytest.mark.asyncio
+async def test_preview_update_allows_clearing_nullable_description() -> None:
+    from tldw_Server_API.app.services.mcp_hub_capability_adapter_service import (
+        McpHubCapabilityAdapterService,
+    )
+
+    repo = _FakeRepo()
+    svc = McpHubCapabilityAdapterService(repo=repo, tool_registry=_FakeToolRegistry())
+
+    preview = await svc.preview_update(
+        11,
+        description=None,
+    )
+
+    assert preview["normalized_mapping"]["description"] is None

@@ -1,3 +1,5 @@
+"""Resolve portable MCP Hub capabilities into concrete policy documents."""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -27,10 +29,12 @@ _SUPPORTED_ENVIRONMENT_REQUIREMENTS = frozenset(
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
+    """Return a shallow dict copy when the input is dictionary-like."""
     return dict(value) if isinstance(value, dict) else {}
 
 
 def _as_str_list(value: Any) -> list[str]:
+    """Normalize scalars and collections into a cleaned list of strings."""
     if isinstance(value, str):
         cleaned = value.strip()
         return [cleaned] if cleaned else []
@@ -45,6 +49,7 @@ def _as_str_list(value: Any) -> list[str]:
 
 
 def _unique(items: list[str]) -> list[str]:
+    """Preserve first-seen order while removing duplicates."""
     out: list[str] = []
     seen: set[str] = set()
     for item in items:
@@ -56,6 +61,7 @@ def _unique(items: list[str]) -> list[str]:
 
 
 def _collect_scope_ids(metadata: dict[str, Any], singular_key: str, plural_key: str) -> list[int]:
+    """Extract deduplicated integer scope identifiers from metadata."""
     out: list[int] = []
     seen: set[int] = set()
 
@@ -79,6 +85,7 @@ def _collect_scope_ids(metadata: dict[str, Any], singular_key: str, plural_key: 
 
 
 def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Union list fields and deep-merge nested dictionaries into a new document."""
     merged = deepcopy(base)
     for key, value in overlay.items():
         if key in _UNION_LIST_KEYS:
@@ -92,6 +99,8 @@ def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> di
 
 
 class CapabilityResolutionResult(BaseModel):
+    """Normalized output for a capability resolution request."""
+
     resolved_capabilities: list[str] = Field(default_factory=list)
     unresolved_capabilities: list[str] = Field(default_factory=list)
     resolved_policy_document: dict[str, Any] = Field(default_factory=dict)
@@ -114,6 +123,7 @@ class McpHubCapabilityResolutionService:
         metadata: dict[str, Any] | None,
         resolution_intent: str = "allow",
     ) -> CapabilityResolutionResult:
+        """Resolve capabilities using the highest-precedence active mapping in scope."""
         metadata_map = dict(metadata or {})
         resolved_capabilities: list[str] = []
         unresolved_capabilities: list[str] = []
@@ -185,6 +195,7 @@ class McpHubCapabilityResolutionService:
         capability_name: str,
         metadata: dict[str, Any],
     ) -> dict[str, Any] | None:
+        """Return the first active mapping found in team, org, then global scope order."""
         for team_id in _collect_scope_ids(metadata, "team_id", "team_ids"):
             mapping = await self.repo.find_active_capability_mapping(
                 owner_scope_type="team",
@@ -211,6 +222,7 @@ class McpHubCapabilityResolutionService:
 
     @staticmethod
     def _split_environment_requirements(values: Any) -> tuple[list[str], list[str]]:
+        """Partition environment requirements into supported and unsupported lists."""
         supported: list[str] = []
         unsupported: list[str] = []
         for requirement in _unique(_as_str_list(values)):

@@ -122,29 +122,52 @@ export const CapabilityMappingsTab = () => {
     setSuccessMessage(null)
   }
 
-  const buildPayload = (): McpHubCapabilityAdapterMappingInput | null => {
+  const buildPayload = (): {
+    payload: McpHubCapabilityAdapterMappingInput | null
+    validationError: string | null
+  } => {
     if (!mappingId.trim() || !capabilityName.trim() || !parsedResolvedPolicy) {
-      return null
+      return {
+        payload: null,
+        validationError: "Mapping ID, capability name, and valid policy JSON are required."
+      }
     }
+
+    const trimmedOwnerScopeId = ownerScopeId.trim()
+    let numericOwnerScopeId: number | null = null
+
+    if (trimmedOwnerScopeId) {
+      if (!/^\d+$/.test(trimmedOwnerScopeId)) {
+        return {
+          payload: null,
+          validationError: "Owner Scope ID must be a valid integer."
+        }
+      }
+      numericOwnerScopeId = Number.parseInt(trimmedOwnerScopeId, 10)
+    }
+
     return {
-      mapping_id: mappingId.trim(),
-      title: title.trim() || null,
-      description: description.trim() || null,
-      owner_scope_type: ownerScopeType,
-      owner_scope_id: ownerScopeId.trim() ? Number(ownerScopeId) : null,
-      capability_name: capabilityName.trim(),
-      adapter_contract_version: 1,
-      resolved_policy_document: parsedResolvedPolicy,
-      supported_environment_requirements: parseLineList(supportedRequirementsText),
-      is_active: isActive
+      payload: {
+        mapping_id: mappingId.trim(),
+        title: title.trim() || null,
+        description: description.trim() || null,
+        owner_scope_type: ownerScopeType,
+        owner_scope_id: numericOwnerScopeId,
+        capability_name: capabilityName.trim(),
+        adapter_contract_version: 1,
+        resolved_policy_document: parsedResolvedPolicy,
+        supported_environment_requirements: parseLineList(supportedRequirementsText),
+        is_active: isActive
+      },
+      validationError: null
     }
   }
 
   const handlePreview = async () => {
     setSuccessMessage(null)
-    const payload = buildPayload()
+    const { payload, validationError } = buildPayload()
     if (!payload) {
-      setErrorMessage("Mapping ID, capability name, and valid policy JSON are required.")
+      setErrorMessage(validationError)
       setPreview(null)
       return
     }
@@ -162,9 +185,9 @@ export const CapabilityMappingsTab = () => {
 
   const handleSave = async () => {
     setSuccessMessage(null)
-    const payload = buildPayload()
+    const { payload, validationError } = buildPayload()
     if (!payload) {
-      setErrorMessage("Mapping ID, capability name, and valid policy JSON are required.")
+      setErrorMessage(validationError)
       return
     }
     setSaving(true)
@@ -280,6 +303,7 @@ export const CapabilityMappingsTab = () => {
                   id="mcp-capability-mapping-scope-id"
                   aria-label="Owner Scope ID"
                   value={ownerScopeId}
+                  inputMode="numeric"
                   onChange={(event) => setOwnerScopeId(event.target.value)}
                   placeholder="Optional"
                 />
