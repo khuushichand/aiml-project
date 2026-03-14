@@ -12,12 +12,14 @@ import {
 } from "../../hooks"
 import {
   useCreateDeckMutation,
+  useCreateFlashcardsBulkMutation,
   useCreateFlashcardMutation,
   useDecksQuery
 } from "@/components/Flashcards/hooks/useFlashcardQueries"
 
 const flashcardMocks = vi.hoisted(() => ({
   createDeck: vi.fn(),
+  createFlashcardsBulk: vi.fn(),
   createFlashcard: vi.fn(),
   navigate: vi.fn()
 }))
@@ -66,6 +68,7 @@ vi.mock("../../hooks", () => ({
 vi.mock("@/components/Flashcards/hooks/useFlashcardQueries", () => ({
   useDecksQuery: vi.fn(),
   useCreateDeckMutation: vi.fn(),
+  useCreateFlashcardsBulkMutation: vi.fn(),
   useCreateFlashcardMutation: vi.fn()
 }))
 
@@ -109,12 +112,17 @@ describe("ResultsTab drill-down details", () => {
     vi.clearAllMocks()
     window.sessionStorage.clear()
     flashcardMocks.createDeck.mockReset()
+    flashcardMocks.createFlashcardsBulk.mockReset()
     flashcardMocks.createFlashcard.mockReset()
     flashcardMocks.navigate.mockReset()
     flashcardMocks.createDeck.mockResolvedValue({
       id: 99,
       name: "New deck"
     })
+    flashcardMocks.createFlashcardsBulk.mockResolvedValue([
+      { uuid: "new-card-1" },
+      { uuid: "new-card-2" }
+    ])
     flashcardMocks.createFlashcard.mockResolvedValue({
       uuid: "new-card"
     })
@@ -178,6 +186,10 @@ describe("ResultsTab drill-down details", () => {
     } as any)
     vi.mocked(useCreateDeckMutation).mockReturnValue({
       mutateAsync: flashcardMocks.createDeck,
+      isPending: false
+    } as any)
+    vi.mocked(useCreateFlashcardsBulkMutation).mockReturnValue({
+      mutateAsync: flashcardMocks.createFlashcardsBulk,
       isPending: false
     } as any)
     vi.mocked(useCreateFlashcardMutation).mockReturnValue({
@@ -373,16 +385,17 @@ describe("ResultsTab drill-down details", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Flashcards" }))
 
     await waitFor(() => {
-      expect(flashcardMocks.createFlashcard).toHaveBeenCalledTimes(1)
+      expect(flashcardMocks.createFlashcardsBulk).toHaveBeenCalledTimes(1)
     })
     expect(flashcardMocks.createDeck).not.toHaveBeenCalled()
-    expect(flashcardMocks.createFlashcard).toHaveBeenCalledWith(
+    expect(flashcardMocks.createFlashcard).not.toHaveBeenCalled()
+    expect(flashcardMocks.createFlashcardsBulk).toHaveBeenCalledWith([
       expect.objectContaining({
         deck_id: 3,
         front: "Cells are not alive.",
         tags: ["quiz-missed", "quiz-review"]
       })
-    )
+    ])
 
     fireEvent.click(
       screen.getByRole("button", { name: "Create Flashcards from Missed Questions" })

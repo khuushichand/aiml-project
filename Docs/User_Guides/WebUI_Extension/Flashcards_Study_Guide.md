@@ -30,6 +30,21 @@ Why the 8 KB field limit did not increase:
 5. Use `Manage` when you want to inspect queue state on expanded cards or document rows while cleaning up a deck.
 6. Repeat daily. The scheduler adjusts next due dates from your ratings.
 
+## Study Assistant Conflict Recovery
+
+The flashcard study assistant and quiz remediation assistant now recover cleanly if the same thread changes in another tab or client.
+
+What happens on a thread version conflict:
+
+- The latest assistant thread is reloaded automatically.
+- Your pending question or transcript is preserved instead of being dropped.
+- The panel shows `Reload latest` and retry actions so you can continue without reopening the card or results view.
+
+Retry labels:
+
+- Text questions use `Retry my message`.
+- Voice transcript fact-checks use `Retry transcript review`.
+
 ## Scheduler Tab
 
 Open `Scheduler` from the top-level Flashcards tabs to edit deck-level review policy.

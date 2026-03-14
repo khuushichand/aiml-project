@@ -103,11 +103,15 @@ if (!(globalThis as any).ResizeObserver) {
 
 describe("ResultsTab remediation panel", () => {
   const onRetakeQuiz = vi.fn()
+  let assistantQueryState: any
+  const assistantRefetchMock = vi.fn()
 
   beforeEach(() => {
     vi.clearAllMocks()
     window.sessionStorage.clear()
     onRetakeQuiz.mockReset()
+    assistantQueryState = null
+    assistantRefetchMock.mockReset()
 
     mocks.createDeck.mockResolvedValue({ id: 99, name: "Recovery Deck" })
     mocks.createFlashcard.mockResolvedValue({ uuid: "new-card" })
@@ -243,44 +247,91 @@ describe("ResultsTab remediation panel", () => {
       isPending: false
     } as any)
 
+    assistantRefetchMock.mockImplementation(async () => {
+      const nextMessageId = 201 + (assistantQueryState.data?.messages?.length ?? 1)
+      assistantQueryState = {
+        ...assistantQueryState,
+        data: {
+          ...assistantQueryState.data,
+          thread: {
+            ...assistantQueryState.data.thread,
+            version: 2,
+            message_count: 2
+          },
+          messages: [
+            ...(assistantQueryState.data?.messages ?? []),
+            {
+              id: nextMessageId,
+              thread_id: 19,
+              role: "assistant",
+              action_type: "follow_up",
+              input_modality: "text",
+              content: "Latest remediation context",
+              structured_payload: {},
+              context_snapshot: {},
+              provider: "openai",
+              model: "gpt-5",
+              created_at: "2026-03-13T09:14:00Z",
+              client_id: "test"
+            }
+          ]
+        }
+      }
+      return assistantQueryState
+    })
     vi.mocked(useQuizAttemptQuestionAssistantQuery).mockImplementation(
-      (_attemptId: number | null | undefined, questionId: number | null | undefined) =>
-        ({
-          data: questionId === 12
-            ? {
-                thread: {
-                  id: 19,
-                  context_type: "quiz_attempt_question",
-                  quiz_attempt_id: 101,
-                  question_id: 12,
-                  message_count: 1,
-                  deleted: false,
-                  client_id: "test",
-                  version: 1
-                },
-                messages: [
-                  {
-                    id: 201,
-                    thread_id: 19,
-                    role: "assistant",
-                    action_type: "explain",
-                    input_modality: "text",
-                    content: "Review the misconception in your own words.",
-                    structured_payload: {},
-                    context_snapshot: {},
-                    provider: "openai",
-                    model: "gpt-5",
-                    created_at: "2026-03-13T09:13:00Z",
-                    client_id: "test"
-                  }
-                ],
-                context_snapshot: {},
-                available_actions: ["explain", "follow_up", "freeform"]
-              }
-            : null,
-          isLoading: false,
-          isError: false
-        }) as any
+      (_attemptId: number | null | undefined, questionId: number | null | undefined) => {
+        if (questionId !== 12) {
+          return {
+            data: null,
+            isLoading: false,
+            isError: false,
+            refetch: assistantRefetchMock
+          } as any
+        }
+
+        if (!assistantQueryState) {
+          assistantQueryState = {
+            data: {
+              thread: {
+                id: 19,
+                context_type: "quiz_attempt_question",
+                quiz_attempt_id: 101,
+                question_id: 12,
+                message_count: 1,
+                deleted: false,
+                client_id: "test",
+                version: 1
+              },
+              messages: [
+                {
+                  id: 201,
+                  thread_id: 19,
+                  role: "assistant",
+                  action_type: "explain",
+                  input_modality: "text",
+                  content: "Review the misconception in your own words.",
+                  structured_payload: {},
+                  context_snapshot: {},
+                  provider: "openai",
+                  model: "gpt-5",
+                  created_at: "2026-03-13T09:13:00Z",
+                  client_id: "test"
+                }
+              ],
+              context_snapshot: {},
+              available_actions: ["explain", "follow_up", "freeform"]
+            },
+            isLoading: false,
+            isError: false
+          }
+        }
+
+        return {
+          ...assistantQueryState,
+          refetch: assistantRefetchMock
+        } as any
+      }
     )
 
     vi.mocked(useQuizAttemptQuestionAssistantRespondMutation).mockReturnValue({
@@ -397,4 +448,40 @@ describe("ResultsTab remediation panel", () => {
     })
     expect(mocks.createFlashcard).not.toHaveBeenCalled()
   })
+
+  it("recovers remediation assistant conflicts in place", async () => {
+    mocks.assistantRespond
+      .mockRejectedValueOnce(Object.assign(new Error("Version mismatch"), { response: { status: 409 } }))
+      .mockRejectedValueOnce(Object.assign(new Error("Version mismatch"), { response: { status: 409 } }))
+      .mockResolvedValueOnce({
+        assistant_message: {
+          id: 401,
+          content: "Retried remediation response"
+        }
+      })
+    await openDetails()
+
+    fireEvent.click(screen.getByRole("button", { name: /explain mistake for question 12/i }))
+
+    await waitFor(() => {
+      expect(assistantRefetchMock).toHaveBeenCalled()
+      expect(screen.getByText("Latest remediation context")).toBeInTheDocument()
+      expect(screen.getByText("Conversation changed elsewhere.")).toBeInTheDocument()
+      expect(screen.getByText("Quiz #7, question 12")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole("button", { name: /explain mistake for question 12/i }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Retry my message" })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry my message" }))
+
+    await waitFor(() => {
+      expect(mocks.assistantRespond).toHaveBeenNthCalledWith(3, {
+        attemptId: 101,
+        questionId: 12,
+        request: { action: "explain" }
+      })
+    })
+  }, 12000)
 })

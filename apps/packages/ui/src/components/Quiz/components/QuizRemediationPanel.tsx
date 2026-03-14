@@ -49,6 +49,11 @@ export const QuizRemediationPanel: React.FC<QuizRemediationPanelProps> = ({
   const [activeQuestionId, setActiveQuestionId] = React.useState<number | null>(
     () => missedQuestionEntries[0]?.questionId ?? null
   )
+  const [assistantAutoRequest, setAssistantAutoRequest] = React.useState<{
+    token: number
+    request: StudyAssistantRespondRequest
+  } | null>(null)
+  const assistantAutoRequestTokenRef = React.useRef(0)
 
   React.useEffect(() => {
     if (missedQuestionEntries.length === 0) {
@@ -84,13 +89,13 @@ export const QuizRemediationPanel: React.FC<QuizRemediationPanelProps> = ({
   const handleExplainQuestion = React.useCallback(
     async (questionId: number) => {
       setActiveQuestionId(questionId)
-      await assistantRespondMutation.mutateAsync({
-        attemptId,
-        questionId,
+      assistantAutoRequestTokenRef.current += 1
+      setAssistantAutoRequest({
+        token: assistantAutoRequestTokenRef.current,
         request: { action: "explain" }
       })
     },
-    [assistantRespondMutation, attemptId]
+    []
   )
 
   const handleAssistantRespond = React.useCallback(
@@ -270,12 +275,15 @@ export const QuizRemediationPanel: React.FC<QuizRemediationPanelProps> = ({
             </div>
             <FlashcardStudyAssistantPanel
               cardUuid={`quiz-attempt-${attemptId}-question-${activeQuestion.questionId}`}
+              threadVersion={assistantQuery.data?.thread.version ?? null}
               messages={assistantQuery.data?.messages ?? []}
               availableActions={assistantQuery.data?.available_actions ?? [...DEFAULT_AVAILABLE_ACTIONS]}
               isLoading={assistantQuery.isLoading}
               isError={assistantQuery.isError}
               isResponding={assistantRespondMutation.isPending}
+              onReloadContext={() => assistantQuery.refetch()}
               onRespond={handleAssistantRespond}
+              autoSubmitRequest={assistantAutoRequest}
             />
           </div>
         ) : null}
