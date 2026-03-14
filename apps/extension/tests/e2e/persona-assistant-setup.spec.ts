@@ -31,6 +31,7 @@ type PersonaProfileMock = {
 type PersonaMockState = {
   profile: PersonaProfileMock
   commandCount: number
+  connections: Array<{ id: string; name: string; base_url: string; auth_type: string }>
   failStarterCommandOnce: boolean
   failedStarterCommand: boolean
 }
@@ -210,10 +211,25 @@ const handleMockApiRequest = async (route: Route, state: PersonaMockState) => {
     return
   }
 
+  if (pathname === `/api/v1/persona/profiles/${PERSONA_ID}/connections` && method === "GET") {
+    await fulfillJson(route, 200, state.connections)
+    return
+  }
+
   if (pathname === `/api/v1/persona/profiles/${PERSONA_ID}/connections` && method === "POST") {
-    await fulfillJson(route, 201, {
-      id: "conn-setup-1"
-    })
+    const body = request.postDataJSON() as {
+      name?: string
+      base_url?: string
+      auth_type?: string
+    }
+    const nextConnection = {
+      id: `conn-setup-${state.connections.length + 1}`,
+      name: String(body?.name || "Setup Connection"),
+      base_url: String(body?.base_url || "https://api.example.com"),
+      auth_type: String(body?.auth_type || "none")
+    }
+    state.connections = [nextConnection, ...state.connections]
+    await fulfillJson(route, 201, nextConnection)
     return
   }
 
@@ -250,6 +266,7 @@ const installPersonaSetupMocks = async (
   const state: PersonaMockState = {
     profile: buildInitialProfile(),
     commandCount: 0,
+    connections: [],
     failStarterCommandOnce,
     failedStarterCommand: false
   }
@@ -404,7 +421,23 @@ test.describe("Persona assistant setup", () => {
       )
       await expect(page.getByTestId("persona-setup-handoff-card")).toBeVisible()
       await expect(page.getByText("Assistant setup complete")).toBeVisible()
-      await expect(page.getByRole("button", { name: "Adjust assistant defaults" })).toBeVisible()
+      await expect(page.getByText("Recommended next step")).toBeVisible()
+      await expect(page.getByText("Add a connection")).toBeVisible()
+
+      await page.getByRole("button", { name: "Open Connections" }).first().click()
+      await expect(page.getByRole("tab", { name: "Connections" })).toHaveAttribute(
+        "aria-selected",
+        "true"
+      )
+      await expect(page.getByTestId("persona-setup-handoff-card")).toBeVisible()
+
+      await page.getByTestId("persona-connections-name-input").fill("Slack Alerts")
+      await page
+        .getByTestId("persona-connections-base-url-input")
+        .fill("https://hooks.example.com/incoming")
+      await page.getByTestId("persona-connections-save").click()
+
+      await expect(page.getByText("Setup complete")).toBeVisible()
     } finally {
       await context.close()
     }
