@@ -13,10 +13,11 @@
 ## Status
 
 - Task 1: Complete
-- Task 2: In Progress
-- Task 3: Not Started
+- Task 2: Complete
+- Task 3: In Progress
 - Task 4: Not Started
 - Task 5: Not Started
+- Task 6: Not Started
 - Task 6: Not Started
 
 ### Task 1: Add capability-mapping storage and repo coverage
