@@ -105,3 +105,4 @@ async def test_policy_resolver_uses_named_workspace_set_members_over_preserved_i
     assert policy["selected_workspace_set_object_id"] == 501
     assert policy["selected_workspace_set_object_name"] == "Research Workspaces"
     assert policy["selected_assignment_workspace_ids"] == ["workspace-alpha", "workspace-beta"]
+    assert policy["authored_policy_document"] == policy["resolved_policy_document"]

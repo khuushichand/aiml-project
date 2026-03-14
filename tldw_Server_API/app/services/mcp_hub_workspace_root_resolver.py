@@ -111,6 +111,12 @@ class McpHubWorkspaceRootResolver:
                 result["workspace_root"] = _normalize_workspace_root(str(workspace_root))
                 result["source"] = "sandbox_session"
                 return result
+        elif session_key:
+            workspace_root = self._sandbox_service.get_session_workspace_path(session_key)
+            if workspace_root:
+                result["workspace_root"] = _normalize_workspace_root(str(workspace_root))
+                result["source"] = "sandbox_session"
+                return result
 
         if not user_key or not workspace_key:
             result["reason"] = "workspace_root_unavailable"

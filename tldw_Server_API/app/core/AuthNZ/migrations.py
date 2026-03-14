@@ -2082,6 +2082,49 @@ def migration_069_add_mcp_governance_pack_schema(conn: sqlite3.Connection) -> No
     logger.info("Migration 069: Added MCP governance pack schema")
 
 
+def migration_070_add_mcp_capability_adapter_mappings(conn: sqlite3.Connection) -> None:
+    """Add scope-aware MCP capability adapter mapping storage."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_capability_adapter_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mapping_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER,
+            capability_name TEXT NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            resolved_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            supported_environment_requirements_json TEXT NOT NULL DEFAULT '[]',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_capability_adapter_mappings_scope "
+        "ON mcp_capability_adapter_mappings(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_mapping_id "
+        "ON mcp_capability_adapter_mappings(mapping_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_active_scope_capability "
+        "ON mcp_capability_adapter_mappings("
+        "owner_scope_type, IFNULL(owner_scope_id, -1), capability_name"
+        ") WHERE is_active = 1"
+    )
+
+    conn.commit()
+    logger.info("Migration 070: Added MCP capability adapter mapping schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -3914,6 +3957,11 @@ def get_authnz_migrations() -> list[Migration]:
             69,
             "Add MCP governance pack schema",
             migration_069_add_mcp_governance_pack_schema,
+        ),
+        Migration(
+            70,
+            "Add MCP capability adapter mapping schema",
+            migration_070_add_mcp_capability_adapter_mappings,
         ),
     ]
 

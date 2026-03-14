@@ -7,10 +7,22 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+from tldw_Server_API.app.services.mcp_hub_capability_resolution_service import (
+    CapabilityResolutionResult,
+    McpHubCapabilityResolutionService,
+)
 
 _TARGET_ORDER = {"default": 0, "group": 1, "persona": 2}
 _SCOPE_ORDER = {"global": 0, "org": 1, "team": 2, "user": 3}
-_UNION_LIST_KEYS = {"allowed_tools", "denied_tools", "tool_names", "tool_patterns", "capabilities"}
+_UNION_LIST_KEYS = {
+    "allowed_tools",
+    "denied_tools",
+    "tool_names",
+    "tool_patterns",
+    "capabilities",
+    "tool_modules",
+    "module_ids",
+}
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -99,6 +111,30 @@ def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> di
     return merged
 
 
+def _has_explicit_scalar_value(value: Any) -> bool:
+    """Return whether a scalar value should override mapping-provided hints."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _merge_resolved_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Merge mapping effects into authored policy while preserving explicit authored scalars."""
+    merged = deepcopy(base)
+    for key, value in overlay.items():
+        if key in _UNION_LIST_KEYS:
+            merged[key] = _unique(_as_str_list(merged.get(key)) + _as_str_list(value))
+            continue
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = _merge_resolved_policy_documents(_as_dict(merged.get(key)), value)
+            continue
+        if key not in merged or not _has_explicit_scalar_value(merged.get(key)):
+            merged[key] = deepcopy(value)
+    return merged
+
+
 def _allowed_tool_patterns(policy_document: dict[str, Any]) -> list[str]:
     """Return the effective allowed-tool pattern list from a policy document."""
     patterns = (
@@ -133,11 +169,83 @@ def _provenance_entries(
     return entries
 
 
+def _capability_mapping_provenance_entries(
+    resolution: CapabilityResolutionResult,
+    *,
+    resolution_intent: str,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for summary in resolution.mapping_summaries:
+        is_deny = str(resolution_intent or "").strip().lower() == "deny"
+        entries.append(
+            {
+                "field": "capabilities",
+                "value": summary.get("capability_name"),
+                "source_kind": "capability_mapping",
+                "assignment_id": None,
+                "profile_id": None,
+                "override_id": None,
+                "capability_name": summary.get("capability_name"),
+                "mapping_id": summary.get("mapping_id"),
+                "mapping_scope_type": summary.get("mapping_scope_type"),
+                "mapping_scope_id": summary.get("mapping_scope_id"),
+                "resolved_effects": deepcopy(_as_dict(summary.get("resolved_effects"))),
+                "resolution_intent": "deny" if is_deny else "allow",
+                "effect": "narrowed" if is_deny else "merged",
+            }
+        )
+    for capability_name in resolution.unresolved_capabilities:
+        is_deny = str(resolution_intent or "").strip().lower() == "deny"
+        entries.append(
+            {
+                "field": "capabilities",
+                "value": capability_name,
+                "source_kind": "capability_mapping",
+                "assignment_id": None,
+                "profile_id": None,
+                "override_id": None,
+                "capability_name": capability_name,
+                "mapping_id": None,
+                "mapping_scope_type": None,
+                "mapping_scope_id": None,
+                "resolved_effects": {},
+                "resolution_intent": "deny" if is_deny else "allow",
+                "effect": "blocked",
+            }
+        )
+    return entries
+
+
+def _apply_denied_capability_resolution(
+    base: dict[str, Any],
+    deny_overlay: dict[str, Any],
+) -> dict[str, Any]:
+    merged = deepcopy(base)
+    denied_patterns = _unique(
+        _as_str_list(deny_overlay.get("denied_tools"))
+        + _as_str_list(deny_overlay.get("allowed_tools"))
+        + _as_str_list(deny_overlay.get("tool_patterns"))
+        + _as_str_list(deny_overlay.get("tool_names"))
+    )
+    if denied_patterns:
+        merged["denied_tools"] = _unique(
+            _as_str_list(merged.get("denied_tools")) + denied_patterns
+        )
+    return merged
+
+
 class McpHubPolicyResolver:
     """Resolve effective MCP Hub policy for a runtime request context."""
 
-    def __init__(self, repo: McpHubRepo):
+    def __init__(
+        self,
+        repo: McpHubRepo,
+        capability_resolution_service: McpHubCapabilityResolutionService | None = None,
+    ) -> None:
         self.repo = repo
+        self.capability_resolution_service = capability_resolution_service or McpHubCapabilityResolutionService(
+            repo=repo
+        )
 
     async def resolve_for_context(
         self,
@@ -349,14 +457,78 @@ class McpHubPolicyResolver:
                 }
             )
 
+        authored_policy_document = deepcopy(merged_policy_document)
+        allow_capability_resolution = await self.capability_resolution_service.resolve_capabilities(
+            capability_names=_as_str_list(authored_policy_document.get("capabilities")),
+            metadata=metadata_map,
+            resolution_intent="allow",
+        )
+        deny_capability_resolution = await self.capability_resolution_service.resolve_capabilities(
+            capability_names=_as_str_list(authored_policy_document.get("denied_capabilities")),
+            metadata=metadata_map,
+            resolution_intent="deny",
+        )
+        resolved_policy_document = _merge_resolved_policy_documents(
+            authored_policy_document,
+            allow_capability_resolution.resolved_policy_document,
+        )
+        resolved_policy_document = _apply_denied_capability_resolution(
+            resolved_policy_document,
+            deny_capability_resolution.resolved_policy_document,
+        )
+        provenance.extend(
+            _capability_mapping_provenance_entries(
+                allow_capability_resolution,
+                resolution_intent="allow",
+            )
+        )
+        provenance.extend(
+            _capability_mapping_provenance_entries(
+                deny_capability_resolution,
+                resolution_intent="deny",
+            )
+        )
+        capability_mapping_summary = [
+            *allow_capability_resolution.mapping_summaries,
+            *deny_capability_resolution.mapping_summaries,
+        ]
+        capability_warnings = [
+            *allow_capability_resolution.warnings,
+            *deny_capability_resolution.warnings,
+        ]
+        resolved_capabilities = _unique(
+            allow_capability_resolution.resolved_capabilities
+            + deny_capability_resolution.resolved_capabilities
+        )
+        unresolved_capabilities = _unique(
+            allow_capability_resolution.unresolved_capabilities
+            + deny_capability_resolution.unresolved_capabilities
+        )
+        supported_environment_requirements = _unique(
+            allow_capability_resolution.supported_environment_requirements
+            + deny_capability_resolution.supported_environment_requirements
+        )
+        unsupported_environment_requirements = _unique(
+            allow_capability_resolution.unsupported_environment_requirements
+            + deny_capability_resolution.unsupported_environment_requirements
+        )
+
         return {
             "enabled": True,
-            "allowed_tools": _allowed_tool_patterns(merged_policy_document),
-            "denied_tools": _unique(_as_str_list(merged_policy_document.get("denied_tools"))),
-            "capabilities": _unique(_as_str_list(merged_policy_document.get("capabilities"))),
+            "allowed_tools": _allowed_tool_patterns(resolved_policy_document),
+            "denied_tools": _unique(_as_str_list(resolved_policy_document.get("denied_tools"))),
+            "capabilities": _unique(_as_str_list(resolved_policy_document.get("capabilities"))),
             "approval_policy_id": resolved_approval_policy_id,
-            "approval_mode": str(merged_policy_document.get("approval_mode") or "").strip() or None,
-            "policy_document": merged_policy_document,
+            "approval_mode": str(resolved_policy_document.get("approval_mode") or "").strip() or None,
+            "policy_document": resolved_policy_document,
+            "authored_policy_document": authored_policy_document,
+            "resolved_policy_document": resolved_policy_document,
+            "resolved_capabilities": resolved_capabilities,
+            "unresolved_capabilities": unresolved_capabilities,
+            "capability_mapping_summary": capability_mapping_summary,
+            "capability_warnings": capability_warnings,
+            "supported_environment_requirements": supported_environment_requirements,
+            "unsupported_environment_requirements": unsupported_environment_requirements,
             "selected_assignment_id": selected_assignment_id,
             "selected_workspace_source_mode": selected_workspace_source_mode,
             "selected_workspace_set_object_id": selected_workspace_set_object_id,
@@ -417,6 +589,14 @@ class McpHubPolicyResolver:
             "approval_policy_id": None,
             "approval_mode": None,
             "policy_document": {},
+            "authored_policy_document": {},
+            "resolved_policy_document": {},
+            "resolved_capabilities": [],
+            "unresolved_capabilities": [],
+            "capability_mapping_summary": [],
+            "capability_warnings": [],
+            "supported_environment_requirements": [],
+            "unsupported_environment_requirements": [],
             "selected_assignment_id": None,
             "selected_workspace_source_mode": None,
             "selected_workspace_set_object_id": None,

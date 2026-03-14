@@ -10,6 +10,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 
 _VALID_SCOPE_TYPES = {"global", "org", "team", "user"}
+_VALID_CAPABILITY_ADAPTER_SCOPE_TYPES = {"global", "org", "team"}
 _VALID_TARGET_TYPES = {"default", "group", "persona"}
 _VALID_PROFILE_MODES = {"preset", "custom"}
 _VALID_APPROVAL_MODES = {
@@ -34,6 +35,13 @@ def _normalize_scope_type(scope_type: str | None) -> str:
     if value in _VALID_SCOPE_TYPES:
         return value
     raise ValueError(f"Invalid owner_scope_type: {scope_type}")
+
+
+def _normalize_capability_adapter_scope_type(scope_type: str | None) -> str:
+    value = _normalize_scope_type(scope_type)
+    if value not in _VALID_CAPABILITY_ADAPTER_SCOPE_TYPES:
+        raise ValueError(f"Invalid capability adapter owner_scope_type: {scope_type}")
+    return value
 
 
 def _to_bool(value: Any) -> bool:
@@ -112,6 +120,36 @@ def _load_json_dict(raw: Any) -> dict[str, Any]:
     return {}
 
 
+def _load_json_list(raw: Any) -> list[Any]:
+    if isinstance(raw, list):
+        return list(raw)
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        return list(parsed) if isinstance(parsed, list) else []
+    return []
+
+
+def _normalize_string_list(values: Any) -> list[str]:
+    if values is None:
+        return []
+    if not isinstance(values, (list, tuple, set)):
+        raise ValueError("supported_environment_requirements must be a list")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        normalized.append(text)
+        seen.add(text)
+    return normalized
+
+
 @dataclass
 class McpHubRepo:
     """Data access for MCP Hub ACP profiles and external server configuration."""
@@ -135,6 +173,7 @@ class McpHubRepo:
                 "mcp_acp_profiles",
                 "mcp_approval_decisions",
                 "mcp_approval_policies",
+                "mcp_capability_adapter_mappings",
                 "mcp_credential_bindings",
                 "mcp_external_servers",
                 "mcp_external_server_credential_slots",
@@ -316,6 +355,26 @@ class McpHubRepo:
         out["is_active"] = _to_bool(out.get("is_active"))
         out["is_immutable"] = _to_bool(out.get("is_immutable"))
         out["rules"] = _load_json_dict(out.pop("rules_json", None))
+        return out
+
+    @staticmethod
+    def _normalize_capability_adapter_mapping_row(
+        row: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["is_active"] = _to_bool(out.get("is_active"))
+        out["owner_scope_type"] = _normalize_capability_adapter_scope_type(out.get("owner_scope_type"))
+        out["mapping_id"] = str(out.get("mapping_id") or "").strip()
+        out["title"] = str(out.get("title") or out["mapping_id"]).strip()
+        out["capability_name"] = str(out.get("capability_name") or "").strip()
+        out["resolved_policy_document"] = _load_json_dict(
+            out.pop("resolved_policy_document_json", None)
+        )
+        out["supported_environment_requirements"] = _normalize_string_list(
+            _load_json_list(out.pop("supported_environment_requirements_json", None))
+        )
         return out
 
     @staticmethod
@@ -603,6 +662,323 @@ class McpHubRepo:
             self._normalize_governance_pack_object_row(self._row_to_dict(row)) or {}
             for row in rows
         ]
+
+    async def create_capability_adapter_mapping(
+        self,
+        *,
+        mapping_id: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        capability_name: str,
+        adapter_contract_version: int,
+        resolved_policy_document: dict[str, Any],
+        supported_environment_requirements: list[str],
+        actor_id: int | None,
+        title: str | None = None,
+        description: str | None = None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        scope_type = _normalize_capability_adapter_scope_type(owner_scope_type)
+        normalized_scope_id = None if scope_type == "global" else (
+            int(owner_scope_id) if owner_scope_id is not None else None
+        )
+        if scope_type != "global" and normalized_scope_id is None:
+            raise ValueError("owner_scope_id is required for org and team capability mappings")
+        normalized_mapping_id = str(mapping_id or "").strip()
+        if not normalized_mapping_id:
+            raise ValueError("mapping_id is required")
+        normalized_title = str(title or normalized_mapping_id).strip()
+        normalized_capability_name = str(capability_name or "").strip()
+        if not normalized_capability_name:
+            raise ValueError("capability_name is required")
+        normalized_requirements = _normalize_string_list(supported_environment_requirements)
+        normalized_is_active = _to_bool(is_active)
+        if normalized_is_active:
+            existing = await self.find_active_capability_mapping(
+                owner_scope_type=scope_type,
+                owner_scope_id=normalized_scope_id,
+                capability_name=normalized_capability_name,
+            )
+            if existing is not None:
+                raise ValueError("active capability adapter mapping already exists for scope/capability")
+
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = (
+            normalized_is_active if getattr(self.db_pool, "pool", None) is not None else int(normalized_is_active)
+        )
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_capability_adapter_mappings (
+                mapping_id, title, description, owner_scope_type, owner_scope_id,
+                capability_name, adapter_contract_version, resolved_policy_document_json,
+                supported_environment_requirements_json, is_active, created_by, updated_by,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_mapping_id,
+                normalized_title,
+                description,
+                scope_type,
+                normalized_scope_id,
+                normalized_capability_name,
+                int(adapter_contract_version),
+                json.dumps(dict(resolved_policy_document or {})),
+                json.dumps(normalized_requirements),
+                active_value,
+                actor_id,
+                actor_id,
+                ts,
+                ts,
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id
+            FROM mcp_capability_adapter_mappings
+            WHERE mapping_id = ?
+            """,
+            (normalized_mapping_id,),
+        )
+        if not row:
+            return {}
+        created = await self.get_capability_adapter_mapping(int(row["id"]))
+        return created or {}
+
+    async def get_capability_adapter_mapping(
+        self,
+        capability_adapter_mapping_id: int,
+    ) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, mapping_id, title, description, owner_scope_type, owner_scope_id,
+                   capability_name, adapter_contract_version, resolved_policy_document_json,
+                   supported_environment_requirements_json, is_active, created_by, updated_by,
+                   created_at, updated_at
+            FROM mcp_capability_adapter_mappings
+            WHERE id = ?
+            """,
+            (int(capability_adapter_mapping_id),),
+        )
+        return self._normalize_capability_adapter_mapping_row(self._row_to_dict(row) if row else None)
+
+    async def list_capability_adapter_mappings(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+        capability_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_scope_type = (
+            _normalize_capability_adapter_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else None
+        )
+        normalized_scope_id = int(owner_scope_id) if owner_scope_id is not None else None
+        normalized_capability_name = (
+            str(capability_name or "").strip() if capability_name is not None else None
+        )
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, mapping_id, title, description, owner_scope_type, owner_scope_id,
+                   capability_name, adapter_contract_version, resolved_policy_document_json,
+                   supported_environment_requirements_json, is_active, created_by, updated_by,
+                   created_at, updated_at
+            FROM mcp_capability_adapter_mappings
+            WHERE (? IS NULL OR owner_scope_type = ?)
+              AND (? IS NULL OR owner_scope_id = ?)
+              AND (? IS NULL OR capability_name = ?)
+            ORDER BY capability_name, mapping_id, id
+            """,
+            (
+                normalized_scope_type,
+                normalized_scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+                normalized_capability_name,
+                normalized_capability_name,
+            ),
+        )
+        return [
+            self._normalize_capability_adapter_mapping_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
+
+    async def update_capability_adapter_mapping(
+        self,
+        capability_adapter_mapping_id: int,
+        *,
+        mapping_id: str | object = _UNSET,
+        title: str | None | object = _UNSET,
+        description: str | None | object = _UNSET,
+        owner_scope_type: str | object = _UNSET,
+        owner_scope_id: int | None | object = _UNSET,
+        capability_name: str | object = _UNSET,
+        adapter_contract_version: int | object = _UNSET,
+        resolved_policy_document: dict[str, Any] | None | object = _UNSET,
+        supported_environment_requirements: list[str] | None | object = _UNSET,
+        is_active: bool | object = _UNSET,
+        actor_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_capability_adapter_mapping(capability_adapter_mapping_id)
+        if not existing:
+            return None
+
+        next_scope = (
+            _normalize_capability_adapter_scope_type(owner_scope_type)
+            if owner_scope_type is not _UNSET
+            else str(existing["owner_scope_type"])
+        )
+        if owner_scope_id is _UNSET:
+            next_scope_id = existing.get("owner_scope_id")
+        elif next_scope == "global":
+            next_scope_id = None
+        elif owner_scope_id is None:
+            raise ValueError("owner_scope_id is required for org and team capability mappings")
+        else:
+            next_scope_id = int(owner_scope_id)
+        next_mapping_id = (
+            str(existing["mapping_id"])
+            if mapping_id is _UNSET
+            else str(mapping_id or "").strip()
+        )
+        if not next_mapping_id:
+            raise ValueError("mapping_id is required")
+        next_title = (
+            str(existing.get("title") or existing["mapping_id"]).strip()
+            if title is _UNSET
+            else str(title or next_mapping_id).strip()
+        )
+        next_description = existing.get("description") if description is _UNSET else description
+        next_capability_name = (
+            str(existing["capability_name"])
+            if capability_name is _UNSET
+            else str(capability_name or "").strip()
+        )
+        if not next_capability_name:
+            raise ValueError("capability_name is required")
+        next_adapter_contract_version = (
+            int(existing["adapter_contract_version"])
+            if adapter_contract_version is _UNSET
+            else int(adapter_contract_version)
+        )
+        next_resolved_policy_document = (
+            dict(existing.get("resolved_policy_document") or {})
+            if resolved_policy_document is _UNSET
+            else dict(resolved_policy_document or {})
+        )
+        next_supported_environment_requirements = (
+            list(existing.get("supported_environment_requirements") or [])
+            if supported_environment_requirements is _UNSET
+            else _normalize_string_list(supported_environment_requirements)
+        )
+        next_is_active = (
+            _to_bool(existing.get("is_active"))
+            if is_active is _UNSET
+            else _to_bool(is_active)
+        )
+        if next_scope == "global":
+            next_scope_id = None
+        elif next_scope_id is None:
+            raise ValueError("owner_scope_id is required for org and team capability mappings")
+        if next_is_active:
+            current_active = await self.find_active_capability_mapping(
+                owner_scope_type=next_scope,
+                owner_scope_id=next_scope_id,
+                capability_name=next_capability_name,
+            )
+            if current_active is not None and int(current_active["id"]) != int(capability_adapter_mapping_id):
+                raise ValueError("active capability adapter mapping already exists for scope/capability")
+
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = next_is_active if getattr(self.db_pool, "pool", None) is not None else int(next_is_active)
+        await self.db_pool.execute(
+            """
+            UPDATE mcp_capability_adapter_mappings
+            SET mapping_id = ?,
+                title = ?,
+                description = ?,
+                owner_scope_type = ?,
+                owner_scope_id = ?,
+                capability_name = ?,
+                adapter_contract_version = ?,
+                resolved_policy_document_json = ?,
+                supported_environment_requirements_json = ?,
+                is_active = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                next_mapping_id,
+                next_title,
+                next_description,
+                next_scope,
+                next_scope_id,
+                next_capability_name,
+                next_adapter_contract_version,
+                json.dumps(next_resolved_policy_document),
+                json.dumps(next_supported_environment_requirements),
+                active_value,
+                actor_id,
+                ts,
+                int(capability_adapter_mapping_id),
+            ),
+        )
+        return await self.get_capability_adapter_mapping(capability_adapter_mapping_id)
+
+    async def delete_capability_adapter_mapping(self, capability_adapter_mapping_id: int) -> bool:
+        cursor = await self.db_pool.execute(
+            "DELETE FROM mcp_capability_adapter_mappings WHERE id = ?",
+            (int(capability_adapter_mapping_id),),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
+
+    async def find_active_capability_mapping(
+        self,
+        *,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        capability_name: str,
+    ) -> dict[str, Any] | None:
+        scope_type = _normalize_capability_adapter_scope_type(owner_scope_type)
+        normalized_scope_id = None if scope_type == "global" else (
+            int(owner_scope_id) if owner_scope_id is not None else None
+        )
+        if scope_type != "global" and normalized_scope_id is None:
+            raise ValueError("owner_scope_id is required for org and team capability mappings")
+        normalized_capability_name = str(capability_name or "").strip()
+        if not normalized_capability_name:
+            raise ValueError("capability_name is required")
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, mapping_id, title, description, owner_scope_type, owner_scope_id,
+                   capability_name, adapter_contract_version, resolved_policy_document_json,
+                   supported_environment_requirements_json, is_active, created_by, updated_by,
+                   created_at, updated_at
+            FROM mcp_capability_adapter_mappings
+            WHERE owner_scope_type = ?
+              AND (
+                (owner_scope_id IS NULL AND ? IS NULL)
+                OR owner_scope_id = ?
+              )
+              AND capability_name = ?
+              AND is_active = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (
+                scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+                normalized_capability_name,
+                True if getattr(self.db_pool, "pool", None) is not None else 1,
+            ),
+        )
+        return self._normalize_capability_adapter_mapping_row(self._row_to_dict(row) if row else None)
 
     async def create_acp_profile(
         self,

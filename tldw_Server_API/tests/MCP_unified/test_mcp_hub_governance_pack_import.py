@@ -5,21 +5,11 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_import_governance_pack_materializes_immutable_base_objects_with_provenance(
-    tmp_path,
-    monkeypatch,
-) -> None:
+async def _make_repo(tmp_path, monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
-    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
-        load_governance_pack_fixture,
-    )
-    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
-        McpHubGovernancePackService,
-    )
 
     db_path = tmp_path / "users.db"
     monkeypatch.setenv("AUTH_MODE", "multi_user")
@@ -33,6 +23,147 @@ async def test_import_governance_pack_materializes_immutable_base_objects_with_p
 
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
+    return repo
+
+
+@pytest.mark.asyncio
+async def test_dry_run_governance_pack_uses_live_capability_mappings(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackService(repo=repo)
+    pack = load_governance_pack_fixture("minimal_researcher_pack")
+
+    report = await service.dry_run_pack(
+        pack=pack,
+        owner_scope_type="team",
+        owner_scope_id=21,
+    )
+
+    assert report.verdict == "blocked"
+    assert report.resolved_capabilities == []
+    assert sorted(report.unresolved_capabilities) == [
+        "filesystem.read",
+        "tool.invoke.research",
+    ]
+    assert report.capability_mapping_summary == []
+
+    await repo.create_capability_adapter_mapping(
+        mapping_id="filesystem.read.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="filesystem.read",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["files.read"]},
+        supported_environment_requirements=["workspace_bounded_read"],
+        is_active=True,
+        actor_id=7,
+    )
+    await repo.create_capability_adapter_mapping(
+        mapping_id="tool.invoke.research.team-21",
+        owner_scope_type="team",
+        owner_scope_id=21,
+        capability_name="tool.invoke.research",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["web.search"]},
+        supported_environment_requirements=[],
+        is_active=True,
+        actor_id=7,
+    )
+
+    report = await service.dry_run_pack(
+        pack=pack,
+        owner_scope_type="team",
+        owner_scope_id=21,
+    )
+
+    assert report.verdict == "importable"
+    assert sorted(report.resolved_capabilities) == [
+        "filesystem.read",
+        "tool.invoke.research",
+    ]
+    assert report.unresolved_capabilities == []
+    assert sorted(summary["mapping_id"] for summary in report.capability_mapping_summary) == [
+        "filesystem.read.global",
+        "tool.invoke.research.team-21",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dry_run_governance_pack_warns_when_profile_requirement_not_guaranteed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackService(repo=repo)
+    pack = load_governance_pack_fixture("minimal_researcher_pack")
+    pack.profiles[0].environment_requirements = ["workspace_bounded_write"]
+
+    await repo.create_capability_adapter_mapping(
+        mapping_id="filesystem.read.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="filesystem.read",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["files.read"]},
+        supported_environment_requirements=[],
+        is_active=True,
+        actor_id=7,
+    )
+    await repo.create_capability_adapter_mapping(
+        mapping_id="tool.invoke.research.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="tool.invoke.research",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["web.search"]},
+        supported_environment_requirements=[],
+        is_active=True,
+        actor_id=7,
+    )
+
+    report = await service.dry_run_pack(
+        pack=pack,
+        owner_scope_type="global",
+        owner_scope_id=None,
+    )
+
+    assert report.verdict == "importable"
+    assert report.unresolved_capabilities == []
+    assert (
+        "profile:researcher.profile requires environment requirement 'workspace_bounded_write' "
+        "but current capability mappings do not guarantee it"
+    ) in report.warnings
+
+
+@pytest.mark.asyncio
+async def test_import_governance_pack_materializes_immutable_base_objects_with_provenance(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
 
     pack = load_governance_pack_fixture("minimal_researcher_pack")
     service = McpHubGovernancePackService(repo=repo)
@@ -105,10 +236,6 @@ async def test_import_governance_pack_rejects_duplicate_scope_identity(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
-    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.MCP_unified.governance_packs import (
         load_governance_pack_fixture,
     )
@@ -117,18 +244,7 @@ async def test_import_governance_pack_rejects_duplicate_scope_identity(
         McpHubGovernancePackService,
     )
 
-    db_path = tmp_path / "users.db"
-    monkeypatch.setenv("AUTH_MODE", "multi_user")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-
-    reset_settings()
-    await reset_db_pool()
-
-    pool = await get_db_pool()
-    ensure_authnz_tables(Path(str(db_path)))
-
-    repo = McpHubRepo(pool)
-    await repo.ensure_tables()
+    repo = await _make_repo(tmp_path, monkeypatch)
 
     pack = load_governance_pack_fixture("minimal_researcher_pack")
     service = McpHubGovernancePackService(repo=repo)
@@ -148,6 +264,79 @@ async def test_import_governance_pack_rejects_duplicate_scope_identity(
             actor_id=7,
         )
 
+
+@pytest.mark.asyncio
+async def test_imported_governance_pack_denied_capabilities_narrow_runtime_policy(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackService(repo=repo)
+    pack = load_governance_pack_fixture("minimal_researcher_pack")
+    pack.profiles[0].capabilities.deny = ["tool.invoke.docs"]
+
+    await repo.create_capability_adapter_mapping(
+        mapping_id="filesystem.read.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="filesystem.read",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["files.read"]},
+        supported_environment_requirements=["workspace_bounded_read"],
+        is_active=True,
+        actor_id=7,
+    )
+    await repo.create_capability_adapter_mapping(
+        mapping_id="tool.invoke.research.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="tool.invoke.research",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["web.search"]},
+        supported_environment_requirements=[],
+        is_active=True,
+        actor_id=7,
+    )
+    await repo.create_capability_adapter_mapping(
+        mapping_id="tool.invoke.docs.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="tool.invoke.docs",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["docs.search"]},
+        supported_environment_requirements=[],
+        is_active=True,
+        actor_id=7,
+    )
+
+    await service.import_pack(
+        pack=pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    resolver = McpHubPolicyResolver(repo=repo)
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={"mcp_policy_context_enabled": True},
+    )
+
+    assert sorted(policy["allowed_tools"]) == ["files.read", "web.search"]
+    assert policy["denied_tools"] == ["docs.search"]
+    assert any(
+        summary["capability_name"] == "tool.invoke.docs" and summary["resolution_intent"] == "deny"
+        for summary in policy["capability_mapping_summary"]
+    )
+
     inventory = await repo.list_governance_packs(owner_scope_type="user", owner_scope_id=7)
     assert len(inventory) == 1
 
@@ -157,10 +346,6 @@ async def test_import_governance_pack_rolls_back_partial_objects_on_failure(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
-    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.MCP_unified.governance_packs import (
         load_governance_pack_fixture,
     )
@@ -168,18 +353,7 @@ async def test_import_governance_pack_rolls_back_partial_objects_on_failure(
         McpHubGovernancePackService,
     )
 
-    db_path = tmp_path / "users.db"
-    monkeypatch.setenv("AUTH_MODE", "multi_user")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-
-    reset_settings()
-    await reset_db_pool()
-
-    pool = await get_db_pool()
-    ensure_authnz_tables(Path(str(db_path)))
-
-    repo = McpHubRepo(pool)
-    await repo.ensure_tables()
+    repo = await _make_repo(tmp_path, monkeypatch)
 
     original_create_policy_assignment = repo.create_policy_assignment
 

@@ -90,6 +90,7 @@ class _FakeRepo:
         ]
         self.overrides: dict[int, dict] = {}
         self.assignment_workspaces: dict[int, list[str]] = {}
+        self.capability_mappings: dict[tuple[str, int | None, str], dict] = {}
 
     async def list_policy_assignments(
         self,
@@ -125,6 +126,15 @@ class _FakeRepo:
             for workspace_id in self.assignment_workspaces.get(assignment_id, [])
         ]
 
+    async def find_active_capability_mapping(
+        self,
+        *,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        capability_name: str,
+    ) -> dict | None:
+        return self.capability_mappings.get((owner_scope_type, owner_scope_id, capability_name))
+
 
 @pytest.mark.asyncio
 async def test_policy_resolver_merges_default_group_and_persona_targets() -> None:
@@ -150,6 +160,8 @@ async def test_policy_resolver_merges_default_group_and_persona_targets() -> Non
     assert policy["denied_tools"] == ["external.tools.refresh"]
     assert policy["capabilities"] == ["filesystem.read", "network.external"]
     assert policy["approval_mode"] == "ask_every_time"
+    assert policy["authored_policy_document"] == policy["policy_document"]
+    assert policy["resolved_policy_document"] == policy["policy_document"]
     assert policy["policy_document"]["path_scope_mode"] == "cwd_descendants"
     assert policy["policy_document"]["path_scope_enforcement"] == "approval_required_when_unenforceable"
     assert [source["assignment_id"] for source in policy["sources"]] == [10, 11, 12]
@@ -268,5 +280,172 @@ async def test_policy_resolver_applies_path_scope_object_layers_before_inline_an
     assert any(
         entry["field"] == "path_scope_mode"
         and entry["source_kind"] == "assignment_path_scope_object"
+        for entry in policy["provenance"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_resolver_returns_authored_and_resolved_documents_when_mapping_applies() -> None:
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = _FakeRepo()
+    repo.profiles[1]["policy_document"] = {
+        "allowed_tools": ["notes.search"],
+        "capabilities": ["tool.invoke.research"],
+        "path_scope_enforcement": "approval_required_when_unenforceable",
+    }
+    repo.capability_mappings[("global", None, "tool.invoke.research")] = {
+        "mapping_id": "research.global",
+        "owner_scope_type": "global",
+        "owner_scope_id": None,
+        "capability_name": "tool.invoke.research",
+        "resolved_policy_document": {
+            "allowed_tools": ["web.search"],
+            "approval_mode": "allow_silently",
+            "path_scope_mode": "workspace_root",
+        },
+        "supported_environment_requirements": ["workspace_bounded_read"],
+        "is_active": True,
+    }
+    resolver = McpHubPolicyResolver(repo=repo)
+
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={
+            "mcp_policy_context_enabled": True,
+            "group_id": "ops",
+            "persona_id": "researcher",
+        },
+    )
+
+    assert policy["authored_policy_document"]["allowed_tools"] == [
+        "notes.search",
+        "external.servers.list",
+        "Bash(git *)",
+    ]
+    assert policy["authored_policy_document"]["capabilities"] == [
+        "tool.invoke.research",
+        "network.external",
+    ]
+    assert policy["resolved_policy_document"]["allowed_tools"] == [
+        "notes.search",
+        "external.servers.list",
+        "Bash(git *)",
+        "web.search",
+    ]
+    assert policy["resolved_policy_document"]["approval_mode"] == "ask_every_time"
+    assert policy["resolved_policy_document"]["path_scope_mode"] == "cwd_descendants"
+    assert policy["allowed_tools"] == [
+        "notes.search",
+        "external.servers.list",
+        "Bash(git *)",
+        "web.search",
+    ]
+    assert policy["resolved_capabilities"] == ["tool.invoke.research"]
+    assert policy["unresolved_capabilities"] == ["network.external"]
+    assert policy["capability_mapping_summary"] == [
+        {
+            "capability_name": "tool.invoke.research",
+            "resolution_intent": "allow",
+            "mapping_id": "research.global",
+            "mapping_scope_type": "global",
+            "mapping_scope_id": None,
+            "resolved_effects": {
+                "allowed_tools": ["web.search"],
+                "approval_mode": "allow_silently",
+                "path_scope_mode": "workspace_root",
+            },
+            "supported_environment_requirements": ["workspace_bounded_read"],
+            "unsupported_environment_requirements": [],
+        }
+    ]
+    assert any(
+        entry["source_kind"] == "capability_mapping"
+        and entry["capability_name"] == "tool.invoke.research"
+        and entry["mapping_id"] == "research.global"
+        and entry["effect"] == "merged"
+        for entry in policy["provenance"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_resolver_keeps_unresolved_capabilities_visible_without_grants() -> None:
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = _FakeRepo()
+    repo.assignments = [repo.assignments[0]]
+    repo.profiles[1]["policy_document"] = {
+        "capabilities": ["tool.invoke.unmapped"],
+    }
+    resolver = McpHubPolicyResolver(repo=repo)
+
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={"mcp_policy_context_enabled": True},
+    )
+
+    assert policy["allowed_tools"] == []
+    assert policy["authored_policy_document"] == {"capabilities": ["tool.invoke.unmapped"]}
+    assert policy["resolved_policy_document"] == {"capabilities": ["tool.invoke.unmapped"]}
+    assert policy["resolved_capabilities"] == []
+    assert policy["unresolved_capabilities"] == ["tool.invoke.unmapped"]
+    assert policy["capability_warnings"] == [
+        "No active capability adapter mapping found for 'tool.invoke.unmapped'"
+    ]
+    assert any(
+        entry["source_kind"] == "capability_mapping"
+        and entry["capability_name"] == "tool.invoke.unmapped"
+        and entry["effect"] == "blocked"
+        for entry in policy["provenance"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_resolver_turns_denied_capabilities_into_denied_tool_patterns() -> None:
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = _FakeRepo()
+    repo.assignments = [repo.assignments[0]]
+    repo.profiles[1]["policy_document"] = {
+        "capabilities": ["filesystem.read"],
+        "denied_capabilities": ["tool.invoke.docs"],
+    }
+    repo.capability_mappings = {
+        ("global", None, "filesystem.read"): {
+            "mapping_id": "filesystem.read.global",
+            "owner_scope_type": "global",
+            "owner_scope_id": None,
+            "capability_name": "filesystem.read",
+            "resolved_policy_document": {"allowed_tools": ["files.read"]},
+            "supported_environment_requirements": [],
+            "is_active": True,
+        },
+        ("global", None, "tool.invoke.docs"): {
+            "mapping_id": "docs.global",
+            "owner_scope_type": "global",
+            "owner_scope_id": None,
+            "capability_name": "tool.invoke.docs",
+            "resolved_policy_document": {"allowed_tools": ["docs.search"]},
+            "supported_environment_requirements": [],
+            "is_active": True,
+        },
+    }
+    resolver = McpHubPolicyResolver(repo=repo)
+
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={"mcp_policy_context_enabled": True},
+    )
+
+    assert policy["allowed_tools"] == ["files.read"]
+    assert policy["denied_tools"] == ["docs.search"]
+    assert sorted(summary["resolution_intent"] for summary in policy["capability_mapping_summary"]) == [
+        "allow",
+        "deny",
+    ]
+    assert any(
+        entry["source_kind"] == "capability_mapping"
+        and entry["capability_name"] == "tool.invoke.docs"
+        and entry["effect"] == "narrowed"
         for entry in policy["provenance"]
     )

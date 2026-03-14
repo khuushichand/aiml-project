@@ -20,6 +20,10 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ApprovalPolicyResponse,
     ApprovalPolicyUpdateRequest,
     AssignmentCredentialBindingUpsertRequest,
+    CapabilityAdapterMappingCreateRequest,
+    CapabilityAdapterMappingPreviewResponse,
+    CapabilityAdapterMappingResponse,
+    CapabilityAdapterMappingUpdateRequest,
     CredentialBindingResponse,
     EffectivePolicyResponse,
     EffectiveExternalAccessResponse,
@@ -75,6 +79,9 @@ from tldw_Server_API.app.core.config import config
 from tldw_Server_API.app.core.exceptions import BadRequestError, ResourceNotFoundError
 from tldw_Server_API.app.services.mcp_hub_external_legacy_inventory import (
     McpHubExternalLegacyInventoryService,
+)
+from tldw_Server_API.app.services.mcp_hub_capability_adapter_service import (
+    McpHubCapabilityAdapterService,
 )
 from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
     GovernancePackAlreadyExistsError,
@@ -136,6 +143,17 @@ async def get_mcp_hub_governance_pack_service() -> McpHubGovernancePackService:
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
     return McpHubGovernancePackService(repo=repo)
+
+
+async def get_mcp_hub_capability_adapter_service() -> McpHubCapabilityAdapterService:
+    """Resolve capability-adapter service with storage bootstrap checks."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpHubCapabilityAdapterService(
+        repo=repo,
+        tool_registry=McpHubToolRegistryService(),
+    )
 
 
 async def get_mcp_hub_policy_resolver_dep() -> McpHubPolicyResolver:
@@ -677,6 +695,45 @@ def _resolve_governance_pack_mutation_scope(
     if owner_scope_id is None:
         raise HTTPException(status_code=422, detail=f"{scope_type} scope requires owner_scope_id")
     return (scope_type, int(owner_scope_id))
+
+
+def _resolve_capability_adapter_mutation_scope(
+    *,
+    owner_scope_type: str,
+    owner_scope_id: int | None,
+) -> tuple[str, int | None]:
+    """Resolve capability-adapter mapping scope, rejecting unsupported user scope."""
+    scope_type = str(owner_scope_type or "").strip().lower()
+    if scope_type not in {"global", "org", "team"}:
+        raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+    if scope_type == "global":
+        if owner_scope_id is not None:
+            raise HTTPException(status_code=422, detail="global scope cannot include owner_scope_id")
+        return ("global", None)
+    if owner_scope_id is None:
+        raise HTTPException(status_code=422, detail=f"{scope_type} scope requires owner_scope_id")
+    return (scope_type, int(owner_scope_id))
+
+
+def _resolve_visible_capability_adapter_scope_filters(
+    *,
+    principal: AuthPrincipal,
+    owner_scope_type: str | None,
+    owner_scope_id: int | None,
+) -> list[tuple[str | None, int | None]]:
+    """Resolve visible filters for capability mappings, excluding unsupported user scope."""
+    if owner_scope_type is not None and str(owner_scope_type or "").strip().lower() == "user":
+        raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    return [
+        (scope_type, scope_id)
+        for scope_type, scope_id in filters
+        if scope_type is None or scope_type in {"global", "org", "team"}
+    ]
 
 
 def _portable_grant_capability(capability: Any) -> str | None:
@@ -1229,6 +1286,154 @@ async def get_tool_registry_summary(
         entries=[ToolRegistryEntryResponse.model_validate(row) for row in summary.get("entries", [])],
         modules=[ToolRegistryModuleResponse.model_validate(row) for row in summary.get("modules", [])],
     )
+
+
+@router.post("/capability-mappings/preview", response_model=CapabilityAdapterMappingPreviewResponse)
+async def preview_capability_mapping(
+    payload: CapabilityAdapterMappingCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> CapabilityAdapterMappingPreviewResponse:
+    """Validate and preview a capability adapter mapping without persisting it."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_capability_adapter_mutation_scope(
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        preview = await svc.preview_mapping(
+            mapping_id=payload.mapping_id,
+            title=payload.title,
+            description=payload.description,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            capability_name=payload.capability_name,
+            adapter_contract_version=payload.adapter_contract_version,
+            resolved_policy_document=payload.resolved_policy_document,
+            supported_environment_requirements=payload.supported_environment_requirements,
+            is_active=payload.is_active,
+        )
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
+    return CapabilityAdapterMappingPreviewResponse.model_validate(preview)
+
+
+@router.get("/capability-mappings", response_model=list[CapabilityAdapterMappingResponse])
+async def list_capability_mappings(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> list[CapabilityAdapterMappingResponse]:
+    """List capability adapter mappings visible to the current principal."""
+    filters = _resolve_visible_capability_adapter_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_capability_adapter_mappings(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [CapabilityAdapterMappingResponse.model_validate(row) for row in rows]
+
+
+@router.post("/capability-mappings", response_model=CapabilityAdapterMappingResponse, status_code=201)
+async def create_capability_mapping(
+    payload: CapabilityAdapterMappingCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> CapabilityAdapterMappingResponse:
+    """Create a capability adapter mapping after validation and grant-authority checks."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_capability_adapter_mutation_scope(
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        preview = await svc.preview_mapping(
+            mapping_id=payload.mapping_id,
+            title=payload.title,
+            description=payload.description,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            capability_name=payload.capability_name,
+            adapter_contract_version=payload.adapter_contract_version,
+            resolved_policy_document=payload.resolved_policy_document,
+            supported_environment_requirements=payload.supported_environment_requirements,
+            is_active=payload.is_active,
+        )
+        _require_grant_authority(
+            principal,
+            dict(preview["normalized_mapping"].get("resolved_policy_document") or {}),
+        )
+        created = await svc.create_mapping(
+            mapping_id=payload.mapping_id,
+            title=payload.title,
+            description=payload.description,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            capability_name=payload.capability_name,
+            adapter_contract_version=payload.adapter_contract_version,
+            resolved_policy_document=payload.resolved_policy_document,
+            supported_environment_requirements=payload.supported_environment_requirements,
+            actor_id=principal.user_id,
+            is_active=payload.is_active,
+        )
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
+    return CapabilityAdapterMappingResponse.model_validate(created)
+
+
+@router.put("/capability-mappings/{capability_adapter_mapping_id}", response_model=CapabilityAdapterMappingResponse)
+async def update_capability_mapping(
+    capability_adapter_mapping_id: int,
+    payload: CapabilityAdapterMappingUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> CapabilityAdapterMappingResponse:
+    """Update a capability adapter mapping after validation and grant-authority checks."""
+    _require_mutation_permission(principal)
+    update_fields = payload.model_dump(exclude_unset=True)
+    try:
+        preview = await svc.preview_update(
+            capability_adapter_mapping_id,
+            **update_fields,
+        )
+        _require_grant_authority(
+            principal,
+            dict(preview["normalized_mapping"].get("resolved_policy_document") or {}),
+        )
+        updated = await svc.update_mapping(
+            capability_adapter_mapping_id,
+            **update_fields,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
+    return CapabilityAdapterMappingResponse.model_validate(updated)
+
+
+@router.delete("/capability-mappings/{capability_adapter_mapping_id}", response_model=MCPHubDeleteResponse)
+async def delete_capability_mapping(
+    capability_adapter_mapping_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> MCPHubDeleteResponse:
+    """Delete a capability adapter mapping."""
+    _require_mutation_permission(principal)
+    try:
+        await svc.delete_capability_adapter_mapping(capability_adapter_mapping_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
 
 
 @router.post("/governance-packs/dry-run", response_model=GovernancePackDryRunResponse)
