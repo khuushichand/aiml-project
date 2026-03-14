@@ -31,6 +31,14 @@ _TEXT_COLOR = "#f8fafc"
 _MUTED_TEXT_COLOR = "#cbd5e1"
 _ACCENT_COLOR = "#38bdf8"
 _DEFAULT_FFMPEG_TIMEOUT_SECONDS = 120
+_DEFAULT_FFPROBE_TIMEOUT_SECONDS = 30
+_TRANSITION_DURATION_SECONDS = 0.75
+_TRANSITION_FILTERS = {
+    "cut": "cut",
+    "fade": "fade",
+    "wipe": "wipeleft",
+    "zoom": "zoomin",
+}
 
 
 class PresentationRenderError(RuntimeError):
@@ -62,6 +70,15 @@ class PresentationRenderSnapshot:
     theme: str
     slides: list[dict[str, Any]]
     studio_data: dict[str, Any] | None
+
+
+@dataclass
+class _PreparedSlideRender:
+    slide: dict[str, Any]
+    frame_path: Path
+    audio_path: Path | None
+    audio_duration_seconds: float | None
+    effective_duration_seconds: float
 
 
 def load_presentation_render_snapshot(
@@ -143,6 +160,23 @@ def _resolve_ffmpeg_path() -> str:
     raise PresentationRenderError("presentation_render_ffmpeg_unavailable")
 
 
+def _resolve_ffprobe_path() -> str | None:
+    env_path = (os.getenv("FFPROBE_PATH") or "").strip()
+    if env_path:
+        return env_path
+
+    ffmpeg_env_path = (os.getenv("FFMPEG_PATH") or "").strip()
+    if ffmpeg_env_path:
+        sibling = Path(ffmpeg_env_path).with_name("ffprobe")
+        if sibling.exists():
+            return str(sibling)
+
+    ffprobe_path = shutil.which("ffprobe")
+    if ffprobe_path:
+        return ffprobe_path
+    return None
+
+
 def _resolve_ffmpeg_timeout_seconds(*, expected_duration_seconds: float) -> int:
     override = (os.getenv("PRESENTATION_RENDER_FFMPEG_TIMEOUT_SECONDS") or "").strip()
     if override:
@@ -194,6 +228,67 @@ def _slide_studio_metadata(slide: dict[str, Any]) -> dict[str, Any]:
     if isinstance(studio, dict):
         return studio
     return {}
+
+
+def _duration_seconds_from_ms(value: Any) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    if value <= 0:
+        return None
+    return float(value) / 1000.0
+
+
+def _probe_media_duration_seconds(media_path: Path) -> float | None:
+    ffprobe_path = _resolve_ffprobe_path()
+    if ffprobe_path is None or not media_path.exists():
+        return None
+
+    command = [
+        ffprobe_path,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(media_path),
+    ]
+    try:
+        completed = subprocess.run(  # nosec B603
+            command,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_DEFAULT_FFPROBE_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        logger.warning("ffprobe duration probe failed for {}: ffprobe executable is unavailable", media_path)
+        return None
+    except subprocess.TimeoutExpired as exc:
+        logger.warning(
+            "ffprobe duration probe failed for {}: {} timed out after {} seconds",
+            media_path,
+            exc.cmd,
+            exc.timeout,
+        )
+        return None
+    except subprocess.CalledProcessError as exc:
+        stderr_text = (exc.stderr or b"").decode("utf-8", "ignore").strip()
+        logger.warning(
+            "ffprobe duration probe failed for {}: exit code {}{}",
+            media_path,
+            exc.returncode,
+            f" ({stderr_text})" if stderr_text else "",
+        )
+        return None
+
+    try:
+        duration_seconds = float((completed.stdout or b"").decode("utf-8", "ignore").strip())
+    except ValueError:
+        return None
+    if duration_seconds <= 0:
+        return None
+    return duration_seconds
 
 
 def _decode_data_b64(data_b64: str, *, error_code: str) -> bytes:
@@ -302,13 +397,7 @@ def _materialize_slide_audio(
     return audio_path
 
 
-def _estimate_slide_duration_seconds(slide: dict[str, Any]) -> float:
-    audio = _slide_studio_metadata(slide).get("audio")
-    if isinstance(audio, dict):
-        duration_ms = audio.get("duration_ms")
-        if isinstance(duration_ms, (int, float)) and duration_ms > 0:
-            return max(1.0, float(duration_ms) / 1000.0)
-
+def _estimate_slide_duration_from_notes_seconds(slide: dict[str, Any]) -> float:
     notes = str(slide.get("speaker_notes") or "").strip()
     if not notes:
         return 3.0
@@ -316,6 +405,56 @@ def _estimate_slide_duration_seconds(slide: dict[str, Any]) -> float:
     if words <= 0:
         return 3.0
     return max(3.0, min(20.0, round(words / 2.6, 2)))
+
+
+def _resolve_slide_audio_duration_seconds(
+    slide: dict[str, Any],
+    *,
+    audio_path: Path | None,
+) -> float | None:
+    audio = _slide_studio_metadata(slide).get("audio")
+    if not isinstance(audio, dict):
+        return None
+
+    metadata_duration_seconds = _duration_seconds_from_ms(audio.get("duration_ms"))
+    if metadata_duration_seconds is not None:
+        return max(1.0, metadata_duration_seconds)
+
+    if audio_path is None:
+        return None
+
+    probed_duration_seconds = _probe_media_duration_seconds(audio_path)
+    if probed_duration_seconds is None:
+        return None
+    return max(1.0, probed_duration_seconds)
+
+
+def _resolve_effective_slide_duration_seconds(
+    slide: dict[str, Any],
+    *,
+    audio_duration_seconds: float | None,
+) -> float:
+    studio = _slide_studio_metadata(slide)
+    timing_mode = str(studio.get("timing_mode") or "").strip().lower()
+    manual_duration_seconds = _duration_seconds_from_ms(studio.get("manual_duration_ms"))
+
+    if timing_mode == "manual" and manual_duration_seconds is not None:
+        if audio_duration_seconds is not None:
+            return max(audio_duration_seconds, manual_duration_seconds)
+        return manual_duration_seconds
+
+    if audio_duration_seconds is not None:
+        return audio_duration_seconds
+
+    return _estimate_slide_duration_from_notes_seconds(slide)
+
+
+def _resolve_slide_transition_filter(slide: dict[str, Any]) -> str:
+    studio = _slide_studio_metadata(slide)
+    if "transition" not in studio or not str(studio.get("transition") or "").strip():
+        return "cut"
+    transition_name = str(studio.get("transition") or "fade").strip().lower()
+    return _TRANSITION_FILTERS.get(transition_name, "fade")
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -451,11 +590,11 @@ def _build_segment_command(
         str(frame_path),
     ]
     if audio_path is not None:
-        command.extend(["-i", str(audio_path)])
+        command.extend(["-i", str(audio_path), "-af", "apad"])
     else:
-        command.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", f"{duration_seconds:.2f}"])
+        command.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
 
-    command.extend(["-shortest", "-r", "30", "-tune", "stillimage"])
+    command.extend(["-r", "30", "-tune", "stillimage", "-t", f"{duration_seconds:.2f}"])
     if output_format == "mp4":
         command.extend(
             [
@@ -484,6 +623,57 @@ def _build_segment_command(
     return command
 
 
+def _build_visual_segment_command(
+    *,
+    ffmpeg_path: str,
+    frame_path: Path,
+    duration_seconds: float,
+    output_path: Path,
+    output_format: str,
+) -> list[str]:
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-loop",
+        "1",
+        "-framerate",
+        "30",
+        "-t",
+        f"{duration_seconds:.2f}",
+        "-i",
+        str(frame_path),
+        "-an",
+    ]
+    if output_format == "mp4":
+        command.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+    else:
+        command.extend(["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "35"])
+    command.append(str(output_path))
+    return command
+
+
+def _build_audio_segment_command(
+    *,
+    ffmpeg_path: str,
+    audio_path: Path | None,
+    duration_seconds: float,
+    output_path: Path,
+    output_format: str,
+) -> list[str]:
+    command = [ffmpeg_path, "-y"]
+    if audio_path is not None:
+        command.extend(["-i", str(audio_path), "-af", "apad"])
+    else:
+        command.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
+    command.extend(["-t", f"{duration_seconds:.2f}"])
+    if output_format == "mp4":
+        command.extend(["-c:a", "aac"])
+    else:
+        command.extend(["-c:a", "libopus"])
+    command.append(str(output_path))
+    return command
+
+
 def _build_concat_command(
     *,
     ffmpeg_path: str,
@@ -501,6 +691,107 @@ def _build_concat_command(
         "-i",
         str(concat_list_path),
         "-c",
+        "copy",
+    ]
+    if output_format == "mp4":
+        command.extend(["-movflags", "+faststart"])
+    command.append(str(output_path))
+    return command
+
+
+def _build_audio_concat_command(
+    *,
+    ffmpeg_path: str,
+    audio_paths: list[Path],
+    output_path: Path,
+    output_format: str,
+) -> list[str]:
+    if len(audio_paths) == 1:
+        command = [ffmpeg_path, "-y", "-i", str(audio_paths[0]), "-c", "copy"]
+        command.append(str(output_path))
+        return command
+
+    command = [ffmpeg_path, "-y"]
+    for audio_path in audio_paths:
+        command.extend(["-i", str(audio_path)])
+    filter_inputs = "".join(f"[{index}:a]" for index in range(len(audio_paths)))
+    command.extend(
+        [
+            "-filter_complex",
+            f"{filter_inputs}concat=n={len(audio_paths)}:v=0:a=1[aout]",
+            "-map",
+            "[aout]",
+        ]
+    )
+    if output_format == "mp4":
+        command.extend(["-c:a", "aac"])
+    else:
+        command.extend(["-c:a", "libopus"])
+    command.append(str(output_path))
+    return command
+
+
+def _build_transition_video_command(
+    *,
+    ffmpeg_path: str,
+    video_paths: list[Path],
+    effective_durations_seconds: list[float],
+    boundary_transitions: list[str],
+    output_path: Path,
+    output_format: str,
+) -> list[str]:
+    command = [ffmpeg_path, "-y"]
+    for video_path in video_paths:
+        command.extend(["-i", str(video_path)])
+
+    if len(video_paths) == 1:
+        command.extend(["-map", "0:v:0"])
+    else:
+        filter_parts: list[str] = []
+        current_label = "0:v"
+        cumulative_offset = 0.0
+        for index in range(1, len(video_paths)):
+            boundary_transition = boundary_transitions[index - 1]
+            output_label = f"v{index}"
+            next_label = f"{index}:v"
+            cumulative_offset += effective_durations_seconds[index - 1]
+            if boundary_transition == "cut":
+                filter_parts.append(
+                    f"[{current_label}][{next_label}]concat=n=2:v=1:a=0[{output_label}]"
+                )
+            else:
+                filter_parts.append(
+                    f"[{current_label}][{next_label}]xfade=transition={boundary_transition}:duration={_TRANSITION_DURATION_SECONDS:.2f}:offset={cumulative_offset:.2f}[{output_label}]"
+                )
+            current_label = output_label
+        command.extend(["-filter_complex", ";".join(filter_parts), "-map", f"[{current_label}]"])
+
+    if output_format == "mp4":
+        command.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+    else:
+        command.extend(["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "35"])
+    command.append(str(output_path))
+    return command
+
+
+def _build_mux_command(
+    *,
+    ffmpeg_path: str,
+    video_path: Path,
+    audio_path: Path,
+    output_path: Path,
+    output_format: str,
+) -> list[str]:
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(audio_path),
+        "-c:v",
+        "copy",
+        "-c:a",
         "copy",
     ]
     if output_format == "mp4":
@@ -550,8 +841,7 @@ def render_presentation_video(
     with tempfile.TemporaryDirectory(prefix="presentation-render-") as temp_dir_str:
         temp_dir = Path(temp_dir_str)
         with _collections_db_context(user_id=user_id, collections_db=collections_db) as asset_db:
-            segment_paths: list[Path] = []
-            total_expected_duration_seconds = 0.0
+            prepared_slides: list[_PreparedSlideRender] = []
             for slide_index, slide in enumerate(render_slides):
                 frame_path = temp_dir / f"slide-{slide_index:03d}.png"
                 _render_slide_frame(
@@ -567,14 +857,42 @@ def render_presentation_video(
                     collections_db=asset_db,
                     user_id=user_id,
                 )
+                audio_duration_seconds = _resolve_slide_audio_duration_seconds(
+                    slide,
+                    audio_path=audio_path,
+                )
+                slide_duration_seconds = _resolve_effective_slide_duration_seconds(
+                    slide,
+                    audio_duration_seconds=audio_duration_seconds,
+                )
+                prepared_slides.append(
+                    _PreparedSlideRender(
+                        slide=slide,
+                        frame_path=frame_path,
+                        audio_path=audio_path,
+                        audio_duration_seconds=audio_duration_seconds,
+                        effective_duration_seconds=slide_duration_seconds,
+                    )
+                )
+
+        boundary_transitions = [
+            _resolve_slide_transition_filter(prepared.slide)
+            for prepared in prepared_slides[1:]
+        ]
+        has_visual_transitions = any(transition != "cut" for transition in boundary_transitions)
+        total_expected_duration_seconds = sum(
+            prepared.effective_duration_seconds for prepared in prepared_slides
+        )
+
+        if not has_visual_transitions:
+            segment_paths: list[Path] = []
+            for slide_index, prepared in enumerate(prepared_slides):
                 segment_path = temp_dir / f"segment-{slide_index:03d}.{normalized_format}"
-                slide_duration_seconds = _estimate_slide_duration_seconds(slide)
-                total_expected_duration_seconds += slide_duration_seconds
                 command = _build_segment_command(
                     ffmpeg_path=ffmpeg_path,
-                    frame_path=frame_path,
-                    audio_path=audio_path,
-                    duration_seconds=slide_duration_seconds,
+                    frame_path=prepared.frame_path,
+                    audio_path=prepared.audio_path,
+                    duration_seconds=prepared.effective_duration_seconds,
                     segment_path=segment_path,
                     output_format=normalized_format,
                 )
@@ -582,29 +900,124 @@ def render_presentation_video(
                     command,
                     output_path=segment_path,
                     timeout_seconds=_resolve_ffmpeg_timeout_seconds(
-                        expected_duration_seconds=slide_duration_seconds,
+                        expected_duration_seconds=prepared.effective_duration_seconds,
                     ),
                 )
                 segment_paths.append(segment_path)
+            concat_list_path = temp_dir / "segments.txt"
+            concat_list_path.write_text(
+                "\n".join(f"file '{segment_path.as_posix()}'" for segment_path in segment_paths),
+                encoding="utf-8",
+            )
+            concat_command = _build_concat_command(
+                ffmpeg_path=ffmpeg_path,
+                concat_list_path=concat_list_path,
+                output_path=output_path,
+                output_format=normalized_format,
+            )
+            _run_ffmpeg_command(
+                concat_command,
+                output_path=output_path,
+                timeout_seconds=_resolve_ffmpeg_timeout_seconds(
+                    expected_duration_seconds=total_expected_duration_seconds,
+                ),
+            )
+        else:
+            visual_paths: list[Path] = []
+            audio_paths: list[Path] = []
+            audio_extension = ".m4a" if normalized_format == "mp4" else ".webm"
 
-        concat_list_path = temp_dir / "segments.txt"
-        concat_list_path.write_text(
-            "\n".join(f"file '{segment_path.as_posix()}'" for segment_path in segment_paths),
-            encoding="utf-8",
-        )
-        concat_command = _build_concat_command(
-            ffmpeg_path=ffmpeg_path,
-            concat_list_path=concat_list_path,
-            output_path=output_path,
-            output_format=normalized_format,
-        )
-        _run_ffmpeg_command(
-            concat_command,
-            output_path=output_path,
-            timeout_seconds=_resolve_ffmpeg_timeout_seconds(
-                expected_duration_seconds=total_expected_duration_seconds,
-            ),
-        )
+            for slide_index, prepared in enumerate(prepared_slides):
+                outgoing_transition = (
+                    boundary_transitions[slide_index]
+                    if slide_index < len(boundary_transitions)
+                    else "cut"
+                )
+                visual_duration_seconds = prepared.effective_duration_seconds + (
+                    _TRANSITION_DURATION_SECONDS if outgoing_transition != "cut" else 0.0
+                )
+                visual_path = temp_dir / f"visual-{slide_index:03d}.{normalized_format}"
+                visual_command = _build_visual_segment_command(
+                    ffmpeg_path=ffmpeg_path,
+                    frame_path=prepared.frame_path,
+                    duration_seconds=visual_duration_seconds,
+                    output_path=visual_path,
+                    output_format=normalized_format,
+                )
+                _run_ffmpeg_command(
+                    visual_command,
+                    output_path=visual_path,
+                    timeout_seconds=_resolve_ffmpeg_timeout_seconds(
+                        expected_duration_seconds=visual_duration_seconds,
+                    ),
+                )
+                visual_paths.append(visual_path)
+
+                audio_segment_path = temp_dir / f"audio-{slide_index:03d}{audio_extension}"
+                audio_command = _build_audio_segment_command(
+                    ffmpeg_path=ffmpeg_path,
+                    audio_path=prepared.audio_path,
+                    duration_seconds=prepared.effective_duration_seconds,
+                    output_path=audio_segment_path,
+                    output_format=normalized_format,
+                )
+                _run_ffmpeg_command(
+                    audio_command,
+                    output_path=audio_segment_path,
+                    timeout_seconds=_resolve_ffmpeg_timeout_seconds(
+                        expected_duration_seconds=prepared.effective_duration_seconds,
+                    ),
+                )
+                audio_paths.append(audio_segment_path)
+
+            transitioned_video_path = temp_dir / f"transitioned-video.{normalized_format}"
+            transitioned_video_command = _build_transition_video_command(
+                ffmpeg_path=ffmpeg_path,
+                video_paths=visual_paths,
+                effective_durations_seconds=[
+                    prepared.effective_duration_seconds for prepared in prepared_slides
+                ],
+                boundary_transitions=boundary_transitions,
+                output_path=transitioned_video_path,
+                output_format=normalized_format,
+            )
+            _run_ffmpeg_command(
+                transitioned_video_command,
+                output_path=transitioned_video_path,
+                timeout_seconds=_resolve_ffmpeg_timeout_seconds(
+                    expected_duration_seconds=total_expected_duration_seconds,
+                ),
+            )
+
+            concatenated_audio_path = temp_dir / f"transitioned-audio{audio_extension}"
+            audio_concat_command = _build_audio_concat_command(
+                ffmpeg_path=ffmpeg_path,
+                audio_paths=audio_paths,
+                output_path=concatenated_audio_path,
+                output_format=normalized_format,
+            )
+            _run_ffmpeg_command(
+                audio_concat_command,
+                output_path=concatenated_audio_path,
+                timeout_seconds=_resolve_ffmpeg_timeout_seconds(
+                    expected_duration_seconds=total_expected_duration_seconds,
+                ),
+            )
+
+            mux_command = _build_mux_command(
+                ffmpeg_path=ffmpeg_path,
+                video_path=transitioned_video_path,
+                audio_path=concatenated_audio_path,
+                output_path=output_path,
+                output_format=normalized_format,
+            )
+            _run_ffmpeg_command(
+                mux_command,
+                output_path=output_path,
+                timeout_seconds=_resolve_ffmpeg_timeout_seconds(
+                    expected_duration_seconds=total_expected_duration_seconds,
+                ),
+            )
 
     return PresentationRenderResult(
         output_format=normalized_format,
