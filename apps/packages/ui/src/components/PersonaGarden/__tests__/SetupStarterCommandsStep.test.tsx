@@ -118,4 +118,27 @@ describe("SetupStarterCommandsStep", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search Notes" }))
     expect(onCreateFromTemplate).toHaveBeenCalledWith("notes-search")
   })
+
+  it("shows retry guidance after starter-command creation fails while preserving skip", () => {
+    const onSkip = vi.fn()
+
+    render(
+      <SetupStarterCommandsStep
+        saving={false}
+        error="Failed to create starter command"
+        onCreateFromTemplate={vi.fn()}
+        onCreateMcpStarter={vi.fn()}
+        onSkip={onSkip}
+      />
+    )
+
+    expect(
+      screen.getByText(
+        "Try a starter template again, add an MCP starter instead, or continue without starter commands."
+      )
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue without starter commands" }))
+    expect(onSkip).toHaveBeenCalledTimes(1)
+  })
 })

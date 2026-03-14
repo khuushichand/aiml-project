@@ -20,6 +20,10 @@ export const SetupStarterCommandsStep: React.FC<SetupStarterCommandsStepProps> =
 }) => {
   const [toolName, setToolName] = React.useState("")
   const [phrase, setPhrase] = React.useState("")
+  const retryHint =
+    error && /starter command/i.test(error)
+      ? "Try a starter template again, add an MCP starter instead, or continue without starter commands."
+      : null
 
   const handleCreateMcpStarter = React.useCallback(() => {
     const normalizedToolName = String(toolName || "").trim()
@@ -38,7 +42,10 @@ export const SetupStarterCommandsStep: React.FC<SetupStarterCommandsStepProps> =
       </div>
       {error ? (
         <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-          {error}
+          <div>{error}</div>
+          {retryHint ? (
+            <div className="mt-1 text-xs text-red-100">{retryHint}</div>
+          ) : null}
         </div>
       ) : null}
       <div className="space-y-2">

@@ -631,6 +631,91 @@ describe("SidepanelPersona", () => {
     )
   })
 
+  it("keeps the commands step in place with retry guidance when starter creation fails", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=commands"
+
+    let profileVersion = 2
+    let currentSetup = {
+      status: "in_progress",
+      current_step: "commands",
+      completed_steps: ["persona", "voice"]
+    }
+
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = init?.method || "GET"
+      if (
+        path.includes("/persona/profiles/garden-helper/voice-commands") &&
+        method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: false,
+          error: "Failed to create starter command",
+          json: async () => ({})
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        if (method === "PATCH") {
+          profileVersion += 1
+          currentSetup = {
+            ...currentSetup,
+            ...(init?.body?.setup || {})
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: "garden-helper",
+              version: profileVersion,
+              voice_defaults: {
+                confirmation_mode: "destructive_only"
+              },
+              setup: currentSetup,
+              use_persona_state_context_default: true
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: profileVersion,
+            voice_defaults: {
+              confirmation_mode: "destructive_only"
+            },
+            setup: currentSetup,
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("commands")
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Search Notes" }))
+
+    expect(await screen.findByText("Failed to create starter command")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Try a starter template again, add an MCP starter instead, or continue without starter commands."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("commands")
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue without starter commands" }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("safety")
+    })
+  })
+
   it("keeps the safety step in place with retry guidance when setup connection creation fails", async () => {
     mocks.location.search = "?persona_id=garden-helper&tab=profiles"
 
