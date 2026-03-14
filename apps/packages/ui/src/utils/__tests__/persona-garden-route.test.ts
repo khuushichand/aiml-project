@@ -43,4 +43,19 @@ describe("persona-garden-route", () => {
       tab: "voice"
     })
   })
+
+  it("accepts the commands and connections tabs in persona garden routes", () => {
+    expect(
+      readPersonaGardenSearch("?persona_id=garden-helper&tab=commands")
+    ).toEqual({
+      personaId: "garden-helper",
+      tab: "commands"
+    })
+    expect(
+      readPersonaGardenSearch("?persona_id=garden-helper&tab=connections")
+    ).toEqual({
+      personaId: "garden-helper",
+      tab: "connections"
+    })
+  })
 })

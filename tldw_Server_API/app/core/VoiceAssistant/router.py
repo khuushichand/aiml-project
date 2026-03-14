@@ -6,8 +6,22 @@
 #######################################################################################################################
 import time
 from typing import Any, Callable, Optional
+from urllib.parse import urljoin
 
 from loguru import logger
+
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
+from tldw_Server_API.app.core.Persona.connections import (
+    PersonaConnectionConfigError,
+    PersonaConnectionSecretError,
+    PersonaConnectionTargetError,
+    build_connection_headers,
+    connection_content_from_row,
+    render_nested_templates,
+    render_template_value,
+    safe_template_context,
+    validate_connection_request_target,
+)
 
 from .intent_parser import IntentParser, get_intent_parser
 from .registry import VoiceCommandRegistry, get_voice_command_registry
@@ -21,6 +35,60 @@ from .schemas import (
 )
 from .session import VoiceSessionManager, get_voice_session_manager
 from .workflow_handler import VoiceWorkflowHandler, get_voice_workflow_handler
+
+_PERSONA_CONNECTION_MEMORY_TYPE = "persona_connection"
+_EXTERNAL_ACTION_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
+
+
+def _build_external_payload(
+    *,
+    action_config: dict[str, Any],
+    entities: dict[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+
+    raw_slot_map = action_config.get("slot_to_param_map") or action_config.get("param_map") or {}
+    if isinstance(raw_slot_map, dict):
+        for param_name, source in raw_slot_map.items():
+            if not isinstance(source, str):
+                continue
+            slot_name = source.strip().strip("{}")
+            if slot_name in entities:
+                payload[str(param_name)] = entities[slot_name]
+
+    if not payload:
+        payload.update(entities)
+
+    defaults = action_config.get("default_payload")
+    if isinstance(defaults, dict):
+        for key, value in defaults.items():
+            payload.setdefault(str(key), value)
+
+    return payload
+
+
+def _parse_external_response_body(response: Any) -> Any:
+    headers = getattr(response, "headers", {}) or {}
+    content_type = str(headers.get("content-type") or headers.get("Content-Type") or "").lower()
+    if "json" in content_type and callable(getattr(response, "json", None)):
+        try:
+            return response.json()
+        except Exception as exc:
+            logger.debug(f"Failed to parse external action response as JSON: {exc}")
+    text = getattr(response, "text", None)
+    if isinstance(text, str):
+        return text
+    return None
+
+
+async def _close_response(response: Any) -> None:
+    close = getattr(response, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(response, "close", None)
+    if callable(close):
+        close()
 
 
 class VoiceCommandRouter:
@@ -92,6 +160,7 @@ class VoiceCommandRouter:
         session_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         db: Optional[Any] = None,
+        persona_id: Optional[str] = None,
     ) -> tuple[ActionResult, str]:
         """
         Process a voice command through the full pipeline.
@@ -120,7 +189,12 @@ class VoiceCommandRouter:
         if db:
             try:
                 self.registry.load_defaults()
-                self.registry.refresh_user_commands(db, user_id, include_disabled=True)
+                self.registry.refresh_user_commands(
+                    db,
+                    user_id,
+                    include_disabled=True,
+                    persona_id=persona_id,
+                )
                 if created:
                     from .db_helpers import save_voice_session
 
@@ -150,14 +224,24 @@ class VoiceCommandRouter:
             }
 
             # Parse intent
-            parsed = await self.parser.parse(text, user_id, context)
+            parsed = await self.parser.parse(
+                text,
+                user_id,
+                context,
+                persona_id=persona_id,
+            )
             logger.debug(
                 f"Parsed intent: {parsed.intent.action_type} "
                 f"(method={parsed.match_method}, confidence={parsed.intent.confidence:.2f})"
             )
 
             # Execute action
-            result = await self._execute_intent(parsed.intent, session)
+            result = await self._execute_intent(
+                parsed.intent,
+                session,
+                db=db,
+                persona_id=persona_id,
+            )
 
             # Add assistant response to history
             await self.session_manager.add_turn(
@@ -200,7 +284,11 @@ class VoiceCommandRouter:
 
                     command_name = None
                     if parsed.intent.command_id:
-                        cmd = self.registry.get_command(parsed.intent.command_id, user_id)
+                        cmd = self.registry.get_command(
+                            parsed.intent.command_id,
+                            user_id,
+                            persona_id=persona_id,
+                        )
                         command_name = cmd.name if cmd else None
                     if not command_name:
                         command_name = parsed.intent.action_config.get("action") or parsed.intent.action_type.value
@@ -210,10 +298,16 @@ class VoiceCommandRouter:
                         command_id=parsed.intent.command_id,
                         command_name=command_name,
                         user_id=user_id,
+                        persona_id=persona_id,
                         action_type=result.action_type,
                         success=result.success,
                         response_time_ms=result.execution_time_ms,
                         session_id=session.session_id,
+                        resolution_type=(
+                            "direct_command"
+                            if parsed.intent.command_id
+                            else "planner_fallback"
+                        ),
                     )
                     save_voice_session(db, session)
                 except Exception as e:
@@ -234,10 +328,40 @@ class VoiceCommandRouter:
                 execution_time_ms=(time.time() - start_time) * 1000,
             ), session.session_id
 
+    async def match_registered_command(
+        self,
+        text: str,
+        *,
+        user_id: int,
+        persona_id: str | None = None,
+        db: Optional[Any] = None,
+        include_disabled: bool = False,
+        context: Optional[dict[str, Any]] = None,
+    ) -> Optional[ParsedIntent]:
+        """Run the deterministic registered-command fast path without executing the action."""
+        self.registry.load_defaults()
+        if db:
+            self.registry.refresh_user_commands(
+                db,
+                user_id,
+                include_disabled=include_disabled,
+                persona_id=persona_id,
+            )
+        return await self.parser.parse_registered_command(
+            text,
+            user_id=user_id,
+            persona_id=persona_id,
+            context=context,
+            include_disabled=include_disabled,
+        )
+
     async def _execute_intent(
         self,
         intent: VoiceIntent,
         session: VoiceSessionContext,
+        *,
+        db: Optional[Any] = None,
+        persona_id: str | None = None,
     ) -> ActionResult:
         """Execute an intent and return the result."""
 
@@ -252,7 +376,7 @@ class VoiceCommandRouter:
 
         # Route to appropriate handler based on action type
         if intent.action_type == ActionType.CUSTOM:
-            return await self._execute_custom(intent, session)
+            return await self._execute_custom(intent, session, db=db, persona_id=persona_id)
         elif intent.action_type == ActionType.MCP_TOOL:
             return await self._execute_mcp_tool(intent, session)
         elif intent.action_type == ActionType.WORKFLOW:
@@ -285,8 +409,25 @@ class VoiceCommandRouter:
         self,
         intent: VoiceIntent,
         session: VoiceSessionContext,
+        *,
+        db: Optional[Any] = None,
+        persona_id: str | None = None,
     ) -> ActionResult:
         """Execute a custom action."""
+        external_command = self._get_external_connection_command(
+            intent=intent,
+            user_id=session.user_id,
+            persona_id=persona_id,
+        )
+        if external_command is not None:
+            return await self._execute_external_connection_action(
+                intent=intent,
+                session=session,
+                db=db,
+                persona_id=persona_id,
+                command=external_command,
+            )
+
         action = intent.action_config.get("action", "")
 
         handler = self._custom_handlers.get(action)
@@ -298,6 +439,235 @@ class VoiceCommandRouter:
             action_type=ActionType.CUSTOM,
             response_text="I don't recognize that command.",
             error_message=f"No handler for custom action: {action}",
+        )
+
+    def _get_external_connection_command(
+        self,
+        *,
+        intent: VoiceIntent,
+        user_id: int,
+        persona_id: str | None,
+    ) -> Any | None:
+        if not intent.command_id:
+            return None
+        command = self.registry.get_command(
+            intent.command_id,
+            user_id,
+            persona_id=persona_id,
+        )
+        if command is None or not getattr(command, "connection_id", None):
+            return None
+        return command
+
+    def _load_persona_connection(
+        self,
+        *,
+        db: Any,
+        user_id: int,
+        persona_id: str,
+        connection_id: str,
+    ) -> dict[str, Any] | None:
+        rows = db.list_persona_memory_entries(
+            user_id=str(user_id),
+            persona_id=persona_id,
+            memory_type=_PERSONA_CONNECTION_MEMORY_TYPE,
+            include_archived=False,
+            include_deleted=False,
+            limit=200,
+            offset=0,
+        )
+        for row in rows or []:
+            if str(row.get("id") or "").strip() != connection_id:
+                continue
+            content = connection_content_from_row(row)
+            content["id"] = connection_id
+            return content
+        return None
+
+    def _format_external_action_result(
+        self,
+        *,
+        action_config: dict[str, Any],
+        status_code: int,
+        body: Any,
+    ) -> str:
+        explicit_message = str(action_config.get("success_message") or "").strip()
+        if explicit_message:
+            return explicit_message
+        if isinstance(body, dict):
+            for key in ("response_text", "message", "detail", "status", "result"):
+                value = body.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            results = body.get("results")
+            if isinstance(results, list):
+                if not results:
+                    return "The action completed but returned no results."
+                if len(results) == 1:
+                    return "The action completed and returned one result."
+                return f"The action completed and returned {len(results)} results."
+        if isinstance(body, list):
+            if not body:
+                return "The action completed but returned no results."
+            return f"The action completed and returned {len(body)} results."
+        if isinstance(body, str) and body.strip():
+            return body.strip()
+        if 200 <= status_code < 300:
+            return "Done."
+        return "The external action completed."
+
+    async def _execute_external_connection_action(
+        self,
+        *,
+        intent: VoiceIntent,
+        session: VoiceSessionContext,
+        db: Any | None,
+        persona_id: str | None,
+        command: Any,
+    ) -> ActionResult:
+        resolved_persona_id = str(
+            persona_id
+            or getattr(command, "persona_id", None)
+            or ""
+        ).strip()
+        connection_id = str(getattr(command, "connection_id", "") or "").strip()
+        if db is None:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't reach that external action right now.",
+                error_message="External actions require a database connection.",
+            )
+        if not resolved_persona_id or not connection_id:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't resolve that external action.",
+                error_message="Missing persona_id or connection_id for external action.",
+            )
+
+        connection = self._load_persona_connection(
+            db=db,
+            user_id=session.user_id,
+            persona_id=resolved_persona_id,
+            connection_id=connection_id,
+        )
+        if connection is None:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't find the configured connection for that command.",
+                error_message=f"Connection '{connection_id}' was not found for persona '{resolved_persona_id}'.",
+            )
+
+        action_config = dict(intent.action_config or {})
+        payload = _build_external_payload(
+            action_config=action_config,
+            entities=dict(intent.entities or {}),
+        )
+        template_context = safe_template_context(intent.entities or {}, payload)
+
+        method = str(action_config.get("method") or action_config.get("http_method") or "POST").strip().upper()
+        if method not in _EXTERNAL_ACTION_METHODS:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't determine how to call that external action.",
+                error_message=f"Unsupported external action method: {method}",
+        )
+
+        base_url = str(connection.get("base_url") or "").strip()
+        path = str(action_config.get("path") or action_config.get("request_path") or "").strip()
+        rendered_path = render_template_value(path, template_context) if path else ""
+        url = urljoin(base_url.rstrip("/") + "/", rendered_path.lstrip("/")) if rendered_path else base_url
+
+        try:
+            validate_connection_request_target(url, connection)
+        except (PersonaConnectionConfigError, PersonaConnectionTargetError) as exc:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't complete that external action.",
+                error_message=str(exc),
+            )
+
+        rendered_payload = render_nested_templates(payload, template_context)
+        try:
+            headers, _secret = build_connection_headers(
+                connection,
+                payload=rendered_payload if isinstance(rendered_payload, dict) else {},
+                auth_header_name=str(action_config.get("auth_header_name") or "").strip() or None,
+            )
+        except PersonaConnectionSecretError as exc:
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't complete that external action.",
+                error_message=str(exc),
+            )
+        timeout_ms = int(connection.get("timeout_ms") or 15000)
+        timeout_seconds = max(0.1, timeout_ms / 1000.0)
+        retry_policy = RetryPolicy()
+        retry_policy.attempts = 1
+        retry_policy.retry_on_unsafe = False
+        request_kwargs: dict[str, Any] = {
+            "method": method,
+            "url": url,
+            "headers": headers or None,
+            "timeout": timeout_seconds,
+            "retry": retry_policy,
+        }
+        if method in {"GET", "DELETE", "HEAD"}:
+            request_kwargs["params"] = rendered_payload if isinstance(rendered_payload, dict) else None
+        else:
+            request_kwargs["json"] = rendered_payload
+
+        try:
+            response = await afetch(**request_kwargs)
+            try:
+                response_body = _parse_external_response_body(response)
+            finally:
+                await _close_response(response)
+        except Exception as exc:
+            logger.error(f"External connection action failed: {exc}")
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't reach that external action right now.",
+                error_message=str(exc),
+            )
+
+        if int(getattr(response, "status_code", 500)) >= 400:
+            error_detail = response_body if isinstance(response_body, str) else str(response_body)
+            return ActionResult(
+                success=False,
+                action_type=intent.action_type,
+                response_text="I couldn't complete that external action.",
+                error_message=error_detail,
+                result_data={
+                    "status_code": int(getattr(response, "status_code", 500)),
+                    "body": response_body,
+                    "connection_id": connection_id,
+                    "url": url,
+                },
+            )
+
+        response_text = self._format_external_action_result(
+            action_config=action_config,
+            status_code=int(getattr(response, "status_code", 200)),
+            body=response_body,
+        )
+        return ActionResult(
+            success=True,
+            action_type=intent.action_type,
+            response_text=response_text,
+            result_data={
+                "status_code": int(getattr(response, "status_code", 200)),
+                "body": response_body,
+                "connection_id": connection_id,
+                "url": url,
+                "request_payload": rendered_payload,
+            },
         )
 
     async def _execute_mcp_tool(

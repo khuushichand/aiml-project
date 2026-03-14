@@ -1,15 +1,21 @@
 export type PersonaGardenTabKey =
+  | "commands"
+  | "test-lab"
   | "live"
   | "profiles"
   | "voice"
+  | "connections"
   | "state"
   | "scopes"
   | "policies"
 
 const PERSONA_GARDEN_TAB_KEYS = new Set<PersonaGardenTabKey>([
+  "commands",
+  "test-lab",
   "live",
   "profiles",
   "voice",
+  "connections",
   "state",
   "scopes",
   "policies"

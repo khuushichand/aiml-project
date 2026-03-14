@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 
 PersonaMode = Literal["session_scoped", "persistent_scoped"]
@@ -17,6 +17,10 @@ PersonaSessionStatus = Literal["active", "paused", "closed", "archived"]
 PersonaExemplarKind = Literal["style", "catchphrase", "boundary", "scenario_demo", "tool_behavior"]
 PersonaExemplarSourceType = Literal["manual", "transcript_import", "character_seed", "generated_candidate"]
 PersonaExemplarReviewAction = Literal["approve", "reject"]
+PersonaConfirmationMode = Literal["always", "destructive_only", "never"]
+PersonaSetupStatus = Literal["not_started", "in_progress", "completed"]
+PersonaSetupStep = Literal["persona", "voice", "commands", "safety", "test"]
+PersonaSetupTestType = Literal["dry_run", "live_session"]
 
 
 class PersonaInfo(BaseModel):
@@ -72,6 +76,83 @@ class PersonaSessionDetail(PersonaSessionSummary):
     turns: list[dict[str, object]] = Field(default_factory=list)
 
 
+class PersonaVoiceDefaults(BaseModel):
+    stt_language: str | None = None
+    stt_model: str | None = None
+    tts_provider: str | None = None
+    tts_voice: str | None = None
+    confirmation_mode: PersonaConfirmationMode | None = None
+    voice_chat_trigger_phrases: list[str] = Field(default_factory=list)
+    auto_resume: bool | None = None
+    barge_in: bool | None = None
+    auto_commit_enabled: bool | None = None
+    vad_threshold: float | None = None
+    min_silence_ms: int | None = None
+    turn_stop_secs: float | None = None
+    min_utterance_secs: float | None = None
+
+    @field_validator("stt_language", "stt_model", "tts_provider", "tts_voice", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("voice_chat_trigger_phrases", mode="before")
+    @classmethod
+    def _normalize_trigger_phrases(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        items = value if isinstance(value, list) else [value]
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for item in items:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
+        return normalized
+
+    @field_validator("vad_threshold", "turn_stop_secs", "min_utterance_secs", mode="before")
+    @classmethod
+    def _normalize_turn_detection_floats(cls, value: Any, info: ValidationInfo) -> float | None:
+        if value is None or value == "":
+            return None
+        bounds = {
+            "vad_threshold": (0.0, 1.0),
+            "turn_stop_secs": (0.05, 10.0),
+            "min_utterance_secs": (0.0, 10.0),
+        }
+        min_value, max_value = bounds[info.field_name]
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        return max(min_value, min(max_value, numeric))
+
+    @field_validator("min_silence_ms", mode="before")
+    @classmethod
+    def _normalize_min_silence_ms(cls, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return None
+        return max(50, min(10_000, numeric))
+
+
+class PersonaSetupState(BaseModel):
+    status: PersonaSetupStatus = "not_started"
+    version: int = Field(default=1, ge=1)
+    current_step: PersonaSetupStep = "persona"
+    completed_steps: list[PersonaSetupStep] = Field(default_factory=list)
+    completed_at: str | None = None
+    last_test_type: PersonaSetupTestType | None = None
+
+
 class PersonaProfileCreate(BaseModel):
     id: str | None = Field(default=None, min_length=1, max_length=200)
     name: str = Field(..., min_length=1, max_length=200)
@@ -80,6 +161,8 @@ class PersonaProfileCreate(BaseModel):
     system_prompt: str | None = None
     is_active: bool = True
     use_persona_state_context_default: bool = True
+    voice_defaults: PersonaVoiceDefaults = Field(default_factory=PersonaVoiceDefaults)
+    setup: PersonaSetupState = Field(default_factory=PersonaSetupState)
 
 
 class PersonaProfileUpdate(BaseModel):
@@ -89,6 +172,8 @@ class PersonaProfileUpdate(BaseModel):
     system_prompt: str | None = None
     is_active: bool | None = None
     use_persona_state_context_default: bool | None = None
+    voice_defaults: PersonaVoiceDefaults | None = None
+    setup: PersonaSetupState | None = None
 
 
 class PersonaProfileResponse(BaseModel):
@@ -102,6 +187,8 @@ class PersonaProfileResponse(BaseModel):
     system_prompt: str | None = None
     is_active: bool = True
     use_persona_state_context_default: bool = True
+    voice_defaults: PersonaVoiceDefaults = Field(default_factory=PersonaVoiceDefaults)
+    setup: PersonaSetupState = Field(default_factory=PersonaSetupState)
     created_at: str
     last_modified: str
     version: int = 1
@@ -245,3 +332,173 @@ class PersonaStateHistoryResponse(BaseModel):
 
 class PersonaStateRestoreRequest(BaseModel):
     entry_id: str = Field(..., min_length=1, max_length=200)
+
+
+class PersonaConnectionCreate(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=200)
+    name: str = Field(..., min_length=1, max_length=200)
+    base_url: str = Field(..., min_length=1, max_length=2048)
+    auth_type: str = Field(default="none", min_length=1, max_length=64)
+    secret: str | None = Field(default=None, min_length=1, max_length=8192)
+    headers_template: dict[str, str] = Field(default_factory=dict)
+    timeout_ms: int = Field(default=15_000, ge=100, le=120_000)
+
+
+class PersonaConnectionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    base_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    auth_type: str | None = Field(default=None, min_length=1, max_length=64)
+    secret: str | None = Field(default=None, min_length=1, max_length=8192)
+    clear_secret: bool = False
+    headers_template: dict[str, str] | None = None
+    timeout_ms: int | None = Field(default=None, ge=100, le=120_000)
+
+
+class PersonaConnectionResponse(BaseModel):
+    id: str
+    persona_id: str
+    name: str
+    base_url: str
+    auth_type: str
+    headers_template: dict[str, str] = Field(default_factory=dict)
+    timeout_ms: int
+    allowed_hosts: list[str] = Field(default_factory=list)
+    secret_configured: bool = False
+    key_hint: str | None = None
+    created_at: str | None = None
+    last_modified: str | None = None
+
+
+class PersonaConnectionDeleteResponse(BaseModel):
+    status: str
+    persona_id: str
+    connection_id: str
+
+
+class PersonaConnectionTestRequest(BaseModel):
+    method: str = Field(default="GET", min_length=1, max_length=16)
+    path: str | None = Field(default=None, max_length=2048)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    auth_header_name: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class PersonaConnectionTestResponse(BaseModel):
+    ok: bool
+    connection_id: str
+    method: str
+    url: str
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+    timeout_ms: int
+    status_code: int | None = None
+    body_preview: Any = None
+    latency_ms: int | None = None
+    error: str | None = None
+
+
+class PersonaCommandDryRunRequest(BaseModel):
+    heard_text: str = Field(..., min_length=1, max_length=20_000)
+
+
+class PersonaCommandPlannedActionResponse(BaseModel):
+    target_type: str
+    target_name: str | None = None
+    payload_preview: dict[str, Any] = Field(default_factory=dict)
+
+
+class PersonaCommandSafetyGateResponse(BaseModel):
+    classification: str
+    requires_confirmation: bool
+    reason: str
+
+
+class PersonaCommandDryRunResponse(BaseModel):
+    heard_text: str
+    matched: bool
+    match_reason: str | None = None
+    command_id: str | None = None
+    command_name: str | None = None
+    connection_id: str | None = None
+    connection_status: Literal["ok", "missing"] | None = None
+    connection_name: str | None = None
+    extracted_params: dict[str, Any] = Field(default_factory=dict)
+    planned_action: PersonaCommandPlannedActionResponse | None = None
+    safety_gate: PersonaCommandSafetyGateResponse | None = None
+    fallback_to_persona_planner: bool = False
+    failure_phase: str | None = None
+
+
+class PersonaVoiceCommandAnalyticsItem(BaseModel):
+    command_id: str
+    command_name: str | None = None
+    total_invocations: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    avg_response_time_ms: float = 0.0
+    last_used: str | None = None
+
+
+class PersonaVoiceFallbackAnalytics(BaseModel):
+    total_invocations: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    avg_response_time_ms: float = 0.0
+    last_used: str | None = None
+
+
+class PersonaVoiceAnalyticsSummary(BaseModel):
+    total_events: int = 0
+    direct_command_count: int = 0
+    planner_fallback_count: int = 0
+    success_rate: float = 0.0
+    fallback_rate: float = 0.0
+    avg_response_time_ms: float = 0.0
+
+
+class PersonaLiveVoiceAnalyticsSummary(BaseModel):
+    total_committed_turns: int = 0
+    vad_auto_commit_count: int = 0
+    manual_commit_count: int = 0
+    vad_auto_rate: float = 0.0
+    manual_commit_rate: float = 0.0
+    degraded_session_count: int = 0
+
+
+class PersonaLiveVoiceSessionSummary(BaseModel):
+    session_id: str
+    started_at: str | None = None
+    ended_at: str | None = None
+    auto_commit_enabled: bool | None = None
+    vad_threshold: float | None = None
+    min_silence_ms: int | None = None
+    turn_stop_secs: float | None = None
+    min_utterance_secs: float | None = None
+    turn_detection_changed_during_session: bool = False
+    total_committed_turns: int = 0
+    vad_auto_commit_count: int = 0
+    manual_commit_count: int = 0
+    manual_mode_required_count: int = 0
+    text_only_tts_count: int = 0
+    listening_recovery_count: int = 0
+    thinking_recovery_count: int = 0
+
+
+class PersonaLiveVoiceSessionUpdateRequest(BaseModel):
+    listening_recovery_count: int = Field(default=0, ge=0)
+    thinking_recovery_count: int = Field(default=0, ge=0)
+    finalize: bool = False
+    ended_at: str | None = None
+
+
+class PersonaVoiceAnalyticsResponse(BaseModel):
+    persona_id: str
+    summary: PersonaVoiceAnalyticsSummary
+    live_voice: PersonaLiveVoiceAnalyticsSummary = Field(
+        default_factory=PersonaLiveVoiceAnalyticsSummary
+    )
+    recent_live_sessions: list[PersonaLiveVoiceSessionSummary] = Field(default_factory=list)
+    commands: list[PersonaVoiceCommandAnalyticsItem] = Field(default_factory=list)
+    fallbacks: PersonaVoiceFallbackAnalytics = Field(
+        default_factory=PersonaVoiceFallbackAnalytics
+    )
