@@ -21,9 +21,10 @@ _CATEGORY_DEFS: tuple[dict[str, str], ...] = (
     {"key": "chat_messages", "label": "Chat sessions/messages"},
     {"key": "notes", "label": "Notes"},
     {"key": "audit_events", "label": "Audit log events"},
+    {"key": "embeddings", "label": "Vector embeddings"},
 )
 _SUPPORTED_CATEGORY_KEYS = {entry["key"] for entry in _CATEGORY_DEFS}
-_UNSUPPORTED_CATEGORY_KEYS = {"embeddings"}
+_UNSUPPORTED_CATEGORY_KEYS: set[str] = set()
 
 
 class DataSubjectRequestCoverageUnavailableError(RuntimeError):
@@ -184,6 +185,48 @@ async def _count_chat_messages(user_id: int) -> int:
     )
 
 
+def _get_chroma_manager_for_user(user_id: int):
+    """Create a ChromaDBManager for the given user using lazy import."""
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+    from tldw_Server_API.app.core.config import settings as app_settings
+
+    embedding_config: dict = {}
+    user_db_base = app_settings.get("USER_DB_BASE_DIR")
+    if user_db_base:
+        embedding_config["USER_DB_BASE_DIR"] = str(user_db_base)
+    else:
+        project_root = Path(__file__).resolve().parents[3]
+        embedding_config["USER_DB_BASE_DIR"] = str(
+            project_root / "Databases" / "user_databases"
+        )
+    return ChromaDBManager(str(user_id), embedding_config)
+
+
+async def _count_embeddings(user_id: int) -> int:
+    """Count vector embeddings across all ChromaDB collections for a user."""
+
+    def _count_sync() -> int:
+        try:
+            manager = _get_chroma_manager_for_user(user_id)
+        except Exception as exc:
+            logger.debug("ChromaDB not available for user {}: {}", user_id, exc)
+            return 0
+        try:
+            collections = manager.list_collections()
+            total = 0
+            for col in collections:
+                try:
+                    total += col.count()
+                except Exception:
+                    pass
+            return total
+        except Exception as exc:
+            logger.debug("Failed to count embeddings for user {}: {}", user_id, exc)
+            return 0
+
+    return await asyncio.to_thread(_count_sync)
+
+
 async def _count_audit_events(user_id: int) -> int:
     from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import _resolve_audit_storage_mode
 
@@ -207,17 +250,19 @@ async def _build_summary_for_user(
     user_id: int,
     selected_categories: list[str],
 ) -> list[dict[str, Any]]:
-    media_records, chat_messages, notes, audit_events = await asyncio.gather(
+    media_records, chat_messages, notes, audit_events, embeddings = await asyncio.gather(
         _count_media_records(user_id),
         _count_chat_messages(user_id),
         _count_notes(user_id),
         _count_audit_events(user_id),
+        _count_embeddings(user_id),
     )
     count_map = {
         "media_records": media_records,
         "chat_messages": chat_messages,
         "notes": notes,
         "audit_events": audit_events,
+        "embeddings": embeddings,
     }
     return [
         {
@@ -231,14 +276,19 @@ async def _build_summary_for_user(
 
 
 def _coverage_metadata(*, selected_categories: list[str]) -> dict[str, Any]:
-    return {
+    result: dict[str, Any] = {
         "supported_categories": [entry["key"] for entry in _CATEGORY_DEFS],
         "selected_categories": selected_categories,
         "unsupported_categories": sorted(_UNSUPPORTED_CATEGORY_KEYS),
-        "unsupported_details": {
-            "embeddings": "Milestone 1 does not include authoritative embedding counts.",
-        },
     }
+    if _UNSUPPORTED_CATEGORY_KEYS:
+        result["unsupported_details"] = {
+            key: f"Category '{key}' is not yet supported."
+            for key in sorted(_UNSUPPORTED_CATEGORY_KEYS)
+        }
+    else:
+        result["unsupported_details"] = {}
+    return result
 
 
 async def preview_data_subject_request(
