@@ -197,6 +197,10 @@ const buildVoiceAnalytics = (recentSessions: MockRecentLiveSession[]) => ({
 
 describe("AssistantDefaultsPanel", () => {
   beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn()
+    })
     mocks.fetchWithAuth.mockReset()
     mocks.resolvedDefaults = {
       sttLanguage: "en-US",
@@ -707,5 +711,43 @@ describe("AssistantDefaultsPanel", () => {
     expect(
       screen.getByText("Suggestion: current settings look healthy")
     ).toBeInTheDocument()
+  })
+
+  it("focuses confirmation mode for setup handoff requests after defaults load", async () => {
+    const onSetupHandoffFocusConsumed = vi.fn()
+
+    render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+        handoffFocusRequest={{ section: "confirmation_mode", token: 1 }}
+        onSetupHandoffFocusConsumed={onSetupHandoffFocusConsumed}
+      />
+    )
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Confirmation mode")).toHaveFocus()
+    )
+    expect(onSetupHandoffFocusConsumed).toHaveBeenCalledWith(1)
+  })
+
+  it("focuses the first assistant defaults control for assistant_defaults handoff requests", async () => {
+    const onSetupHandoffFocusConsumed = vi.fn()
+
+    render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+        handoffFocusRequest={{ section: "assistant_defaults", token: 2 }}
+        onSetupHandoffFocusConsumed={onSetupHandoffFocusConsumed}
+      />
+    )
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("STT language")).toHaveFocus()
+    )
+    expect(onSetupHandoffFocusConsumed).toHaveBeenCalledWith(2)
   })
 })

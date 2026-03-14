@@ -240,6 +240,25 @@ type SetupHandoffState = {
   compact: boolean
 }
 
+type SetupHandoffSectionTarget =
+  | { tab: "commands"; section: "command_form" | "command_list" }
+  | {
+      tab: "connections"
+      section: "connection_form" | "saved_connections"
+      connectionId?: string | null
+      connectionName?: string | null
+    }
+  | { tab: "profiles"; section: "assistant_defaults" | "confirmation_mode" }
+  | { tab: "test-lab"; section: "dry_run_form" }
+
+type SetupHandoffFocusRequest = {
+  tab: SetupHandoffSectionTarget["tab"]
+  section: SetupHandoffSectionTarget["section"]
+  token: number
+  connectionId?: string | null
+  connectionName?: string | null
+}
+
 type SetupHandoffConsumedAction =
   | "command_saved"
   | "connection_saved"
@@ -655,6 +674,7 @@ const SidepanelPersona = ({
   const runtimeApprovalRowRefs = React.useRef<Map<string, HTMLDivElement | null>>(
     new Map()
   )
+  const setupHandoffFocusTokenRef = React.useRef(0)
   const emittedSetupEventKeysRef = React.useRef<Set<string>>(new Set())
   const setupLiveDetourRef = React.useRef<SetupLiveDetourState | null>(null)
   const setupHandoffRef = React.useRef<SetupHandoffState | null>(null)
@@ -682,6 +702,8 @@ const SidepanelPersona = ({
   const setupWizardAwaitingLiveResponseRef = React.useRef(false)
   const setupWizardLastLiveTextRef = React.useRef("")
   const [setupHandoff, setSetupHandoff] = React.useState<SetupHandoffState | null>(null)
+  const [setupHandoffFocusRequest, setSetupHandoffFocusRequest] =
+    React.useState<SetupHandoffFocusRequest | null>(null)
   const [setupReviewSummaryDraft, setSetupReviewSummaryDraft] =
     React.useState<SetupReviewSummary>(DEFAULT_SETUP_REVIEW_SUMMARY)
   const [liveSessionVoiceDefaultsBaseline, setLiveSessionVoiceDefaultsBaseline] =
@@ -4367,18 +4389,34 @@ const SidepanelPersona = ({
         eventType: "handoff_dismissed"
       })
     }
+    setSetupHandoffFocusRequest(null)
     setSetupHandoff(null)
   }, [emitSetupAnalyticsEvent, setupHandoff])
 
-  const openSetupHandoffTab = React.useCallback((tab: PersonaGardenTabKey) => {
-    if (setupHandoff) {
+  const openSetupHandoffTarget = React.useCallback((target: { tab: "live" } | SetupHandoffSectionTarget) => {
+    const tab = target.tab
+    const currentHandoff = setupHandoffRef.current
+    if (currentHandoff) {
       void emitSetupAnalyticsEvent({
-        runId: setupHandoff.runId,
+        runId: currentHandoff.runId,
         eventType: "handoff_action_clicked",
         actionTarget: tab
       })
     }
     setActiveTab(tab)
+    if ("section" in target) {
+      setupHandoffFocusTokenRef.current += 1
+      setSetupHandoffFocusRequest({
+        tab: target.tab,
+        section: target.section,
+        token: setupHandoffFocusTokenRef.current,
+        connectionId: "connectionId" in target ? (target.connectionId ?? null) : null,
+        connectionName:
+          "connectionName" in target ? (target.connectionName ?? null) : null
+      })
+    } else {
+      setSetupHandoffFocusRequest(null)
+    }
     setSetupHandoff((current) => {
       if (!current) return null
       if (current.targetTab === tab) {
@@ -4389,7 +4427,15 @@ const SidepanelPersona = ({
         targetTab: tab
       }
     })
-  }, [emitSetupAnalyticsEvent, setupHandoff])
+  }, [emitSetupAnalyticsEvent])
+
+  const handleSetupHandoffFocusConsumed = React.useCallback((token: number) => {
+    setSetupHandoffFocusRequest((current) => {
+      if (!current) return current
+      if (current.token !== token) return current
+      return null
+    })
+  }, [])
 
   const handleProfileDefaultsSaved = React.useCallback(() => {
     consumeSetupHandoffAction("voice_defaults_saved")
@@ -4419,15 +4465,39 @@ const SidepanelPersona = ({
           recommendedAction={setupHandoff.recommendedAction}
           compact={setupHandoff.compact}
           onDismiss={dismissSetupHandoff}
-          onOpenCommands={() => openSetupHandoffTab("commands")}
-          onOpenTestLab={() => openSetupHandoffTab("test-lab")}
-          onOpenLive={() => openSetupHandoffTab("live")}
-          onOpenProfiles={() => openSetupHandoffTab("profiles")}
-          onOpenConnections={() => openSetupHandoffTab("connections")}
+          onOpenCommands={() =>
+            openSetupHandoffTarget({ tab: "commands", section: "command_list" })
+          }
+          onOpenTestLab={() =>
+            openSetupHandoffTarget({ tab: "test-lab", section: "dry_run_form" })
+          }
+          onOpenLive={() => openSetupHandoffTarget({ tab: "live" })}
+          onOpenProfiles={() =>
+            openSetupHandoffTarget({
+              tab: "profiles",
+              section: "confirmation_mode"
+            })
+          }
+          onOpenConnections={() =>
+            setupHandoff.reviewSummary.connection.mode === "skipped"
+              ? openSetupHandoffTarget({
+                  tab: "connections",
+                  section: "connection_form"
+                })
+              : openSetupHandoffTarget({
+                  tab: "connections",
+                  section: "saved_connections",
+                  connectionName:
+                    setupHandoff.reviewSummary.connection.mode === "created" ||
+                    setupHandoff.reviewSummary.connection.mode === "available"
+                      ? setupHandoff.reviewSummary.connection.name
+                      : null
+                })
+          }
         />
       )
     },
-    [dismissSetupHandoff, openSetupHandoffTab, setupHandoff]
+    [dismissSetupHandoff, openSetupHandoffTarget, setupHandoff]
   )
 
   const withSetupHandoff = React.useCallback(
@@ -4452,6 +4522,15 @@ const SidepanelPersona = ({
           isActive={activeTab === "commands"}
           analytics={voiceAnalytics}
           analyticsLoading={voiceAnalyticsLoading}
+          handoffFocusRequest={
+            setupHandoffFocusRequest?.tab === "commands"
+              ? {
+                  section: setupHandoffFocusRequest.section as "command_form" | "command_list",
+                  token: setupHandoffFocusRequest.token
+                }
+              : null
+          }
+          onSetupHandoffFocusConsumed={handleSetupHandoffFocusConsumed}
           openCommandId={openCommandId}
           onOpenCommandHandled={handleOpenCommandHandled}
           draftCommandPhrase={draftCommandPhrase}
@@ -4473,6 +4552,15 @@ const SidepanelPersona = ({
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "test-lab"}
           analytics={voiceAnalytics}
+          handoffFocusRequest={
+            setupHandoffFocusRequest?.tab === "test-lab"
+              ? {
+                  section: setupHandoffFocusRequest.section as "dry_run_form",
+                  token: setupHandoffFocusRequest.token
+                }
+              : null
+          }
+          onSetupHandoffFocusConsumed={handleSetupHandoffFocusConsumed}
           initialHeardText={lastTestLabPhrase}
           rerunRequestToken={testLabRerunToken}
           onOpenCommand={handleOpenCommandFromTestLab}
@@ -4516,6 +4604,17 @@ const SidepanelPersona = ({
           isActive={activeTab === "profiles"}
           analytics={voiceAnalytics}
           analyticsLoading={voiceAnalyticsLoading}
+          handoffFocusRequest={
+            setupHandoffFocusRequest?.tab === "profiles"
+              ? {
+                  section: setupHandoffFocusRequest.section as
+                    | "assistant_defaults"
+                    | "confirmation_mode",
+                  token: setupHandoffFocusRequest.token
+                }
+              : null
+          }
+          onSetupHandoffFocusConsumed={handleSetupHandoffFocusConsumed}
         />
       )
     },
@@ -4541,6 +4640,19 @@ const SidepanelPersona = ({
           isActive={activeTab === "connections"}
           onConnectionSaved={handleConnectionSaved}
           onConnectionTestSucceeded={handleConnectionTestSucceeded}
+          handoffFocusRequest={
+            setupHandoffFocusRequest?.tab === "connections"
+              ? {
+                  section: setupHandoffFocusRequest.section as
+                    | "connection_form"
+                    | "saved_connections",
+                  token: setupHandoffFocusRequest.token,
+                  connectionId: setupHandoffFocusRequest.connectionId ?? null,
+                  connectionName: setupHandoffFocusRequest.connectionName ?? null
+                }
+              : null
+          }
+          onSetupHandoffFocusConsumed={handleSetupHandoffFocusConsumed}
         />
       )
     },

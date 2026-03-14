@@ -410,4 +410,23 @@ describe("TestLabPanel", () => {
       expect(mocks.fetchWithAuth).toHaveBeenCalledTimes(1)
     })
   })
+
+  it("focuses the dry-run form for setup handoff requests", async () => {
+    const onSetupHandoffFocusConsumed = vi.fn()
+
+    render(
+      <TestLabPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        handoffFocusRequest={{ section: "dry_run_form", token: 1 }}
+        onSetupHandoffFocusConsumed={onSetupHandoffFocusConsumed}
+      />
+    )
+
+    await waitFor(() =>
+      expect(screen.getByTestId("persona-test-lab-heard-input")).toHaveFocus()
+    )
+    expect(onSetupHandoffFocusConsumed).toHaveBeenCalledWith(1)
+  })
 })

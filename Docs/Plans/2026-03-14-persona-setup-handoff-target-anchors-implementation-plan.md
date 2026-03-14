@@ -1,5 +1,7 @@
 # Persona Setup Handoff Target Anchors Implementation Plan
 
+Status: Complete on 2026-03-14.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make post-setup handoff actions in Persona Garden land on the exact section the user needs in Commands, Connections, Profiles, and Test Lab instead of only switching tabs.

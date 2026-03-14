@@ -23,6 +23,11 @@ type ProfilePanelProps = {
   isActive?: boolean
   analytics?: PersonaVoiceAnalytics | null
   analyticsLoading?: boolean
+  handoffFocusRequest?: {
+    section: "assistant_defaults" | "confirmation_mode"
+    token: number
+  } | null
+  onSetupHandoffFocusConsumed?: (token: number) => void
 }
 
 export const ProfilePanel: React.FC<ProfilePanelProps> = ({
@@ -39,7 +44,9 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
   onDefaultsSaved,
   isActive = false,
   analytics = null,
-  analyticsLoading = false
+  analyticsLoading = false,
+  handoffFocusRequest = null,
+  onSetupHandoffFocusConsumed
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const setupProgressItems = React.useMemo(() => buildPersonaSetupProgress(setup), [setup])
@@ -115,6 +122,8 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
         isActive={isActive}
         analytics={analytics}
         analyticsLoading={analyticsLoading}
+        handoffFocusRequest={handoffFocusRequest}
+        onSetupHandoffFocusConsumed={onSetupHandoffFocusConsumed}
         onSaved={() => {
           onDefaultsSaved?.()
         }}

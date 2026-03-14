@@ -23,6 +23,11 @@ type AssistantDefaultsPanelProps = {
   isActive?: boolean
   analytics?: PersonaVoiceAnalytics | null
   analyticsLoading?: boolean
+  handoffFocusRequest?: {
+    section: "assistant_defaults" | "confirmation_mode"
+    token: number
+  } | null
+  onSetupHandoffFocusConsumed?: (token: number) => void
   onSaved?: (voiceDefaults: PersonaVoiceDefaults) => void
 }
 
@@ -153,6 +158,8 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
   isActive = false,
   analytics = null,
   analyticsLoading = false,
+  handoffFocusRequest = null,
+  onSetupHandoffFocusConsumed,
   onSaved
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
@@ -162,6 +169,9 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
   const [success, setSuccess] = React.useState<string | null>(null)
   const [formState, setFormState] =
     React.useState<AssistantDefaultsFormState>(DEFAULT_FORM_STATE)
+  const sttLanguageInputRef = React.useRef<HTMLInputElement | null>(null)
+  const confirmationModeRef = React.useRef<HTMLSelectElement | null>(null)
+  const lastHandledHandoffTokenRef = React.useRef<number | null>(null)
 
   React.useEffect(() => {
     let cancelled = false
@@ -219,6 +229,29 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
       cancelled = true
     }
   }, [isActive, selectedPersonaId])
+
+  React.useEffect(() => {
+    if (!isActive || !selectedPersonaId || !handoffFocusRequest || loading) return
+    if (lastHandledHandoffTokenRef.current === handoffFocusRequest.token) return
+
+    const focusTarget =
+      handoffFocusRequest.section === "confirmation_mode"
+        ? confirmationModeRef.current
+        : sttLanguageInputRef.current
+
+    if (!focusTarget || focusTarget.disabled) return
+
+    focusTarget.scrollIntoView?.({ block: "nearest", behavior: "smooth" })
+    focusTarget.focus()
+    lastHandledHandoffTokenRef.current = handoffFocusRequest.token
+    onSetupHandoffFocusConsumed?.(handoffFocusRequest.token)
+  }, [
+    handoffFocusRequest,
+    isActive,
+    loading,
+    onSetupHandoffFocusConsumed,
+    selectedPersonaId
+  ])
 
   const resolvedDefaults = useResolvedPersonaVoiceDefaults(buildPayload(formState))
   const savedVadPreset = React.useMemo(
@@ -350,6 +383,7 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
           </span>
           <input
             id="persona-assistant-defaults-stt-language"
+            ref={sttLanguageInputRef}
             className="rounded-md border border-border bg-surface2 px-3 py-2 text-sm text-text"
             value={formState.sttLanguage}
             onChange={(event) => updateField("sttLanguage", event.target.value)}
@@ -420,6 +454,7 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
           </span>
           <select
             id="persona-assistant-defaults-confirmation-mode"
+            ref={confirmationModeRef}
             className="rounded-md border border-border bg-surface2 px-3 py-2 text-sm text-text"
             value={formState.confirmationMode}
             onChange={(event) =>

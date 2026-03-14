@@ -81,6 +81,11 @@ type CommandsPanelProps = {
   isActive?: boolean
   analytics?: PersonaVoiceAnalytics | null
   analyticsLoading?: boolean
+  handoffFocusRequest?: {
+    section: "command_form" | "command_list"
+    token: number
+  } | null
+  onSetupHandoffFocusConsumed?: (token: number) => void
   openCommandId?: string | null
   onOpenCommandHandled?: (commandId: string) => void
   draftCommandPhrase?: string | null
@@ -284,6 +289,8 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   isActive = false,
   analytics = null,
   analyticsLoading = false,
+  handoffFocusRequest = null,
+  onSetupHandoffFocusConsumed,
   openCommandId = null,
   onOpenCommandHandled,
   draftCommandPhrase = null,
@@ -307,6 +314,12 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   const [draftSourceKind, setDraftSourceKind] = React.useState<CommandDraftSource | null>(
     null
   )
+  const commandNameInputRef = React.useRef<HTMLInputElement | null>(null)
+  const commandFormRef = React.useRef<HTMLDivElement | null>(null)
+  const commandEditButtonRefs = React.useRef<Map<string, HTMLButtonElement | null>>(
+    new Map()
+  )
+  const lastHandledHandoffTokenRef = React.useRef(0)
   const editingCommand = React.useMemo(
     () =>
       formState.commandId
@@ -518,6 +531,47 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     isActive,
     onOpenCommandHandled,
     openCommandId,
+    selectedPersonaId
+  ])
+
+  React.useEffect(() => {
+    if (!isActive || !selectedPersonaId || !handoffFocusRequest) return
+    if (lastHandledHandoffTokenRef.current === handoffFocusRequest.token) return
+
+    const focusCommandForm = () => {
+      commandFormRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" })
+      commandNameInputRef.current?.focus()
+    }
+
+    if (handoffFocusRequest.section === "command_form") {
+      focusCommandForm()
+      lastHandledHandoffTokenRef.current = handoffFocusRequest.token
+      onSetupHandoffFocusConsumed?.(handoffFocusRequest.token)
+      return
+    }
+
+    if (!commandsLoaded) return
+
+    const firstCommandId = commands[0]?.id
+    const firstEditButton = firstCommandId
+      ? commandEditButtonRefs.current.get(firstCommandId)
+      : null
+
+    if (firstEditButton) {
+      firstEditButton.scrollIntoView?.({ block: "start", behavior: "smooth" })
+      firstEditButton.focus()
+    } else {
+      focusCommandForm()
+    }
+
+    lastHandledHandoffTokenRef.current = handoffFocusRequest.token
+    onSetupHandoffFocusConsumed?.(handoffFocusRequest.token)
+  }, [
+    commands,
+    commandsLoaded,
+    handoffFocusRequest,
+    isActive,
+    onSetupHandoffFocusConsumed,
     selectedPersonaId
   ])
 
@@ -938,6 +992,9 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                           <button
                             type="button"
                             data-testid={`persona-commands-edit-${command.id}`}
+                            ref={(node) => {
+                              commandEditButtonRefs.current.set(command.id, node)
+                            }}
                             className="rounded-md border border-border px-2 py-1 text-xs text-text transition hover:bg-surface2"
                             onClick={() => handleEdit(command)}
                           >
@@ -990,7 +1047,10 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                 )}
               </div>
 
-              <div className="rounded-md border border-border bg-bg p-3">
+              <div
+                ref={commandFormRef}
+                className="rounded-md border border-border bg-bg p-3"
+              >
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-medium text-text">
                     {formState.commandId
@@ -1062,6 +1122,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                       defaultValue: "Command name"
                     })}
                     <input
+                      ref={commandNameInputRef}
                       data-testid="persona-commands-name-input"
                       className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
                       value={formState.name}

@@ -44,6 +44,10 @@ const createDeferred = <T,>() => {
 
 describe("ConnectionsPanel", () => {
   beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn()
+    })
     mocks.fetchWithAuth.mockReset()
     let connections = [
       {
@@ -424,5 +428,49 @@ describe("ConnectionsPanel", () => {
     ])
 
     expect(await screen.findByText("Other API")).toBeInTheDocument()
+  })
+
+  it("focuses the connection form for handoff connection_form requests", async () => {
+    const onSetupHandoffFocusConsumed = vi.fn()
+
+    render(
+      <ConnectionsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        handoffFocusRequest={{ section: "connection_form", token: 1 }}
+        onSetupHandoffFocusConsumed={onSetupHandoffFocusConsumed}
+      />
+    )
+
+    await waitFor(() =>
+      expect(screen.getByTestId("persona-connections-name-input")).toHaveFocus()
+    )
+    expect(onSetupHandoffFocusConsumed).toHaveBeenCalledWith(1)
+  })
+
+  it("focuses the targeted saved connection action after rows load", async () => {
+    const onSetupHandoffFocusConsumed = vi.fn()
+
+    render(
+      <ConnectionsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        handoffFocusRequest={{
+          section: "saved_connections",
+          token: 2,
+          connectionName: "Existing API"
+        }}
+        onSetupHandoffFocusConsumed={onSetupHandoffFocusConsumed}
+      />
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("persona-connections-edit-conn-existing")
+      ).toHaveFocus()
+    )
+    expect(onSetupHandoffFocusConsumed).toHaveBeenCalledWith(2)
   })
 })
