@@ -689,6 +689,122 @@ describe("SidepanelPersona", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("shows assistant setup overlay for incomplete persona setup and preserves the requested tab", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "research_assistant", name: "Research Assistant" },
+            { id: "garden-helper", name: "Garden Helper" }
+          ]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_runs: 0, matched_runs: 0, fallback_runs: 0 }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            setup: {
+              status: "in_progress",
+              version: 1,
+              current_step: "voice",
+              completed_at: null,
+              last_test_type: null
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({ ok: true, json: async () => [] })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("assistant-setup-overlay")).toBeInTheDocument()
+    )
+
+    expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("voice")
+    expect(screen.getByTestId("assistant-setup-post-target")).toHaveTextContent("profiles")
+    expect(screen.queryByText("Persona Profile")).not.toBeInTheDocument()
+  })
+
+  it("does not gate completed setup personas and keeps the requested tab active", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "research_assistant", name: "Research Assistant" },
+            { id: "garden-helper", name: "Garden Helper" }
+          ]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_runs: 0, matched_runs: 0, fallback_runs: 0 }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            setup: {
+              status: "completed",
+              version: 1,
+              current_step: "test",
+              completed_at: "2026-03-13T10:00:00Z",
+              last_test_type: "dry_run"
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({ ok: true, json: async () => [] })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() =>
+      expect(screen.getByText("Persona Profile")).toBeInTheDocument()
+    )
+
+    expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
+  })
+
   it("records the current draft as a companion check-in", async () => {
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
       if (path.includes("/api/v1/companion/check-ins")) {

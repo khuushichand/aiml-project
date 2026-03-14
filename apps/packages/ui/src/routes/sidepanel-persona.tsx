@@ -45,6 +45,10 @@ import {
   useResolvedPersonaVoiceDefaults,
   type PersonaVoiceDefaults
 } from "@/hooks/useResolvedPersonaVoiceDefaults"
+import {
+  usePersonaSetupWizard,
+  type PersonaSetupState
+} from "@/hooks/usePersonaSetupWizard"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
 
 type PersonaInfo = {
@@ -159,6 +163,7 @@ type PersonaProfileResponse = {
   id?: string
   use_persona_state_context_default?: boolean
   voice_defaults?: PersonaVoiceDefaults | null
+  setup?: PersonaSetupState | null
 }
 
 type PersonaStateDocsResponse = {
@@ -391,6 +396,9 @@ const SidepanelPersona = ({
     React.useState<string>(DEFAULT_PERSONA_ID)
   const [savedPersonaVoiceDefaults, setSavedPersonaVoiceDefaults] =
     React.useState<PersonaVoiceDefaults | null>(null)
+  const [savedPersonaSetup, setSavedPersonaSetup] =
+    React.useState<PersonaSetupState | null>(null)
+  const [personaProfileLoading, setPersonaProfileLoading] = React.useState(false)
   const [liveSessionVoiceDefaultsBaseline, setLiveSessionVoiceDefaultsBaseline] =
     React.useState<PersonaVoiceDefaults | null>(null)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
@@ -577,6 +585,8 @@ const SidepanelPersona = ({
     const normalizedPersonaId = String(selectedPersonaId || "").trim()
     if (!normalizedPersonaId || isCompanionMode) {
       setSavedPersonaVoiceDefaults(null)
+      setSavedPersonaSetup(null)
+      setPersonaProfileLoading(false)
       if (!connected) {
         setLiveSessionVoiceDefaultsBaseline(null)
       }
@@ -584,6 +594,7 @@ const SidepanelPersona = ({
     }
 
     let cancelled = false
+    setPersonaProfileLoading(true)
     ;(async () => {
       try {
         const response = await tldwClient.fetchWithAuth(
@@ -596,10 +607,16 @@ const SidepanelPersona = ({
         const payload = (await response.json()) as PersonaProfileResponse
         if (!cancelled) {
           setSavedPersonaVoiceDefaults(payload?.voice_defaults || null)
+          setSavedPersonaSetup(payload?.setup || null)
         }
       } catch {
         if (!cancelled) {
           setSavedPersonaVoiceDefaults(null)
+          setSavedPersonaSetup(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setPersonaProfileLoading(false)
         }
       }
     })()
@@ -608,6 +625,14 @@ const SidepanelPersona = ({
       cancelled = true
     }
   }, [connected, isCompanionMode, selectedPersonaId])
+
+  const personaSetupWizard = usePersonaSetupWizard({
+    selectedPersonaId,
+    activeTab,
+    isCompanionMode,
+    loading: personaProfileLoading,
+    setup: savedPersonaSetup
+  })
 
   const resolvedLivePersonaVoiceDefaults = useResolvedPersonaVoiceDefaults(
     connected ? liveSessionVoiceDefaultsBaseline : savedPersonaVoiceDefaults
@@ -2927,11 +2952,45 @@ const SidepanelPersona = ({
         </div>
       ) : (
         <div className="flex flex-1 flex-col p-3">
-          <PersonaGardenTabs
-            activeKey={activeTab}
-            onChange={(key) => setActiveTab(key as PersonaGardenTabKey)}
-            items={tabItems}
-          />
+          {personaSetupWizard.isSetupRequired ? (
+            <div
+              data-testid="assistant-setup-overlay"
+              className="flex flex-1 flex-col gap-3 rounded-xl border border-border bg-surface p-4"
+            >
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-text-subtle">
+                  {t(
+                    "sidepanel:personaGarden.setup.heading",
+                    "Assistant Setup"
+                  )}
+                </div>
+                <div className="mt-2 text-sm text-text">
+                  {t(
+                    "sidepanel:personaGarden.setup.description",
+                    "Finish setup before using this persona in Persona Garden."
+                  )}
+                </div>
+              </div>
+              <div
+                data-testid="assistant-setup-current-step"
+                className="text-sm text-text"
+              >
+                {personaSetupWizard.currentStep}
+              </div>
+              <div
+                data-testid="assistant-setup-post-target"
+                className="text-xs text-text-muted"
+              >
+                {personaSetupWizard.postSetupTargetTab}
+              </div>
+            </div>
+          ) : (
+            <PersonaGardenTabs
+              activeKey={activeTab}
+              onChange={(key) => setActiveTab(key as PersonaGardenTabKey)}
+              items={tabItems}
+            />
+          )}
         </div>
       )}
     </div>
