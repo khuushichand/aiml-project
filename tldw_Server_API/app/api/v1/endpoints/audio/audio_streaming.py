@@ -4,11 +4,12 @@ import asyncio
 import base64
 import configparser
 import contextlib
+import importlib
 import json
 import os
 import time
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
 
 import numpy as np
@@ -35,6 +36,7 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER, get_api_keys
 from tldw_Server_API.app.core.Audio.error_payloads import _maybe_debug_details
+from tldw_Server_API.app.core.Audio.streaming_exceptions import QuotaExceeded
 from tldw_Server_API.app.core.Audio.quota_helpers import EXPECTED_DB_EXC, EXPECTED_REDIS_EXC, _get_failopen_cap_minutes
 from tldw_Server_API.app.core.Usage.audio_quota import (
     active_streams_count,
@@ -66,13 +68,6 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import upsert_transcript
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
-    QuotaExceeded,
-    SileroTurnDetector,
-    UnifiedStreamingConfig,
-    UnifiedStreamingTranscriber,
-    handle_unified_websocket,
-)
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -86,6 +81,41 @@ from tldw_Server_API.app.core.Streaming import speech_chat_service
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+        UnifiedStreamingConfig as _UnifiedStreamingConfig,
+    )
+
+
+_AUDIO_STREAMING_UNIFIED_MODULE = (
+    "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified"
+)
+
+
+def _load_audio_streaming_unified_module():
+    return importlib.import_module(_AUDIO_STREAMING_UNIFIED_MODULE)
+
+
+def _load_audio_streaming_unified_attr(name: str) -> Any:
+    return getattr(_load_audio_streaming_unified_module(), name)
+
+
+def UnifiedStreamingTranscriber(*args, **kwargs):
+    return _load_audio_streaming_unified_attr("UnifiedStreamingTranscriber")(*args, **kwargs)
+
+
+def SileroTurnDetector(*args, **kwargs):
+    return _load_audio_streaming_unified_attr("SileroTurnDetector")(*args, **kwargs)
+
+
+def _new_unified_streaming_config(**kwargs):
+    return _load_audio_streaming_unified_attr("UnifiedStreamingConfig")(**kwargs)
+
+
+async def _handle_unified_websocket(*args, **kwargs):
+    handler = _load_audio_streaming_unified_attr("handle_unified_websocket")
+    return await handler(*args, **kwargs)
 
 _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -325,7 +355,7 @@ def _coerce_positive_int(raw: Any) -> Optional[int]:
     return value
 
 
-def _stream_model_label(config: UnifiedStreamingConfig) -> str:
+def _stream_model_label(config: "_UnifiedStreamingConfig") -> str:
     model = str(getattr(config, "model", "parakeet") or "parakeet").strip().lower()
     variant = str(getattr(config, "model_variant", "standard") or "standard").strip().lower()
     return f"stream:{model}:{variant}"
@@ -730,7 +760,7 @@ async def websocket_transcribe(
         # [STT-Settings].default_streaming_transcription_model.
         default_model, default_variant, default_whisper_model_size = _resolve_default_streaming_model()
 
-        config = UnifiedStreamingConfig(
+        config = _new_unified_streaming_config(
             model=default_model,
             model_variant=default_variant,
             sample_rate=16000,
@@ -881,7 +911,7 @@ async def websocket_transcribe(
 
         async def _on_stream_config_resolved(
             config_payload: dict[str, Any],
-            resolved_config: UnifiedStreamingConfig,
+            resolved_config: "_UnifiedStreamingConfig",
         ) -> None:
             nonlocal persistence_enabled
             nonlocal persistence_partial_enabled
@@ -947,9 +977,7 @@ async def websocket_transcribe(
         remaining_minutes_snapshot: Optional[float] = None
 
         # Use shared exception class so inner handler can bubble it up
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
-            QuotaExceeded as _QuotaExceeded,
-        )
+        _QuotaExceeded = QuotaExceeded
 
         async def _on_audio_quota(seconds: float, _sr: int) -> None:
             """
@@ -1051,7 +1079,7 @@ async def websocket_transcribe(
                 logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
 
         try:
-            await handle_unified_websocket(
+            await _handle_unified_websocket(
                 websocket,
                 config,
                 on_audio_seconds=_on_audio_quota,
@@ -1400,7 +1428,7 @@ async def websocket_audio_chat_stream(
         persistence_warning_sent = False
         persistence_announced = False
 
-        config = UnifiedStreamingConfig()
+        config = _new_unified_streaming_config()
         try:
             config.model = stt_cfg.get("model", config.model)
             variant_override = stt_cfg.get("variant") or stt_cfg.get("model_variant")
@@ -1465,7 +1493,7 @@ async def websocket_audio_chat_stream(
                 )
             return
 
-        turn_detector: Optional[SileroTurnDetector] = None
+        turn_detector: Optional[Any] = None
         vad_warning_sent = False
 
         async def _send_vad_warning(message: str, details: Optional[str]) -> None:
