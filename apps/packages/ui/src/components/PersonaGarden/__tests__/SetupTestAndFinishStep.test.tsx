@@ -103,6 +103,8 @@ describe("SetupTestAndFinishStep", () => {
   })
 
   it("renders a dry-run no-match outcome with a forward action", () => {
+    const onCreateCommandFromPhrase = vi.fn()
+
     render(
       <SetupTestAndFinishStep
         saving={false}
@@ -117,10 +119,13 @@ describe("SetupTestAndFinishStep", () => {
         onSendLive={vi.fn()}
         onFinishWithDryRun={vi.fn()}
         onFinishWithLiveSession={vi.fn()}
+        onCreateCommandFromPhrase={onCreateCommandFromPhrase}
       />
     )
 
     expect(screen.getByText(/No direct command matched/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Create command from this phrase" }))
+    expect(onCreateCommandFromPhrase).toHaveBeenCalledWith("open the pod bay doors")
     expect(screen.getByRole("button", { name: "Connect live session" })).toBeInTheDocument()
   })
 
@@ -209,5 +214,30 @@ describe("SetupTestAndFinishStep", () => {
     )
 
     expect(screen.getByText("Failed to finish assistant setup")).toBeInTheDocument()
+  })
+
+  it("restores the dry-run phrase and shows a resume note when setup returns from commands", () => {
+    render(
+      <SetupTestAndFinishStep
+        saving={false}
+        dryRunLoading={false}
+        liveConnected={false}
+        initialHeardText="open the pod bay doors"
+        notice="Command saved. Run the same phrase again to confirm setup."
+        outcome={null}
+        onRunDryRun={vi.fn()}
+        onConnectLive={vi.fn()}
+        onSendLive={vi.fn()}
+        onFinishWithDryRun={vi.fn()}
+        onFinishWithLiveSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getByPlaceholderText("Try a spoken phrase")).toHaveValue(
+      "open the pod bay doors"
+    )
+    expect(
+      screen.getByText("Command saved. Run the same phrase again to confirm setup.")
+    ).toBeInTheDocument()
   })
 })

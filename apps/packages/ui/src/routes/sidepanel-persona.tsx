@@ -22,7 +22,10 @@ import {
   type SetupReviewSummary
 } from "@/components/PersonaGarden/PersonaSetupHandoffCard"
 import { AssistantSetupWizard } from "@/components/PersonaGarden/AssistantSetupWizard"
-import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
+import {
+  CommandsPanel,
+  type CommandDraftSource
+} from "@/components/PersonaGarden/CommandsPanel"
 import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
 import { LiveSessionPanel } from "@/components/PersonaGarden/LiveSessionPanel"
 import { PersonaGardenTabs } from "@/components/PersonaGarden/PersonaGardenTabs"
@@ -221,6 +224,11 @@ type SetupHandoffState = {
   targetTab: PersonaGardenTabKey
   completionType: "dry_run" | "live_session"
   reviewSummary: SetupReviewSummary
+}
+
+type SetupCommandDetourState = {
+  phrase: string
+  returnStep: "test"
 }
 
 const DEFAULT_SETUP_REVIEW_SUMMARY: SetupReviewSummary = {
@@ -619,9 +627,15 @@ const SidepanelPersona = ({
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
   const [openCommandId, setOpenCommandId] = React.useState<string | null>(null)
   const [draftCommandPhrase, setDraftCommandPhrase] = React.useState<string | null>(null)
+  const [draftCommandSource, setDraftCommandSource] =
+    React.useState<CommandDraftSource | null>(null)
   const [rerunAfterSaveCommandId, setRerunAfterSaveCommandId] =
     React.useState<string | null>(null)
   const [lastTestLabPhrase, setLastTestLabPhrase] = React.useState("")
+  const [setupCommandDetour, setSetupCommandDetour] =
+    React.useState<SetupCommandDetourState | null>(null)
+  const [setupNoMatchPhrase, setSetupNoMatchPhrase] = React.useState<string | null>(null)
+  const [setupTestResumeNote, setSetupTestResumeNote] = React.useState<string | null>(null)
   const [testLabRerunToken, setTestLabRerunToken] = React.useState(0)
   const [pendingRecoveryReconnectToken, setPendingRecoveryReconnectToken] =
     React.useState(0)
@@ -1001,6 +1015,9 @@ const SidepanelPersona = ({
     }
     setSetupWizardDryRunLoading(false)
     setSetupTestOutcome(null)
+    setSetupTestResumeNote(null)
+    setSetupCommandDetour(null)
+    setSetupNoMatchPhrase(null)
     setupWizardLastLiveTextRef.current = ""
     setupWizardAwaitingLiveResponseRef.current = false
   }, [personaSetupWizard.currentStep, personaSetupWizard.isSetupRequired])
@@ -1227,6 +1244,7 @@ const SidepanelPersona = ({
     const normalizedHeardText = String(heardText || "").trim()
     if (!normalizedCommandId) return
     setDraftCommandPhrase(null)
+    setDraftCommandSource(null)
     setOpenCommandId(normalizedCommandId)
     setRerunAfterSaveCommandId(normalizedCommandId)
     setLastTestLabPhrase(normalizedHeardText)
@@ -1239,7 +1257,24 @@ const SidepanelPersona = ({
     setOpenCommandId(null)
     setRerunAfterSaveCommandId(null)
     setDraftCommandPhrase(normalizedHeardText)
+    setDraftCommandSource("test_lab")
     setLastTestLabPhrase(normalizedHeardText)
+    setActiveTab("commands")
+  }, [])
+
+  const handleCreateCommandFromSetupNoMatch = React.useCallback((heardText: string) => {
+    const normalizedHeardText = String(heardText || "").trim()
+    if (!normalizedHeardText) return
+    setOpenCommandId(null)
+    setRerunAfterSaveCommandId(null)
+    setDraftCommandPhrase(normalizedHeardText)
+    setDraftCommandSource("setup_no_match")
+    setSetupNoMatchPhrase(normalizedHeardText)
+    setSetupTestResumeNote(null)
+    setSetupCommandDetour({
+      phrase: normalizedHeardText,
+      returnStep: "test"
+    })
     setActiveTab("commands")
   }, [])
 
@@ -1257,6 +1292,7 @@ const SidepanelPersona = ({
     setDraftCommandPhrase((current) =>
       current === normalizedHeardText ? null : current
     )
+    setDraftCommandSource(null)
   }, [])
 
   const handleRerunAfterCommandSave = React.useCallback((commandId: string) => {
@@ -1269,6 +1305,25 @@ const SidepanelPersona = ({
     }
     setRerunAfterSaveCommandId(null)
   }, [lastTestLabPhrase, rerunAfterSaveCommandId])
+
+  const handleSetupDetourCommandSaved = React.useCallback(
+    (_commandId: string, context: { fromDraft: boolean }) => {
+      if (!setupCommandDetour || !context.fromDraft) return
+      if (setupCommandDetour.returnStep !== "test") return
+      setSetupCommandDetour(null)
+      setDraftCommandPhrase(null)
+      setDraftCommandSource(null)
+      setOpenCommandId(null)
+      setRerunAfterSaveCommandId(null)
+      setSetupTestOutcome(null)
+      setSetupWizardDryRunLoading(false)
+      setSetupTestResumeNote(
+        "Command saved. Run the same phrase again to confirm setup."
+      )
+      setActiveTab(setupIntentTargetTab || "live")
+    },
+    [setupCommandDetour, setupIntentTargetTab]
+  )
 
   React.useEffect(() => {
     let cancelled = false
@@ -2645,6 +2700,9 @@ const SidepanelPersona = ({
         setSetupIntentPersonaId("")
         setSetupIntentTargetTab(null)
         setSetupTestOutcome(null)
+        setSetupTestResumeNote(null)
+        setSetupCommandDetour(null)
+        setSetupNoMatchPhrase(null)
         setupWizardLastLiveTextRef.current = ""
       } catch (setupError: any) {
         setSetupStepError(
@@ -2678,6 +2736,9 @@ const SidepanelPersona = ({
       setSetupIntentPersonaId(personaId)
       setSetupIntentTargetTab(activeTab)
       setSetupTestOutcome(null)
+      setSetupTestResumeNote(null)
+      setSetupCommandDetour(null)
+      setSetupNoMatchPhrase(null)
       setSetupReviewSummaryDraft(DEFAULT_SETUP_REVIEW_SUMMARY)
       setupWizardLastLiveTextRef.current = ""
       setSetupHandoff(null)
@@ -2742,6 +2803,7 @@ const SidepanelPersona = ({
       if (!personaId || !normalizedHeardText) return
       setSetupWizardDryRunLoading(true)
       clearSetupStepError("test")
+      setSetupTestResumeNote(null)
       setSetupTestOutcome(null)
       try {
         const response = await tldwClient.fetchWithAuth(
@@ -3978,9 +4040,11 @@ const SidepanelPersona = ({
           openCommandId={openCommandId}
           onOpenCommandHandled={handleOpenCommandHandled}
           draftCommandPhrase={draftCommandPhrase}
+          draftCommandSource={draftCommandSource}
           onDraftCommandPhraseHandled={handleDraftCommandPhraseHandled}
           rerunAfterSaveCommandId={rerunAfterSaveCommandId}
           onRerunAfterSave={handleRerunAfterCommandSave}
+          onCommandSaved={handleSetupDetourCommandSaved}
         />
       )
     },
@@ -4242,7 +4306,7 @@ const SidepanelPersona = ({
         </div>
       ) : (
         <div className="flex flex-1 flex-col p-3">
-          {personaSetupWizard.isSetupRequired ? (
+          {personaSetupWizard.isSetupRequired && !setupCommandDetour ? (
             <AssistantSetupWizard
               catalog={catalog.map((persona) => ({
                 id: String(persona.id || ""),
@@ -4314,10 +4378,13 @@ const SidepanelPersona = ({
                     dryRunLoading={setupWizardDryRunLoading}
                     liveConnected={connected}
                     error={setupStepErrors.test || null}
+                    initialHeardText={setupNoMatchPhrase}
+                    notice={setupTestResumeNote}
                     outcome={setupTestOutcome}
                     onRunDryRun={(heardText) => {
                       void handleRunSetupDryRun(heardText)
                     }}
+                    onCreateCommandFromPhrase={handleCreateCommandFromSetupNoMatch}
                     onConnectLive={() => {
                       void connect()
                     }}

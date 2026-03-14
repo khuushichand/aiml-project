@@ -720,6 +720,28 @@ describe("CommandsPanel", () => {
     )
   })
 
+  it("renders setup-specific draft banner copy when the draft source is assistant setup", async () => {
+    renderWithQueryClient(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        draftCommandPhrase="open the pod bay doors"
+        draftCommandSource="setup_no_match"
+      />
+    )
+
+    await screen.findByText("Search Notes")
+    expect(screen.getByTestId("persona-commands-name-input")).toHaveValue(
+      "Open the pod bay doors"
+    )
+    expect(
+      screen.getByText(
+        "Drafted from assistant setup. Save this command, then return to finish setup."
+      )
+    ).toBeInTheDocument()
+  })
+
   it("applies phrase-to-slot assist suggestions for drafted commands", async () => {
     renderWithQueryClient(
       <CommandsPanel

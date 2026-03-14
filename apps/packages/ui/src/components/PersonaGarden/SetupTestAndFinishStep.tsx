@@ -38,8 +38,11 @@ type SetupTestAndFinishStepProps = {
   dryRunLoading: boolean
   liveConnected: boolean
   error?: string | null
+  initialHeardText?: string | null
+  notice?: string | null
   outcome: SetupTestOutcome | null
   onRunDryRun: (heardText: string) => void
+  onCreateCommandFromPhrase?: (heardText: string) => void
   onConnectLive: () => void
   onSendLive: (text: string) => void
   onFinishWithDryRun: () => void
@@ -51,8 +54,11 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
   dryRunLoading,
   liveConnected,
   error = null,
+  initialHeardText = null,
+  notice = null,
   outcome,
   onRunDryRun,
+  onCreateCommandFromPhrase,
   onConnectLive,
   onSendLive,
   onFinishWithDryRun,
@@ -60,6 +66,12 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
 }) => {
   const [dryRunHeardText, setDryRunHeardText] = React.useState("")
   const [liveText, setLiveText] = React.useState("")
+
+  React.useEffect(() => {
+    const normalizedHeardText = String(initialHeardText || "").trim()
+    if (!normalizedHeardText) return
+    setDryRunHeardText(normalizedHeardText)
+  }, [initialHeardText])
 
   const dryRunOutcome = React.useMemo(() => {
     if (!outcome || !outcome.kind.startsWith("dry_run_")) return null
@@ -83,6 +95,11 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
       {error ? (
         <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
           {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+          {notice}
         </div>
       ) : null}
 
@@ -122,6 +139,16 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
           >
             {dryRunLoading ? "Running..." : "Run dry-run test"}
           </button>
+          {dryRunOutcome?.kind === "dry_run_no_match" ? (
+            <button
+              type="button"
+              className="rounded-md border border-amber-500/40 px-3 py-2 text-sm font-medium text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={saving}
+              onClick={() => onCreateCommandFromPhrase?.(dryRunOutcome.heardText)}
+            >
+              Create command from this phrase
+            </button>
+          ) : null}
           {dryRunOutcome?.kind === "dry_run_match" ? (
             <button
               type="button"

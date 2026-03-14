@@ -46,6 +46,8 @@ type PersonaConnectionSummary = {
   secret_configured?: boolean
 }
 
+export type CommandDraftSource = "test_lab" | "setup_no_match"
+
 type CommandFormState = {
   commandId: string | null
   name: string
@@ -82,9 +84,14 @@ type CommandsPanelProps = {
   openCommandId?: string | null
   onOpenCommandHandled?: (commandId: string) => void
   draftCommandPhrase?: string | null
+  draftCommandSource?: CommandDraftSource | null
   onDraftCommandPhraseHandled?: (heardText: string) => void
   rerunAfterSaveCommandId?: string | null
   onRerunAfterSave?: (commandId: string) => void
+  onCommandSaved?: (
+    commandId: string,
+    context: { fromDraft: boolean }
+  ) => void
 }
 
 const REQUEST_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const
@@ -280,9 +287,11 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   openCommandId = null,
   onOpenCommandHandled,
   draftCommandPhrase = null,
+  draftCommandSource = null,
   onDraftCommandPhraseHandled,
   rerunAfterSaveCommandId = null,
-  onRerunAfterSave
+  onRerunAfterSave,
+  onCommandSaved
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const [commands, setCommands] = React.useState<PersonaVoiceCommand[]>([])
@@ -295,6 +304,9 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   const [formState, setFormState] =
     React.useState<CommandFormState>(DEFAULT_FORM_STATE)
   const [draftSourcePhrase, setDraftSourcePhrase] = React.useState<string | null>(null)
+  const [draftSourceKind, setDraftSourceKind] = React.useState<CommandDraftSource | null>(
+    null
+  )
   const editingCommand = React.useMemo(
     () =>
       formState.commandId
@@ -324,6 +336,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   const clearCommandEditor = React.useCallback(() => {
     setFormState(DEFAULT_FORM_STATE)
     setDraftSourcePhrase(null)
+    setDraftSourceKind(null)
     setValidationError(null)
   }, [])
 
@@ -436,12 +449,14 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
   const handleTemplateApply = React.useCallback((template: CommandTemplate) => {
     setFormState(template.apply())
     setDraftSourcePhrase(null)
+    setDraftSourceKind(null)
     setValidationError(null)
   }, [])
 
   const handleEdit = React.useCallback((command: PersonaVoiceCommand) => {
     setFormState(toFormState(command))
     setDraftSourcePhrase(null)
+    setDraftSourceKind(null)
     setValidationError(null)
     setError(null)
   }, [])
@@ -465,10 +480,12 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     if (!isActive || !selectedPersonaId || !normalizedDraftPhrase) return
     setFormState(toDraftFormState(normalizedDraftPhrase))
     setDraftSourcePhrase(normalizedDraftPhrase)
+    setDraftSourceKind(draftCommandSource || "test_lab")
     setValidationError(null)
     setError(null)
     onDraftCommandPhraseHandled?.(normalizedDraftPhrase)
   }, [
+    draftCommandSource,
     draftCommandPhrase,
     isActive,
     onDraftCommandPhraseHandled,
@@ -671,6 +688,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     setError(null)
     try {
       const isEditing = Boolean(formState.commandId)
+      const savedFromDraft = Boolean(draftSourcePhrase) && !isEditing
       const response = await tldwClient.fetchWithAuth(
         isEditing
           ? toAllowedPath(
@@ -703,6 +721,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
         return next
       })
       resetForm()
+      onCommandSaved?.(saved.id, { fromDraft: savedFromDraft })
       if (
         String(rerunAfterSaveCommandId || "").trim() &&
         saved.id === String(rerunAfterSaveCommandId || "").trim()
@@ -720,7 +739,9 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     }
   }, [
     connections,
+    draftSourcePhrase,
     formState,
+    onCommandSaved,
     onRerunAfterSave,
     resetForm,
     rerunAfterSaveCommandId,
@@ -999,10 +1020,15 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
                         data-testid="persona-commands-draft-banner"
                         className="rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-900"
                       >
-                        {t("sidepanel:personaGarden.commands.draftFromTestLab", {
-                          defaultValue:
-                            "Drafted from Test Lab. Adjust the phrase, add placeholders like {topic} if needed, then choose a target."
-                        })}
+                        {draftSourceKind === "setup_no_match"
+                          ? t("sidepanel:personaGarden.commands.draftFromSetup", {
+                              defaultValue:
+                                "Drafted from assistant setup. Save this command, then return to finish setup."
+                            })
+                          : t("sidepanel:personaGarden.commands.draftFromTestLab", {
+                              defaultValue:
+                                "Drafted from Test Lab. Adjust the phrase, add placeholders like {topic} if needed, then choose a target."
+                            })}
                       </div>
                       {draftAssistSuggestions.length > 0 ? (
                         <div className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-text-muted">
