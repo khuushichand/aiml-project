@@ -488,11 +488,13 @@ class EffectivePolicyProvenanceResponse(BaseModel):
     mapping_scope_type: CapabilityAdapterScopeType | None = None
     mapping_scope_id: int | None = None
     resolved_effects: dict[str, Any] = Field(default_factory=dict)
+    resolution_intent: Literal["allow", "deny"] | None = None
     effect: PolicyProvenanceEffect
 
 
 class EffectivePolicyCapabilityMappingResponse(BaseModel):
     capability_name: str
+    resolution_intent: Literal["allow", "deny"] | None = None
     mapping_id: str | None = None
     mapping_scope_type: CapabilityAdapterScopeType | None = None
     mapping_scope_id: int | None = None

@@ -419,11 +419,13 @@ export type McpHubEffectivePolicyProvenance = {
   mapping_scope_type?: McpHubCapabilityAdapterScopeType | null
   mapping_scope_id?: number | null
   resolved_effects?: Record<string, unknown>
+  resolution_intent?: "allow" | "deny" | null
   effect: "merged" | "replaced" | "narrowed" | "blocked"
 }
 
 export type McpHubEffectivePolicyCapabilityMapping = {
   capability_name: string
+  resolution_intent?: "allow" | "deny" | null
   mapping_id?: string | null
   mapping_scope_type?: McpHubCapabilityAdapterScopeType | null
   mapping_scope_id?: number | null

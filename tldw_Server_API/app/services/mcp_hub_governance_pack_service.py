@@ -231,33 +231,44 @@ class McpHubGovernancePackService:
         )
 
         for profile in pack.profiles:
-            profile_capabilities = self._unique(
-                list(profile.capabilities.allow) + list(profile.capabilities.deny)
-            )
-            resolution = await self.capability_resolution_service.resolve_capabilities(
-                capability_names=profile_capabilities,
+            allow_resolution = await self.capability_resolution_service.resolve_capabilities(
+                capability_names=self._unique(list(profile.capabilities.allow)),
                 metadata=resolution_metadata,
+                resolution_intent="allow",
+            )
+            deny_resolution = await self.capability_resolution_service.resolve_capabilities(
+                capability_names=self._unique(list(profile.capabilities.deny)),
+                metadata=resolution_metadata,
+                resolution_intent="deny",
             )
             resolved_capabilities = self._unique(
-                resolved_capabilities + resolution.resolved_capabilities
+                resolved_capabilities
+                + allow_resolution.resolved_capabilities
+                + deny_resolution.resolved_capabilities
             )
             unresolved_capabilities = self._unique(
-                unresolved_capabilities + resolution.unresolved_capabilities
+                unresolved_capabilities
+                + allow_resolution.unresolved_capabilities
+                + deny_resolution.unresolved_capabilities
             )
             supported_environment_requirements = self._unique(
-                supported_environment_requirements + resolution.supported_environment_requirements
+                supported_environment_requirements
+                + allow_resolution.supported_environment_requirements
+                + deny_resolution.supported_environment_requirements
             )
             unsupported_environment_requirements = self._unique(
-                unsupported_environment_requirements + resolution.unsupported_environment_requirements
+                unsupported_environment_requirements
+                + allow_resolution.unsupported_environment_requirements
+                + deny_resolution.unsupported_environment_requirements
             )
-            for summary in resolution.mapping_summaries:
+            for summary in [*allow_resolution.mapping_summaries, *deny_resolution.mapping_summaries]:
                 mapping_key = str(summary.get("mapping_id") or summary.get("capability_name") or "").strip()
                 if mapping_key and mapping_key in seen_mapping_ids:
                     continue
                 if mapping_key:
                     seen_mapping_ids.add(mapping_key)
                 capability_mapping_summary.append(dict(summary))
-            for warning in resolution.warnings:
+            for warning in [*allow_resolution.warnings, *deny_resolution.warnings]:
                 warnings.append(f"profile:{profile.profile_id}: {warning}")
             for requirement in profile.environment_requirements:
                 requirement_value = str(requirement or "").strip()
@@ -268,7 +279,11 @@ class McpHubGovernancePackService:
                         f"profile:{profile.profile_id} uses unsupported environment requirement '{requirement_value}'"
                     )
                     continue
-                if requirement_value not in resolution.supported_environment_requirements:
+                profile_supported_environment_requirements = self._unique(
+                    allow_resolution.supported_environment_requirements
+                    + deny_resolution.supported_environment_requirements
+                )
+                if requirement_value not in profile_supported_environment_requirements:
                     warnings.append(
                         f"profile:{profile.profile_id} requires environment requirement "
                         f"'{requirement_value}' but current capability mappings do not guarantee it"

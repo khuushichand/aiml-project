@@ -153,3 +153,30 @@ async def test_create_mapping_uses_normalized_preview_payload() -> None:
         "workspace_bounded_read"
     ]
     assert created["id"] == 11
+
+
+@pytest.mark.asyncio
+async def test_preview_mapping_expands_module_ids_to_tool_names() -> None:
+    from tldw_Server_API.app.services.mcp_hub_capability_adapter_service import (
+        McpHubCapabilityAdapterService,
+    )
+
+    svc = McpHubCapabilityAdapterService(repo=_FakeRepo(), tool_registry=_FakeToolRegistry())
+
+    preview = await svc.preview_mapping(
+        mapping_id="docs.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="tool.invoke.docs",
+        adapter_contract_version=1,
+        resolved_policy_document={"module_ids": ["docs"]},
+        supported_environment_requirements=[],
+        title="Docs",
+        description=None,
+        is_active=True,
+    )
+
+    assert preview["normalized_mapping"]["resolved_policy_document"] == {
+        "module_ids": ["docs"],
+        "tool_names": ["docs.search"],
+    }

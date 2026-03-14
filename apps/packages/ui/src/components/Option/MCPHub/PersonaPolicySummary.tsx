@@ -154,7 +154,9 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
             <Space orientation="vertical" size={4}>
               {capabilityMappingSummary.map((summary) => (
                 <Typography.Text key={`${summary.capability_name}:${summary.mapping_id ?? "unmapped"}`}>
-                  {`Mapped ${summary.capability_name} via ${summary.mapping_id ?? "local mapping"}`}
+                  {`${
+                    summary.resolution_intent === "deny" ? "Denied" : "Mapped"
+                  } ${summary.capability_name} via ${summary.mapping_id ?? "local mapping"}`}
                 </Typography.Text>
               ))}
             </Space>

@@ -264,6 +264,79 @@ async def test_import_governance_pack_rejects_duplicate_scope_identity(
             actor_id=7,
         )
 
+
+@pytest.mark.asyncio
+async def test_imported_governance_pack_denied_capabilities_narrow_runtime_policy(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackService(repo=repo)
+    pack = load_governance_pack_fixture("minimal_researcher_pack")
+    pack.profiles[0].capabilities.deny = ["tool.invoke.docs"]
+
+    await repo.create_capability_adapter_mapping(
+        mapping_id="filesystem.read.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="filesystem.read",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["files.read"]},
+        supported_environment_requirements=["workspace_bounded_read"],
+        is_active=True,
+        actor_id=7,
+    )
+    await repo.create_capability_adapter_mapping(
+        mapping_id="tool.invoke.research.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="tool.invoke.research",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["web.search"]},
+        supported_environment_requirements=[],
+        is_active=True,
+        actor_id=7,
+    )
+    await repo.create_capability_adapter_mapping(
+        mapping_id="tool.invoke.docs.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="tool.invoke.docs",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["docs.search"]},
+        supported_environment_requirements=[],
+        is_active=True,
+        actor_id=7,
+    )
+
+    await service.import_pack(
+        pack=pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    resolver = McpHubPolicyResolver(repo=repo)
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={"mcp_policy_context_enabled": True},
+    )
+
+    assert sorted(policy["allowed_tools"]) == ["files.read", "web.search"]
+    assert policy["denied_tools"] == ["docs.search"]
+    assert any(
+        summary["capability_name"] == "tool.invoke.docs" and summary["resolution_intent"] == "deny"
+        for summary in policy["capability_mapping_summary"]
+    )
+
     inventory = await repo.list_governance_packs(owner_scope_type="user", owner_scope_id=7)
     assert len(inventory) == 1
 

@@ -102,7 +102,13 @@ class McpHubCapabilityAdapterService:
             raise BadRequestError("capability_name is required")
         normalized_title = str(title or normalized_mapping_id).strip()
         normalized_policy_document = self._normalize_policy_document(resolved_policy_document)
-        await self._validate_policy_document_against_registry(normalized_policy_document)
+        module_to_tool_names = await self._validate_policy_document_against_registry(
+            normalized_policy_document
+        )
+        normalized_policy_document = self._expand_module_policy_effects(
+            normalized_policy_document,
+            module_to_tool_names=module_to_tool_names,
+        )
         normalized_requirements, warnings = self._normalize_environment_requirements(
             supported_environment_requirements
         )
@@ -350,7 +356,7 @@ class McpHubCapabilityAdapterService:
     async def _validate_policy_document_against_registry(
         self,
         policy_document: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, list[str]]:
         entries = await self.tool_registry.list_entries()
         known_tool_names = {
             str(entry.get("tool_name") or "").strip()
@@ -362,6 +368,13 @@ class McpHubCapabilityAdapterService:
             for entry in entries
             if str(entry.get("module") or "").strip()
         }
+        module_to_tool_names: dict[str, list[str]] = {}
+        for entry in entries:
+            module_id = str(entry.get("module") or "").strip()
+            tool_name = str(entry.get("tool_name") or "").strip()
+            if not module_id or not tool_name:
+                continue
+            module_to_tool_names.setdefault(module_id, []).append(tool_name)
         for module_row in await self.tool_registry.list_modules():
             module_id = str(module_row.get("module") or "").strip()
             if module_id:
@@ -381,3 +394,25 @@ class McpHubCapabilityAdapterService:
             for tool_ref in _as_str_list(policy_document.get(key)):
                 if _looks_like_exact_tool_reference(tool_ref) and tool_ref not in known_tool_names:
                     raise BadRequestError(f"unknown tool '{tool_ref}'")
+        return {
+            module_id: _unique(tool_names)
+            for module_id, tool_names in module_to_tool_names.items()
+        }
+
+    @staticmethod
+    def _expand_module_policy_effects(
+        policy_document: dict[str, Any],
+        *,
+        module_to_tool_names: dict[str, list[str]],
+    ) -> dict[str, Any]:
+        expanded = deepcopy(policy_document)
+        module_ids = _unique(
+            _as_str_list(expanded.get("tool_modules")) + _as_str_list(expanded.get("module_ids"))
+        )
+        if not module_ids:
+            return expanded
+        expanded_tool_names = _as_str_list(expanded.get("tool_names"))
+        for module_id in module_ids:
+            expanded_tool_names.extend(module_to_tool_names.get(module_id, []))
+        expanded["tool_names"] = _unique(expanded_tool_names)
+        return expanded

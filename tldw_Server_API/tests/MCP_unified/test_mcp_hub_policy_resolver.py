@@ -346,6 +346,7 @@ async def test_policy_resolver_returns_authored_and_resolved_documents_when_mapp
     assert policy["capability_mapping_summary"] == [
         {
             "capability_name": "tool.invoke.research",
+            "resolution_intent": "allow",
             "mapping_id": "research.global",
             "mapping_scope_type": "global",
             "mapping_scope_id": None,
@@ -395,5 +396,56 @@ async def test_policy_resolver_keeps_unresolved_capabilities_visible_without_gra
         entry["source_kind"] == "capability_mapping"
         and entry["capability_name"] == "tool.invoke.unmapped"
         and entry["effect"] == "blocked"
+        for entry in policy["provenance"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_resolver_turns_denied_capabilities_into_denied_tool_patterns() -> None:
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = _FakeRepo()
+    repo.assignments = [repo.assignments[0]]
+    repo.profiles[1]["policy_document"] = {
+        "capabilities": ["filesystem.read"],
+        "denied_capabilities": ["tool.invoke.docs"],
+    }
+    repo.capability_mappings = {
+        ("global", None, "filesystem.read"): {
+            "mapping_id": "filesystem.read.global",
+            "owner_scope_type": "global",
+            "owner_scope_id": None,
+            "capability_name": "filesystem.read",
+            "resolved_policy_document": {"allowed_tools": ["files.read"]},
+            "supported_environment_requirements": [],
+            "is_active": True,
+        },
+        ("global", None, "tool.invoke.docs"): {
+            "mapping_id": "docs.global",
+            "owner_scope_type": "global",
+            "owner_scope_id": None,
+            "capability_name": "tool.invoke.docs",
+            "resolved_policy_document": {"allowed_tools": ["docs.search"]},
+            "supported_environment_requirements": [],
+            "is_active": True,
+        },
+    }
+    resolver = McpHubPolicyResolver(repo=repo)
+
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={"mcp_policy_context_enabled": True},
+    )
+
+    assert policy["allowed_tools"] == ["files.read"]
+    assert policy["denied_tools"] == ["docs.search"]
+    assert sorted(summary["resolution_intent"] for summary in policy["capability_mapping_summary"]) == [
+        "allow",
+        "deny",
+    ]
+    assert any(
+        entry["source_kind"] == "capability_mapping"
+        and entry["capability_name"] == "tool.invoke.docs"
+        and entry["effect"] == "narrowed"
         for entry in policy["provenance"]
     )

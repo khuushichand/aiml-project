@@ -49,6 +49,32 @@ class _FakeRepo:
                 "supported_environment_requirements": ["workspace_bounded_read", "future.flag"],
                 "is_active": True,
             },
+            ("org", 4, "tool.invoke.docs"): {
+                "id": 5,
+                "mapping_id": "docs.org.4",
+                "owner_scope_type": "org",
+                "owner_scope_id": 4,
+                "capability_name": "tool.invoke.docs",
+                "resolved_policy_document": {
+                    "module_ids": ["docs"],
+                    "tool_names": ["docs.search"],
+                },
+                "supported_environment_requirements": [],
+                "is_active": True,
+            },
+            ("org", 4, "tool.invoke.search"): {
+                "id": 6,
+                "mapping_id": "search.org.4",
+                "owner_scope_type": "org",
+                "owner_scope_id": 4,
+                "capability_name": "tool.invoke.search",
+                "resolved_policy_document": {
+                    "module_ids": ["search"],
+                    "tool_names": ["web.search"],
+                },
+                "supported_environment_requirements": [],
+                "is_active": True,
+            },
         }
 
     async def find_active_capability_mapping(
@@ -126,3 +152,20 @@ async def test_resolution_reports_unresolved_capabilities_dedupes_effects_and_tr
     assert result.supported_environment_requirements == ["workspace_bounded_read"]
     assert result.unsupported_environment_requirements == ["future.flag"]
     assert "tool.invoke.missing" in result.warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_resolution_unions_module_ids_across_multiple_capability_mappings() -> None:
+    from tldw_Server_API.app.services.mcp_hub_capability_resolution_service import (
+        McpHubCapabilityResolutionService,
+    )
+
+    service = McpHubCapabilityResolutionService(repo=_FakeRepo())
+
+    result = await service.resolve_capabilities(
+        capability_names=["tool.invoke.docs", "tool.invoke.search"],
+        metadata={"org_id": 4},
+    )
+
+    assert result.resolved_policy_document["module_ids"] == ["docs", "search"]
+    assert result.resolved_policy_document["tool_names"] == ["docs.search", "web.search"]

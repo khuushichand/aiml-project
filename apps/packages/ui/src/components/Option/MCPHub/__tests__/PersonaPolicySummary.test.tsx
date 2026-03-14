@@ -39,11 +39,22 @@ describe("PersonaPolicySummary", () => {
       capability_mapping_summary: [
         {
           capability_name: "tool.invoke.research",
+          resolution_intent: "allow",
           mapping_id: "research.global",
           mapping_scope_type: "global",
           mapping_scope_id: null,
           resolved_effects: { allowed_tools: ["web.search"] },
           supported_environment_requirements: ["workspace_bounded_read"],
+          unsupported_environment_requirements: []
+        },
+        {
+          capability_name: "tool.invoke.docs",
+          resolution_intent: "deny",
+          mapping_id: "docs.global",
+          mapping_scope_type: "global",
+          mapping_scope_id: null,
+          resolved_effects: { allowed_tools: ["docs.search"] },
+          supported_environment_requirements: [],
           unsupported_environment_requirements: []
         }
       ],
@@ -161,6 +172,7 @@ describe("PersonaPolicySummary", () => {
     expect(screen.getAllByText(/missing secret/i).length).toBeGreaterThan(0)
     expect(screen.getByText("Pack researcher-pack@1.0.0")).toBeTruthy()
     expect(screen.getByText("Mapped tool.invoke.research via research.global")).toBeTruthy()
+    expect(screen.getByText("Denied tool.invoke.docs via docs.global")).toBeTruthy()
     expect(screen.getByText("Unresolved capability: network.external.search")).toBeTruthy()
     expect(
       screen.getByText("profile:researcher: No active capability adapter mapping found for 'network.external.search'")

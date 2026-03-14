@@ -7,7 +7,15 @@ from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 
-_UNION_LIST_KEYS = {"allowed_tools", "denied_tools", "tool_names", "tool_patterns", "capabilities"}
+_UNION_LIST_KEYS = {
+    "allowed_tools",
+    "denied_tools",
+    "tool_names",
+    "tool_patterns",
+    "capabilities",
+    "tool_modules",
+    "module_ids",
+}
 _SUPPORTED_ENVIRONMENT_REQUIREMENTS = frozenset(
     {
         "local_mapping_required",
@@ -104,6 +112,7 @@ class McpHubCapabilityResolutionService:
         *,
         capability_names: list[str],
         metadata: dict[str, Any] | None,
+        resolution_intent: str = "allow",
     ) -> CapabilityResolutionResult:
         metadata_map = dict(metadata or {})
         resolved_capabilities: list[str] = []
@@ -121,7 +130,14 @@ class McpHubCapabilityResolutionService:
             )
             if mapping is None:
                 unresolved_capabilities.append(capability_name)
-                warnings.append(f"No active capability adapter mapping found for '{capability_name}'")
+                if str(resolution_intent or "").strip().lower() == "deny":
+                    warnings.append(
+                        f"No active capability adapter mapping found for denied capability '{capability_name}'"
+                    )
+                else:
+                    warnings.append(
+                        f"No active capability adapter mapping found for '{capability_name}'"
+                    )
                 continue
 
             resolved_capabilities.append(capability_name)
@@ -141,6 +157,7 @@ class McpHubCapabilityResolutionService:
             mapping_summaries.append(
                 {
                     "capability_name": capability_name,
+                    "resolution_intent": str(resolution_intent or "allow").strip().lower() or "allow",
                     "mapping_id": mapping.get("mapping_id"),
                     "mapping_scope_type": mapping.get("owner_scope_type"),
                     "mapping_scope_id": mapping.get("owner_scope_id"),
