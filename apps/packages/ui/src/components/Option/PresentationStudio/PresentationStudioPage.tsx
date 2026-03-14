@@ -69,6 +69,9 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
             metadata: {
               studio: {
                 slideId: blankSlideId,
+                transition: "fade",
+                timing_mode: "auto",
+                manual_duration_ms: null,
                 audio: { status: "missing" },
                 image: { status: "missing" }
               }
