@@ -810,7 +810,11 @@ def test_flashcard_assistant_respond_returns_409_for_stale_thread_version(
         content="Concurrent message",
     )
 
+    call_count = 0
+
     async def fake_generate_reply(*, action, context, message=None, provider=None, model=None):
+        nonlocal call_count
+        call_count += 1
         return {
             "assistant_text": "The glomerulus is the filtration tuft in the nephron.",
             "structured_payload": {},
@@ -831,6 +835,7 @@ def test_flashcard_assistant_respond_returns_409_for_stale_thread_version(
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Study assistant thread version mismatch"
+    assert call_count == 0
 
 
 def test_flashcard_assistant_missing_card_returns_404(client_with_flashcards_db: TestClient):

@@ -406,6 +406,8 @@ async def respond_quiz_attempt_question_assistant(
     try:
         context = build_quiz_attempt_question_context(db, attempt_id, question_id)
         thread = context["thread"]
+        if payload.expected_thread_version is not None and int(thread["version"]) != int(payload.expected_thread_version):
+            raise HTTPException(status_code=409, detail="Study assistant thread version mismatch")
 
         user_content = str(payload.message or "").strip() or _default_study_assistant_message(payload.action, context)
         reply = await generate_study_assistant_reply(

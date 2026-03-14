@@ -344,7 +344,11 @@ def test_quiz_attempt_question_assistant_respond_returns_409_for_stale_thread_ve
         content="Concurrent message",
     )
 
+    call_count = 0
+
     async def fake_generate_reply(*, action, context, message=None, provider=None, model=None):
+        nonlocal call_count
+        call_count += 1
         return {
             "assistant_text": "The glomerulus is where blood filtration begins.",
             "structured_payload": {},
@@ -365,6 +369,7 @@ def test_quiz_attempt_question_assistant_respond_returns_409_for_stale_thread_ve
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Study assistant thread version mismatch"
+    assert call_count == 0
 
 
 def test_quiz_multi_select_endpoints_flow(client_with_quizzes_db: TestClient):
