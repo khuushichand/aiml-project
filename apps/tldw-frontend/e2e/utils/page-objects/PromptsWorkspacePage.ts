@@ -227,10 +227,18 @@ export class PromptsWorkspacePage extends BasePage {
       }
     }
 
-    // Handle confirmation modal (useConfirmDanger)
-    const confirmButton = this.page.getByRole("button", { name: /ok|confirm|yes|delete/i })
-    if (await confirmButton.first().isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await confirmButton.first().click()
+    // Handle confirmation modal (useConfirmDanger / ant-modal-confirm)
+    const confirmModal = this.page.locator('.ant-modal-confirm')
+    await confirmModal.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => {})
+    const confirmDeleteBtn = confirmModal.getByRole("button", { name: /^delete$/i })
+    if (await confirmDeleteBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await confirmDeleteBtn.click({ force: true })
+    } else {
+      // Fallback: any confirm/ok button in the modal
+      const fallbackBtn = confirmModal.getByRole("button", { name: /ok|confirm|yes/i })
+      if (await fallbackBtn.first().isVisible({ timeout: 2_000 }).catch(() => false)) {
+        await fallbackBtn.first().click({ force: true })
+      }
     }
   }
 
