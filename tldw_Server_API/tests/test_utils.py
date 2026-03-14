@@ -110,8 +110,25 @@ def skip_if_transcription_model_unavailable(model_name: str) -> None:
     )
 
     status = check_transcription_model_status(model_name)
-    if not status.get("available"):
+    if not status.get("available") and not status.get("usable"):
         pytest.skip(status.get("message", "Transcription model not available"))
+
+
+def skip_if_whisper_model_not_cached_locally(model_name: str) -> None:
+    """Skip smoke tests unless the resolved Whisper model is already cached locally."""
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
+        check_transcription_model_status,
+    )
+
+    status = check_transcription_model_status(model_name)
+    resolved_model = status.get("model") or model_name
+    if not status.get("available"):
+        pytest.skip(
+            status.get(
+                "message",
+                f"Whisper model {resolved_model} is not cached locally; skipping smoke test",
+            )
+        )
 
 
 # End of test_utils.py

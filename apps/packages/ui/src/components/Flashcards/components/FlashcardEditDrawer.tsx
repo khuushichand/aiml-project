@@ -12,9 +12,11 @@ import {
   Tooltip,
   Typography
 } from "antd"
+import type { TextAreaRef } from "antd/es/input/TextArea"
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { useTranslation } from "react-i18next"
+import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useDebouncedFormField } from "../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
@@ -24,6 +26,13 @@ import {
   getUtf8ByteLength
 } from "../utils/field-byte-limit"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
+import {
+  getSelectionFromElement,
+  insertTextAtSelection,
+  restoreSelection,
+  type TextSelection
+} from "../utils/text-selection"
+import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
 import type { Flashcard, FlashcardUpdate, Deck } from "@/services/flashcards"
 
@@ -32,6 +41,7 @@ dayjs.extend(relativeTime)
 const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
 
 type FlashcardModelType = Flashcard["model_type"]
+type EditableTextField = "front" | "back" | "extra" | "notes"
 
 interface FlashcardEditDrawerProps {
   open: boolean
@@ -57,6 +67,7 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
   decksLoading = false
 }) => {
   const { t } = useTranslation(["option", "common"])
+  const message = useAntdMessage()
   const [form] = Form.useForm<FlashcardUpdate & { tags_text?: string[] }>()
   const selectedModelType = Form.useWatch("model_type", form) as
     | FlashcardModelType
@@ -72,6 +83,18 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
   const notesPreview = useDebouncedFormField(form, "notes")
   const frontValue = Form.useWatch("front", form) as string | undefined
   const backValue = Form.useWatch("back", form) as string | undefined
+  const textAreaRefs = React.useRef<Record<EditableTextField, TextAreaRef | null>>({
+    front: null,
+    back: null,
+    extra: null,
+    notes: null
+  })
+  const selectionRef = React.useRef<Record<EditableTextField, TextSelection>>({
+    front: { start: 0, end: 0 },
+    back: { start: 0, end: 0 },
+    extra: { start: 0, end: 0 },
+    notes: { start: 0, end: 0 }
+  })
   const frontByteLength = getUtf8ByteLength(frontValue)
   const backByteLength = getUtf8ByteLength(backValue)
   const frontLimitState = getFlashcardFieldLimitState(frontByteLength)
@@ -218,6 +241,53 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
       console.error("Reset scheduling error:", e)
     }
   }, [onResetScheduling])
+
+  const updateSelection = React.useCallback(
+    (
+      field: EditableTextField,
+      element: HTMLTextAreaElement | null | undefined
+    ) => {
+      const currentValue = String(form.getFieldValue(field) ?? "")
+      selectionRef.current[field] = getSelectionFromElement(element, currentValue)
+    },
+    [form]
+  )
+
+  const handleInsertImage = React.useCallback(
+    async (field: EditableTextField, markdownSnippet: string) => {
+      const currentValue = String(form.getFieldValue(field) ?? "")
+      const textArea =
+        textAreaRefs.current[field]?.resizableTextArea?.textArea ?? null
+      const selection =
+        selectionRef.current[field] ?? getSelectionFromElement(textArea, currentValue)
+      const { nextValue, cursor } = insertTextAtSelection(
+        currentValue,
+        selection,
+        markdownSnippet
+      )
+      form.setFieldsValue({ [field]: nextValue })
+      setIsDirty(true)
+      restoreSelection(textArea, cursor)
+    },
+    [form]
+  )
+
+  const renderFieldLabel = React.useCallback(
+    (field: EditableTextField, label: string) => (
+      <div className="flex items-center justify-between gap-3">
+        <span>{label}</span>
+        <FlashcardImageInsertButton
+          ariaLabel={`Upload image for ${label}`}
+          buttonLabel={t("option:flashcards.insertImage", {
+            defaultValue: "Insert image"
+          })}
+          onInsert={(markdownSnippet) => handleInsertImage(field, markdownSnippet)}
+          onError={(error) => message.error(error.message)}
+        />
+      </div>
+    ),
+    [handleInsertImage, message, t]
+  )
 
   return (
     <>
@@ -492,7 +562,10 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
           </div>
           <Form.Item
             name="front"
-            label={t("option:flashcards.front", { defaultValue: "Front" })}
+            label={renderFieldLabel(
+              "front",
+              t("option:flashcards.front", { defaultValue: "Front" })
+            )}
             rules={[
               {
                 required: true,
@@ -539,7 +612,15 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
               }
             ]}
           >
-            <Input.TextArea rows={3} />
+            <Input.TextArea
+              ref={(instance) => {
+                textAreaRefs.current.front = instance
+              }}
+              rows={3}
+              onSelect={(event) => updateSelection("front", event.currentTarget)}
+              onClick={(event) => updateSelection("front", event.currentTarget)}
+              onKeyUp={(event) => updateSelection("front", event.currentTarget)}
+            />
           </Form.Item>
           <Text
             type={frontLimitState === "over" ? "danger" : frontLimitState === "warning" ? "warning" : "secondary"}
@@ -561,7 +642,10 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
 
           <Form.Item
             name="back"
-            label={t("option:flashcards.back", { defaultValue: "Back" })}
+            label={renderFieldLabel(
+              "back",
+              t("option:flashcards.back", { defaultValue: "Back" })
+            )}
             rules={[
               {
                 required: true,
@@ -588,7 +672,15 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
               }
             ]}
           >
-            <Input.TextArea rows={5} />
+            <Input.TextArea
+              ref={(instance) => {
+                textAreaRefs.current.back = instance
+              }}
+              rows={5}
+              onSelect={(event) => updateSelection("back", event.currentTarget)}
+              onClick={(event) => updateSelection("back", event.currentTarget)}
+              onKeyUp={(event) => updateSelection("back", event.currentTarget)}
+            />
           </Form.Item>
           <Text
             type={backLimitState === "over" ? "danger" : backLimitState === "warning" ? "warning" : "secondary"}
@@ -636,9 +728,20 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
                 <>
                   <Form.Item
                     name="extra"
-                    label={t("option:flashcards.extra", { defaultValue: "Extra" })}
+                    label={renderFieldLabel(
+                      "extra",
+                      t("option:flashcards.extra", { defaultValue: "Extra" })
+                    )}
                   >
-                    <Input.TextArea rows={2} />
+                    <Input.TextArea
+                      ref={(instance) => {
+                        textAreaRefs.current.extra = instance
+                      }}
+                      rows={2}
+                      onSelect={(event) => updateSelection("extra", event.currentTarget)}
+                      onClick={(event) => updateSelection("extra", event.currentTarget)}
+                      onKeyUp={(event) => updateSelection("extra", event.currentTarget)}
+                    />
                   </Form.Item>
                   {showPreview && extraPreview && (
                     <div className="mb-4 border rounded p-2 text-xs bg-surface">
@@ -647,9 +750,20 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
                   )}
                   <Form.Item
                     name="notes"
-                    label={t("option:flashcards.notes", { defaultValue: "Notes" })}
+                    label={renderFieldLabel(
+                      "notes",
+                      t("option:flashcards.notes", { defaultValue: "Notes" })
+                    )}
                   >
-                    <Input.TextArea rows={2} />
+                    <Input.TextArea
+                      ref={(instance) => {
+                        textAreaRefs.current.notes = instance
+                      }}
+                      rows={2}
+                      onSelect={(event) => updateSelection("notes", event.currentTarget)}
+                      onClick={(event) => updateSelection("notes", event.currentTarget)}
+                      onKeyUp={(event) => updateSelection("notes", event.currentTarget)}
+                    />
                   </Form.Item>
                   {showPreview && notesPreview && (
                     <div className="mb-4 border rounded p-2 text-xs bg-surface">

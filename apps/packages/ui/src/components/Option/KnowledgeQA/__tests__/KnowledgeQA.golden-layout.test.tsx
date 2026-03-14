@@ -94,6 +94,10 @@ vi.mock("@/hooks/useConnectionState", () => ({
     isChecking: connectivity.isChecking,
     lastCheckedAt: connectivity.lastCheckedAt,
   }),
+  useConnectionUxState: () => ({
+    uxState: "connected_ok" as const,
+    hasCompletedFirstRun: true,
+  }),
 }))
 
 vi.mock("@/hooks/useMediaQuery", () => ({

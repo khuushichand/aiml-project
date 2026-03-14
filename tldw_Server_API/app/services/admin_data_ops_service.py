@@ -2,26 +2,34 @@
 # Description: Admin data operations helpers (backups, retention policies, exports)
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
+import hmac
 import io
 import json
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
 from loguru import logger
 
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.retention_policies import (
     RETENTION_POLICIES,
     apply_retention_overrides,
     upsert_retention_override,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.admin_retention_preview_counts import (
+    count_retention_window,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Backups import (
     create_backup,
     create_incremental_backup,
@@ -61,6 +69,7 @@ DATASET_DB_RESOLVERS = {
 }
 _BACKUP_DATASETS = frozenset([*DATASET_DB_RESOLVERS.keys(), "authnz"])
 _BACKUP_EXTENSIONS = (".db", ".sqlib", ".dump")
+_RETENTION_PREVIEW_SCHEMA_VERSION = "v1"
 
 
 def _backup_base_dir() -> str:
@@ -314,24 +323,217 @@ async def list_retention_policies() -> list[dict[str, Any]]:
     return policies
 
 
-async def update_retention_policy(policy_key: str, days: int) -> dict[str, Any]:
+def _resolve_retention_policy_meta(policy_key: str) -> dict[str, Any]:
     meta = RETENTION_POLICIES.get(policy_key)
     if not meta:
         raise InvalidRetentionPolicyError("unknown_policy")
+    return meta
+
+
+def _validate_requested_retention_days(policy_key: str, days: int) -> tuple[dict[str, Any], int]:
+    meta = _resolve_retention_policy_meta(policy_key)
     min_val = int(meta["min"])
     max_val = int(meta["max"])
     if days < min_val or days > max_val:
         raise InvalidRetentionRangeError("invalid_range")
+    return meta, int(days)
 
+
+async def _current_retention_days(policy_key: str) -> int:
+    meta = _resolve_retention_policy_meta(policy_key)
     settings = get_settings()
-    effective_days = int(days)
+    await apply_retention_overrides(settings)
+    value = getattr(settings, meta["attr"], None)
+    return int(value) if value is not None else 0
+
+
+def _effective_retention_days(policy_key: str, requested_days: int) -> int:
+    effective_days = int(requested_days)
     if policy_key == "privilege_snapshots_weekly":
+        settings = get_settings()
         try:
-            primary = int(getattr(settings, RETENTION_POLICIES["privilege_snapshots"]["attr"]))
-            if effective_days < primary:
-                effective_days = primary
+            primary_days = int(getattr(settings, RETENTION_POLICIES["privilege_snapshots"]["attr"]))
+            if effective_days < primary_days:
+                effective_days = primary_days
         except Exception as retention_floor_error:
             logger.debug("Failed to apply privilege snapshot retention floor", exc_info=retention_floor_error)
+    return effective_days
+
+
+def _retention_preview_ttl_seconds() -> int:
+    raw_value = (os.getenv("ADMIN_RETENTION_PREVIEW_TTL_SECONDS") or "900").strip()
+    try:
+        return max(60, int(raw_value))
+    except ValueError:
+        return 900
+
+
+def _retention_preview_secret() -> bytes:
+    settings = get_settings()
+    secret_seed = (
+        getattr(settings, "JWT_SECRET_KEY", None)
+        or getattr(settings, "SINGLE_USER_API_KEY", None)
+        or os.getenv("JWT_SECRET_TEST_KEY")
+    )
+    if not secret_seed:
+        raise RuntimeError("preview_signature_secret_unavailable")
+    pepper = getattr(settings, "API_KEY_PEPPER", None) or ""
+    material = f"{secret_seed}|{pepper}|retention-preview|{_RETENTION_PREVIEW_SCHEMA_VERSION}"
+    return hashlib.sha256(material.encode("utf-8")).digest()
+
+
+def build_retention_preview_signature(
+    *,
+    principal: AuthPrincipal,
+    policy_key: str,
+    current_days: int,
+    new_days: int,
+) -> str:
+    expires_at = int((datetime.now(timezone.utc) + timedelta(seconds=_retention_preview_ttl_seconds())).timestamp())
+    payload = {
+        "v": _RETENTION_PREVIEW_SCHEMA_VERSION,
+        "p": policy_key,
+        "c": int(current_days),
+        "n": int(new_days),
+        "a": principal.principal_id,
+        "e": expires_at,
+    }
+    body = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    digest = hmac.new(_retention_preview_secret(), body.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{body}.{digest}"
+
+
+def _decode_retention_preview_signature(signature: str) -> dict[str, Any]:
+    try:
+        body, digest = str(signature).split(".", 1)
+    except ValueError as exc:
+        raise InvalidRetentionRangeError("invalid_preview_signature") from exc
+
+    expected = hmac.new(_retention_preview_secret(), body.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(digest, expected):
+        raise InvalidRetentionRangeError("invalid_preview_signature")
+
+    padded = body + "=" * (-len(body) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(decoded.decode("utf-8"))
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise InvalidRetentionRangeError("invalid_preview_signature") from exc
+    if not isinstance(payload, dict):
+        raise InvalidRetentionRangeError("invalid_preview_signature")
+    return payload
+
+
+async def verify_retention_preview_signature(
+    *,
+    principal: AuthPrincipal,
+    policy_key: str,
+    days: int,
+    preview_signature: str | None,
+) -> None:
+    if not preview_signature:
+        raise InvalidRetentionRangeError("preview_signature_required")
+    payload = _decode_retention_preview_signature(preview_signature)
+    if payload.get("v") != _RETENTION_PREVIEW_SCHEMA_VERSION:
+        raise InvalidRetentionRangeError("invalid_preview_signature")
+    expires_at = int(payload.get("e") or 0)
+    if expires_at < int(datetime.now(timezone.utc).timestamp()):
+        raise InvalidRetentionRangeError("expired_preview_signature")
+    actual_current_days = await _current_retention_days(policy_key)
+    effective_days = _effective_retention_days(policy_key, days)
+    if (
+        payload.get("p") != policy_key
+        or int(payload.get("c") or -1) != actual_current_days
+        or int(payload.get("n") or -1) != effective_days
+        or payload.get("a") != principal.principal_id
+    ):
+        raise InvalidRetentionRangeError("invalid_preview_signature")
+
+
+async def preview_retention_policy(
+    *,
+    policy_key: str,
+    current_days: int,
+    days: int,
+) -> dict[str, Any]:
+    _, requested_days = _validate_requested_retention_days(policy_key, days)
+    actual_current_days = await _current_retention_days(policy_key)
+    if int(current_days) != actual_current_days:
+        raise InvalidRetentionRangeError("stale_current_days")
+
+    effective_days = _effective_retention_days(policy_key, requested_days)
+    counts = {
+        "audit_log_entries": 0,
+        "job_records": 0,
+        "backup_files": 0,
+    }
+    notes: list[str] = []
+
+    if effective_days < actual_current_days:
+        older_than = datetime.now(timezone.utc) - timedelta(days=effective_days)
+        not_older_than = datetime.now(timezone.utc) - timedelta(days=actual_current_days)
+        if policy_key == "audit_logs":
+            counts["audit_log_entries"] = await count_retention_window(
+                table="audit_logs",
+                column="created_at",
+                older_than=older_than,
+                not_older_than=not_older_than,
+            )
+        elif policy_key == "usage_logs":
+            counts["job_records"] = await count_retention_window(
+                table="usage_log",
+                column="ts",
+                older_than=older_than,
+                not_older_than=not_older_than,
+            )
+        elif policy_key == "llm_usage_logs":
+            counts["job_records"] = await count_retention_window(
+                table="llm_usage_log",
+                column="ts",
+                older_than=older_than,
+                not_older_than=not_older_than,
+            )
+        elif policy_key == "usage_daily":
+            counts["job_records"] = await count_retention_window(
+                table="usage_daily",
+                column="day",
+                older_than=(datetime.now(timezone.utc) - timedelta(days=effective_days)).date().isoformat(),
+                not_older_than=(datetime.now(timezone.utc) - timedelta(days=actual_current_days)).date().isoformat(),
+                is_date_column=True,
+            )
+        elif policy_key == "llm_usage_daily":
+            counts["job_records"] = await count_retention_window(
+                table="llm_usage_daily",
+                column="day",
+                older_than=(datetime.now(timezone.utc) - timedelta(days=effective_days)).date().isoformat(),
+                not_older_than=(datetime.now(timezone.utc) - timedelta(days=actual_current_days)).date().isoformat(),
+                is_date_column=True,
+            )
+        elif policy_key in {"privilege_snapshots", "privilege_snapshots_weekly"}:
+            counts["job_records"] = await count_retention_window(
+                table="privilege_snapshots",
+                column="generated_at",
+                older_than=older_than,
+                not_older_than=not_older_than,
+            )
+        else:
+            notes.append("No additional backend preview counts are modeled for this policy.")
+
+    return {
+        "key": policy_key,
+        "current_days": actual_current_days,
+        "new_days": effective_days,
+        "counts": counts,
+        "notes": notes,
+    }
+
+
+async def update_retention_policy(policy_key: str, days: int) -> dict[str, Any]:
+    meta, requested_days = _validate_requested_retention_days(policy_key, days)
+    settings = get_settings()
+    effective_days = _effective_retention_days(policy_key, requested_days)
     await upsert_retention_override(policy_key, effective_days)
     setattr(settings, meta["attr"], effective_days)
 

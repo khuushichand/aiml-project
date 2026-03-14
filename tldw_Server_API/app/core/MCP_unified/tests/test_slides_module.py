@@ -19,6 +19,7 @@ class FakeRow:
     marp_theme: str | None
     template_id: str | None
     settings: str | None
+    studio_data: str | None
     slides: str
     slides_text: str
     source_type: str | None
@@ -37,7 +38,7 @@ class FakeSlidesDB:
         self.rows: Dict[str, FakeRow] = {}
         self._counter = 0
 
-    def create_presentation(self, presentation_id, title, description, theme, marp_theme, template_id, settings, slides, slides_text, source_type, source_ref, source_query, custom_css):
+    def create_presentation(self, presentation_id, title, description, theme, marp_theme, template_id, settings, studio_data, slides, slides_text, source_type, source_ref, source_query, custom_css):
         self._counter += 1
         pid = presentation_id or f"pres-{self._counter}"
         row = FakeRow(
@@ -48,6 +49,7 @@ class FakeSlidesDB:
             marp_theme=marp_theme,
             template_id=template_id,
             settings=settings,
+            studio_data=studio_data,
             slides=slides,
             slides_text=slides_text,
             source_type=source_type,

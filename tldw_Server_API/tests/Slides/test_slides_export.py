@@ -148,6 +148,69 @@ def test_export_markdown_includes_images():
     assert "![Logo](data:image/png;base64," in md
 
 
+def test_export_bundle_resolves_output_asset_ref(tmp_path, monkeypatch):
+    assets_dir = _build_assets(tmp_path)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.slides_export.resolve_slide_asset",
+        lambda asset_ref, **kwargs: {
+            "asset_ref": asset_ref,
+            "mime": "image/png",
+            "data_b64": _SAMPLE_PNG_B64,
+            "alt": "Cover",
+        },
+    )
+    slides = [
+        {
+            "order": 0,
+            "layout": "content",
+            "title": "Slide",
+            "content": "Hello",
+            "speaker_notes": None,
+            "metadata": {"images": [{"asset_ref": "output:123", "alt": "Cover"}]},
+        },
+    ]
+
+    bundle = export_presentation_bundle(
+        title="Deck",
+        slides=slides,
+        theme="black",
+        settings=None,
+        custom_css=None,
+        assets_dir=assets_dir,
+    )
+
+    with zipfile.ZipFile(io.BytesIO(bundle)) as zf:
+        index_html = zf.read("index.html").decode("utf-8")
+        assert "data:image/png;base64," in index_html
+        assert "alt=\"Cover\"" in index_html
+
+
+def test_export_markdown_resolves_output_asset_ref(monkeypatch):
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.slides_export.resolve_slide_asset",
+        lambda asset_ref, **kwargs: {
+            "asset_ref": asset_ref,
+            "mime": "image/png",
+            "data_b64": _SAMPLE_PNG_B64,
+            "alt": "Cover",
+        },
+    )
+    slides = [
+        {
+            "order": 0,
+            "layout": "content",
+            "title": "Slide",
+            "content": "Hello",
+            "speaker_notes": "Narration",
+            "metadata": {"images": [{"asset_ref": "output:123", "alt": "Cover"}]},
+        }
+    ]
+
+    md = export_presentation_markdown(title="Deck", slides=slides, theme="black")
+
+    assert "![Cover](data:image/png;base64," in md
+
+
 def test_export_markdown_rejects_invalid_image():
     slides = [
         {

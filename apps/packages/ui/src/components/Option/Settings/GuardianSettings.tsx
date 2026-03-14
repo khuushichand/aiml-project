@@ -37,8 +37,10 @@ import {
 import type { ColumnsType } from "antd/es/table"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
 import { useServerOnline } from "@/hooks/useServerOnline"
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import {
   listRules,
@@ -1726,6 +1728,8 @@ function CrisisResourcesTab({ online }: { online: boolean }) {
 export function GuardianSettings() {
   const { t } = useTranslation("settings")
   const online = useServerOnline()
+  const navigate = useNavigate()
+  const { uxState } = useConnectionUxState()
   const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
   const guardianRoutesAvailable = Boolean(
     capabilities?.hasGuardian && capabilities?.hasSelfMonitoring
@@ -1745,6 +1749,81 @@ export function GuardianSettings() {
     )
   }
 
+  const offlineWarning =
+    !online && uxState !== "testing"
+      ? uxState === "error_auth" || uxState === "configuring_auth"
+        ? (
+      <Alert
+        type="warning"
+        showIcon
+        title={t("guardian.authRequiredTitle", "Add your credentials to manage Guardian settings.")}
+        description={t(
+          "guardian.authRequiredDescription",
+          "Your server is reachable, but Guardian settings require valid credentials before they can be managed."
+        )}
+        action={
+          <Button size="small" onClick={() => navigate("/settings/tldw")}>
+            {t("guardian.openSettings", "Open Settings")}
+          </Button>
+        }
+        style={{ marginBottom: 16 }}
+      />
+          )
+        : uxState === "unconfigured" || uxState === "configuring_url"
+          ? (
+      <Alert
+        type="warning"
+        showIcon
+        title={t("guardian.setupRequiredTitle", "Finish setup to manage Guardian settings.")}
+        description={t(
+          "guardian.setupRequiredDescription",
+          "Complete the tldw server setup flow, then return here to manage Guardian and Self-Monitoring settings."
+        )}
+        action={
+          <Button size="small" onClick={() => navigate("/")}>
+            {t("guardian.finishSetup", "Finish Setup")}
+          </Button>
+        }
+        style={{ marginBottom: 16 }}
+      />
+            )
+          : uxState === "error_unreachable"
+            ? (
+      <Alert
+        type="warning"
+        showIcon
+        title={t("guardian.unreachableTitle", "Can't reach your tldw server right now.")}
+        description={t(
+          "guardian.unreachableDescription",
+          "Your server settings are saved, but Guardian settings cannot reach the tldw server right now."
+        )}
+        action={
+          <Space size="small">
+            <Button size="small" onClick={() => navigate("/settings/health")}>
+              {t("guardian.diagnostics", "Health & diagnostics")}
+            </Button>
+            <Button size="small" onClick={() => navigate("/settings/tldw")}>
+              {t("guardian.openSettings", "Open Settings")}
+            </Button>
+          </Space>
+        }
+        style={{ marginBottom: 16 }}
+      />
+              )
+            : (
+      <Alert
+        type="warning"
+        showIcon
+        title={t("guardian.serverOfflineTitle", "Server offline")}
+        description={t(
+          "guardian.serverOffline",
+          "Connect to your tldw server to manage guardian and monitoring settings."
+        )}
+        style={{ marginBottom: 16 }}
+      />
+              )
+      : null
+
   return (
     <div style={{ maxWidth: 960, margin: "0 auto", padding: "16px 0" }}>
       <Title level={4}>{t("guardian.title", "Guardian & Self-Monitoring")}</Title>
@@ -1755,18 +1834,7 @@ export function GuardianSettings() {
         )}
       </Paragraph>
 
-      {!online && (
-        <Alert
-          type="warning"
-          showIcon
-          title={t("guardian.serverOfflineTitle", "Server offline")}
-          description={t(
-            "guardian.serverOffline",
-            "Connect to your tldw server to manage guardian and monitoring settings."
-          )}
-          style={{ marginBottom: 16 }}
-        />
-      )}
+      {offlineWarning}
 
       <Tabs
         defaultActiveKey="self-monitoring"

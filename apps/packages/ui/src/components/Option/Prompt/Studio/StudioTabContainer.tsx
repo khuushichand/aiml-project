@@ -39,8 +39,8 @@ import {
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useServerOnline } from "@/hooks/useServerOnline"
-import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { QueueHealthWidget } from "./QueueHealthWidget"
 import { ProjectsTab } from "./Projects/ProjectsTab"
 import { StudioPromptsTab } from "./Prompts/StudioPromptsTab"
@@ -291,24 +291,17 @@ export const StudioTabContainer: React.FC = () => {
   // Offline state
   if (!isOnline) {
     return (
-      <ConnectFeatureBanner
-        title={t("settings:managePrompts.studio.connectTitle", {
-          defaultValue: "Connect to use Prompt Studio"
+      <WorkspaceConnectionGate
+        featureName={t("settings:managePrompts.studio.title", {
+          defaultValue: "Prompt Studio"
         })}
-        description={t("settings:managePrompts.studio.connectDescription", {
+        setupDescription={t("settings:managePrompts.studio.connectDescription", {
           defaultValue:
             "To access full Prompt Studio features, connect to your tldw server first."
         })}
-        examples={[
-          t("settings:managePrompts.studio.connectExample1", {
-            defaultValue: "Open Settings -> tldw server to add your server URL."
-          }),
-          t("settings:managePrompts.studio.connectExample2", {
-            defaultValue:
-              "Once connected, you can manage projects, prompts, test cases, evaluations, and optimizations."
-          })
-        ]}
-      />
+      >
+        <div />
+      </WorkspaceConnectionGate>
     )
   }
 

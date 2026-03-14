@@ -1,4 +1,6 @@
 export * from "./useFlashcardQueries"
+export * from "./useFlashcardDocumentQuery"
+export * from "./useFlashcardDocumentRowState"
 export * from "./useDebouncedFormField"
 export * from "./useFlashcardShortcuts"
 export * from "./useCardsKeyboardNav"

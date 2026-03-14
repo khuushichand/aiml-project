@@ -94,7 +94,14 @@ vi.mock('@/context/demo-mode', () => ({
 }))
 
 vi.mock('@/hooks/useConnectionState', () => ({
-  useConnectionState: () => ({ serverUrl: 'http://localhost:8000' })
+  useConnectionState: () => ({ serverUrl: 'http://localhost:8000' }),
+  useConnectionUxState: () => ({
+    uxState: 'connected_ok',
+    hasCompletedFirstRun: true
+  }),
+  useConnectionActions: () => ({
+    checkOnce: vi.fn()
+  })
 }))
 
 vi.mock('@/hooks/useMessageOption', () => ({

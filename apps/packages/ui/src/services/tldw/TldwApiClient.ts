@@ -261,6 +261,64 @@ export interface OpenAICredentialSourceSwitchResponse {
   updated_at?: string | null
 }
 
+export type PresentationStudioSlide = {
+  order: number
+  layout: string
+  title?: string | null
+  content: string
+  speaker_notes?: string | null
+  metadata: Record<string, any>
+}
+
+export type PresentationStudioRecord = {
+  id: string
+  title: string
+  description?: string | null
+  theme: string
+  marp_theme?: string | null
+  template_id?: string | null
+  settings?: Record<string, any> | null
+  studio_data?: Record<string, any> | null
+  slides: PresentationStudioSlide[]
+  custom_css?: string | null
+  source_type?: string | null
+  source_ref?: unknown
+  source_query?: string | null
+  created_at: string
+  last_modified: string
+  deleted?: boolean
+  client_id?: string
+  version: number
+}
+
+export type PresentationRenderFormat = "mp4" | "webm"
+
+export type PresentationRenderJob = {
+  job_id: number
+  status: string
+  job_type: string
+  presentation_id?: string | null
+  presentation_version?: number | null
+  format?: PresentationRenderFormat | null
+  output_id?: number | null
+  download_url?: string | null
+  error?: string | null
+}
+
+export type PresentationRenderArtifact = {
+  output_id: number
+  format: PresentationRenderFormat
+  title?: string | null
+  download_url: string
+  presentation_version?: number | null
+  created_at?: string | null
+}
+
+export type PresentationRenderArtifactList = {
+  presentation_id: string
+  artifacts: PresentationRenderArtifact[]
+}
+
 export type UserProfileUpdateEntry = {
   key: string
   value: unknown | null
@@ -7038,24 +7096,102 @@ export class TldwApiClient {
     })
   }
 
-  async getPresentation(presentationId: string): Promise<{
-    id: string
-    title: string
-    description?: string
-    theme: string
-    slides: Array<{
-      order: number
-      layout: string
-      title?: string
-      content: string
-      speaker_notes?: string
-    }>
-    version: number
-    created_at: string
-    last_modified: string
-  }> {
-    return await this.request<any>({
+  async getPresentation(presentationId: string): Promise<PresentationStudioRecord> {
+    return await this.request<PresentationStudioRecord>({
       path: `/api/v1/slides/presentations/${encodeURIComponent(presentationId)}`,
+      method: "GET"
+    })
+  }
+
+  async createPresentation(payload: {
+    title: string
+    description?: string | null
+    theme?: string
+    marp_theme?: string | null
+    template_id?: string | null
+    settings?: Record<string, any> | null
+    studio_data?: Record<string, any> | null
+    slides: PresentationStudioSlide[]
+    custom_css?: string | null
+  }): Promise<PresentationStudioRecord> {
+    const path = await this.resolveApiPath("slides.presentations.create", [
+      "/api/v1/slides/presentations"
+    ])
+    return await this.request<PresentationStudioRecord>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async patchPresentation(
+    presentationId: string,
+    payload: {
+      title?: string | null
+      description?: string | null
+      theme?: string | null
+      marp_theme?: string | null
+      template_id?: string | null
+      settings?: Record<string, any> | null
+      studio_data?: Record<string, any> | null
+      slides?: PresentationStudioSlide[] | null
+      custom_css?: string | null
+    },
+    options?: { ifMatch?: string | number | null }
+  ): Promise<PresentationStudioRecord> {
+    const template = await this.resolveApiPath("slides.presentations.patch", [
+      "/api/v1/slides/presentations/{presentation_id}"
+    ])
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (options?.ifMatch != null) {
+      headers["If-Match"] = String(options.ifMatch)
+    }
+    return await this.request<PresentationStudioRecord>({
+      path: this.fillPathParams(template, presentationId),
+      method: "PATCH",
+      headers,
+      body: payload
+    })
+  }
+
+  async submitPresentationRenderJob(
+    presentationId: string,
+    payload: { format: PresentationRenderFormat },
+    options: { ifMatch: string | number }
+  ): Promise<PresentationRenderJob> {
+    const template = await this.resolveApiPath("slides.presentations.render.create", [
+      "/api/v1/slides/presentations/{presentation_id}/render-jobs"
+    ])
+    return await this.request<PresentationRenderJob>({
+      path: this.fillPathParams(template, presentationId),
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(options.ifMatch)
+      },
+      body: payload
+    })
+  }
+
+  async getPresentationRenderJob(jobId: number): Promise<PresentationRenderJob> {
+    const template = await this.resolveApiPath("slides.presentations.render.get", [
+      "/api/v1/slides/render-jobs/{job_id}"
+    ])
+    return await this.request<PresentationRenderJob>({
+      path: this.fillPathParams(template, String(jobId)),
+      method: "GET"
+    })
+  }
+
+  async listPresentationRenderArtifacts(
+    presentationId: string
+  ): Promise<PresentationRenderArtifactList> {
+    const template = await this.resolveApiPath("slides.presentations.render.artifacts", [
+      "/api/v1/slides/presentations/{presentation_id}/render-artifacts"
+    ])
+    return await this.request<PresentationRenderArtifactList>({
+      path: this.fillPathParams(template, presentationId),
       method: "GET"
     })
   }

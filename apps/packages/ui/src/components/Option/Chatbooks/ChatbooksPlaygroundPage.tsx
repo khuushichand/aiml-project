@@ -28,6 +28,7 @@ import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { bgRequest } from "@/services/background-proxy"
 import { PageShell } from "@/components/Common/PageShell"
+import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { formatFileSize } from "@/utils/format"
 import {
@@ -999,8 +1000,8 @@ const groupPreviewItems = (items: any[]): Record<ContentTypeKey, ChatbookEntity[
 
 export const ChatbooksPlaygroundPage: React.FC = () => {
   const { t } = useTranslation(["settings", "common", "option"])
-  const notification = useAntdNotification()
   const isOnline = useServerOnline()
+  const notification = useAntdNotification()
   const { capabilities } = useServerCapabilities()
 
   const [activeTab, setActiveTab] = React.useState("export")
@@ -2054,21 +2055,16 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
     }
   ]
 
-  if (!isOnline) {
-    return (
-      <PageShell>
-        <Empty
-          description={t(
-            "settings:chatbooksPlayground.offline",
-            "Connect to your tldw server to use Chatbooks."
-          )}
-        />
-      </PageShell>
-    )
-  }
-
   return (
-    <PageShell maxWidthClassName="max-w-6xl">
+    <WorkspaceConnectionGate
+      featureName={t("settings:chatbooksPlayground.title", "Chatbooks")}
+      setupDescription={t(
+        "settings:chatbooksPlayground.offline",
+        "Connect to your tldw server to use Chatbooks."
+      )}
+      maxWidthClassName="max-w-6xl"
+    >
+      <PageShell maxWidthClassName="max-w-6xl">
       <div className="flex flex-col gap-6">
         <div>
           <Title level={3}>{t("settings:chatbooksPlayground.title", "Chatbooks Playground")}</Title>
@@ -2198,7 +2194,8 @@ export const ChatbooksPlaygroundPage: React.FC = () => {
           </div>
         </div>
       </div>
-    </PageShell>
+      </PageShell>
+    </WorkspaceConnectionGate>
   )
 }
 

@@ -13,7 +13,10 @@ import {
   submitAttempt,
   listAttempts,
   getAttempt,
+  getQuizAttemptQuestionAssistant,
   generateQuiz,
+  generateRemediationQuiz,
+  respondQuizAttemptQuestionAssistant,
   type Quiz,
   type Question,
   type QuestionListParams,
@@ -21,12 +24,19 @@ import {
   type QuizUpdate,
   type QuestionCreate,
   type QuestionUpdate,
+  type QuestionType,
   type QuizGenerateRequest,
+  type QuizRemediationGenerateRequest,
   type QuizAnswerInput,
   type QuizListParams,
   type AttemptListParams,
   type QuizAttempt
 } from "@/services/quizzes"
+import type {
+  StudyAssistantAction,
+  StudyAssistantContextResponse,
+  StudyAssistantRespondRequest
+} from "@/services/flashcards"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 
@@ -36,6 +46,13 @@ export interface UseQuizQueriesOptions {
 
 const QUIZ_QUERY_STALE_TIME_MS = 30_000
 const ATTEMPT_QUERY_STALE_TIME_MS = 30_000
+const DEFAULT_STUDY_ASSISTANT_ACTIONS: StudyAssistantAction[] = [
+  "explain",
+  "mnemonic",
+  "follow_up",
+  "fact_check",
+  "freeform"
+]
 
 type QuizListCacheValue = {
   items: Quiz[]
@@ -437,6 +454,73 @@ export function useAttemptQuery(
   })
 }
 
+export function useQuizAttemptQuestionAssistantQuery(
+  attemptId: number | null | undefined,
+  questionId: number | null | undefined,
+  options?: UseQuizQueriesOptions
+) {
+  const { quizzesEnabled } = useQuizzesEnabled()
+
+  return useQuery({
+    queryKey: ["quizzes:assistant", attemptId ?? null, questionId ?? null],
+    queryFn: ({ signal }) => getQuizAttemptQuestionAssistant(attemptId!, questionId!, { signal }),
+    enabled: (options?.enabled ?? quizzesEnabled) && attemptId != null && questionId != null,
+    staleTime: ATTEMPT_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false
+  })
+}
+
+export function useQuizAttemptQuestionAssistantRespondMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["quizzes:assistant:respond"],
+    mutationFn: (params: {
+      attemptId: number
+      questionId: number
+      request: StudyAssistantRespondRequest
+      signal?: AbortSignal
+    }) => {
+      const cached = qc.getQueryData<StudyAssistantContextResponse>([
+        "quizzes:assistant",
+        params.attemptId,
+        params.questionId
+      ])
+      const request = params.request.expected_thread_version != null
+        ? params.request
+        : cached?.thread?.version != null
+          ? {
+              ...params.request,
+              expected_thread_version: cached.thread.version
+            }
+          : params.request
+
+      return respondQuizAttemptQuestionAssistant(
+        params.attemptId,
+        params.questionId,
+        request,
+        params.signal ? { signal: params.signal } : undefined
+      )
+    },
+    onSuccess: (response, variables) => {
+      qc.setQueryData<StudyAssistantContextResponse>(
+        ["quizzes:assistant", variables.attemptId, variables.questionId],
+        (current) => ({
+          thread: response.thread,
+          messages: current
+            ? [...current.messages, response.user_message, response.assistant_message]
+            : [response.user_message, response.assistant_message],
+          context_snapshot: response.context_snapshot,
+          available_actions: current?.available_actions ?? [...DEFAULT_STUDY_ASSISTANT_ACTIONS]
+        })
+      )
+    },
+    onError: (error) => {
+      console.error("Failed to respond with quiz question assistant:", error)
+    }
+  })
+}
+
 /**
  * Hook for starting a quiz attempt
  */
@@ -480,6 +564,44 @@ export function useGenerateQuizMutation() {
     mutationKey: ["quizzes:generate"],
     mutationFn: (params: { request: QuizGenerateRequest; signal?: AbortSignal }) =>
       generateQuiz(params.request, { signal: params.signal }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["quizzes:list"] })
+    }
+  })
+}
+
+export function useGenerateRemediationQuizMutation() {
+  const qc = useQueryClient()
+  type GenerateRemediationQuizMutationInput = {
+    attemptId: number
+    questionIds: number[]
+    numQuestions?: number
+    questionTypes?: QuestionType[]
+    difficulty?: "easy" | "medium" | "hard" | "mixed"
+    focusTopics?: string[]
+    model?: string
+    workspaceTag?: string | null
+    signal?: AbortSignal
+  }
+
+  return useMutation({
+    mutationKey: ["quizzes:generate:remediation"],
+    mutationFn: (params: GenerateRemediationQuizMutationInput) => {
+      const request: QuizRemediationGenerateRequest = {
+        attemptId: params.attemptId,
+        questionIds: params.questionIds
+      }
+      if (params.numQuestions !== undefined) request.num_questions = params.numQuestions
+      if (params.questionTypes !== undefined) request.question_types = params.questionTypes
+      if (params.difficulty !== undefined) request.difficulty = params.difficulty
+      if (params.focusTopics !== undefined) request.focus_topics = params.focusTopics
+      if (params.model !== undefined) request.model = params.model
+      if (params.workspaceTag !== undefined) request.workspace_tag = params.workspaceTag
+
+      return params.signal
+        ? generateRemediationQuiz(request, { signal: params.signal })
+        : generateRemediationQuiz(request)
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["quizzes:list"] })
     }

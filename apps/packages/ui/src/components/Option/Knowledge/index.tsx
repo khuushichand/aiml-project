@@ -4,9 +4,8 @@ import { Input, Button, List, Switch, Spin, Select, Checkbox, Skeleton, Collapse
 import { HelpCircle } from "lucide-react"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { useNavigate } from "react-router-dom"
-import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
-import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
+import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { useDemoMode } from "@/context/demo-mode"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -33,7 +32,6 @@ export const KnowledgeSettings = () => {
     ragSources,
     setRagSources
   } = useMessageOption()
-  const isOnline = useServerOnline()
   const { demoEnabled } = useDemoMode()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const [ragQuery, setRagQuery] = useState("")
@@ -154,70 +152,6 @@ export const KnowledgeSettings = () => {
     }
   }
 
-  if (!isOnline) {
-    return demoEnabled ? (
-      <FeatureEmptyState
-        title={
-          <span className="inline-flex items-center gap-2">
-            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primaryStrong">
-              Demo
-            </span>
-            <span>
-              {t("knowledge:empty.demoTitle", {
-                defaultValue: "Explore Knowledge in demo mode"
-              })}
-            </span>
-          </span>
-        }
-        description={t("knowledge:empty.demoDescription", {
-          defaultValue:
-            "This demo shows how Knowledge can organize your sources for better search. Connect your own server later to index your real documents and transcripts."
-        })}
-        examples={[
-          t("knowledge:empty.demoExample1", {
-            defaultValue:
-              "See how knowledge bases and sources appear in this table."
-          }),
-          t("knowledge:empty.demoExample2", {
-            defaultValue:
-              "When you connect, you’ll be able to upload files and text that tldw can search across."
-          })
-        ]}
-        primaryActionLabel={t("settings:tldw.setupLink", "Set up server")}
-        onPrimaryAction={() => navigate("/settings/tldw")}
-      />
-    ) : (
-      <ConnectFeatureBanner
-        title={
-          <span className="inline-flex items-center gap-2">
-            <span className="rounded-full bg-warn/10 px-2 py-0.5 text-[11px] font-medium text-warn">
-              Not connected
-            </span>
-            <span>
-              {t("knowledge:empty.connectTitle", {
-                defaultValue: "Connect to use Knowledge"
-              })}
-            </span>
-          </span>
-        }
-        description={t("knowledge:empty.connectDescription", {
-          defaultValue:
-            "To use Knowledge, first connect to your tldw server so new sources can be indexed."
-        })}
-        examples={[
-          t("knowledge:empty.connectExample1", {
-            defaultValue:
-              "Open Settings → tldw server to add your server URL."
-          }),
-          t("knowledge:empty.connectExample2", {
-            defaultValue:
-              "Use Diagnostics if your server is running but not reachable."
-          })
-        ]}
-      />
-    )
-  }
-
   const STATUS_COPY: Record<string, { title: string; description: string }> = {
     indexing: {
       title: t("knowledge:status.indexingTitle", { defaultValue: "Knowledge base is indexing" }),
@@ -323,9 +257,52 @@ export const KnowledgeSettings = () => {
   })()
 
   return (
-    <div className="space-y-8">
-      {/* RAG playground: options, quick search, and navigation into Chat */}
-      <div className="rounded-lg border border-border bg-surface p-4 shadow-sm">
+    <WorkspaceConnectionGate
+      featureName={t("knowledge:title", { defaultValue: "Knowledge" })}
+      setupDescription={t("knowledge:empty.connectDescription", {
+        defaultValue:
+          "To use Knowledge, first connect to your tldw server so new sources can be indexed."
+      })}
+      renderDemo={
+        demoEnabled
+          ? () => (
+              <FeatureEmptyState
+                title={
+                  <span className="inline-flex items-center gap-2">
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primaryStrong">
+                      Demo
+                    </span>
+                    <span>
+                      {t("knowledge:empty.demoTitle", {
+                        defaultValue: "Explore Knowledge in demo mode"
+                      })}
+                    </span>
+                  </span>
+                }
+                description={t("knowledge:empty.demoDescription", {
+                  defaultValue:
+                    "This demo shows how Knowledge can organize your sources for better search. Connect your own server later to index your real documents and transcripts."
+                })}
+                examples={[
+                  t("knowledge:empty.demoExample1", {
+                    defaultValue:
+                      "See how knowledge bases and sources appear in this table."
+                  }),
+                  t("knowledge:empty.demoExample2", {
+                    defaultValue:
+                      "When you connect, you’ll be able to upload files and text that tldw can search across."
+                  })
+                ]}
+                primaryActionLabel={t("settings:tldw.setupLink", "Set up server")}
+                onPrimaryAction={() => navigate("/settings/tldw")}
+              />
+            )
+          : undefined
+      }
+    >
+      <div className="space-y-8">
+        {/* RAG playground: options, quick search, and navigation into Chat */}
+        <div className="rounded-lg border border-border bg-surface p-4 shadow-sm">
         <div className="flex flex-col gap-1">
           <h2 className="text-sm font-semibold text-text">
             {t("knowledge:ragWorkspace.title", {
@@ -1102,7 +1079,8 @@ export const KnowledgeSettings = () => {
             </div>
           </div>
         )}
+        </div>
       </div>
-    </div>
+    </WorkspaceConnectionGate>
   )
 }

@@ -39,9 +39,6 @@ import numpy as np
 #
 # DEBUG Imports
 #from memory_profiler import profile
-# Third-Party Imports
-from faster_whisper import WhisperModel as OriginalWhisperModel
-from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 
 # Import diarization module (optional dependency)
 try:
@@ -105,6 +102,12 @@ _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS = (
 torch: Any | None = None
 _TORCH_IMPORT_ERROR: Exception | None = None
 _TORCH_IMPORT_ATTEMPTED: bool = False
+_ORIGINAL_WHISPER_MODEL: Any | None = None
+_ORIGINAL_WHISPER_MODEL_IMPORT_ERROR: Exception | None = None
+_ORIGINAL_WHISPER_MODEL_IMPORT_ATTEMPTED: bool = False
+_QWEN2AUDIO_CLASSES: tuple[Any, Any] | None = None
+_QWEN2AUDIO_IMPORT_ERROR: Exception | None = None
+_QWEN2AUDIO_IMPORT_ATTEMPTED: bool = False
 
 
 def _get_torch(*, allow_import: bool) -> Any | None:
@@ -127,6 +130,55 @@ def _get_torch(*, allow_import: bool) -> Any | None:
         _TORCH_IMPORT_ERROR = exc
         torch = None
     return torch
+
+
+def _get_original_whisper_model() -> Any | None:
+    global _ORIGINAL_WHISPER_MODEL
+    global _ORIGINAL_WHISPER_MODEL_IMPORT_ERROR
+    global _ORIGINAL_WHISPER_MODEL_IMPORT_ATTEMPTED
+
+    if _ORIGINAL_WHISPER_MODEL is not None:
+        return _ORIGINAL_WHISPER_MODEL
+    if _ORIGINAL_WHISPER_MODEL_IMPORT_ERROR is not None:
+        return None
+    if _ORIGINAL_WHISPER_MODEL_IMPORT_ATTEMPTED:
+        return None
+
+    _ORIGINAL_WHISPER_MODEL_IMPORT_ATTEMPTED = True
+    try:
+        module = importlib.import_module("faster_whisper")
+        _ORIGINAL_WHISPER_MODEL = getattr(module, "WhisperModel")
+        _ORIGINAL_WHISPER_MODEL_IMPORT_ERROR = None
+    except Exception as exc:
+        _ORIGINAL_WHISPER_MODEL_IMPORT_ERROR = exc
+        _ORIGINAL_WHISPER_MODEL = None
+    return _ORIGINAL_WHISPER_MODEL
+
+
+def _get_qwen2audio_classes() -> tuple[Any, Any] | None:
+    global _QWEN2AUDIO_CLASSES
+    global _QWEN2AUDIO_IMPORT_ERROR
+    global _QWEN2AUDIO_IMPORT_ATTEMPTED
+
+    if _QWEN2AUDIO_CLASSES is not None:
+        return _QWEN2AUDIO_CLASSES
+    if _QWEN2AUDIO_IMPORT_ERROR is not None:
+        return None
+    if _QWEN2AUDIO_IMPORT_ATTEMPTED:
+        return None
+
+    _QWEN2AUDIO_IMPORT_ATTEMPTED = True
+    try:
+        module = importlib.import_module("transformers")
+        _QWEN2AUDIO_CLASSES = (
+            getattr(module, "AutoProcessor"),
+            getattr(module, "Qwen2AudioForConditionalGeneration"),
+        )
+        _QWEN2AUDIO_IMPORT_ERROR = None
+    except Exception as exc:
+        _QWEN2AUDIO_IMPORT_ERROR = exc
+        _QWEN2AUDIO_CLASSES = None
+    return _QWEN2AUDIO_CLASSES
 
 
 def _torch_cuda_available(*, allow_import: bool = False) -> bool:
@@ -1932,6 +1984,13 @@ def load_qwen2audio():
             raise RuntimeError(
                 f"[Transcription error] Qwen2Audio unavailable because torch failed to import: {_TORCH_IMPORT_ERROR}"
             )
+        qwen2audio_classes = _get_qwen2audio_classes()
+        if qwen2audio_classes is None:
+            raise RuntimeError(
+                "[Transcription error] Qwen2Audio unavailable because transformers failed to import: "
+                f"{_QWEN2AUDIO_IMPORT_ERROR}"
+            )
+        auto_processor_cls, qwen2audio_model_cls = qwen2audio_classes
         # Gate heavy Qwen2Audio loading behind config so typical installs
         # do not attempt to download/initialize this large model unless
         # explicitly enabled.
@@ -1954,8 +2013,8 @@ def load_qwen2audio():
         revision = stt_cfg.get("qwen2audio_revision") or os.getenv("QWEN2AUDIO_REVISION")
         logging.info(f"Loading Qwen2Audio model: {model_id}")
 
-        qwen_processor = AutoProcessor.from_pretrained(model_id, revision=revision)  # nosec B615
-        qwen_model = Qwen2AudioForConditionalGeneration.from_pretrained(
+        qwen_processor = auto_processor_cls.from_pretrained(model_id, revision=revision)  # nosec B615
+        qwen_model = qwen2audio_model_cls.from_pretrained(
             model_id,
             revision=revision,
             torch_dtype=torch_mod.float16,
@@ -2123,22 +2182,20 @@ def get_model_download_status(model_name: str) -> Optional[dict[str, Any]]:
     """
     return model_download_status.get(model_name)
 
-class WhisperModel(OriginalWhisperModel):
+class WhisperModel:
     """
-    Custom wrapper for `faster_whisper.WhisperModel` to manage model loading.
+    Lazy wrapper for `faster_whisper.WhisperModel` to manage model loading.
 
-    This class extends the original `faster_whisper.WhisperModel` to provide
-    customized model path resolution (Hugging Face Hub ID, local path, or
-    standard model name) and sets a default download root for models.
+    This class preserves the public `WhisperModel` API used by the rest of the
+    codebase while deferring the actual `faster_whisper` import until an
+    instance is created. It keeps the existing custom model path resolution and
+    default download-root behavior.
 
     Attributes:
         default_download_root (str): The default directory path where models
-            will be downloaded or looked for if not found elsewhere. This is
-            set relative to the `tldw_Server_API` directory structure.
+            will be downloaded or looked for if not found elsewhere.
         valid_model_sizes (List[str]): A list of recognized standard model size
             names and some known community model identifiers.
-        model_identifier (str): The resolved identifier (path or name) used to
-            load the model.
     """
     default_download_root = str(WHISPER_MODEL_BASE_DIR)
 
@@ -2196,6 +2253,13 @@ class WhisperModel(OriginalWhisperModel):
                 or if `faster_whisper.WhisperModel` initialization fails.
             RuntimeError: For other unexpected errors during model loading.
         """
+        original_model_cls = _get_original_whisper_model()
+        if original_model_cls is None:
+            raise RuntimeError(
+                "faster_whisper unavailable because import failed: "
+                f"{_ORIGINAL_WHISPER_MODEL_IMPORT_ERROR}"
+            )
+
         download_root_path = _resolve_whisper_download_root(
             download_root or self.default_download_root
         )
@@ -2242,7 +2306,7 @@ class WhisperModel(OriginalWhisperModel):
         )
 
         try:
-            super().__init__(
+            self._delegate = original_model_cls(
                 model_size_or_path=resolved_identifier, # Use the corrected identifier
                 device=device,
                 device_index=device_index,
@@ -2268,6 +2332,9 @@ class WhisperModel(OriginalWhisperModel):
              # Catch other unexpected errors
              logging.error(f"An unexpected error occurred during faster_whisper.WhisperModel initialization with '{resolved_identifier}': {e}", exc_info=True)
              raise RuntimeError(f"Unexpected error loading model: {resolved_identifier} - {e}") from e
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
 
 # Model unloading functions
 def unload_whisper_model():
