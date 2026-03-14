@@ -334,6 +334,7 @@ describe("TestLabPanel", () => {
         })
       )
     )
+    expect(mocks.fetchWithAuth).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId("persona-test-lab-heard-input")).toHaveValue(
       "send alert repaired"
     )
@@ -350,5 +351,41 @@ describe("TestLabPanel", () => {
       "cmd-alert",
       "send alert repaired"
     )
+  })
+
+  it("does not rerun again when the heard text changes after a rerun token is handled", async () => {
+    const view = render(
+      <TestLabPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        rerunRequestToken={0}
+      />
+    )
+
+    fireEvent.change(screen.getByTestId("persona-test-lab-heard-input"), {
+      target: { value: "send alert repaired" }
+    })
+
+    view.rerender(
+      <TestLabPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        rerunRequestToken={1}
+      />
+    )
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.change(screen.getByTestId("persona-test-lab-heard-input"), {
+      target: { value: "send alert repaired again" }
+    })
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalledTimes(1)
+    })
   })
 })

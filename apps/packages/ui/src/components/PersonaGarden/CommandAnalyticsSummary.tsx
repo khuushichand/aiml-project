@@ -46,7 +46,7 @@ export type PersonaLiveVoiceSessionSummary = {
   turn_stop_secs: number
   min_utterance_secs: number
   turn_detection_changed_during_session: boolean
-  committed_turn_count: number
+  total_committed_turns: number
   vad_auto_commit_count: number
   manual_commit_count: number
   manual_mode_required_count: number

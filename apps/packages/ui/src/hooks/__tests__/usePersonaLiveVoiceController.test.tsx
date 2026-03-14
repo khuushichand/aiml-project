@@ -1283,4 +1283,47 @@ describe("usePersonaLiveVoiceController", () => {
       expect(result.current.sessionBargeIn).toBe(false)
     })
   })
+
+  it("logs browser speech cancellation failures", () => {
+    const speechSynthesisDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      "speechSynthesis"
+    )
+    const cancelError = new Error("cancel failed")
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    Object.defineProperty(window, "speechSynthesis", {
+      configurable: true,
+      value: {
+        cancel: () => {
+          throw cancelError
+        },
+        getVoices: () => [],
+        speak: vi.fn()
+      }
+    })
+
+    renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws: null,
+        connected: false,
+        sessionId: null,
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      "stopBrowserSpeech: speechSynthesis.cancel failed",
+      cancelError
+    )
+
+    errorSpy.mockRestore()
+    if (speechSynthesisDescriptor) {
+      Object.defineProperty(window, "speechSynthesis", speechSynthesisDescriptor)
+      return
+    }
+    delete (window as { speechSynthesis?: unknown }).speechSynthesis
+  })
 })

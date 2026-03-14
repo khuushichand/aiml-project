@@ -110,6 +110,10 @@ export const useResolvedPersonaVoiceDefaults = (
       normalizeText(personaVoiceDefaults?.tts_provider) ||
       normalizeText(ttsProvider) ||
       DEFAULT_TTS_PROVIDER
+    const personaTriggerPhrases = normalizePhrases(
+      personaVoiceDefaults?.voice_chat_trigger_phrases
+    )
+    const fallbackTriggerPhrases = normalizePhrases(voiceChatTriggerPhrases)
 
     return {
       sttLanguage:
@@ -132,9 +136,9 @@ export const useResolvedPersonaVoiceDefaults = (
       confirmationMode:
         personaVoiceDefaults?.confirmation_mode || DEFAULT_CONFIRMATION_MODE,
       voiceChatTriggerPhrases:
-        normalizePhrases(personaVoiceDefaults?.voice_chat_trigger_phrases).length > 0
-          ? normalizePhrases(personaVoiceDefaults?.voice_chat_trigger_phrases)
-          : normalizePhrases(voiceChatTriggerPhrases),
+        personaTriggerPhrases.length > 0
+          ? personaTriggerPhrases
+          : fallbackTriggerPhrases,
       autoResume:
         typeof personaVoiceDefaults?.auto_resume === "boolean"
           ? personaVoiceDefaults.auto_resume

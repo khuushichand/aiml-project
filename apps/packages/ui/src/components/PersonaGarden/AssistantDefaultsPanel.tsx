@@ -15,6 +15,7 @@ import {
   useResolvedPersonaVoiceDefaults
 } from "@/hooks/useResolvedPersonaVoiceDefaults"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { toAllowedPath } from "@/services/tldw/path-utils"
 
 type AssistantDefaultsPanelProps = {
   selectedPersonaId: string
@@ -68,7 +69,7 @@ const normalizePhrases = (value: string | null | undefined): string[] => {
   const seen = new Set<string>()
   const next: string[] = []
   const chunks = String(value || "")
-    .split(/\r?\n|,/g)
+    .split(/\r?\n/g)
     .map((item) => item.trim())
   for (const chunk of chunks) {
     if (!chunk || seen.has(chunk)) continue
@@ -177,9 +178,10 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
       setLoading(true)
       setError(null)
       setSuccess(null)
+      setFormState(DEFAULT_FORM_STATE)
       try {
         const response = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}` as any,
+          toAllowedPath(`/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}`),
           { method: "GET" }
         )
         if (!response.ok) {
@@ -196,6 +198,7 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
         }
       } catch (loadError) {
         if (!cancelled) {
+          setFormState(DEFAULT_FORM_STATE)
           setError(
             loadError instanceof Error
               ? loadError.message
@@ -258,7 +261,7 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
 
     try {
       const response = await tldwClient.fetchWithAuth(
-        `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}` as any,
+        toAllowedPath(`/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}`),
         {
           method: "PATCH",
           body: {

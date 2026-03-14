@@ -143,10 +143,10 @@ describe("AssistantVoiceCard", () => {
     fireEvent.click(screen.getByTestId("live-vad-advanced-toggle"))
 
     expect(screen.getByText("Speech threshold")).toBeInTheDocument()
-    expect(screen.getByTestId("live-vad-threshold")).toHaveValue(0.61)
-    expect(screen.getByTestId("live-vad-min-silence-ms")).toHaveValue(640)
-    expect(screen.getByTestId("live-vad-turn-stop-secs")).toHaveValue(0.48)
-    expect(screen.getByTestId("live-vad-min-utterance-secs")).toHaveValue(0.82)
+    expect(screen.getByTestId("live-vad-threshold")).toHaveDisplayValue("0.61")
+    expect(screen.getByTestId("live-vad-min-silence-ms")).toHaveDisplayValue("640")
+    expect(screen.getByTestId("live-vad-turn-stop-secs")).toHaveDisplayValue("0.48")
+    expect(screen.getByTestId("live-vad-min-utterance-secs")).toHaveDisplayValue("0.82")
   })
 
   it("disables turn detection tuning while disconnected or when manual mode is required", () => {

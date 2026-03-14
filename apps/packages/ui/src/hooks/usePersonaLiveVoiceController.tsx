@@ -229,7 +229,9 @@ export const usePersonaLiveVoiceController = ({
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       try {
         window.speechSynthesis.cancel()
-      } catch {}
+      } catch (error) {
+        console.error("stopBrowserSpeech: speechSynthesis.cancel failed", error)
+      }
     }
     browserUtteranceActiveRef.current = false
   }, [])

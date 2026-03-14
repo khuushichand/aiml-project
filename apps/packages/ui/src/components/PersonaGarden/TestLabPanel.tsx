@@ -2,6 +2,7 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { toAllowedPath } from "@/services/tldw/path-utils"
 
 import {
   formatFailureLabel,
@@ -65,6 +66,8 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
   const [result, setResult] = React.useState<PersonaCommandDryRunResult | null>(null)
   const [rerunNoticeVisible, setRerunNoticeVisible] = React.useState(false)
   const [repairConfirmedVisible, setRepairConfirmedVisible] = React.useState(false)
+  const heardTextRef = React.useRef(heardText)
+  const lastHandledRerunTokenRef = React.useRef(0)
   const hasMissingConnection = Boolean(
     result &&
       (result.connection_status === "missing" ||
@@ -90,10 +93,21 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
   }, [isActive])
 
   React.useEffect(() => {
+    heardTextRef.current = heardText
+  }, [heardText])
+
+  React.useEffect(() => {
+    heardTextRef.current = initialHeardText
     setHeardText((current) =>
       current === initialHeardText ? current : initialHeardText
     )
   }, [initialHeardText])
+
+  React.useEffect(() => {
+    if (rerunRequestToken <= 0) {
+      lastHandledRerunTokenRef.current = 0
+    }
+  }, [rerunRequestToken])
 
   const runDryRun = React.useCallback(async (
     nextHeardText: string,
@@ -109,7 +123,9 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
     setError(null)
     try {
       const response = await tldwClient.fetchWithAuth(
-        `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands/test` as any,
+        toAllowedPath(
+          `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands/test`
+        ),
         {
           method: "POST",
           body: { heard_text: trimmed }
@@ -146,20 +162,16 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
 
   React.useEffect(() => {
     if (!isActive || !selectedPersonaId || rerunRequestToken <= 0) return
-    const nextHeardText = String(initialHeardText || heardText).trim()
+    if (lastHandledRerunTokenRef.current === rerunRequestToken) return
+    const nextHeardText = String(initialHeardText || heardTextRef.current).trim()
     if (!nextHeardText) return
+    lastHandledRerunTokenRef.current = rerunRequestToken
+    heardTextRef.current = nextHeardText
     setHeardText(nextHeardText)
     setRerunNoticeVisible(true)
     setRepairConfirmedVisible(false)
     void runDryRun(nextHeardText, { source: "rerun" })
-  }, [
-    heardText,
-    initialHeardText,
-    isActive,
-    rerunRequestToken,
-    runDryRun,
-    selectedPersonaId
-  ])
+  }, [initialHeardText, isActive, rerunRequestToken, runDryRun, selectedPersonaId])
 
   return (
     <div className="rounded-lg border border-border bg-surface p-3">
@@ -237,7 +249,9 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                 className="mt-1 min-h-[88px] w-full rounded-md border border-border bg-bg px-2 py-1 text-sm text-text"
                 value={heardText}
                 onChange={(event) => {
-                  setHeardText(event.target.value)
+                  const nextValue = event.target.value
+                  heardTextRef.current = nextValue
+                  setHeardText(nextValue)
                   setRepairConfirmedVisible(false)
                 }}
                 placeholder="search notes for model context protocol"

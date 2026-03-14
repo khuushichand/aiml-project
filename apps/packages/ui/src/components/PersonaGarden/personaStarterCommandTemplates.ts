@@ -10,8 +10,19 @@ export type PersonaStarterCommandTemplate = {
   requiresConfirmation: boolean
 }
 
-export const PERSONA_STARTER_COMMAND_TEMPLATES: PersonaStarterCommandTemplate[] = [
-  {
+const freezeTemplate = (
+  template: PersonaStarterCommandTemplate
+): Readonly<PersonaStarterCommandTemplate> =>
+  Object.freeze({
+    ...template,
+    phrases: Object.freeze([...template.phrases]),
+    slotMap: Object.freeze({ ...template.slotMap })
+  })
+
+export const PERSONA_STARTER_COMMAND_TEMPLATES: ReadonlyArray<
+  Readonly<PersonaStarterCommandTemplate>
+> = Object.freeze([
+  freezeTemplate({
     key: "notes-search",
     label: "Search Notes",
     description: "Find notes by spoken topic",
@@ -21,8 +32,8 @@ export const PERSONA_STARTER_COMMAND_TEMPLATES: PersonaStarterCommandTemplate[] 
     toolName: "notes.search",
     slotMap: { query: "topic" },
     requiresConfirmation: false
-  },
-  {
+  }),
+  freezeTemplate({
     key: "note-create",
     label: "Create Note",
     description: "Save dictated notes quickly",
@@ -32,8 +43,8 @@ export const PERSONA_STARTER_COMMAND_TEMPLATES: PersonaStarterCommandTemplate[] 
     toolName: "notes.create",
     slotMap: { content: "content" },
     requiresConfirmation: true
-  },
-  {
+  }),
+  freezeTemplate({
     key: "media-search",
     label: "Search Library",
     description: "Search ingested media by phrase",
@@ -43,10 +54,21 @@ export const PERSONA_STARTER_COMMAND_TEMPLATES: PersonaStarterCommandTemplate[] 
     toolName: "media.search",
     slotMap: { query: "query" },
     requiresConfirmation: false
-  }
-]
+  })
+])
 
 export const getPersonaStarterCommandTemplate = (
   key: string
-): PersonaStarterCommandTemplate | null =>
-  PERSONA_STARTER_COMMAND_TEMPLATES.find((template) => template.key === key) || null
+): PersonaStarterCommandTemplate | null => {
+  const template =
+    PERSONA_STARTER_COMMAND_TEMPLATES.find((candidate) => candidate.key === key) ||
+    null
+
+  if (!template) return null
+
+  return {
+    ...template,
+    phrases: [...template.phrases],
+    slotMap: { ...template.slotMap }
+  }
+}

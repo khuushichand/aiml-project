@@ -51,6 +51,18 @@ const formatPresetLabel = (preset: PersonaTurnDetectionPreset): string =>
     ? "Custom"
     : preset.slice(0, 1).toUpperCase() + preset.slice(1)
 
+const formatNumericInput = (value: number): string => String(value)
+
+const useNumericInputDraft = (value: number) => {
+  const [draft, setDraft] = React.useState(() => formatNumericInput(value))
+
+  React.useEffect(() => {
+    setDraft(formatNumericInput(value))
+  }, [value])
+
+  return [draft, setDraft] as const
+}
+
 const isMatchingPreset = (
   candidate: PersonaTurnDetectionValues,
   preset: PersonaTurnDetectionValues
@@ -112,8 +124,41 @@ export const PersonaTurnDetectionControls: React.FC<
   onMinUtteranceSecsChange
 }) => {
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
+  const [vadThresholdDraft, setVadThresholdDraft] = useNumericInputDraft(values.vadThreshold)
+  const [minSilenceMsDraft, setMinSilenceMsDraft] = useNumericInputDraft(values.minSilenceMs)
+  const [turnStopSecsDraft, setTurnStopSecsDraft] = useNumericInputDraft(values.turnStopSecs)
+  const [minUtteranceSecsDraft, setMinUtteranceSecsDraft] = useNumericInputDraft(
+    values.minUtteranceSecs
+  )
   const numericInputsDisabled =
     advancedInputsDisabled ?? (disabled || !values.autoCommitEnabled)
+
+  const commitNumericDraft = React.useCallback(
+    (
+      draft: string,
+      currentValue: number,
+      setDraft: React.Dispatch<React.SetStateAction<string>>,
+      onCommit: (next: number) => void
+    ) => {
+      const normalized = String(draft || "").trim()
+      if (!normalized) {
+        setDraft(formatNumericInput(currentValue))
+        return
+      }
+
+      const parsed = Number(normalized)
+      if (!Number.isFinite(parsed)) {
+        setDraft(formatNumericInput(currentValue))
+        return
+      }
+
+      setDraft(formatNumericInput(parsed))
+      if (parsed !== currentValue) {
+        onCommit(parsed)
+      }
+    },
+    []
+  )
 
   return (
     <div
@@ -181,13 +226,19 @@ export const PersonaTurnDetectionControls: React.FC<
             <input
               data-testid={`${testIdPrefix}-threshold`}
               className="rounded border border-border bg-bg px-2 py-1 text-text"
-              type="number"
-              min={0}
-              max={1}
-              step={0.01}
+              type="text"
+              inputMode="decimal"
               disabled={numericInputsDisabled}
-              value={values.vadThreshold}
-              onChange={(event) => onVadThresholdChange(Number(event.target.value))}
+              value={vadThresholdDraft}
+              onChange={(event) => setVadThresholdDraft(event.target.value)}
+              onBlur={() =>
+                commitNumericDraft(
+                  vadThresholdDraft,
+                  values.vadThreshold,
+                  setVadThresholdDraft,
+                  onVadThresholdChange
+                )
+              }
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -195,13 +246,19 @@ export const PersonaTurnDetectionControls: React.FC<
             <input
               data-testid={`${testIdPrefix}-min-silence-ms`}
               className="rounded border border-border bg-bg px-2 py-1 text-text"
-              type="number"
-              min={50}
-              max={10000}
-              step={10}
+              type="text"
+              inputMode="numeric"
               disabled={numericInputsDisabled}
-              value={values.minSilenceMs}
-              onChange={(event) => onMinSilenceMsChange(Number(event.target.value))}
+              value={minSilenceMsDraft}
+              onChange={(event) => setMinSilenceMsDraft(event.target.value)}
+              onBlur={() =>
+                commitNumericDraft(
+                  minSilenceMsDraft,
+                  values.minSilenceMs,
+                  setMinSilenceMsDraft,
+                  onMinSilenceMsChange
+                )
+              }
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -209,13 +266,19 @@ export const PersonaTurnDetectionControls: React.FC<
             <input
               data-testid={`${testIdPrefix}-min-utterance-secs`}
               className="rounded border border-border bg-bg px-2 py-1 text-text"
-              type="number"
-              min={0}
-              max={10}
-              step={0.01}
+              type="text"
+              inputMode="decimal"
               disabled={numericInputsDisabled}
-              value={values.minUtteranceSecs}
-              onChange={(event) => onMinUtteranceSecsChange(Number(event.target.value))}
+              value={minUtteranceSecsDraft}
+              onChange={(event) => setMinUtteranceSecsDraft(event.target.value)}
+              onBlur={() =>
+                commitNumericDraft(
+                  minUtteranceSecsDraft,
+                  values.minUtteranceSecs,
+                  setMinUtteranceSecsDraft,
+                  onMinUtteranceSecsChange
+                )
+              }
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -223,13 +286,19 @@ export const PersonaTurnDetectionControls: React.FC<
             <input
               data-testid={`${testIdPrefix}-turn-stop-secs`}
               className="rounded border border-border bg-bg px-2 py-1 text-text"
-              type="number"
-              min={0.05}
-              max={10}
-              step={0.01}
+              type="text"
+              inputMode="decimal"
               disabled={numericInputsDisabled}
-              value={values.turnStopSecs}
-              onChange={(event) => onTurnStopSecsChange(Number(event.target.value))}
+              value={turnStopSecsDraft}
+              onChange={(event) => setTurnStopSecsDraft(event.target.value)}
+              onBlur={() =>
+                commitNumericDraft(
+                  turnStopSecsDraft,
+                  values.turnStopSecs,
+                  setTurnStopSecsDraft,
+                  onTurnStopSecsChange
+                )
+              }
             />
           </label>
           {advancedFooterText ? (

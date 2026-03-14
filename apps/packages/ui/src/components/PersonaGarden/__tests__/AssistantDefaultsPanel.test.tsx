@@ -53,7 +53,63 @@ vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
     turnStopSecs: 0.2,
     minUtteranceSecs: 0.4
   },
-  useResolvedPersonaVoiceDefaults: () => mocks.resolvedDefaults
+  useResolvedPersonaVoiceDefaults: (voiceDefaults?: Record<string, unknown> | null) => ({
+    ...mocks.resolvedDefaults,
+    sttLanguage:
+      typeof voiceDefaults?.stt_language === "string"
+        ? voiceDefaults.stt_language
+        : mocks.resolvedDefaults.sttLanguage,
+    sttModel:
+      typeof voiceDefaults?.stt_model === "string"
+        ? voiceDefaults.stt_model
+        : mocks.resolvedDefaults.sttModel,
+    ttsProvider:
+      typeof voiceDefaults?.tts_provider === "string"
+        ? voiceDefaults.tts_provider
+        : mocks.resolvedDefaults.ttsProvider,
+    ttsVoice:
+      typeof voiceDefaults?.tts_voice === "string"
+        ? voiceDefaults.tts_voice
+        : mocks.resolvedDefaults.ttsVoice,
+    confirmationMode:
+      typeof voiceDefaults?.confirmation_mode === "string"
+        ? (voiceDefaults.confirmation_mode as
+            | "always"
+            | "destructive_only"
+            | "never")
+        : mocks.resolvedDefaults.confirmationMode,
+    voiceChatTriggerPhrases: Array.isArray(voiceDefaults?.voice_chat_trigger_phrases)
+      ? voiceDefaults.voice_chat_trigger_phrases.map((phrase) => String(phrase))
+      : mocks.resolvedDefaults.voiceChatTriggerPhrases,
+    autoResume:
+      typeof voiceDefaults?.auto_resume === "boolean"
+        ? voiceDefaults.auto_resume
+        : mocks.resolvedDefaults.autoResume,
+    bargeIn:
+      typeof voiceDefaults?.barge_in === "boolean"
+        ? voiceDefaults.barge_in
+        : mocks.resolvedDefaults.bargeIn,
+    autoCommitEnabled:
+      typeof voiceDefaults?.auto_commit_enabled === "boolean"
+        ? voiceDefaults.auto_commit_enabled
+        : mocks.resolvedDefaults.autoCommitEnabled,
+    vadThreshold:
+      typeof voiceDefaults?.vad_threshold === "number"
+        ? voiceDefaults.vad_threshold
+        : mocks.resolvedDefaults.vadThreshold,
+    minSilenceMs:
+      typeof voiceDefaults?.min_silence_ms === "number"
+        ? voiceDefaults.min_silence_ms
+        : mocks.resolvedDefaults.minSilenceMs,
+    turnStopSecs:
+      typeof voiceDefaults?.turn_stop_secs === "number"
+        ? voiceDefaults.turn_stop_secs
+        : mocks.resolvedDefaults.turnStopSecs,
+    minUtteranceSecs:
+      typeof voiceDefaults?.min_utterance_secs === "number"
+        ? voiceDefaults.min_utterance_secs
+        : mocks.resolvedDefaults.minUtteranceSecs
+  })
 }))
 
 import { AssistantDefaultsPanel } from "../AssistantDefaultsPanel"
@@ -68,7 +124,7 @@ type MockRecentLiveSession = {
   turn_stop_secs: number
   min_utterance_secs: number
   turn_detection_changed_during_session: boolean
-  committed_turn_count: number
+  total_committed_turns: number
   vad_auto_commit_count: number
   manual_commit_count: number
   manual_mode_required_count: number
@@ -89,7 +145,7 @@ const buildRecentLiveSession = (
   turn_stop_secs: 0.2,
   min_utterance_secs: 0.4,
   turn_detection_changed_during_session: false,
-  committed_turn_count: 4,
+  total_committed_turns: 4,
   vad_auto_commit_count: 4,
   manual_commit_count: 0,
   manual_mode_required_count: 0,
@@ -111,7 +167,7 @@ const buildVoiceAnalytics = (recentSessions: MockRecentLiveSession[]) => ({
   },
   live_voice: {
     total_committed_turns: recentSessions.reduce(
-      (total, session) => total + session.committed_turn_count,
+      (total, session) => total + session.total_committed_turns,
       0
     ),
     vad_auto_commit_count: recentSessions.reduce(
@@ -229,10 +285,16 @@ describe("AssistantDefaultsPanel", () => {
     expect(screen.getByTestId("assistant-defaults-vad-auto-commit")).toBeChecked()
 
     fireEvent.click(screen.getByTestId("assistant-defaults-vad-advanced-toggle"))
-    expect(screen.getByTestId("assistant-defaults-vad-threshold")).toHaveValue(0.35)
-    expect(screen.getByTestId("assistant-defaults-vad-min-silence-ms")).toHaveValue(150)
-    expect(screen.getByTestId("assistant-defaults-vad-turn-stop-secs")).toHaveValue(0.1)
-    expect(screen.getByTestId("assistant-defaults-vad-min-utterance-secs")).toHaveValue(0.25)
+    expect(screen.getByTestId("assistant-defaults-vad-threshold")).toHaveDisplayValue("0.35")
+    expect(screen.getByTestId("assistant-defaults-vad-min-silence-ms")).toHaveDisplayValue(
+      "150"
+    )
+    expect(screen.getByTestId("assistant-defaults-vad-turn-stop-secs")).toHaveDisplayValue(
+      "0.1"
+    )
+    expect(screen.getByTestId("assistant-defaults-vad-min-utterance-secs")).toHaveDisplayValue(
+      "0.25"
+    )
 
     fireEvent.change(screen.getByLabelText("STT language"), {
       target: { value: "fr-FR" }
@@ -244,7 +306,7 @@ describe("AssistantDefaultsPanel", () => {
       target: { value: "nova" }
     })
     fireEvent.change(screen.getByLabelText("Trigger phrases"), {
-      target: { value: "bonjour helper\nsalut helper" }
+      target: { value: "bonjour helper\nhey garden, start research" }
     })
     fireEvent.change(screen.getByLabelText("Auto-resume"), {
       target: { value: "false" }
@@ -256,15 +318,19 @@ describe("AssistantDefaultsPanel", () => {
     fireEvent.change(screen.getByTestId("assistant-defaults-vad-threshold"), {
       target: { value: "0.61" }
     })
+    fireEvent.blur(screen.getByTestId("assistant-defaults-vad-threshold"))
     fireEvent.change(screen.getByTestId("assistant-defaults-vad-min-silence-ms"), {
       target: { value: "640" }
     })
+    fireEvent.blur(screen.getByTestId("assistant-defaults-vad-min-silence-ms"))
     fireEvent.change(screen.getByTestId("assistant-defaults-vad-turn-stop-secs"), {
       target: { value: "0.48" }
     })
+    fireEvent.blur(screen.getByTestId("assistant-defaults-vad-turn-stop-secs"))
     fireEvent.change(screen.getByTestId("assistant-defaults-vad-min-utterance-secs"), {
       target: { value: "0.82" }
     })
+    fireEvent.blur(screen.getByTestId("assistant-defaults-vad-min-utterance-secs"))
     fireEvent.click(screen.getByRole("button", { name: "Save assistant defaults" }))
 
     await waitFor(() => {
@@ -279,7 +345,10 @@ describe("AssistantDefaultsPanel", () => {
               tts_provider: "openai",
               tts_voice: "nova",
               confirmation_mode: "destructive_only",
-              voice_chat_trigger_phrases: ["bonjour helper", "salut helper"],
+              voice_chat_trigger_phrases: [
+                "bonjour helper",
+                "hey garden, start research"
+              ],
               auto_resume: false,
               barge_in: true,
               auto_commit_enabled: false,
@@ -295,12 +364,144 @@ describe("AssistantDefaultsPanel", () => {
 
     expect(screen.getByText("Assistant defaults saved.")).toBeInTheDocument()
     expect(screen.getByText("Effective Preview")).toBeInTheDocument()
-    expect(screen.getByText("parakeet")).toBeInTheDocument()
+    expect(screen.getByText("whisper-1")).toBeInTheDocument()
+    expect(screen.getByText("bonjour helper, hey garden, start research")).toBeInTheDocument()
     expect(onSaved).toHaveBeenCalledWith(
       expect.objectContaining({
         stt_language: "fr-FR"
       })
     )
+  })
+
+  it("clears the previous persona defaults before a new persona load resolves", async () => {
+    let personaTwoResolve: ((value: unknown) => void) | null = null
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string }) => {
+      if (
+        path === "/api/v1/persona/profiles/persona-1" &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "persona-1",
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1"
+            }
+          })
+        })
+      }
+      if (
+        path === "/api/v1/persona/profiles/persona-2" &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return new Promise((resolve) => {
+          personaTwoResolve = resolve
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({})
+      })
+    })
+
+    const view = render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("STT language")).toHaveValue("en-US")
+    })
+
+    view.rerender(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-2"
+        selectedPersonaName="Scout"
+        isActive
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("STT language")).toHaveValue("")
+    })
+
+    personaTwoResolve?.({
+      ok: true,
+      json: async () => ({
+        id: "persona-2",
+        voice_defaults: {
+          stt_language: "fr-FR",
+          stt_model: "nova"
+        }
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("STT language")).toHaveValue("fr-FR")
+    })
+  })
+
+  it("clears stale defaults when loading the next persona fails", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string }) => {
+      if (
+        path === "/api/v1/persona/profiles/persona-1" &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "persona-1",
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1"
+            }
+          })
+        })
+      }
+      if (
+        path === "/api/v1/persona/profiles/persona-2" &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: false,
+          error: "Persona 2 unavailable",
+          json: async () => ({})
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({})
+      })
+    })
+
+    const view = render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("STT language")).toHaveValue("en-US")
+    })
+
+    view.rerender(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-2"
+        selectedPersonaName="Scout"
+        isActive
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText("Persona 2 unavailable")).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText("STT language")).toHaveValue("")
   })
 
   it("shows custom as the saved preset when advanced turn detection values diverge", async () => {
@@ -409,19 +610,19 @@ describe("AssistantDefaultsPanel", () => {
         analytics={buildVoiceAnalytics([
           buildRecentLiveSession({
             session_id: "sess-fast-1",
-            committed_turn_count: 4,
+            total_committed_turns: 4,
             vad_auto_commit_count: 2,
             manual_commit_count: 2
           }),
           buildRecentLiveSession({
             session_id: "sess-fast-2",
-            committed_turn_count: 4,
+            total_committed_turns: 4,
             vad_auto_commit_count: 2,
             manual_commit_count: 2
           }),
           buildRecentLiveSession({
             session_id: "sess-fast-3",
-            committed_turn_count: 4,
+            total_committed_turns: 4,
             vad_auto_commit_count: 2,
             manual_commit_count: 2
           })
@@ -445,21 +646,21 @@ describe("AssistantDefaultsPanel", () => {
         analytics={buildVoiceAnalytics([
           buildRecentLiveSession({
             session_id: "sess-manual-mode-1",
-            committed_turn_count: 4,
+            total_committed_turns: 4,
             vad_auto_commit_count: 1,
             manual_commit_count: 3,
             manual_mode_required_count: 1
           }),
           buildRecentLiveSession({
             session_id: "sess-manual-mode-2",
-            committed_turn_count: 4,
+            total_committed_turns: 4,
             vad_auto_commit_count: 2,
             manual_commit_count: 2,
             manual_mode_required_count: 1
           }),
           buildRecentLiveSession({
             session_id: "sess-manual-mode-3",
-            committed_turn_count: 4,
+            total_committed_turns: 4,
             vad_auto_commit_count: 2,
             manual_commit_count: 2,
             manual_mode_required_count: 1
@@ -487,7 +688,7 @@ describe("AssistantDefaultsPanel", () => {
           buildRecentLiveSession({
             session_id: "sess-mixed-3",
             turn_detection_changed_during_session: true,
-            committed_turn_count: 4,
+            total_committed_turns: 4,
             vad_auto_commit_count: 1,
             manual_commit_count: 3,
             manual_mode_required_count: 2

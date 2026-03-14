@@ -29,8 +29,14 @@ const HEALTHY_AUTO_RATE_THRESHOLD = 0.7
 const HEALTHY_MANUAL_RATE_THRESHOLD = 0.15
 const HEALTHY_RECOVERY_RATE_THRESHOLD = 0.15
 
+const clampToNonNegativeNumber = (value: number): number =>
+  Math.max(0, Number(value) || 0)
+
+const clampToNonNegativeInteger = (value: number): number =>
+  Math.max(0, Math.trunc(Number(value) || 0))
+
 const formatPercent = (value: number): string =>
-  `${Math.round(Math.max(0, Number(value) || 0) * 100)}%`
+  `${Math.round(Math.min(1, Math.max(0, Number(value) || 0)) * 100)}%`
 
 const formatDateTime = (value?: string | null): string => {
   const normalized = String(value || "").trim()
@@ -49,7 +55,7 @@ const pluralize = (count: number, singular: string, plural: string): string =>
   `${count} ${count === 1 ? singular : plural}`
 
 const getCommittedTurnCount = (session: PersonaLiveVoiceSessionSummary): number =>
-  Math.max(0, Math.trunc(Number(session.committed_turn_count) || 0))
+  clampToNonNegativeInteger(session.total_committed_turns)
 
 const sumCounts = (
   sessions: PersonaLiveVoiceSessionSummary[],
@@ -64,10 +70,10 @@ const buildTurnDetectionValues = (
   session: PersonaLiveVoiceSessionSummary
 ): PersonaTurnDetectionValues => ({
   autoCommitEnabled: Boolean(session.auto_commit_enabled),
-  vadThreshold: Number(session.vad_threshold) || 0,
-  minSilenceMs: Math.max(0, Math.trunc(Number(session.min_silence_ms) || 0)),
-  turnStopSecs: Number(session.turn_stop_secs) || 0,
-  minUtteranceSecs: Number(session.min_utterance_secs) || 0
+  vadThreshold: clampToNonNegativeNumber(session.vad_threshold),
+  minSilenceMs: clampToNonNegativeInteger(session.min_silence_ms),
+  turnStopSecs: clampToNonNegativeNumber(session.turn_stop_secs),
+  minUtteranceSecs: clampToNonNegativeNumber(session.min_utterance_secs)
 })
 
 const formatPresetLabel = (preset: ReturnType<typeof derivePersonaTurnDetectionPreset>): string =>
@@ -175,7 +181,7 @@ export const PersonaTurnDetectionFeedbackCard: React.FC<
       Array.isArray(analytics?.recent_live_sessions)
         ? analytics.recent_live_sessions.slice(0, 8)
         : [],
-    [analytics?.recent_live_sessions]
+    [analytics]
   )
   const eligibleSessions = recentSessions.filter(
     (session) => !session.turn_detection_changed_during_session
