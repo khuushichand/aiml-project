@@ -32,6 +32,7 @@ const messageSpies = {
 
 const assistantMutateAsync = vi.fn()
 const speakMock = vi.fn()
+const assistantRefetchMock = vi.fn()
 const speechRecognitionState = {
   supported: true,
   isListening: false,
@@ -118,11 +119,14 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 }
 
 describe("ReviewTab study assistant panel", () => {
+  let assistantQueryState: any
+
   beforeEach(() => {
     vi.clearAllMocks()
     speechRecognitionState.supported = true
     speechRecognitionState.isListening = false
     speechRecognitionState.transcript = ""
+    assistantRefetchMock.mockReset()
 
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [{ id: 1, name: "Biology" }],
@@ -180,7 +184,7 @@ describe("ReviewTab study assistant panel", () => {
     } as any)
     vi.mocked(useHasCardsQuery).mockReturnValue({ data: true } as any)
     vi.mocked(useNextDueQuery).mockReturnValue({ data: null } as any)
-    vi.mocked(useFlashcardAssistantQuery).mockReturnValue({
+    assistantQueryState = {
       data: {
         thread: {
           id: 9,
@@ -217,7 +221,46 @@ describe("ReviewTab study assistant panel", () => {
       },
       isLoading: false,
       isError: false
-    } as any)
+    }
+    assistantRefetchMock.mockImplementation(async () => {
+      const nextMessageId = 12 + (assistantQueryState.data?.messages?.length ?? 1)
+      assistantQueryState = {
+        ...assistantQueryState,
+        data: {
+          ...assistantQueryState.data,
+          thread: {
+            ...assistantQueryState.data.thread,
+            version: 2,
+            message_count: 2
+          },
+          messages: [
+            ...(assistantQueryState.data?.messages ?? []),
+            {
+              id: nextMessageId,
+              thread_id: 9,
+              role: "assistant",
+              action_type: "follow_up",
+              input_modality: "text",
+              content: "Fresh thread update",
+              structured_payload: {},
+              context_snapshot: {},
+              provider: "openai",
+              model: "gpt-5",
+              created_at: "2026-03-13T08:05:00Z",
+              client_id: "test"
+            }
+          ]
+        }
+      }
+      return assistantQueryState
+    })
+    vi.mocked(useFlashcardAssistantQuery).mockImplementation(
+      () =>
+        ({
+          ...assistantQueryState,
+          refetch: assistantRefetchMock
+        }) as any
+    )
     vi.mocked(useFlashcardAssistantRespondMutation).mockReturnValue({
       mutateAsync: assistantMutateAsync,
       isPending: false
@@ -310,5 +353,86 @@ describe("ReviewTab study assistant panel", () => {
       expect(screen.getByText("Study assistant unavailable")).toBeInTheDocument()
     })
     expect(screen.getByTestId("flashcards-review-show-answer")).toBeInTheDocument()
+  })
+
+  it("reloads the latest thread and offers retry actions after a conflict", async () => {
+    assistantMutateAsync
+      .mockRejectedValueOnce(Object.assign(new Error("Version mismatch"), { response: { status: 409 } }))
+      .mockResolvedValueOnce({
+        assistant_message: { content: "Retried explanation" }
+      })
+    renderReviewTab()
+
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }))
+
+    await waitFor(() => {
+      expect(assistantRefetchMock).toHaveBeenCalled()
+      expect(screen.getByText("Fresh thread update")).toBeInTheDocument()
+      expect(screen.getByText("Conversation changed elsewhere.")).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: "Retry my message" })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry my message" }))
+
+    await waitFor(() => {
+      expect(assistantMutateAsync).toHaveBeenNthCalledWith(2, {
+        cardUuid: "card-1",
+        request: { action: "explain" }
+      })
+    })
+  })
+
+  it("clears the pending request when reloading the latest thread", async () => {
+    assistantMutateAsync.mockRejectedValueOnce(
+      Object.assign(new Error("Version mismatch"), { response: { status: 409 } })
+    )
+    renderReviewTab()
+
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Reload latest/i })).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: "Retry my message" })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /Reload latest/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Retry my message" })).not.toBeInTheDocument()
+    })
+    expect(assistantMutateAsync).toHaveBeenCalledTimes(1)
+  })
+
+  it("preserves transcript fact-check requests across conflict recovery", async () => {
+    assistantMutateAsync
+      .mockRejectedValueOnce(Object.assign(new Error("Version mismatch"), { response: { status: 409 } }))
+      .mockResolvedValueOnce({
+        assistant_message: { content: "Retried fact-check" }
+      })
+    renderReviewTab()
+
+    fireEvent.click(screen.getByRole("button", { name: "Fact-check me" }))
+    fireEvent.change(screen.getByLabelText("Transcript"), {
+      target: { value: "I think the glomerulus filters blood." }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Send fact-check" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Conversation changed elsewhere.")).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: "Retry transcript review" })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry transcript review" }))
+
+    await waitFor(() => {
+      expect(assistantMutateAsync).toHaveBeenNthCalledWith(2, {
+        cardUuid: "card-1",
+        request: {
+          action: "fact_check",
+          message: "I think the glomerulus filters blood.",
+          input_modality: "voice_transcript"
+        }
+      })
+    })
   })
 })

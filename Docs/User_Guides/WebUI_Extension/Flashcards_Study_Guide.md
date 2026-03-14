@@ -30,6 +30,37 @@ Why the 8 KB field limit did not increase:
 5. Use `Manage` when you want to inspect queue state on expanded cards or document rows while cleaning up a deck.
 6. Repeat daily. The scheduler adjusts next due dates from your ratings.
 
+## Study Assistant Conflict Recovery
+
+The flashcard study assistant and quiz remediation assistant now recover cleanly if the same thread changes in another tab or client.
+
+What happens on a thread version conflict:
+
+- The latest assistant thread is reloaded automatically.
+- Your pending question or transcript is preserved instead of being dropped.
+- The panel shows `Reload latest` and retry actions so you can continue without reopening the card or results view.
+
+Retry labels:
+
+- Text questions use `Retry my message`.
+- Voice transcript fact-checks use `Retry transcript review`.
+
+## Quiz Remediation Conversion State
+
+Quiz-results remediation flashcards now use server-backed conversion records instead of browser-only session state.
+
+What changed:
+
+- `Already converted` status survives reloads, browser changes, and new devices.
+- Each missed question keeps one active remediation conversion plus any superseded history.
+- `Convert Again Anyway` creates a fresh active conversion and leaves the older one in history as `superseded`.
+- If linked remediation cards were deleted later, the quiz results view marks that conversion as stale and lets you reconvert normally.
+
+`Study Linked Cards` behavior:
+
+- If all active remediation conversions for an attempt point to the same live deck, the handoff keeps that deck filter.
+- If conversions span multiple decks, the handoff still opens Flashcards study for the quiz attempt, but without a deck filter.
+
 ## Scheduler Tab
 
 Open `Scheduler` from the top-level Flashcards tabs to edit deck-level review policy.
@@ -52,6 +83,34 @@ Important behavior:
 - Scheduler edits are deck-scoped; they do not affect other decks unless you copy them.
 - Unsaved scheduler drafts are guarded when you switch decks or leave the `Scheduler` tab.
 - If another client updates the same deck first, the tab shows `Reload latest` and `Reapply my draft` actions.
+
+## Scheduler Settings During Deck Creation
+
+You can now set scheduler policy at deck-creation time instead of creating the deck first and fixing it later.
+
+Flashcards creation flows:
+
+- `Manage` manual card creation
+- `Transfer` structured Q&A preview save
+- `Transfer` generated flashcards save
+- `Transfer` image occlusion save
+
+How it works:
+
+- Existing deck selectors now include `Create new deck`.
+- Choosing that option opens a deck-name field plus the same scheduler preset/editor used by the scheduler UI.
+- Existing decks remain read-only in those flows and show a compact scheduler summary instead.
+- New decks created there start with exactly the scheduler settings you selected.
+
+Quiz remediation:
+
+- `Results` → `Create Flashcards from Missed Questions` also supports `Create new deck`.
+- The remediation modal lets you set scheduler settings for the new deck before conversion runs.
+- If you choose an existing deck, the modal shows that deck's scheduler summary.
+
+Later edits:
+
+- If you need to change a deck after creation, open the `Scheduler` tab and edit that deck there.
 
 ## Queue States
 

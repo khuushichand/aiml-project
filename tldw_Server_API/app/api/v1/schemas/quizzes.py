@@ -1,7 +1,9 @@
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .flashcards import DeckSchedulerSettings
 
 
 class QuestionType(str, Enum):
@@ -186,6 +188,72 @@ class AttemptResponse(BaseModel):
 class AttemptListResponse(BaseModel):
     items: list[AttemptResponse]
     count: int
+
+
+class QuizRemediationConversionSummary(BaseModel):
+    id: int
+    attempt_id: int
+    quiz_id: int
+    question_id: int
+    status: Literal["active", "superseded"]
+    orphaned: bool = False
+    superseded_count: int = Field(0, ge=0)
+    superseded_by_id: Optional[int] = None
+    target_deck_id: Optional[int] = None
+    target_deck_name_snapshot: Optional[str] = None
+    flashcard_count: int = Field(0, ge=0)
+    flashcard_uuids_json: list[str] = Field(default_factory=list)
+    source_ref_id: Optional[str] = None
+    created_at: Optional[str] = None
+    last_modified: Optional[str] = None
+    client_id: str
+    version: int
+
+
+class QuizRemediationConversionListResponse(BaseModel):
+    attempt_id: int
+    items: list[QuizRemediationConversionSummary] = Field(default_factory=list)
+    count: int = Field(..., ge=0)
+    superseded_count: int = Field(..., ge=0)
+
+
+class QuizRemediationTargetDeck(BaseModel):
+    id: int
+    name: str
+
+
+class QuizRemediationConvertRequest(BaseModel):
+    question_ids: list[int] = Field(..., min_length=1)
+    target_deck_id: Optional[int] = Field(None, ge=1)
+    create_deck_name: Optional[str] = None
+    create_deck_scheduler_settings: Optional[DeckSchedulerSettings] = None
+    replace_active: bool = False
+
+    @model_validator(mode="after")
+    def validate_deck_target(self) -> "QuizRemediationConvertRequest":
+        has_target_deck = self.target_deck_id is not None
+        has_create_deck = bool((self.create_deck_name or "").strip())
+        if has_target_deck == has_create_deck:
+            raise ValueError("Provide exactly one of target_deck_id or create_deck_name")
+        if self.create_deck_scheduler_settings is not None and not has_create_deck:
+            raise ValueError("create_deck_scheduler_settings requires create_deck_name")
+        return self
+
+
+class QuizRemediationConvertResult(BaseModel):
+    question_id: int
+    status: Literal["created", "already_exists", "superseded_and_created", "failed"]
+    conversion: Optional[QuizRemediationConversionSummary] = None
+    flashcard_uuids: list[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class QuizRemediationConvertResponse(BaseModel):
+    attempt_id: int
+    quiz_id: int
+    target_deck: Optional[QuizRemediationTargetDeck] = None
+    results: list[QuizRemediationConvertResult] = Field(default_factory=list)
+    created_flashcard_uuids: list[str] = Field(default_factory=list)
 
 
 class QuizGenerateRequest(BaseModel):

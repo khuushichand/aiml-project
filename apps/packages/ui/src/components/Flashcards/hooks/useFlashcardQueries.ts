@@ -454,8 +454,16 @@ export function useCreateDeckMutation() {
 
   return useMutation({
     mutationKey: ["flashcards:deck:create"],
-    mutationFn: (params: { name: string; description?: string }) =>
-      createDeck({ name: params.name.trim(), description: params.description?.trim() || undefined }),
+    mutationFn: (params: {
+      name: string
+      description?: string
+      scheduler_settings?: Deck["scheduler_settings"]
+    }) =>
+      createDeck({
+        name: params.name.trim(),
+        description: params.description?.trim() || undefined,
+        scheduler_settings: params.scheduler_settings
+      }),
     onSuccess: () => {
       invalidateFlashcardsQueries(qc)
     },

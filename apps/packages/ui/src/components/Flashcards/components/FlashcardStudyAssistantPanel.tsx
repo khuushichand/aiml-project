@@ -6,6 +6,7 @@ import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
 import { useTTS } from "@/hooks/useTTS"
 import type {
   StudyAssistantAction,
+  StudyAssistantContextResponse,
   StudyAssistantMessage,
   StudyAssistantRespondRequest
 } from "@/services/flashcards"
@@ -24,13 +25,50 @@ const DEFAULT_ACTIONS: StudyAssistantAction[] = [
 
 interface FlashcardStudyAssistantPanelProps {
   cardUuid: string
+  threadVersion?: number | null
   messages: StudyAssistantMessage[]
   availableActions?: StudyAssistantAction[] | null
   isLoading?: boolean
   isError?: boolean
   isResponding?: boolean
+  onReloadContext?: () => Promise<unknown>
   onRespond: (request: StudyAssistantRespondRequest) => Promise<unknown>
+  autoSubmitRequest?: {
+    token: number
+    request: StudyAssistantRespondRequest
+  } | null
 }
+
+type SubmitOutcome = "success" | "conflict" | "error"
+
+const hasStudyAssistantContextShape = (value: unknown): value is StudyAssistantContextResponse =>
+  typeof value === "object" &&
+  value !== null &&
+  "thread" in value &&
+  "messages" in value &&
+  "available_actions" in value
+
+const extractStudyAssistantContext = (value: unknown): StudyAssistantContextResponse | null => {
+  if (hasStudyAssistantContextShape(value)) {
+    return value
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "data" in value &&
+    hasStudyAssistantContextShape((value as { data?: unknown }).data)
+  ) {
+    return (value as { data: StudyAssistantContextResponse }).data
+  }
+  return null
+}
+
+const isConflictError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "response" in error &&
+  typeof (error as { response?: { status?: unknown } }).response?.status === "number" &&
+  (error as { response?: { status?: number } }).response?.status === 409
 
 const ACTION_LABELS: Record<StudyAssistantAction, string> = {
   explain: "Explain",
@@ -42,12 +80,15 @@ const ACTION_LABELS: Record<StudyAssistantAction, string> = {
 
 export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanelProps> = ({
   cardUuid,
+  threadVersion = null,
   messages,
   availableActions,
   isLoading = false,
   isError = false,
   isResponding = false,
-  onRespond
+  onReloadContext,
+  onRespond,
+  autoSubmitRequest = null
 }) => {
   const { t } = useTranslation(["option", "common"])
   const { speak, isSpeaking } = useTTS()
@@ -60,48 +101,109 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
     resetTranscript
   } = useSpeechRecognition()
   const [assistantError, setAssistantError] = React.useState<string | null>(null)
+  const [conflictRequest, setConflictRequest] = React.useState<StudyAssistantRespondRequest | null>(null)
+  const [isConflictRecovering, setIsConflictRecovering] = React.useState(false)
+  const [reloadedContext, setReloadedContext] = React.useState<StudyAssistantContextResponse | null>(null)
   const [followUpText, setFollowUpText] = React.useState("")
   const [factCheckTranscript, setFactCheckTranscript] = React.useState("")
   const [factCheckOpen, setFactCheckOpen] = React.useState(false)
+  const lastAutoSubmitTokenRef = React.useRef<number | null>(null)
+  const resetTranscriptRef = React.useRef(resetTranscript)
 
-  const resolvedActions = React.useMemo(
-    () =>
-      Array.from(
-        new Set((availableActions && availableActions.length ? availableActions : DEFAULT_ACTIONS))
-      ),
-    [availableActions]
-  )
+  React.useEffect(() => {
+    resetTranscriptRef.current = resetTranscript
+  }, [resetTranscript])
+
+  const activeContextOverride = React.useMemo(() => {
+    if (!reloadedContext) return null
+    if (threadVersion == null) return reloadedContext
+    return reloadedContext.thread.version > threadVersion ? reloadedContext : null
+  }, [reloadedContext, threadVersion])
+
+  const displayedMessages = activeContextOverride?.messages ?? messages
+  const resolvedActions = React.useMemo(() => {
+    const sourceActions = activeContextOverride?.available_actions ?? availableActions
+    return Array.from(new Set((sourceActions && sourceActions.length ? sourceActions : DEFAULT_ACTIONS)))
+  }, [activeContextOverride?.available_actions, availableActions])
 
   React.useEffect(() => {
     setAssistantError(null)
+    setConflictRequest(null)
+    setIsConflictRecovering(false)
+    setReloadedContext(null)
     setFollowUpText("")
     setFactCheckTranscript("")
     setFactCheckOpen(false)
-    resetTranscript()
-  }, [cardUuid, resetTranscript])
+    resetTranscriptRef.current()
+  }, [cardUuid])
+
+  React.useEffect(() => {
+    if (!reloadedContext || threadVersion == null) return
+    if (threadVersion >= reloadedContext.thread.version) {
+      setReloadedContext(null)
+    }
+  }, [reloadedContext, threadVersion])
 
   React.useEffect(() => {
     if (!factCheckOpen || !isListening) return
     setFactCheckTranscript(transcript)
   }, [factCheckOpen, isListening, transcript])
 
+  const reloadLatestContext = React.useCallback(async () => {
+    if (!onReloadContext) return true
+    setIsConflictRecovering(true)
+    try {
+      const refreshed = await onReloadContext()
+      const latestContext = extractStudyAssistantContext(refreshed)
+      if (latestContext) {
+        setReloadedContext(latestContext)
+      }
+      return true
+    } catch {
+      setAssistantError(
+        t("option:flashcards.studyAssistantUnavailable", {
+          defaultValue: "Study assistant unavailable"
+        })
+      )
+      return false
+    } finally {
+      setIsConflictRecovering(false)
+    }
+  }, [onReloadContext, t])
+
   const submitRequest = React.useCallback(
-    async (request: StudyAssistantRespondRequest) => {
+    async (request: StudyAssistantRespondRequest): Promise<SubmitOutcome> => {
       try {
         setAssistantError(null)
+        setConflictRequest(null)
         await onRespond(request)
-        return true
-      } catch {
+        return "success"
+      } catch (error) {
+        if (isConflictError(error)) {
+          setConflictRequest(request)
+          const reloaded = await reloadLatestContext()
+          if (!reloaded) {
+            return "error"
+          }
+          return "conflict"
+        }
         setAssistantError(
           t("option:flashcards.studyAssistantUnavailable", {
             defaultValue: "Study assistant unavailable"
           })
         )
-        return false
+        return "error"
       }
     },
-    [onRespond, t]
+    [onRespond, reloadLatestContext, t]
   )
+
+  React.useEffect(() => {
+    if (!autoSubmitRequest) return
+    if (lastAutoSubmitTokenRef.current === autoSubmitRequest.token) return
+    lastAutoSubmitTokenRef.current = autoSubmitRequest.token
+    void submitRequest(autoSubmitRequest.request)
+  }, [autoSubmitRequest, submitRequest])
 
   const handleQuickAction = React.useCallback(
     async (action: StudyAssistantAction) => {
@@ -125,12 +227,12 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
     const action: StudyAssistantAction = resolvedActions.includes("follow_up")
       ? "follow_up"
       : "freeform"
-    const succeeded = await submitRequest({
+    const outcome = await submitRequest({
       action,
       message: trimmed,
       input_modality: "text"
     })
-    if (succeeded) {
+    if (outcome === "success") {
       setFollowUpText("")
     }
   }, [followUpText, resolvedActions, submitRequest])
@@ -138,12 +240,12 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
   const handleSubmitFactCheck = React.useCallback(async () => {
     const trimmed = factCheckTranscript.trim()
     if (!trimmed) return
-    const succeeded = await submitRequest({
+    const outcome = await submitRequest({
       action: "fact_check",
       message: trimmed,
       input_modality: "voice_transcript"
     })
-    if (!succeeded) return
+    if (outcome !== "success") return
     if (isListening) {
       stop()
     }
@@ -168,6 +270,29 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
     },
     [speak]
   )
+
+  const handleReloadLatest = React.useCallback(async () => {
+    const reloaded = await reloadLatestContext()
+    if (!reloaded) return
+    setConflictRequest(null)
+  }, [reloadLatestContext])
+
+  const handleRetryConflict = React.useCallback(async () => {
+    if (!conflictRequest) return
+    await submitRequest(conflictRequest)
+  }, [conflictRequest, submitRequest])
+
+  const retryLabel = React.useMemo(() => {
+    if (!conflictRequest) return null
+    if (conflictRequest.input_modality === "voice_transcript") {
+      return t("option:flashcards.studyAssistantRetryTranscript", {
+        defaultValue: "Retry transcript review"
+      })
+    }
+    return t("option:flashcards.studyAssistantRetryMessage", {
+      defaultValue: "Retry my message"
+    })
+  }, [conflictRequest, t])
 
   return (
     <Card
@@ -197,11 +322,44 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
             }
           />
         )}
+        {conflictRequest && (
+          <div className="rounded border border-amber-300 bg-amber-50 p-3">
+            <div className="font-medium">
+              {t("option:flashcards.studyAssistantConflictTitle", {
+                defaultValue: "Conversation changed elsewhere."
+              })}
+            </div>
+            <div className="text-sm text-text-muted">
+              {t("option:flashcards.studyAssistantConflictDescription", {
+                defaultValue: "Reload the latest thread or retry your request against the updated conversation."
+              })}
+            </div>
+            <Space className="mt-3">
+              <Button
+                size="small"
+                onClick={() => void handleReloadLatest()}
+                loading={isConflictRecovering}
+              >
+                {t("option:flashcards.studyAssistantReloadLatest", {
+                  defaultValue: "Reload latest"
+                })}
+              </Button>
+              <Button
+                size="small"
+                type="primary"
+                onClick={() => void handleRetryConflict()}
+                loading={isResponding}
+              >
+                {retryLabel}
+              </Button>
+            </Space>
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           {resolvedActions.includes("explain") && (
             <Button
               onClick={() => void handleQuickAction("explain")}
-              loading={isResponding}
+              loading={isResponding || isConflictRecovering}
               icon={<Lightbulb className="size-4" />}
             >
               {t("option:flashcards.studyAssistantExplain", {
@@ -212,7 +370,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
           {resolvedActions.includes("mnemonic") && (
             <Button
               onClick={() => void handleQuickAction("mnemonic")}
-              loading={isResponding}
+              loading={isResponding || isConflictRecovering}
             >
               {t("option:flashcards.studyAssistantMnemonic", {
                 defaultValue: ACTION_LABELS.mnemonic
@@ -222,7 +380,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
           {supported && resolvedActions.includes("fact_check") && (
             <Button
               onClick={() => void handleQuickAction("fact_check")}
-              loading={isResponding}
+              loading={isResponding || isConflictRecovering}
             >
               {t("option:flashcards.studyAssistantFactCheck", {
                 defaultValue: ACTION_LABELS.fact_check
@@ -235,7 +393,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
             transcript={factCheckTranscript}
             isListening={isListening}
             supported={supported}
-            isSubmitting={isResponding}
+            isSubmitting={isResponding || isConflictRecovering}
             onTranscriptChange={setFactCheckTranscript}
             onStartListening={() => start()}
             onStopListening={stop}
@@ -266,7 +424,7 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
                 <Button
                   type="primary"
                   icon={<MessageSquareText className="size-4" />}
-                  loading={isResponding}
+                  loading={isResponding || isConflictRecovering}
                   disabled={!followUpText.trim()}
                   onClick={() => void handleSubmitFollowUp()}
                 >
@@ -290,9 +448,9 @@ export const FlashcardStudyAssistantPanel: React.FC<FlashcardStudyAssistantPanel
                 defaultValue: "Loading assistant history..."
               })}
             </Text>
-          ) : messages.length ? (
+          ) : displayedMessages.length ? (
             <div className="flex flex-col gap-3">
-              {messages.map((message) => (
+              {displayedMessages.map((message) => (
                 <div
                   key={message.id}
                   className="rounded border border-border bg-surface p-3"
