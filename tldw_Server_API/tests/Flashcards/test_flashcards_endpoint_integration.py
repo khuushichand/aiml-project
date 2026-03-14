@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Flashcards.asset_refs import extract_flashcard_asset_uuids
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
+from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import SchedulerSettingsError
 from tldw_Server_API.tests.test_config import TestConfig
 
 # Explicit auth headers for single-user mode (required by get_request_user)
@@ -778,6 +779,7 @@ def test_fsrs_review_bootstraps_scheduler_state_and_returns_scheduler_type(
 def test_fsrs_review_returns_400_for_invalid_deck_settings(
     client_with_flashcards_db: TestClient,
     flashcards_db: CharactersRAGDB,
+    monkeypatch,
 ):
     deck_id = flashcards_db.add_deck("Broken FSRS Deck", scheduler_type="fsrs")
     card_uuid = flashcards_db.add_flashcard(
@@ -793,11 +795,14 @@ def test_fsrs_review_returns_400_for_invalid_deck_settings(
             "due_at": "2026-03-13T00:00:00Z",
         }
     )
-    with flashcards_db.transaction() as conn:
-        conn.execute(
-            "UPDATE decks SET scheduler_settings_json = ?, version = version + 1 WHERE id = ?",
-            (json.dumps({"fsrs": {"target_retention": 1.2, "maximum_interval_days": 36500}}), deck_id),
-        )
+
+    def raise_invalid_settings(raw):
+        raise SchedulerSettingsError("target_retention must be between 0 and 1")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB._normalize_scheduler_settings_envelope",
+        raise_invalid_settings,
+    )
 
     reviewed = client_with_flashcards_db.post(
         "/api/v1/flashcards/review",
