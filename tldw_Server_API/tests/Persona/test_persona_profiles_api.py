@@ -412,6 +412,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
             "status": "not_started",
             "version": 1,
             "current_step": "persona",
+            "completed_steps": [],
             "completed_at": None,
             "last_test_type": None,
         }
@@ -423,6 +424,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
                     "status": "in_progress",
                     "version": 1,
                     "current_step": "commands",
+                    "completed_steps": ["persona", "voice"],
                     "completed_at": None,
                     "last_test_type": None,
                 }
@@ -434,6 +436,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
             "status": "in_progress",
             "version": 1,
             "current_step": "commands",
+            "completed_steps": ["persona", "voice"],
             "completed_at": None,
             "last_test_type": None,
         }
@@ -445,6 +448,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
                     "status": "completed",
                     "version": 1,
                     "current_step": "test",
+                    "completed_steps": ["persona", "voice", "commands", "safety", "test"],
                     "completed_at": "2026-03-13T10:00:00Z",
                     "last_test_type": "dry_run",
                 }
@@ -456,6 +460,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
             "status": "completed",
             "version": 1,
             "current_step": "test",
+            "completed_steps": ["persona", "voice", "commands", "safety", "test"],
             "completed_at": "2026-03-13T10:00:00Z",
             "last_test_type": "dry_run",
         }
@@ -467,6 +472,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
             "status": "completed",
             "version": 1,
             "current_step": "test",
+            "completed_steps": ["persona", "voice", "commands", "safety", "test"],
             "completed_at": "2026-03-13T10:00:00Z",
             "last_test_type": "dry_run",
         }
@@ -481,8 +487,33 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
             "status": "completed",
             "version": 1,
             "current_step": "test",
+            "completed_steps": ["persona", "voice", "commands", "safety", "test"],
             "completed_at": "2026-03-13T10:00:00Z",
             "last_test_type": "dry_run",
+        }
+
+        reset = client.patch(
+            f"/api/v1/persona/profiles/{persona_id}",
+            json={
+                "setup": {
+                    "status": "in_progress",
+                    "version": 1,
+                    "current_step": "persona",
+                    "completed_steps": [],
+                    "completed_at": None,
+                    "last_test_type": None,
+                }
+            },
+        )
+        assert reset.status_code == 200, reset.text
+        reset_payload = reset.json()
+        assert reset_payload["setup"] == {
+            "status": "in_progress",
+            "version": 1,
+            "current_step": "persona",
+            "completed_steps": [],
+            "completed_at": None,
+            "last_test_type": None,
         }
 
         completed_live = client.patch(
@@ -492,6 +523,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
                     "status": "completed",
                     "version": 1,
                     "current_step": "test",
+                    "completed_steps": ["persona", "voice", "commands", "safety", "test"],
                     "completed_at": "2026-03-13T10:05:00Z",
                     "last_test_type": "live_session",
                 }
@@ -503,6 +535,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
             "status": "completed",
             "version": 1,
             "current_step": "test",
+            "completed_steps": ["persona", "voice", "commands", "safety", "test"],
             "completed_at": "2026-03-13T10:05:00Z",
             "last_test_type": "live_session",
         }

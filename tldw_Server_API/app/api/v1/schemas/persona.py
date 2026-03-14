@@ -148,6 +148,7 @@ class PersonaSetupState(BaseModel):
     status: PersonaSetupStatus = "not_started"
     version: int = Field(default=1, ge=1)
     current_step: PersonaSetupStep = "persona"
+    completed_steps: list[PersonaSetupStep] = Field(default_factory=list)
     completed_at: str | None = None
     last_test_type: PersonaSetupTestType | None = None
 
