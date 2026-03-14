@@ -147,19 +147,19 @@ export class AdminPage extends BasePage {
   /* MLX Admin locators                                                  */
   /* ------------------------------------------------------------------ */
 
-  /** MLX: Model path input (AutoComplete) */
+  /** MLX: Model path input (AutoComplete combobox) */
   get mlxModelPathInput(): Locator {
-    return this.page.getByPlaceholder(/mlx-community/i)
+    return this.page.getByRole("combobox").first()
   }
 
   /** MLX: Load Model button */
   get mlxLoadButton(): Locator {
-    return this.page.getByRole("button", { name: /Load Model/i })
+    return this.page.getByRole("button", { name: "Load Model", exact: true })
   }
 
   /** MLX: Unload Model button */
   get mlxUnloadButton(): Locator {
-    return this.page.getByRole("button", { name: /Unload Model/i })
+    return this.page.getByRole("button", { name: "Unload Model", exact: true })
   }
 
   /** MLX: Load Model card */

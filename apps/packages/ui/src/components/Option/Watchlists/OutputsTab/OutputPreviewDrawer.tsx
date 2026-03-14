@@ -9,9 +9,13 @@ import {
   Tooltip,
   message
 } from "antd"
-import { Download, ExternalLink } from "lucide-react"
+import { Download, ExternalLink, MessageSquare } from "lucide-react"
 import DOMPurify from "dompurify"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
+import { setSetting } from "@/services/settings"
+import { DISCUSS_WATCHLIST_PROMPT_SETTING } from "@/services/settings/ui-settings"
+import type { WatchlistChatHandoffPayload } from "@/services/tldw/watchlist-chat-handoff"
 import { downloadWatchlistOutput, downloadWatchlistOutputBinary } from "@/services/watchlists"
 import type { WatchlistOutput } from "@/types/watchlists"
 import {
@@ -41,6 +45,8 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   onClose
 }) => {
   const { t } = useTranslation(["watchlists", "common"])
+  const navigate = useNavigate()
+
   const [loading, setLoading] = useState(false)
   const [content, setContent] = useState<string | null>(null)
   const [audioObjectUrl, setAudioObjectUrl] = useState<string | null>(null)
@@ -50,6 +56,25 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   const outputIsAudio = useMemo(() => isAudioOutput(output), [output])
   const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
   const wasOpenRef = useRef(false)
+
+  const handleChatAboutOutput = useCallback(() => {
+    if (!output) return
+    const payload: WatchlistChatHandoffPayload = {
+      articles: [
+        {
+          title: output.title || `Output #${output.id}`,
+          content: content || undefined,
+          sourceType: "output",
+          mediaId: output.media_item_id ?? undefined
+        }
+      ]
+    }
+    void setSetting(DISCUSS_WATCHLIST_PROMPT_SETTING, payload)
+    window.dispatchEvent(
+      new CustomEvent("tldw:discuss-watchlist", { detail: payload })
+    )
+    navigate("/")
+  }, [output, content, navigate])
 
   useLayoutEffect(() => {
     if (open) {
@@ -196,6 +221,15 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
               />
             </Tooltip>
           )}
+          <Tooltip title={t("watchlists:outputs.chatAbout", "Chat about this")}>
+            <Button
+              type="text"
+              icon={<MessageSquare className="h-4 w-4" />}
+              onClick={handleChatAboutOutput}
+              disabled={!content}
+              data-testid="watchlists-output-chat-about"
+            />
+          </Tooltip>
           <Tooltip title={t("watchlists:outputs.download", "Download")}>
             <Button
               type="text"

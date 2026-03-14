@@ -198,59 +198,39 @@ export class PromptsWorkspacePage extends BasePage {
     // Close the full-page editor if it is still open (e.g. after createPrompt)
     const editorOpen = await this.fullPageEditor.isVisible().catch(() => false)
     if (editorOpen) {
-      // Try the Back/Cancel buttons by their data-testid
-      const backBtn = this.page.locator('[data-testid="full-editor-back"]')
-      const cancelBtn = this.page.locator('[data-testid="full-editor-cancel"]')
-      if (await backBtn.isVisible().catch(() => false)) {
-        await backBtn.click()
-      } else if (await cancelBtn.isVisible().catch(() => false)) {
-        await cancelBtn.click()
-      } else {
-        await this.page.keyboard.press("Escape")
-      }
-      await this.fullPageEditor.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {})
-      // Handle any unsaved-changes confirmation dialog
-      const discardBtn = this.page.getByRole("button", { name: /discard|ok|yes|confirm/i })
-      if (await discardBtn.first().isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await discardBtn.first().click()
-        await this.fullPageEditor.waitFor({ state: "hidden", timeout: 3_000 }).catch(() => {})
-      }
+      // Navigate directly to the prompts list page to escape the editor
+      await this.page.goto("/prompts", { waitUntil: "domcontentloaded" })
+      await this.page.waitForTimeout(1_000)
     }
 
     // Find the prompt text in the list to identify its row
     const promptText = this.page.getByText(name, { exact: false }).first()
     await expect(promptText).toBeVisible({ timeout: 10_000 })
 
-    // The PromptActionsMenu "more" button is near the prompt row.
-    // Click the row first to make sure the actions are available.
+    // Click the prompt row to open the details drawer/panel
     await promptText.click()
+    await this.page.waitForTimeout(500)
 
-    // Look for the more-actions button (three dots) in the prompt's row or card
-    // The testid pattern is `prompt-more-{id}`, but we don't know the id.
-    // Use the generic approach: find the nearest more-actions button.
-    const moreButton = this.page.locator("[data-testid^='prompt-more-']").first()
-    if (await moreButton.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await moreButton.click()
+    // The "Prompt details" panel should open with a Delete button.
+    // Try to find "Delete" in the details panel first.
+    const detailsDeleteBtn = this.page.getByRole("button", { name: /^delete$/i })
+    if (await detailsDeleteBtn.first().isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await detailsDeleteBtn.first().click()
     } else {
-      // Try right-click context menu or hover-revealed button
-      await promptText.hover()
-      const hoverMore = this.page.locator("[data-testid^='prompt-more-']").first()
-      await hoverMore.click({ timeout: 5_000 })
+      // Fallback: look for the more-actions button
+      const moreButton = this.page.locator("[data-testid^='prompt-more-']").first()
+      if (await moreButton.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        await moreButton.click()
+        const deleteItem = this.page.getByText(/^delete$/i).last()
+        await expect(deleteItem).toBeVisible({ timeout: 5_000 })
+        await deleteItem.click()
+      }
     }
-
-    // Click "Delete" in the dropdown menu
-    const deleteItem = this.page.getByText(/^delete$/i).last()
-    await expect(deleteItem).toBeVisible({ timeout: 5_000 })
-    await deleteItem.click()
 
     // Handle confirmation modal (useConfirmDanger)
     const confirmButton = this.page.getByRole("button", { name: /ok|confirm|yes|delete/i })
-    if ((await confirmButton.count()) > 0) {
-      try {
-        await confirmButton.first().click({ timeout: 3_000 })
-      } catch {
-        // No confirmation needed
-      }
+    if (await confirmButton.first().isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await confirmButton.first().click()
     }
   }
 
