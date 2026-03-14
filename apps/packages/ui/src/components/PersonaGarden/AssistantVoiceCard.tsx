@@ -101,7 +101,8 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   onSaveCurrentSettingsAsDefaults = () => undefined,
   onReconnectPersonaSession
 }) => {
-  const turnDetectionDisabled = !connected || manualModeRequired
+  const sessionControlsDisabled = !connected
+  const turnDetectionDisabled = sessionControlsDisabled || manualModeRequired
   const turnDetectionHelperText = !connected
     ? "Connect to tune live turn detection for this session."
     : manualModeRequired
@@ -125,7 +126,7 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
           <Button
             data-testid="live-voice-send-now"
             size="small"
-            disabled={!canSendNow}
+            disabled={sessionControlsDisabled || !canSendNow}
             onClick={onSendNow}
           >
             Send now
@@ -134,7 +135,7 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
             data-testid="live-voice-start-stop"
             size="small"
             type={isListening ? "default" : "primary"}
-            disabled={!speechAvailable}
+            disabled={sessionControlsDisabled || !speechAvailable}
             onClick={onToggleListening}
           >
             {isListening ? "Stop listening" : "Start listening"}
@@ -173,6 +174,7 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
         <Checkbox
           data-testid="live-voice-auto-resume"
           checked={sessionAutoResume}
+          disabled={sessionControlsDisabled}
           onChange={(event) => onSessionAutoResumeChange(event.target.checked)}
         >
           Auto-resume (session only)
@@ -180,6 +182,7 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
         <Checkbox
           data-testid="live-voice-barge-in"
           checked={sessionBargeIn}
+          disabled={sessionControlsDisabled}
           onChange={(event) => onSessionBargeInChange(event.target.checked)}
         >
           Barge-in (session only)

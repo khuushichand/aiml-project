@@ -46,9 +46,39 @@ describe("AssistantSetupWizard", () => {
 
     expect(onUsePersona).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole("button", { name: "Use this persona" }))
+    fireEvent.click(screen.getByRole("button", { name: "Use Default Persona persona" }))
 
     expect(onUsePersona).toHaveBeenCalledWith("default_persona")
+  })
+
+  it("lets keyboard users choose a persona with enter and space", () => {
+    const onUsePersona = vi.fn()
+
+    render(
+      <AssistantSetupWizard
+        catalog={[
+          { id: "default_persona", name: "Default Persona" },
+          { id: "helper", name: "Helper" }
+        ]}
+        selectedPersonaId="default_persona"
+        currentStep="persona"
+        postSetupTargetTab="profiles"
+        saving={false}
+        error={null}
+        onUsePersona={onUsePersona}
+        onCreatePersona={vi.fn()}
+      />
+    )
+
+    const helperButton = screen.getByRole("button", { name: "Use Helper persona" })
+    expect(helperButton).toHaveAttribute("aria-pressed", "false")
+
+    fireEvent.keyDown(helperButton, { key: "Enter" })
+    fireEvent.keyDown(helperButton, { key: " " })
+
+    expect(onUsePersona).toHaveBeenCalledTimes(2)
+    expect(onUsePersona).toHaveBeenNthCalledWith(1, "helper")
+    expect(onUsePersona).toHaveBeenNthCalledWith(2, "helper")
   })
 
   it("allows creating a new persona from the setup flow", () => {
@@ -110,6 +140,77 @@ describe("AssistantSetupWizard", () => {
 
     expect(screen.getByTestId("setup-voice-content")).toHaveTextContent("Voice step")
     expect(screen.queryByText("Setup step")).not.toBeInTheDocument()
+  })
+
+  it("renders a progress rail with completed, current, and pending setup steps", () => {
+    render(
+      <AssistantSetupWizard
+        catalog={[{ id: "default_persona", name: "Default Persona" }]}
+        selectedPersonaId="default_persona"
+        currentStep="commands"
+        postSetupTargetTab="profiles"
+        progressItems={[
+          {
+            step: "persona",
+            label: "Choose persona",
+            status: "completed",
+            summary: "Persona selected"
+          },
+          {
+            step: "voice",
+            label: "Voice defaults",
+            status: "completed",
+            summary: "Voice defaults saved"
+          },
+          {
+            step: "commands",
+            label: "Starter commands",
+            status: "current",
+            summary: "Starter commands selected"
+          },
+          {
+            step: "safety",
+            label: "Safety and connections",
+            status: "pending",
+            summary: null
+          },
+          {
+            step: "test",
+            label: "Test and finish",
+            status: "pending",
+            summary: null
+          }
+        ]}
+        saving={false}
+        error={null}
+        onUsePersona={vi.fn()}
+        onCreatePersona={vi.fn()}
+      />
+    )
+
+    expect(screen.getByTestId("assistant-setup-progress")).toBeInTheDocument()
+    expect(screen.getByTestId("assistant-setup-progress-step-persona")).toHaveAttribute(
+      "data-status",
+      "completed"
+    )
+    expect(screen.getByTestId("assistant-setup-progress-step-voice")).toHaveAttribute(
+      "data-status",
+      "completed"
+    )
+    expect(screen.getByTestId("assistant-setup-progress-step-commands")).toHaveAttribute(
+      "data-status",
+      "current"
+    )
+    expect(screen.getByTestId("assistant-setup-progress-step-safety")).toHaveAttribute(
+      "data-status",
+      "pending"
+    )
+    expect(screen.getByTestId("assistant-setup-progress-step-test")).toHaveAttribute(
+      "data-status",
+      "pending"
+    )
+    expect(screen.getByText("Voice defaults saved")).toBeInTheDocument()
+    expect(screen.getByText("Starter commands selected")).toBeInTheDocument()
   })
 
   it("renders injected commands-step content when the wizard reaches starter commands", () => {

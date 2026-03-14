@@ -5,14 +5,17 @@ import { describe, expect, it, vi } from "vitest"
 vi.mock("../McpToolPicker", () => ({
   McpToolPicker: ({
     value,
-    onChange
+    onChange,
+    disabled
   }: {
     value: string
     onChange: (value: string) => void
+    disabled?: boolean
   }) => (
     <input
       aria-label="MCP tool"
       value={value}
+      disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
     />
   )
@@ -81,5 +84,20 @@ describe("SetupStarterCommandsStep", () => {
       "notes.search",
       "search notes for {topic}"
     )
+  })
+
+  it("disables MCP starter inputs while saving and keeps the phrase input labeled", () => {
+    render(
+      <SetupStarterCommandsStep
+        saving
+        onCreateFromTemplate={vi.fn()}
+        onCreateMcpStarter={vi.fn()}
+        onSkip={vi.fn()}
+      />
+    )
+
+    expect(screen.getByLabelText("MCP tool")).toBeDisabled()
+    expect(screen.getByLabelText("MCP starter phrase")).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Add MCP starter" })).toBeDisabled()
   })
 })

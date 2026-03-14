@@ -35,6 +35,7 @@ import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import { getPersonaStarterCommandTemplate } from "@/components/PersonaGarden/personaStarterCommandTemplates"
+import { buildPersonaSetupProgress } from "@/components/PersonaGarden/personaSetupProgress"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import {
@@ -672,6 +673,24 @@ const SidepanelPersona = ({
     loading: personaProfileLoading,
     setup: savedPersonaSetup
   })
+  const assistantSetupProgressItems = React.useMemo(
+    () =>
+      buildPersonaSetupProgress({
+        ...(savedPersonaSetup || {}),
+        status:
+          savedPersonaSetup?.status ||
+          (personaSetupWizard.isSetupRequired ? "in_progress" : "not_started"),
+        current_step: personaSetupWizard.currentStep,
+        completed_steps: Array.isArray(savedPersonaSetup?.completed_steps)
+          ? savedPersonaSetup.completed_steps
+          : []
+      }),
+    [
+      personaSetupWizard.currentStep,
+      personaSetupWizard.isSetupRequired,
+      savedPersonaSetup
+    ]
+  )
 
   React.useEffect(() => {
     const normalizedPersonaId = String(selectedPersonaId || "").trim()
@@ -3480,6 +3499,7 @@ const SidepanelPersona = ({
           personaCount={catalog.length}
           connected={connected}
           sessionId={sessionId}
+          setup={savedPersonaSetup}
           isActive={activeTab === "profiles"}
           analytics={voiceAnalytics}
           analyticsLoading={voiceAnalyticsLoading}
@@ -3609,6 +3629,7 @@ const SidepanelPersona = ({
               selectedPersonaId={selectedPersonaId}
               currentStep={personaSetupWizard.currentStep}
               postSetupTargetTab={setupIntentTargetTab || activeTab}
+              progressItems={assistantSetupProgressItems}
               voiceStepContent={
                 personaSetupWizard.currentStep === "voice" ? (
                   <AssistantDefaultsPanel

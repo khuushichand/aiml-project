@@ -152,9 +152,14 @@ describe("AssistantVoiceCard", () => {
   it("disables turn detection tuning while disconnected or when manual mode is required", () => {
     const disconnectedProps = defaultVoiceCardProps()
     disconnectedProps.connected = false
+    disconnectedProps.canSendNow = true
 
     const { rerender } = render(<AssistantVoiceCard {...disconnectedProps} />)
 
+    expect(screen.getByTestId("live-voice-send-now")).toBeDisabled()
+    expect(screen.getByTestId("live-voice-start-stop")).toBeDisabled()
+    expect(screen.getByTestId("live-voice-auto-resume")).toBeDisabled()
+    expect(screen.getByTestId("live-voice-barge-in")).toBeDisabled()
     expect(screen.getByTestId("live-vad-auto-commit")).toBeDisabled()
     fireEvent.click(screen.getByTestId("live-vad-advanced-toggle"))
     expect(screen.getByText("Connect to tune live turn detection for this session.")).toBeInTheDocument()

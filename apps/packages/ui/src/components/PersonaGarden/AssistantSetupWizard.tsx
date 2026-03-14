@@ -3,11 +3,14 @@ import React from "react"
 import type { PersonaSetupStep } from "@/hooks/usePersonaSetupWizard"
 import type { PersonaGardenTabKey } from "@/utils/persona-garden-route"
 
+import type { PersonaSetupProgressItem } from "./personaSetupProgress"
+
 type AssistantSetupWizardProps = {
   catalog: Array<{ id: string; name: string }>
   selectedPersonaId: string
   currentStep: PersonaSetupStep
   postSetupTargetTab: PersonaGardenTabKey
+  progressItems?: PersonaSetupProgressItem[]
   voiceStepContent?: React.ReactNode
   commandsStepContent?: React.ReactNode
   safetyStepContent?: React.ReactNode
@@ -23,6 +26,7 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
   selectedPersonaId,
   currentStep,
   postSetupTargetTab,
+  progressItems = [],
   voiceStepContent,
   commandsStepContent,
   safetyStepContent,
@@ -53,6 +57,33 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
           Finish setup before using this persona in Persona Garden.
         </div>
       </div>
+      {progressItems.length ? (
+        <div
+          data-testid="assistant-setup-progress"
+          className="grid gap-2 rounded-lg border border-border bg-surface2 p-3"
+        >
+          {progressItems.map((item, index) => (
+            <div
+              key={item.step}
+              data-testid={`assistant-setup-progress-step-${item.step}`}
+              data-status={item.status}
+              className="rounded-md border border-border bg-surface px-3 py-2"
+            >
+              <div className="flex items-center justify-between gap-3 text-sm text-text">
+                <span className="font-medium">
+                  {index + 1}. {item.label}
+                </span>
+                <span className="text-[11px] uppercase tracking-wide text-text-muted">
+                  {item.status}
+                </span>
+              </div>
+              {item.summary ? (
+                <div className="mt-1 text-xs text-text-muted">{item.summary}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div
         data-testid="assistant-setup-current-step"
         className="text-sm font-medium text-text"
@@ -95,7 +126,15 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
                     type="button"
                     className="rounded-md border border-border px-3 py-1 text-xs font-medium text-text disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={saving}
+                    aria-label={`Use ${persona.name} persona`}
+                    aria-pressed={isSelected}
                     data-selected={isSelected ? "true" : "false"}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault()
+                        onUsePersona(persona.id)
+                      }
+                    }}
                     onClick={() => onUsePersona(persona.id)}
                   >
                     Use this persona

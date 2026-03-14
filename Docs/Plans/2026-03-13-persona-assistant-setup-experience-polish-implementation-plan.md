@@ -171,7 +171,7 @@ git commit -m "feat: stabilize persona setup intent and step progress"
 
 ### Task 3: Add The Progress Rail And Profiles Setup Status Card
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Create: `apps/packages/ui/src/components/PersonaGarden/PersonaSetupStatusCard.tsx`
@@ -258,6 +258,8 @@ git commit -m "feat: add persona setup progress rail and status card"
 ```
 
 ### Task 4: Add Reset/Rerun Actions And Step-Scoped Error State
+
+**Status:** Not Started
 
 **Files:**
 - Modify: `apps/packages/ui/src/routes/sidepanel-persona.tsx`

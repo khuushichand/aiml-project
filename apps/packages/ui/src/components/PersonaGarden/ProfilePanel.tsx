@@ -3,6 +3,10 @@ import { useTranslation } from "react-i18next"
 
 import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
 import type { PersonaVoiceAnalytics } from "@/components/PersonaGarden/CommandAnalyticsSummary"
+import { PersonaSetupStatusCard } from "@/components/PersonaGarden/PersonaSetupStatusCard"
+import type { PersonaSetupState } from "@/hooks/usePersonaSetupWizard"
+
+import { buildPersonaSetupProgress } from "./personaSetupProgress"
 
 type ProfilePanelProps = {
   selectedPersonaId: string
@@ -10,6 +14,7 @@ type ProfilePanelProps = {
   personaCount: number
   connected: boolean
   sessionId: string | null
+  setup?: PersonaSetupState | null
   isActive?: boolean
   analytics?: PersonaVoiceAnalytics | null
   analyticsLoading?: boolean
@@ -21,11 +26,13 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
   personaCount,
   connected,
   sessionId,
+  setup = null,
   isActive = false,
   analytics = null,
   analyticsLoading = false
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
+  const setupProgressItems = React.useMemo(() => buildPersonaSetupProgress(setup), [setup])
 
   return (
     <div className="space-y-3">
@@ -84,6 +91,10 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
           </p>
         </div>
       </div>
+      <PersonaSetupStatusCard
+        setup={setup}
+        progressItems={setupProgressItems}
+      />
       <AssistantDefaultsPanel
         selectedPersonaId={selectedPersonaId}
         selectedPersonaName={selectedPersonaName}

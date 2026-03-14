@@ -53,12 +53,14 @@ export const SetupStarterCommandsStep: React.FC<SetupStarterCommandsStepProps> =
       </div>
       <div className="space-y-2 rounded-lg border border-border bg-surface2 p-3">
         <div className="text-sm font-medium text-text">Add MCP starter</div>
-        <McpToolPicker value={toolName} onChange={setToolName} />
+        <McpToolPicker value={toolName} onChange={setToolName} disabled={saving} />
         <input
           type="text"
           value={phrase}
+          aria-label="MCP starter phrase"
           placeholder="Phrase users can say"
           className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text"
+          disabled={saving}
           onChange={(event) => setPhrase(event.target.value)}
         />
         <button

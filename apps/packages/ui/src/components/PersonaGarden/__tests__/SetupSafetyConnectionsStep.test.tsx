@@ -82,4 +82,24 @@ describe("SetupSafetyConnectionsStep", () => {
       }
     })
   })
+
+  it("exposes labeled fields and masks connection secrets", () => {
+    render(
+      <SetupSafetyConnectionsStep
+        saving={false}
+        currentConfirmationMode="destructive_only"
+        onContinue={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Never ask" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add one connection now" }))
+
+    expect(screen.getByLabelText("Connection name")).toHaveAttribute("type", "text")
+    expect(screen.getByLabelText("Base URL")).toHaveAttribute("type", "text")
+    expect(screen.getByLabelText("Connection secret")).toHaveAttribute(
+      "type",
+      "password"
+    )
+  })
 })

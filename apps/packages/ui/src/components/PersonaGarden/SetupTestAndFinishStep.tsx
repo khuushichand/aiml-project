@@ -119,19 +119,19 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
           </>
         )}
         {liveSuccessText ? (
-          <div className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
-            Live session responded: {liveSuccessText}
+          <div className="space-y-2">
+            <div className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+              Live session responded: {liveSuccessText}
+            </div>
+            <button
+              type="button"
+              className="rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={saving}
+              onClick={onFinishWithLiveSession}
+            >
+              Finish with live session
+            </button>
           </div>
-        ) : null}
-        {liveSuccessText ? (
-          <button
-            type="button"
-            className="rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={saving}
-            onClick={onFinishWithLiveSession}
-          >
-            Finish with live session
-          </button>
         ) : null}
       </div>
     </div>

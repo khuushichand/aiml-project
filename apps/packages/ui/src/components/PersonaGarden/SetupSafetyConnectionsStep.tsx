@@ -192,6 +192,7 @@ export const SetupSafetyConnectionsStep: React.FC<
           <input
             type="text"
             value={connectionName}
+            aria-label="Connection name"
             placeholder="Connection name"
             className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text"
             onChange={(event) => setConnectionName(event.target.value)}
@@ -199,6 +200,7 @@ export const SetupSafetyConnectionsStep: React.FC<
           <input
             type="text"
             value={connectionBaseUrl}
+            aria-label="Base URL"
             placeholder="Base URL"
             className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text"
             onChange={(event) => setConnectionBaseUrl(event.target.value)}
@@ -217,8 +219,9 @@ export const SetupSafetyConnectionsStep: React.FC<
             </select>
           </label>
           <input
-            type="text"
+            type="password"
             value={connectionSecret}
+            aria-label="Connection secret"
             placeholder="Secret (optional)"
             className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text"
             onChange={(event) => setConnectionSecret(event.target.value)}
