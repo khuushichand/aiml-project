@@ -406,7 +406,7 @@ def get_attempt(
 def get_attempt_remediation_conversions(
     attempt_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-):
+) -> QuizRemediationConversionListResponse:
     """Return server-backed remediation conversion state for a completed attempt."""
     attempt = db.get_attempt(attempt_id, include_questions=False, include_answers=False)
     if not attempt:
@@ -428,7 +428,7 @@ def convert_attempt_remediation_conversions(
     attempt_id: int,
     payload: QuizRemediationConvertRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-):
+) -> QuizRemediationConvertResponse:
     """Create remediation flashcards plus conversion records for missed attempt questions."""
     try:
         return db.convert_quiz_remediation_questions(

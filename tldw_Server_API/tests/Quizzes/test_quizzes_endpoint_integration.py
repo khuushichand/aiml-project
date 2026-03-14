@@ -13,6 +13,14 @@ os.environ.setdefault("READING_DIGEST_SCHEDULER_ENABLED", "0")
 os.environ.setdefault("TEST_MODE", "1")
 
 from tldw_Server_API.app.main import app as fastapi_app
+from tldw_Server_API.app.api.v1.endpoints.quizzes import (
+    convert_attempt_remediation_conversions,
+    get_attempt_remediation_conversions,
+)
+from tldw_Server_API.app.api.v1.schemas.quizzes import (
+    QuizRemediationConversionListResponse,
+    QuizRemediationConvertResponse,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 from tldw_Server_API.app.services import quiz_generator
@@ -108,6 +116,11 @@ def _create_attempt_with_missed_questions(quizzes_db: CharactersRAGDB) -> tuple[
         ],
     )
     return int(attempt["id"]), question_ids
+
+
+def test_remediation_endpoints_declare_return_annotations():
+    assert get_attempt_remediation_conversions.__annotations__["return"] is QuizRemediationConversionListResponse
+    assert convert_attempt_remediation_conversions.__annotations__["return"] is QuizRemediationConvertResponse
 
 
 def test_quiz_source_bundle_roundtrip_via_db_create_and_get(quizzes_db: CharactersRAGDB):
