@@ -25,6 +25,10 @@ import { PersonaGardenTabs } from "@/components/PersonaGarden/PersonaGardenTabs"
 import { PoliciesPanel } from "@/components/PersonaGarden/PoliciesPanel"
 import { ProfilePanel } from "@/components/PersonaGarden/ProfilePanel"
 import { ScopesPanel } from "@/components/PersonaGarden/ScopesPanel"
+import {
+  SetupSafetyConnectionsStep,
+  type SetupSafetyConnectionDraft
+} from "@/components/PersonaGarden/SetupSafetyConnectionsStep"
 import { SetupStarterCommandsStep } from "@/components/PersonaGarden/SetupStarterCommandsStep"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
@@ -47,6 +51,7 @@ import {
 } from "@/hooks/usePersonaLiveVoiceController"
 import {
   useResolvedPersonaVoiceDefaults,
+  type PersonaConfirmationMode,
   type PersonaVoiceDefaults
 } from "@/hooks/useResolvedPersonaVoiceDefaults"
 import {
@@ -1990,6 +1995,75 @@ const SidepanelPersona = ({
     [advancePersonaSetupStep, selectedPersonaId]
   )
 
+  const handleSetupSafetyStepContinue = React.useCallback(
+    async ({
+      confirmationMode,
+      connectionMode,
+      connection
+    }: {
+      confirmationMode: PersonaConfirmationMode
+      connectionMode: "none" | "create"
+      connection?: SetupSafetyConnectionDraft
+    }) => {
+      const personaId = String(selectedPersonaId || "").trim()
+      if (!personaId) return
+      setSetupWizardSaving(true)
+      setSetupWizardError(null)
+      try {
+        if (connectionMode === "create") {
+          const normalizedName = String(connection?.name || "").trim()
+          const normalizedBaseUrl = String(connection?.baseUrl || "").trim()
+          if (!normalizedName || !normalizedBaseUrl) {
+            throw new Error("Connection name and base URL are required.")
+          }
+          const connectionResponse = await tldwClient.fetchWithAuth(
+            `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/connections` as any,
+            {
+              method: "POST",
+              body: {
+                name: normalizedName,
+                base_url: normalizedBaseUrl,
+                auth_type: String(connection?.authType || "none").trim() || "none",
+                secret: String(connection?.secret || "").trim() || undefined
+              }
+            }
+          )
+          if (!connectionResponse.ok) {
+            throw new Error(connectionResponse.error || "Failed to create setup connection")
+          }
+        }
+
+        const mergedVoiceDefaults: PersonaVoiceDefaults = {
+          ...(savedPersonaVoiceDefaults || {}),
+          confirmation_mode: confirmationMode
+        }
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+          {
+            method: "PATCH",
+            body: {
+              voice_defaults: mergedVoiceDefaults,
+              setup: buildPersonaSetupInProgress("test")
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to save assistant safety settings")
+        }
+        const payload = (await response.json()) as PersonaProfileResponse
+        setSavedPersonaVoiceDefaults(payload?.voice_defaults || mergedVoiceDefaults)
+        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress("test"))
+      } catch (setupError: any) {
+        setSetupWizardError(
+          String(setupError?.message || "Failed to save assistant safety settings")
+        )
+      } finally {
+        setSetupWizardSaving(false)
+      }
+    },
+    [buildPersonaSetupInProgress, savedPersonaVoiceDefaults, selectedPersonaId]
+  )
+
   const handleResumeSessionSelectionChange = React.useCallback(
     (value: string) => {
       const nextResumeSessionId = value === "__new__" ? "" : String(value)
@@ -3241,6 +3315,19 @@ const SidepanelPersona = ({
                         "safety",
                         "Failed to advance assistant setup"
                       )
+                    }}
+                  />
+                ) : undefined
+              }
+              safetyStepContent={
+                personaSetupWizard.currentStep === "safety" ? (
+                  <SetupSafetyConnectionsStep
+                    saving={setupWizardSaving}
+                    currentConfirmationMode={
+                      savedPersonaVoiceDefaults?.confirmation_mode || "destructive_only"
+                    }
+                    onContinue={(payload) => {
+                      void handleSetupSafetyStepContinue(payload)
                     }}
                   />
                 ) : undefined

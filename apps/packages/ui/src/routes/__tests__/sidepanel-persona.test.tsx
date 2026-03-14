@@ -1024,6 +1024,215 @@ describe("SidepanelPersona", () => {
     )
   })
 
+  it("records an explicit safety choice without external connections and advances to test", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=live"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "research_assistant", name: "Research Assistant" },
+            { id: "garden-helper", name: "Garden Helper" }
+          ]
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              confirmation_mode: "destructive_only"
+            },
+            setup: {
+              status: "in_progress",
+              version: 1,
+              current_step: "safety",
+              completed_at: null,
+              last_test_type: null
+            }
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "").toUpperCase() === "PATCH" &&
+        init?.body?.voice_defaults
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            voice_defaults: init.body.voice_defaults,
+            setup: init.body.setup
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({ ok: true, json: async () => [] })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() =>
+      expect(screen.getByText("Safety and connections")).toBeInTheDocument()
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask for destructive actions" }))
+    fireEvent.click(screen.getByRole("button", { name: "No external connections for now" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save safety choices" }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("test")
+    )
+
+    const safetyPatchCall = mocks.fetchWithAuth.mock.calls.find(
+      ([calledPath, init]) =>
+        String(calledPath).includes("/persona/profiles/garden-helper") &&
+        String((init as { method?: string } | undefined)?.method || "").toUpperCase() ===
+          "PATCH" &&
+        Boolean((init as { body?: any } | undefined)?.body?.voice_defaults)
+    )
+    expect(safetyPatchCall?.[1]).toEqual(
+      expect.objectContaining({
+        method: "PATCH",
+        body: expect.objectContaining({
+          voice_defaults: expect.objectContaining({
+            confirmation_mode: "destructive_only"
+          }),
+          setup: {
+            status: "in_progress",
+            version: 1,
+            current_step: "test",
+            completed_at: null,
+            last_test_type: null
+          }
+        })
+      })
+    )
+  })
+
+  it("creates an optional connection from the safety step and then advances to test", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=live"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "research_assistant", name: "Research Assistant" },
+            { id: "garden-helper", name: "Garden Helper" }
+          ]
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              confirmation_mode: "destructive_only"
+            },
+            setup: {
+              status: "in_progress",
+              version: 1,
+              current_step: "safety",
+              completed_at: null,
+              last_test_type: null
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/connections")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "conn-setup-1"
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "").toUpperCase() === "PATCH" &&
+        init?.body?.voice_defaults
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            voice_defaults: init.body.voice_defaults,
+            setup: init.body.setup
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({ ok: true, json: async () => [] })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() =>
+      expect(screen.getByText("Safety and connections")).toBeInTheDocument()
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Never ask" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add one connection now" }))
+    fireEvent.change(screen.getByPlaceholderText("Connection name"), {
+      target: { value: "Slack Alerts" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("Base URL"), {
+      target: { value: "https://hooks.example.com/incoming" }
+    })
+    fireEvent.change(screen.getByLabelText("Authentication"), {
+      target: { value: "bearer" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("Secret (optional)"), {
+      target: { value: "token-123" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save safety and connection" }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("test")
+    )
+
+    const connectionCall = mocks.fetchWithAuth.mock.calls.find(
+      ([calledPath]) =>
+        String(calledPath).includes("/persona/profiles/garden-helper/connections")
+    )
+    expect(connectionCall?.[1]).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({
+          name: "Slack Alerts",
+          base_url: "https://hooks.example.com/incoming",
+          auth_type: "bearer",
+          secret: "token-123"
+        })
+      })
+    )
+  })
+
   it("records the current draft as a companion check-in", async () => {
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
       if (path.includes("/api/v1/companion/check-ins")) {
