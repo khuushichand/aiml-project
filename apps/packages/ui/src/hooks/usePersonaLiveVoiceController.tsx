@@ -535,6 +535,11 @@ export const usePersonaLiveVoiceController = ({
 
   React.useEffect(() => {
     if (!connected) {
+      setAutoCommitEnabled(LIVE_VAD_PRESETS.balanced.autoCommitEnabled)
+      setVadThreshold(LIVE_VAD_PRESETS.balanced.vadThreshold)
+      setMinSilenceMs(LIVE_VAD_PRESETS.balanced.minSilenceMs)
+      setTurnStopSecs(LIVE_VAD_PRESETS.balanced.turnStopSecs)
+      setMinUtteranceSecs(LIVE_VAD_PRESETS.balanced.minUtteranceSecs)
       manualModeRequiredRef.current = false
       setManualModeRequired(false)
       setRecoveryMode("none")

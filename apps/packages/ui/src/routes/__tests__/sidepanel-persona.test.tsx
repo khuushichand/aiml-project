@@ -3276,7 +3276,12 @@ describe("SidepanelPersona", () => {
             }),
             stt: expect.objectContaining({
               language: "en-US",
-              model: "whisper-1"
+              model: "whisper-1",
+              enable_vad: true,
+              vad_threshold: 0.5,
+              min_silence_ms: 250,
+              turn_stop_secs: 0.2,
+              min_utterance_secs: 0.4
             }),
             tts: expect.objectContaining({
               provider: "tldw",
@@ -3304,6 +3309,338 @@ describe("SidepanelPersona", () => {
         ])
       )
     })
+  })
+
+  it("sends a fresh voice_config when the live turn detection preset changes", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1",
+              tts_provider: "tldw",
+              tts_voice: "af_heart",
+              confirmation_mode: "destructive_only",
+              voice_chat_trigger_phrases: ["hey helper"],
+              auto_resume: true,
+              barge_in: false
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-live-vad-preset",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
+
+    await waitFor(() => {
+      expect(getSentPayloads(ws)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-live-vad-preset",
+            stt: expect.objectContaining({
+              enable_vad: true,
+              vad_threshold: 0.35,
+              min_silence_ms: 150,
+              turn_stop_secs: 0.1,
+              min_utterance_secs: 0.25
+            })
+          })
+        ])
+      )
+    })
+  })
+
+  it("sends a fresh voice_config when auto-commit is turned off", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1",
+              tts_provider: "tldw",
+              tts_voice: "af_heart",
+              confirmation_mode: "destructive_only",
+              voice_chat_trigger_phrases: ["hey helper"],
+              auto_resume: true,
+              barge_in: false
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-live-vad-auto-commit",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByTestId("live-vad-auto-commit"))
+
+    await waitFor(() => {
+      expect(getSentPayloads(ws)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-live-vad-auto-commit",
+            stt: expect.objectContaining({
+              enable_vad: false
+            })
+          })
+        ])
+      )
+    })
+  })
+
+  it("resets turn detection tuning to the session baseline after reconnect", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1",
+              tts_provider: "tldw",
+              tts_voice: "af_heart",
+              confirmation_mode: "destructive_only",
+              voice_chat_trigger_phrases: ["hey helper"],
+              auto_resume: true,
+              barge_in: false
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-live-vad-reset",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const firstWs = MockWebSocket.instances[0]
+    firstWs.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
+    await waitFor(() => {
+      expect(getSentPayloads(firstWs)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-live-vad-reset",
+            stt: expect.objectContaining({
+              vad_threshold: 0.35,
+              min_silence_ms: 150,
+              turn_stop_secs: 0.1,
+              min_utterance_secs: 0.25
+            })
+          })
+        ])
+      )
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Connect/ })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(2)
+    })
+    const secondWs = MockWebSocket.instances[1]
+    secondWs.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    await waitFor(() => {
+      expect(getSentPayloads(secondWs)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-live-vad-reset",
+            stt: expect.objectContaining({
+              enable_vad: true,
+              vad_threshold: 0.5,
+              min_silence_ms: 250,
+              turn_stop_secs: 0.2,
+              min_utterance_secs: 0.4
+            })
+          })
+        ])
+      )
+    })
+    expect(screen.getByTestId("live-vad-preset-balanced")).toHaveAttribute(
+      "data-active",
+      "true"
+    )
   })
 
   it("does not append tool processing notices into the visible persona log", async () => {
