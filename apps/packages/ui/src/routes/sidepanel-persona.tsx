@@ -231,6 +231,11 @@ type SetupCommandDetourState = {
   returnStep: "test"
 }
 
+type SetupLiveDetourState = {
+  source: "live_unavailable" | "live_failure"
+  lastText: string
+}
+
 const DEFAULT_SETUP_REVIEW_SUMMARY: SetupReviewSummary = {
   starterCommands: { mode: "skipped" },
   confirmationMode: null,
@@ -597,6 +602,7 @@ const SidepanelPersona = ({
   const runtimeApprovalRowRefs = React.useRef<Map<string, HTMLDivElement | null>>(
     new Map()
   )
+  const setupLiveDetourRef = React.useRef<SetupLiveDetourState | null>(null)
   const resolvedApprovalFadeTimerRef = React.useRef<number | null>(null)
   const approvalHighlightPhaseTimerRef = React.useRef<number | null>(null)
 
@@ -634,6 +640,8 @@ const SidepanelPersona = ({
   const [lastTestLabPhrase, setLastTestLabPhrase] = React.useState("")
   const [setupCommandDetour, setSetupCommandDetour] =
     React.useState<SetupCommandDetourState | null>(null)
+  const [setupLiveDetour, setSetupLiveDetour] =
+    React.useState<SetupLiveDetourState | null>(null)
   const [setupNoMatchPhrase, setSetupNoMatchPhrase] = React.useState<string | null>(null)
   const [setupTestResumeNote, setSetupTestResumeNote] = React.useState<string | null>(null)
   const [testLabRerunToken, setTestLabRerunToken] = React.useState(0)
@@ -719,6 +727,10 @@ const SidepanelPersona = ({
     setActiveTab,
     setSelectedPersonaId
   })
+
+  React.useEffect(() => {
+    setupLiveDetourRef.current = setupLiveDetour
+  }, [setupLiveDetour])
 
   React.useEffect(() => {
     if (!isCompanionMode) return
@@ -1017,6 +1029,7 @@ const SidepanelPersona = ({
     setSetupTestOutcome(null)
     setSetupTestResumeNote(null)
     setSetupCommandDetour(null)
+    setSetupLiveDetour(null)
     setSetupNoMatchPhrase(null)
     setupWizardLastLiveTextRef.current = ""
     setupWizardAwaitingLiveResponseRef.current = false
@@ -1276,6 +1289,24 @@ const SidepanelPersona = ({
       returnStep: "test"
     })
     setActiveTab("commands")
+  }, [])
+
+  const handleRecoverSetupInLiveSession = React.useCallback(
+    (context: { source: "live_unavailable" | "live_failure"; text: string }) => {
+      setSetupLiveDetour({
+        source: context.source,
+        lastText: String(context.text || "").trim()
+      })
+      setSetupTestResumeNote(null)
+      setActiveTab("live")
+    },
+    []
+  )
+
+  const handleReturnToSetupFromLiveDetour = React.useCallback(() => {
+    setSetupLiveDetour(null)
+    setupWizardAwaitingLiveResponseRef.current = false
+    setSetupTestResumeNote("Live session is still available if you want to retry.")
   }, [])
 
   const handleOpenCommandHandled = React.useCallback((commandId: string) => {
@@ -1655,6 +1686,12 @@ const SidepanelPersona = ({
               responseText: textDelta
             })
             setupWizardAwaitingLiveResponseRef.current = false
+            if (setupLiveDetourRef.current) {
+              setSetupLiveDetour(null)
+              setSetupTestResumeNote(
+                "Live session responded. Finish setup when you're ready."
+              )
+            }
           }
         }
         appendLog("assistant", String(payload?.text_delta || ""))
@@ -1780,7 +1817,13 @@ const SidepanelPersona = ({
         appendLog("notice", "Received persona TTS audio chunk")
       }
     },
-    [appendLog, liveVoiceController, personaSetupWizard.currentStep, personaSetupWizard.isSetupRequired, sessionId]
+    [
+      appendLog,
+      liveVoiceController,
+      personaSetupWizard.currentStep,
+      personaSetupWizard.isSetupRequired,
+      sessionId,
+    ]
   )
 
   const applyPersonaStatePayload = React.useCallback((payload: PersonaStateDocsResponse) => {
@@ -2702,6 +2745,7 @@ const SidepanelPersona = ({
         setSetupTestOutcome(null)
         setSetupTestResumeNote(null)
         setSetupCommandDetour(null)
+        setSetupLiveDetour(null)
         setSetupNoMatchPhrase(null)
         setupWizardLastLiveTextRef.current = ""
       } catch (setupError: any) {
@@ -2738,6 +2782,7 @@ const SidepanelPersona = ({
       setSetupTestOutcome(null)
       setSetupTestResumeNote(null)
       setSetupCommandDetour(null)
+      setSetupLiveDetour(null)
       setSetupNoMatchPhrase(null)
       setSetupReviewSummaryDraft(DEFAULT_SETUP_REVIEW_SUMMARY)
       setupWizardLastLiveTextRef.current = ""
@@ -2875,6 +2920,10 @@ const SidepanelPersona = ({
           memory_top_k: memoryTopK
         })
       )
+      if (personaSetupWizard.isSetupRequired && setupLiveDetour) {
+        setupWizardAwaitingLiveResponseRef.current = true
+        setupWizardLastLiveTextRef.current = trimmed
+      }
       appendLog("user", trimmed)
       setInput("")
     } catch (err: any) {
@@ -2888,7 +2937,9 @@ const SidepanelPersona = ({
     memoryEnabled,
     memoryTopK,
     personaStateContextEnabled,
-    sessionId
+    personaSetupWizard.isSetupRequired,
+    sessionId,
+    setupLiveDetour
   ])
 
   const sendSetupLiveTestMessage = React.useCallback(
@@ -3594,6 +3645,18 @@ const SidepanelPersona = ({
 
   const liveSessionStatusPanels = (
     <>
+      {setupLiveDetour ? (
+        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-sm text-sky-100">
+          <div>Finish this live test, then return to setup.</div>
+          <button
+            type="button"
+            className="mt-2 rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-100"
+            onClick={handleReturnToSetupFromLiveDetour}
+          >
+            Return to setup
+          </button>
+        </div>
+      ) : null}
       {errorBanner}
       {!isCompanionMode ? (
         <PersonaPolicySummary personaId={selectedPersonaId || null} />
@@ -4306,7 +4369,7 @@ const SidepanelPersona = ({
         </div>
       ) : (
         <div className="flex flex-1 flex-col p-3">
-          {personaSetupWizard.isSetupRequired && !setupCommandDetour ? (
+          {personaSetupWizard.isSetupRequired && !setupCommandDetour && !setupLiveDetour ? (
             <AssistantSetupWizard
               catalog={catalog.map((persona) => ({
                 id: String(persona.id || ""),
@@ -4388,6 +4451,7 @@ const SidepanelPersona = ({
                     onConnectLive={() => {
                       void connect()
                     }}
+                    onRecoverInLiveSession={handleRecoverSetupInLiveSession}
                     onSendLive={(text) => {
                       sendSetupLiveTestMessage(text)
                     }}

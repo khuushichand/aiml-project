@@ -130,6 +130,7 @@ describe("SetupTestAndFinishStep", () => {
   })
 
   it("renders a live-unavailable outcome separately from live-success", () => {
+    const onRecoverInLiveSession = vi.fn()
     const { rerender } = render(
       <SetupTestAndFinishStep
         saving={false}
@@ -141,10 +142,16 @@ describe("SetupTestAndFinishStep", () => {
         onSendLive={vi.fn()}
         onFinishWithDryRun={vi.fn()}
         onFinishWithLiveSession={vi.fn()}
+        onRecoverInLiveSession={onRecoverInLiveSession}
       />
     )
 
     expect(screen.getByText(/Live session unavailable until you connect/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Open Live Session to fix this" }))
+    expect(onRecoverInLiveSession).toHaveBeenCalledWith({
+      source: "live_unavailable",
+      text: ""
+    })
     expect(
       screen.queryByRole("button", { name: "Finish with live session" })
     ).not.toBeInTheDocument()
@@ -164,6 +171,7 @@ describe("SetupTestAndFinishStep", () => {
         onSendLive={vi.fn()}
         onFinishWithDryRun={vi.fn()}
         onFinishWithLiveSession={vi.fn()}
+        onRecoverInLiveSession={onRecoverInLiveSession}
       />
     )
 
@@ -172,6 +180,7 @@ describe("SetupTestAndFinishStep", () => {
   })
 
   it("renders a live-send failure outcome with retry guidance", () => {
+    const onRecoverInLiveSession = vi.fn()
     render(
       <SetupTestAndFinishStep
         saving={false}
@@ -187,6 +196,7 @@ describe("SetupTestAndFinishStep", () => {
         onSendLive={vi.fn()}
         onFinishWithDryRun={vi.fn()}
         onFinishWithLiveSession={vi.fn()}
+        onRecoverInLiveSession={onRecoverInLiveSession}
       />
     )
 
@@ -194,6 +204,11 @@ describe("SetupTestAndFinishStep", () => {
     expect(
       screen.getByText("Try sending the live test again or reconnect the live session.")
     ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Try again in Live Session" }))
+    expect(onRecoverInLiveSession).toHaveBeenCalledWith({
+      source: "live_failure",
+      text: "summarize my assistant setup"
+    })
     expect(screen.getByRole("button", { name: "Send live test" })).toBeInTheDocument()
   })
 

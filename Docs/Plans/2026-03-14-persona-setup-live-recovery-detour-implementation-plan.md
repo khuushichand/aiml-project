@@ -8,9 +8,13 @@
 
 **Tech Stack:** React, TypeScript, Vitest, React Testing Library, Bun.
 
+**Status:** Complete
+
 ---
 
 ### Task 1: Add Live Recovery Actions To The Setup Test Step
+
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/PersonaGarden/SetupTestAndFinishStep.tsx`
@@ -108,6 +112,8 @@ bunx vitest run apps/packages/ui/src/components/PersonaGarden/__tests__/SetupTes
 Expected: PASS.
 
 ### Task 2: Add Route-Owned Live Detour State And Manual Return
+
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/routes/sidepanel-persona.tsx`
@@ -211,6 +217,8 @@ Expected: PASS for the new manual live detour assertions.
 
 ### Task 3: Auto-Return After Successful Setup Live Response
 
+**Status:** Complete
+
 **Files:**
 - Modify: `apps/packages/ui/src/routes/sidepanel-persona.tsx`
 - Modify: `apps/packages/ui/src/routes/__tests__/sidepanel-persona.test.tsx`
@@ -273,6 +281,8 @@ Expected: PASS.
 
 ### Task 4: Clear Live Detour On Setup Reset Or Rerun
 
+**Status:** Complete
+
 **Files:**
 - Modify: `apps/packages/ui/src/routes/sidepanel-persona.tsx`
 - Modify: `apps/packages/ui/src/routes/__tests__/sidepanel-persona.test.tsx`
@@ -316,6 +326,8 @@ bunx vitest run apps/packages/ui/src/routes/__tests__/sidepanel-persona.test.tsx
 Expected: PASS.
 
 ### Task 5: Run Focused Regressions And Commit
+
+**Status:** Complete
 
 **Files:**
 - Update: `Docs/Plans/2026-03-14-persona-setup-live-recovery-detour-implementation-plan.md`
