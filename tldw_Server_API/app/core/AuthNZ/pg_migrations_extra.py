@@ -462,6 +462,45 @@ _CREATE_MCP_HUB_TABLES = [
     ),
     (
         """
+        CREATE TABLE IF NOT EXISTS mcp_capability_adapter_mappings (
+            id SERIAL PRIMARY KEY,
+            mapping_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER NULL,
+            capability_name TEXT NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            resolved_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            supported_environment_requirements_json TEXT NOT NULL DEFAULT '[]',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_capability_adapter_mappings_scope "
+        "ON mcp_capability_adapter_mappings(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_mapping_id "
+        "ON mcp_capability_adapter_mappings(mapping_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_active_scope_capability "
+        "ON mcp_capability_adapter_mappings("
+        "owner_scope_type, COALESCE(owner_scope_id, -1), capability_name"
+        ") WHERE is_active",
+        (),
+    ),
+    (
+        """
         CREATE TABLE IF NOT EXISTS mcp_governance_packs (
             id SERIAL PRIMARY KEY,
             pack_id TEXT NOT NULL,
