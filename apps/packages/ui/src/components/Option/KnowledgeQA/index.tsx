@@ -12,14 +12,18 @@ import { ExportDialog } from "./ExportDialog"
 import { KnowledgeQALayout } from "./layout/KnowledgeQALayout"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
-import { useConnectionActions, useConnectionState } from "@/hooks/useConnectionState"
+import {
+  useConnectionActions,
+  useConnectionState,
+  useConnectionUxState
+} from "@/hooks/useConnectionState"
 import { WifiOff, AlertCircle } from "lucide-react"
 import {
   getRetryCountdownSeconds,
   KNOWLEDGE_QA_RETRY_INTERVAL_MS,
   KNOWLEDGE_QA_RETRY_TICK_MS,
 } from "./retryScheduler"
-import { useLocation } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 
 function normalizeThreadId(rawValue: string | null | undefined): string | null {
   if (typeof rawValue !== "string") return null
@@ -59,11 +63,13 @@ function KnowledgeQAContent() {
   const routeHydratedThreadRef = useRef<string | null>(null)
   const routeHydratedShareRef = useRef<string | null>(null)
   const location = useLocation()
+  const navigate = useNavigate()
   const online = useServerOnline(KNOWLEDGE_QA_RETRY_INTERVAL_MS)
   const { capabilities, loading: capabilitiesLoading, refresh: refreshCapabilities } =
     useServerCapabilities()
   const { checkOnce } = useConnectionActions()
   const { isChecking, lastCheckedAt } = useConnectionState()
+  const { uxState } = useConnectionUxState()
 
   // Check if RAG is supported
   const hasRag = capabilities?.hasRag ?? true
@@ -142,6 +148,88 @@ function KnowledgeQAContent() {
 
   const handleRetryCapabilities = () => {
     void refreshCapabilities()
+  }
+
+  if (!online && uxState !== "testing") {
+    if (uxState === "error_auth" || uxState === "configuring_auth") {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <WifiOff className="w-16 h-16 mx-auto mb-4 text-text-muted" />
+            <h2 className="text-xl font-semibold mb-2">
+              Add your credentials to use Knowledge QA
+            </h2>
+            <p className="text-text-muted mb-4">
+              Your server is reachable, but Knowledge QA needs valid credentials before it can load.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/settings/tldw")}
+              className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
+            >
+              Open Settings
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    if (uxState === "unconfigured" || uxState === "configuring_url") {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <WifiOff className="w-16 h-16 mx-auto mb-4 text-text-muted" />
+            <h2 className="text-xl font-semibold mb-2">
+              Finish setup to use Knowledge QA
+            </h2>
+            <p className="text-text-muted mb-4">
+              Complete the tldw server setup flow, then return here to search your knowledge base.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
+            >
+              Finish Setup
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    if (uxState === "error_unreachable") {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <WifiOff className="w-16 h-16 mx-auto mb-4 text-text-muted" />
+            <h2 className="text-xl font-semibold mb-2">Can't reach your tldw server right now</h2>
+            <p className="text-text-muted mb-3">
+              Your server settings are saved, but Knowledge QA cannot reach the tldw server right now.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={handleRetryConnection}
+                disabled={isChecking}
+                className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isChecking ? "Checking connection..." : "Retry connection"}
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate("/settings/health")}
+                className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
+              >
+                Health & diagnostics
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-text-muted">
+              Retrying automatically in {retryCountdownSeconds}s...
+            </p>
+          </div>
+        </div>
+      )
+    }
   }
 
   // Offline state

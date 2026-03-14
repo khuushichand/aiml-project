@@ -20,7 +20,11 @@ import { bgRequest } from '@/services/background-proxy'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { useServerOnline } from '@/hooks/useServerOnline'
 import { useServerCapabilities } from '@/hooks/useServerCapabilities'
-import { useConnectionState } from '@/hooks/useConnectionState'
+import {
+  useConnectionActions,
+  useConnectionState,
+  useConnectionUxState
+} from '@/hooks/useConnectionState'
 import { useDemoMode } from '@/context/demo-mode'
 import { useMessageOption } from '@/hooks/useMessageOption'
 import { useAntdMessage } from '@/hooks/useAntdMessage'
@@ -153,28 +157,99 @@ const ViewMediaPage: React.FC = () => {
   const isOnline = useServerOnline()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const { demoEnabled } = useDemoMode()
+  const { uxState } = useConnectionUxState()
+  const { checkOnce } = useConnectionActions()
 
   // Check media support
   const mediaUnsupported = !capsLoading && capabilities && !capabilities.hasMedia
 
-  if (!isOnline && demoEnabled) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <FeatureEmptyState
-          title={t('review:mediaEmpty.offlineTitle', {
-            defaultValue: 'Media API not available offline'
-          })}
-          description={t('review:mediaEmpty.offlineDescription', {
-            defaultValue:
-              'This feature requires connection to the tldw server. Please check your server connection.'
-          })}
-          examples={[]}
-        />
-      </div>
-    )
-  }
+  if (!isOnline && uxState !== 'testing') {
+    if (uxState === 'error_auth' || uxState === 'configuring_auth') {
+      return (
+        <div className="flex h-full items-center justify-center">
+          <FeatureEmptyState
+            title={t('review:mediaEmpty.authTitle', {
+              defaultValue: 'Add your credentials to use Media'
+            })}
+            description={t('review:mediaEmpty.authDescription', {
+              defaultValue:
+                'Your server is reachable, but Media needs valid credentials before it can load.'
+            })}
+            examples={[]}
+            primaryActionLabel={t('settings:tldw.openSettings', {
+              defaultValue: 'Open Settings'
+            })}
+            onPrimaryAction={() => navigate('/settings/tldw')}
+          />
+        </div>
+      )
+    }
 
-  if (!isOnline) {
+    if (uxState === 'unconfigured' || uxState === 'configuring_url') {
+      return (
+        <div className="flex h-full items-center justify-center">
+          <FeatureEmptyState
+            title={t('review:mediaEmpty.setupTitle', {
+              defaultValue: 'Finish setup to use Media'
+            })}
+            description={t('review:mediaEmpty.setupDescription', {
+              defaultValue:
+                'Finish the tldw server setup flow, then return here to browse your media.'
+            })}
+            examples={[]}
+            primaryActionLabel={t('settings:tldw.finishSetup', {
+              defaultValue: 'Finish Setup'
+            })}
+            onPrimaryAction={() => navigate('/')}
+          />
+        </div>
+      )
+    }
+
+    if (uxState === 'error_unreachable') {
+      return (
+        <div className="flex h-full items-center justify-center">
+          <FeatureEmptyState
+            title={t('review:mediaEmpty.unreachableTitle', {
+              defaultValue: "Can't reach your tldw server right now"
+            })}
+            description={t('review:mediaEmpty.unreachableDescription', {
+              defaultValue:
+                'Your server settings are saved, but Media cannot reach the tldw server right now.'
+            })}
+            examples={[]}
+            primaryActionLabel={t('option:buttonRetry', {
+              defaultValue: 'Retry connection'
+            })}
+            onPrimaryAction={() => {
+              void checkOnce()
+            }}
+            secondaryActionLabel={t('settings:healthSummary.diagnostics', {
+              defaultValue: 'Health & diagnostics'
+            })}
+            onSecondaryAction={() => navigate('/settings/health')}
+          />
+        </div>
+      )
+    }
+
+    if (demoEnabled) {
+      return (
+        <div className="flex h-full items-center justify-center">
+          <FeatureEmptyState
+            title={t('review:mediaEmpty.offlineTitle', {
+              defaultValue: 'Media API not available offline'
+            })}
+            description={t('review:mediaEmpty.offlineDescription', {
+              defaultValue:
+                'This feature requires connection to the tldw server. Please check your server connection.'
+            })}
+            examples={[]}
+          />
+        </div>
+      )
+    }
+
     return (
       <div className="flex h-full items-center justify-center">
         <FeatureEmptyState
