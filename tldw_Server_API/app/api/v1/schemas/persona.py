@@ -18,6 +18,9 @@ PersonaExemplarKind = Literal["style", "catchphrase", "boundary", "scenario_demo
 PersonaExemplarSourceType = Literal["manual", "transcript_import", "character_seed", "generated_candidate"]
 PersonaExemplarReviewAction = Literal["approve", "reject"]
 PersonaConfirmationMode = Literal["always", "destructive_only", "never"]
+PersonaSetupStatus = Literal["not_started", "in_progress", "completed"]
+PersonaSetupStep = Literal["persona", "voice", "commands", "safety", "test"]
+PersonaSetupTestType = Literal["dry_run", "live_session"]
 
 
 class PersonaInfo(BaseModel):
@@ -141,6 +144,14 @@ class PersonaVoiceDefaults(BaseModel):
         return max(50, min(10_000, numeric))
 
 
+class PersonaSetupState(BaseModel):
+    status: PersonaSetupStatus = "not_started"
+    version: int = Field(default=1, ge=1)
+    current_step: PersonaSetupStep = "persona"
+    completed_at: str | None = None
+    last_test_type: PersonaSetupTestType | None = None
+
+
 class PersonaProfileCreate(BaseModel):
     id: str | None = Field(default=None, min_length=1, max_length=200)
     name: str = Field(..., min_length=1, max_length=200)
@@ -150,6 +161,7 @@ class PersonaProfileCreate(BaseModel):
     is_active: bool = True
     use_persona_state_context_default: bool = True
     voice_defaults: PersonaVoiceDefaults = Field(default_factory=PersonaVoiceDefaults)
+    setup: PersonaSetupState = Field(default_factory=PersonaSetupState)
 
 
 class PersonaProfileUpdate(BaseModel):
@@ -160,6 +172,7 @@ class PersonaProfileUpdate(BaseModel):
     is_active: bool | None = None
     use_persona_state_context_default: bool | None = None
     voice_defaults: PersonaVoiceDefaults | None = None
+    setup: PersonaSetupState | None = None
 
 
 class PersonaProfileResponse(BaseModel):
@@ -174,6 +187,7 @@ class PersonaProfileResponse(BaseModel):
     is_active: bool = True
     use_persona_state_context_default: bool = True
     voice_defaults: PersonaVoiceDefaults = Field(default_factory=PersonaVoiceDefaults)
+    setup: PersonaSetupState = Field(default_factory=PersonaSetupState)
     created_at: str
     last_modified: str
     version: int = 1

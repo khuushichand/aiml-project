@@ -47,6 +47,7 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaProfileCreate,
     PersonaProfileResponse,
     PersonaProfileUpdate,
+    PersonaSetupState,
     PersonaVoiceDefaults,
     PersonaStateHistoryResponse,
     PersonaStateRestoreRequest,
@@ -1602,6 +1603,7 @@ def _build_scope_snapshot(rules: list[dict[str, Any]]) -> tuple[dict[str, Any], 
 
 def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileResponse:
     raw_voice_defaults = profile.get("voice_defaults")
+    raw_setup = profile.get("setup")
     try:
         voice_defaults = (
             PersonaVoiceDefaults.model_validate(raw_voice_defaults)
@@ -1610,6 +1612,14 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
         )
     except Exception:
         voice_defaults = PersonaVoiceDefaults()
+    try:
+        setup = (
+            PersonaSetupState.model_validate(raw_setup)
+            if isinstance(raw_setup, dict)
+            else PersonaSetupState()
+        )
+    except Exception:
+        setup = PersonaSetupState()
     return PersonaProfileResponse(
         id=str(profile.get("id") or ""),
         name=str(profile.get("name") or ""),
@@ -1625,6 +1635,7 @@ def _persona_profile_to_response(profile: dict[str, Any]) -> PersonaProfileRespo
             default=True,
         ),
         voice_defaults=voice_defaults,
+        setup=setup,
         created_at=str(profile.get("created_at") or _utc_now_iso()),
         last_modified=str(profile.get("last_modified") or _utc_now_iso()),
         version=int(profile.get("version") or 1),

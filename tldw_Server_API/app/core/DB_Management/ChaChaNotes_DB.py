@@ -2766,6 +2766,7 @@ CREATE TABLE IF NOT EXISTS persona_profiles(
   system_prompt TEXT,
   is_active BOOLEAN NOT NULL DEFAULT 1,
   voice_defaults_json TEXT NOT NULL DEFAULT '{}',
+  setup_json TEXT NOT NULL DEFAULT '{}',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted BOOLEAN NOT NULL DEFAULT 0,
@@ -4611,6 +4612,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_name TEXT")
             if "origin_character_snapshot_at" not in existing_cols:
                 conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_snapshot_at TEXT")
+            if "setup_json" not in existing_cols:
+                conn.execute("ALTER TABLE persona_profiles ADD COLUMN setup_json TEXT NOT NULL DEFAULT '{}'")
             conn.execute(
                 """
                 UPDATE db_schema_version
@@ -4990,6 +4993,8 @@ UPDATE db_schema_version
             conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_snapshot_at TEXT")
         if "voice_defaults_json" not in profile_cols:
             conn.execute("ALTER TABLE persona_profiles ADD COLUMN voice_defaults_json TEXT NOT NULL DEFAULT '{}'")
+        if "setup_json" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN setup_json TEXT NOT NULL DEFAULT '{}'")
 
         conversation_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
         if "assistant_kind" not in conversation_cols:
@@ -5169,6 +5174,7 @@ UPDATE db_schema_version
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_name TEXT",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_snapshot_at TEXT",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS voice_defaults_json TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS setup_json TEXT NOT NULL DEFAULT '{}'",
             "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS assistant_kind TEXT CHECK (assistant_kind IN ('character', 'persona'))",
             "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS assistant_id TEXT",
             "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS persona_memory_mode TEXT CHECK (persona_memory_mode IN ('read_only', 'read_write'))",
@@ -8254,6 +8260,17 @@ UPDATE db_schema_version
             item["voice_defaults"] = raw_voice_defaults
         else:
             item["voice_defaults"] = {}
+        raw_setup = item.get("setup_json")
+        if isinstance(raw_setup, str):
+            try:
+                decoded_setup = json.loads(raw_setup)
+            except json.JSONDecodeError:
+                decoded_setup = {}
+            item["setup"] = decoded_setup if isinstance(decoded_setup, dict) else {}
+        elif isinstance(raw_setup, dict):
+            item["setup"] = raw_setup
+        else:
+            item["setup"] = {}
         item["deleted"] = self._as_bool(item.get("deleted"))
         return item
 
@@ -8271,6 +8288,22 @@ UPDATE db_schema_version
                 raise InputError("voice_defaults must be a JSON object.") from exc  # noqa: TRY003
         if not isinstance(payload, dict):
             raise InputError("voice_defaults must be a JSON object.")  # noqa: TRY003
+        return self._ensure_json_string(payload) or "{}"
+
+    def _normalize_persona_setup_json(self, value: Any) -> str:
+        if value is None:
+            return "{}"
+        payload = value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return "{}"
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise InputError("setup must be a JSON object.") from exc  # noqa: TRY003
+        if not isinstance(payload, dict):
+            raise InputError("setup must be a JSON object.")  # noqa: TRY003
         return self._ensure_json_string(payload) or "{}"
 
     def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
@@ -8719,6 +8752,7 @@ UPDATE db_schema_version
         voice_defaults_json = self._normalize_persona_voice_defaults_json(
             profile_data.get("voice_defaults")
         )
+        setup_json = self._normalize_persona_setup_json(profile_data.get("setup"))
         now = self._get_current_utc_timestamp_iso()
 
         character_card_id = profile_data.get("character_card_id")
@@ -8768,8 +8802,8 @@ UPDATE db_schema_version
             "INSERT INTO persona_profiles("
             "id, user_id, name, character_card_id, origin_character_id, origin_character_name, "
             "origin_character_snapshot_at, mode, system_prompt, "
-            "is_active, use_persona_state_context_default, voice_defaults_json, created_at, last_modified, deleted, version"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "is_active, use_persona_state_context_default, voice_defaults_json, setup_json, created_at, last_modified, deleted, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             persona_id,
@@ -8784,6 +8818,7 @@ UPDATE db_schema_version
             is_active_db,
             use_persona_state_context_default_db,
             voice_defaults_json,
+            setup_json,
             profile_data.get("created_at") or now,
             profile_data.get("last_modified") or now,
             deleted_db,
@@ -8878,6 +8913,7 @@ UPDATE db_schema_version
             "is_active",
             "use_persona_state_context_default",
             "voice_defaults",
+            "setup",
             "deleted",
         }
         set_parts: list[str] = []
@@ -8898,6 +8934,9 @@ UPDATE db_schema_version
             elif key == "voice_defaults":
                 params.append(self._normalize_persona_voice_defaults_json(value))
                 set_parts.append("voice_defaults_json = ?")
+            elif key == "setup":
+                params.append(self._normalize_persona_setup_json(value))
+                set_parts.append("setup_json = ?")
             elif key == "character_card_id":
                 if value is None:
                     params.append(None)

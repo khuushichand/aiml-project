@@ -396,6 +396,98 @@ def test_persona_profile_voice_defaults_clamps_turn_detection_values(persona_db:
     fastapi_app.dependency_overrides.clear()
 
 
+def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGDB):
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={
+                "name": "Setup Wizard Persona",
+                "mode": "persistent_scoped",
+            },
+        )
+        assert created.status_code == 201, created.text
+        payload = created.json()
+        persona_id = payload["id"]
+        assert payload["setup"] == {
+            "status": "not_started",
+            "version": 1,
+            "current_step": "persona",
+            "completed_at": None,
+            "last_test_type": None,
+        }
+
+        updated = client.patch(
+            f"/api/v1/persona/profiles/{persona_id}",
+            json={
+                "setup": {
+                    "status": "in_progress",
+                    "version": 1,
+                    "current_step": "commands",
+                    "completed_at": None,
+                    "last_test_type": None,
+                }
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        updated_payload = updated.json()
+        assert updated_payload["setup"] == {
+            "status": "in_progress",
+            "version": 1,
+            "current_step": "commands",
+            "completed_at": None,
+            "last_test_type": None,
+        }
+
+        completed = client.patch(
+            f"/api/v1/persona/profiles/{persona_id}",
+            json={
+                "setup": {
+                    "status": "completed",
+                    "version": 1,
+                    "current_step": "test",
+                    "completed_at": "2026-03-13T10:00:00Z",
+                    "last_test_type": "dry_run",
+                }
+            },
+        )
+        assert completed.status_code == 200, completed.text
+        completed_payload = completed.json()
+        assert completed_payload["setup"] == {
+            "status": "completed",
+            "version": 1,
+            "current_step": "test",
+            "completed_at": "2026-03-13T10:00:00Z",
+            "last_test_type": "dry_run",
+        }
+
+        fetched = client.get(f"/api/v1/persona/profiles/{persona_id}")
+        assert fetched.status_code == 200, fetched.text
+        fetched_payload = fetched.json()
+        assert fetched_payload["setup"] == {
+            "status": "completed",
+            "version": 1,
+            "current_step": "test",
+            "completed_at": "2026-03-13T10:00:00Z",
+            "last_test_type": "dry_run",
+        }
+
+        listed = client.get("/api/v1/persona/profiles")
+        assert listed.status_code == 200, listed.text
+        listed_payload = listed.json()
+        listed_profile = next(
+            item for item in listed_payload if item["id"] == persona_id
+        )
+        assert listed_profile["setup"] == {
+            "status": "completed",
+            "version": 1,
+            "current_step": "test",
+            "completed_at": "2026-03-13T10:00:00Z",
+            "last_test_type": "dry_run",
+        }
+
+    fastapi_app.dependency_overrides.clear()
+
+
 def test_persona_profile_state_update_rejects_empty_payload(persona_db: CharactersRAGDB):
     with _client_for_user(1, persona_db) as client:
         created = client.post(
