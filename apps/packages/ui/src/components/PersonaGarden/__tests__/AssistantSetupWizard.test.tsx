@@ -92,4 +92,23 @@ describe("AssistantSetupWizard", () => {
     expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("voice")
     expect(screen.queryByRole("button", { name: "Use this persona" })).not.toBeInTheDocument()
   })
+
+  it("renders injected voice-step content when the wizard advances past persona choice", () => {
+    render(
+      <AssistantSetupWizard
+        catalog={[{ id: "default_persona", name: "Default Persona" }]}
+        selectedPersonaId="default_persona"
+        currentStep="voice"
+        postSetupTargetTab="profiles"
+        voiceStepContent={<div data-testid="setup-voice-content">Voice step</div>}
+        saving={false}
+        error={null}
+        onUsePersona={vi.fn()}
+        onCreatePersona={vi.fn()}
+      />
+    )
+
+    expect(screen.getByTestId("setup-voice-content")).toHaveTextContent("Voice step")
+    expect(screen.queryByText("Setup step")).not.toBeInTheDocument()
+  })
 })

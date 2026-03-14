@@ -16,6 +16,7 @@ import {
 } from "@/components/PersonaGarden/CommandAnalyticsSummary"
 import type { PersonaTurnDetectionValues } from "@/components/PersonaGarden/PersonaTurnDetectionControls"
 import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCard"
+import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
 import { AssistantSetupWizard } from "@/components/PersonaGarden/AssistantSetupWizard"
 import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
 import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
@@ -646,6 +647,38 @@ const SidepanelPersona = ({
       last_test_type: null
     }),
     []
+  )
+
+  const handleSetupVoiceDefaultsSaved = React.useCallback(
+    async () => {
+      const personaId = String(selectedPersonaId || "").trim()
+      if (!personaId) return
+      setSetupWizardSaving(true)
+      setSetupWizardError(null)
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+          {
+            method: "PATCH",
+            body: {
+              setup: buildPersonaSetupInProgress("commands")
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to advance assistant setup")
+        }
+        const payload = (await response.json()) as PersonaProfileResponse
+        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress("commands"))
+      } catch (setupError: any) {
+        setSetupWizardError(
+          String(setupError?.message || "Failed to advance assistant setup")
+        )
+      } finally {
+        setSetupWizardSaving(false)
+      }
+    },
+    [buildPersonaSetupInProgress, selectedPersonaId]
   )
 
   const resolvedLivePersonaVoiceDefaults = useResolvedPersonaVoiceDefaults(
@@ -3062,6 +3095,20 @@ const SidepanelPersona = ({
               selectedPersonaId={selectedPersonaId}
               currentStep={personaSetupWizard.currentStep}
               postSetupTargetTab={personaSetupWizard.postSetupTargetTab}
+              voiceStepContent={
+                personaSetupWizard.currentStep === "voice" ? (
+                  <AssistantDefaultsPanel
+                    selectedPersonaId={selectedPersonaId}
+                    selectedPersonaName={selectedPersonaName}
+                    isActive
+                    analytics={null}
+                    analyticsLoading={false}
+                    onSaved={() => {
+                      void handleSetupVoiceDefaultsSaved()
+                    }}
+                  />
+                ) : undefined
+              }
               saving={setupWizardSaving}
               error={setupWizardError}
               onUsePersona={handleUsePersonaForSetup}

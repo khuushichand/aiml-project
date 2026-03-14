@@ -805,6 +805,134 @@ describe("SidepanelPersona", () => {
     expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
   })
 
+  it("advances setup from voice to commands after assistant defaults are saved", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=live"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "research_assistant", name: "Research Assistant" },
+            { id: "garden-helper", name: "Garden Helper" }
+          ]
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1",
+              tts_provider: "tldw",
+              tts_voice: "af_heart",
+              confirmation_mode: "destructive_only",
+              voice_chat_trigger_phrases: ["hey helper"],
+              auto_resume: true,
+              barge_in: false,
+              auto_commit_enabled: true,
+              vad_threshold: 0.35,
+              min_silence_ms: 150,
+              turn_stop_secs: 0.1,
+              min_utterance_secs: 0.25
+            },
+            setup: {
+              status: "in_progress",
+              version: 1,
+              current_step: "voice",
+              completed_at: null,
+              last_test_type: null
+            }
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "").toUpperCase() === "PATCH" &&
+        init?.body?.voice_defaults
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            voice_defaults: init.body.voice_defaults,
+            setup: {
+              status: "in_progress",
+              version: 1,
+              current_step: "voice",
+              completed_at: null,
+              last_test_type: null
+            }
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "").toUpperCase() === "PATCH" &&
+        init?.body?.setup
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            setup: init.body.setup
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({ ok: true, json: async () => [] })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("STT language")).toHaveValue("en-US")
+    )
+
+    fireEvent.change(screen.getByLabelText("STT language"), {
+      target: { value: "fr-FR" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save assistant defaults" }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("commands")
+    )
+
+    const setupPatchCall = mocks.fetchWithAuth.mock.calls.find(
+      ([calledPath, init]) =>
+        String(calledPath).includes("/persona/profiles/garden-helper") &&
+        String((init as { method?: string } | undefined)?.method || "").toUpperCase() ===
+          "PATCH" &&
+        Boolean((init as { body?: any } | undefined)?.body?.setup)
+    )
+    expect(setupPatchCall?.[1]).toEqual(
+      expect.objectContaining({
+        method: "PATCH",
+        body: {
+          setup: {
+            status: "in_progress",
+            version: 1,
+            current_step: "commands",
+            completed_at: null,
+            last_test_type: null
+          }
+        }
+      })
+    )
+  })
+
   it("records the current draft as a companion check-in", async () => {
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
       if (path.includes("/api/v1/companion/check-ins")) {

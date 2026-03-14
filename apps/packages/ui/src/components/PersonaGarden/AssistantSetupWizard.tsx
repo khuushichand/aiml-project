@@ -8,6 +8,7 @@ type AssistantSetupWizardProps = {
   selectedPersonaId: string
   currentStep: PersonaSetupStep
   postSetupTargetTab: PersonaGardenTabKey
+  voiceStepContent?: React.ReactNode
   saving: boolean
   error: string | null
   onUsePersona: (personaId: string) => void
@@ -19,6 +20,7 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
   selectedPersonaId,
   currentStep,
   postSetupTargetTab,
+  voiceStepContent,
   saving,
   error,
   onUsePersona,
@@ -115,6 +117,8 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
             </button>
           </div>
         </div>
+      ) : currentStep === "voice" && voiceStepContent ? (
+        voiceStepContent
       ) : (
         <div className="rounded-lg border border-border bg-surface2 p-3 text-sm text-text">
           Setup step <span className="font-medium">{currentStep}</span> will continue here.

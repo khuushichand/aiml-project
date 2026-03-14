@@ -22,6 +22,7 @@ type AssistantDefaultsPanelProps = {
   isActive?: boolean
   analytics?: PersonaVoiceAnalytics | null
   analyticsLoading?: boolean
+  onSaved?: (voiceDefaults: PersonaVoiceDefaults) => void
 }
 
 type PersonaProfileResponse = {
@@ -150,7 +151,8 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
   selectedPersonaName,
   isActive = false,
   analytics = null,
-  analyticsLoading = false
+  analyticsLoading = false,
+  onSaved
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const [loading, setLoading] = React.useState(false)
@@ -275,6 +277,7 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
       const payload = (await response.json()) as PersonaProfileResponse
       const nextFormState = buildFormState(payload.voice_defaults)
       setFormState(nextFormState)
+      onSaved?.(payload.voice_defaults || buildPayload(formState))
       setSuccess(
         t("sidepanel:personaGarden.profile.assistantDefaultsSaved", {
           defaultValue: "Assistant defaults saved."
@@ -291,7 +294,7 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
     } finally {
       setSaving(false)
     }
-  }, [formState, selectedPersonaId, t])
+  }, [formState, onSaved, selectedPersonaId, t])
 
   return (
     <div className="rounded-lg border border-border bg-surface p-3">

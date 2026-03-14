@@ -205,11 +205,13 @@ describe("AssistantDefaultsPanel", () => {
   })
 
   it("loads persona defaults, explains fallback behavior, and saves edits", async () => {
+    const onSaved = vi.fn()
     render(
       <AssistantDefaultsPanel
         selectedPersonaId="persona-1"
         selectedPersonaName="Helper"
         isActive
+        onSaved={onSaved}
       />
     )
 
@@ -294,6 +296,11 @@ describe("AssistantDefaultsPanel", () => {
     expect(screen.getByText("Assistant defaults saved.")).toBeInTheDocument()
     expect(screen.getByText("Effective Preview")).toBeInTheDocument()
     expect(screen.getByText("parakeet")).toBeInTheDocument()
+    expect(onSaved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stt_language: "fr-FR"
+      })
+    )
   })
 
   it("shows custom as the saved preset when advanced turn detection values diverge", async () => {
