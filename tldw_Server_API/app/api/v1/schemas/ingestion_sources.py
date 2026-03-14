@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class IngestionSourceCreateRequest(BaseModel):
     """Payload used to create a new ingestion source."""
 
-    source_type: Literal["local_directory", "archive_snapshot"]
+    source_type: Literal["local_directory", "archive_snapshot", "git_repository"]
     sink_type: Literal["media", "notes"]
     policy: Literal["canonical", "import_only"] = "canonical"
     enabled: bool = True
@@ -24,7 +24,7 @@ class IngestionSourcePatchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_type: Literal["local_directory", "archive_snapshot"] | None = None
+    source_type: Literal["local_directory", "archive_snapshot", "git_repository"] | None = None
     sink_type: Literal["media", "notes"] | None = None
     policy: Literal["canonical", "import_only"] | None = None
     enabled: bool | None = None

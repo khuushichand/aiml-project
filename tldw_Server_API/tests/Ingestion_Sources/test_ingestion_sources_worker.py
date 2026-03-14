@@ -390,6 +390,105 @@ async def test_process_sync_job_archive_snapshot_notes_source_consumes_staged_sn
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_process_sync_job_git_repository_notes_source_creates_binding_and_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    repo_root = tmp_path / "allowed" / "notes-repo"
+    notes_root = repo_root / "notes" / "docs" / "api"
+    notes_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    (notes_root / "alpha.md").write_text("# Alpha\n\nfrom repo\n", encoding="utf-8")
+
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("INGESTION_SOURCE_ALLOWED_ROOTS", str(tmp_path / "allowed"))
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+
+    import tldw_Server_API.app.services.ingestion_sources_worker as worker
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        ensure_ingestion_sources_schema,
+    )
+
+    meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+    async with aiosqlite.connect(str(meta_db_path)) as db:
+        db.row_factory = aiosqlite.Row
+        await ensure_ingestion_sources_schema(db)
+        source = await create_source(
+            db,
+            user_id=1,
+            payload={
+                "source_type": "git_repository",
+                "sink_type": "notes",
+                "policy": "canonical",
+                "config": {
+                    "mode": "local_repo",
+                    "path": str(repo_root),
+                    "root_subpath": "notes",
+                    "respect_gitignore": False,
+                },
+            },
+        )
+
+        async def _fake_get_db_pool():
+            return _SQLitePool(db)
+
+        to_thread_calls: list[str] = []
+
+        async def _fake_to_thread(func, *args, **kwargs):
+            to_thread_calls.append(getattr(func, "__name__", "<anonymous>"))
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(worker, "get_db_pool", _fake_get_db_pool, raising=False)
+        monkeypatch.setattr(worker.asyncio, "to_thread", _fake_to_thread)
+
+        jm = _FakeJobManager()
+        await worker._process_sync_job(
+            jm,
+            jid=91,
+            lease_id="lease-91",
+            worker_id="worker-1",
+            source_id=int(source["id"]),
+            user_id=1,
+        )
+
+        assert jm.failed is None
+        assert jm.completed is not None
+        assert jm.completed["result"]["created"] == 1
+        assert to_thread_calls, "git repository snapshot loading should run on a worker thread"
+
+        snapshot_cur = await db.execute(
+            "SELECT snapshot_kind, status FROM ingestion_source_snapshots WHERE source_id = ?",
+            (int(source["id"]),),
+        )
+        snapshot_row = await snapshot_cur.fetchone()
+        assert snapshot_row["snapshot_kind"] == "git_repository"
+        assert snapshot_row["status"] == "success"
+
+        item_cur = await db.execute(
+            "SELECT normalized_relative_path, binding_json, sync_status FROM ingestion_source_items WHERE source_id = ?",
+            (int(source["id"]),),
+        )
+        item_row = await item_cur.fetchone()
+        binding = json.loads(item_row["binding_json"])
+        assert item_row["normalized_relative_path"] == "docs/api/alpha.md"
+        assert item_row["sync_status"] == "sync_managed"
+
+        notes_db = CharactersRAGDB(db_path=str(DatabasePaths.get_chacha_db_path(1)), client_id="1")
+        note = notes_db.get_note_by_id(note_id=binding["note_id"])
+        assert note is not None
+        assert note["title"] == "Alpha"
+        assert note["content"] == "# Alpha\n\nfrom repo\n"
+        assert [row["path"] for row in notes_db.get_note_folders_for_note(binding["note_id"])] == [
+            "docs",
+            "docs/api",
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_process_sync_job_continues_after_sink_apply_failure_for_other_items(
     tmp_path,
     monkeypatch,

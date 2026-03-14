@@ -5005,6 +5005,170 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for statement in statements:
             self.backend.execute(statement, connection=conn)
 
+    def _ensure_note_folder_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Backfill note folder tables for SQLite deployments."""
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_folders(
+              id            INTEGER PRIMARY KEY AUTOINCREMENT,
+              name          TEXT    NOT NULL,
+              path          TEXT    UNIQUE NOT NULL COLLATE NOCASE,
+              parent_id     INTEGER REFERENCES note_folders(id)
+                             ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted       BOOLEAN  NOT NULL DEFAULT 0,
+              client_id     TEXT     NOT NULL DEFAULT 'unknown',
+              version       INTEGER  NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_parent ON note_folders(parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_path ON note_folders(path)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_note_folders_path_nocase ON note_folders(LOWER(path))",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              folder_id  INTEGER NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_memberships_folder ON note_folder_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              source_id  INTEGER NOT NULL,
+              folder_id  INTEGER NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, source_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_note_source ON note_folder_source_memberships(note_id, source_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_folder ON note_folder_source_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_keys(
+              source_id   INTEGER NOT NULL,
+              folder_key  TEXT    NOT NULL,
+              folder_id   INTEGER NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(source_id, folder_key)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_keys_folder ON note_folder_source_keys(folder_id)",
+        ]
+        for statement in statements:
+            conn.execute(statement)
+
+    def _ensure_note_folder_schema_postgres(self, conn: Any) -> None:
+        """Backfill note folder tables for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_folders(
+              id            BIGSERIAL PRIMARY KEY,
+              name          TEXT    NOT NULL,
+              path          TEXT    UNIQUE NOT NULL,
+              parent_id     BIGINT REFERENCES note_folders(id)
+                             ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id     TEXT    NOT NULL DEFAULT 'unknown',
+              version       INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_parent ON note_folders(parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_path ON note_folders(path)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              folder_id  BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_memberships_folder ON note_folder_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              source_id  INTEGER NOT NULL,
+              folder_id  BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, source_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_note_source ON note_folder_source_memberships(note_id, source_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_folder ON note_folder_source_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_keys(
+              source_id   INTEGER NOT NULL,
+              folder_key  TEXT    NOT NULL,
+              folder_id   BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(source_id, folder_key)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_keys_folder ON note_folder_source_keys(folder_id)",
+        ]
+        for statement in statements:
+            conn.execute(statement)
+
+    def _ensure_note_folder_schema_postgres(self, conn: Any) -> None:
+        """Backfill note folder tables for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_folders(
+              id            BIGSERIAL PRIMARY KEY,
+              name          TEXT    NOT NULL,
+              path          TEXT    UNIQUE NOT NULL,
+              parent_id     BIGINT REFERENCES note_folders(id)
+                             ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id     TEXT    NOT NULL DEFAULT 'unknown',
+              version       INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_parent ON note_folders(parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_path ON note_folders(path)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              folder_id  BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_memberships_folder ON note_folder_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              source_id  INTEGER NOT NULL,
+              folder_id  BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, source_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_note_source ON note_folder_source_memberships(note_id, source_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_folder ON note_folder_source_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_keys(
+              source_id   INTEGER NOT NULL,
+              folder_key  TEXT    NOT NULL,
+              folder_id   BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(source_id, folder_key)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_keys_folder ON note_folder_source_keys(folder_id)",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
     def _ensure_workspace_subresource_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure workspace settings columns and sub-resource tables exist for SQLite."""
         try:
@@ -5302,6 +5466,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
                     self._ensure_notes_fts_triggers_sqlite(conn)
                     self._ensure_recent_persona_schema_sqlite(conn)
+                    self._ensure_note_folder_schema_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
                     self._self_heal_character_cards_fts_sqlite(conn)
@@ -5830,6 +5995,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
+                self._ensure_note_folder_schema_sqlite(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -6926,6 +7092,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self._ensure_study_assistant_schema_postgres(conn)
             self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
+            self._ensure_note_folder_schema_postgres(conn)
             self._ensure_workspace_subresource_schema_postgres(conn)
 
             if current_version < target_version:
@@ -10515,7 +10682,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             entity_col = 'entity_uuid'
                     except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
-                assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
+                if entity_col not in ("entity_id", "entity_uuid"):
+                    raise CharactersRAGDBError(  # noqa: TRY003
+                        f"Unexpected sync_log id column: {entity_col}"
+                    )
                 conn.execute(
                     f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",  # nosec B608
                     ("note_edges", edge_id, "create", now_iso, self.client_id, 1, json.dumps(payload)),
@@ -10571,7 +10741,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 entity_col = 'entity_uuid'
                         except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
-                    assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
+                    if entity_col not in ("entity_id", "entity_uuid"):
+                        raise CharactersRAGDBError(  # noqa: TRY003
+                            f"Unexpected sync_log id column: {entity_col}"
+                        )
                     conn.execute(
                         f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",  # nosec B608
                         ("note_edges", edge_id, "delete", now_iso, self.client_id, 1, json.dumps({"edge_id": edge_id})),
@@ -17904,7 +18077,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 entity_col = 'entity_uuid'
                         except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
-                    assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
+                    if entity_col not in ("entity_id", "entity_uuid"):
+                        raise CharactersRAGDBError(  # noqa: TRY003
+                            f"Unexpected sync_log id column: {entity_col}"
+                        )
 
                     sync_log_query = (
                         f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) "  # nosec B608
@@ -18094,6 +18270,340 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if not note_id:
                     continue
                 out.setdefault(note_id, []).append(record)
+        return out
+
+    @staticmethod
+    def _coerce_mapping_row(row: Any) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return row
+        try:
+            return dict(row)
+        except (TypeError, ValueError):
+            if hasattr(row, "keys"):
+                return {key: row[key] for key in row.keys()}
+        return None
+
+    def _normalize_note_folder_path(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip().replace("\\", "/").strip("/")
+        if not text:
+            return None
+        parts: list[str] = []
+        for raw_part in text.split("/"):
+            part = raw_part.strip()
+            if not part or part == ".":
+                continue
+            if part == "..":
+                raise InputError("Folder paths cannot contain parent traversal segments.")  # noqa: TRY003
+            parts.append(part)
+        normalized = "/".join(parts)
+        return normalized or None
+
+    def _note_folder_path_key(self, value: Any) -> str | None:
+        normalized = self._normalize_note_folder_path(value)
+        if not normalized:
+            return None
+        return normalized.lower()
+
+    def _expand_note_folder_paths(self, folder_paths: list[str] | tuple[str, ...]) -> list[str]:
+        expanded: list[str] = []
+        seen: set[str] = set()
+        for raw_path in folder_paths:
+            normalized = self._normalize_note_folder_path(raw_path)
+            if not normalized:
+                continue
+            segments = normalized.split("/")
+            for index in range(1, len(segments) + 1):
+                candidate = "/".join(segments[:index])
+                key = self._note_folder_path_key(candidate)
+                if key is None:
+                    continue
+                if key in seen:
+                    continue
+                seen.add(key)
+                expanded.append(candidate)
+        return expanded
+
+    def _ensure_note_exists_for_folder_sync(self, conn: Any, note_id: str) -> None:
+        row = conn.execute("SELECT id FROM notes WHERE id = ?", (note_id,)).fetchone()
+        if row is None:
+            raise ConflictError("Note not found.", entity="notes", entity_id=note_id)  # noqa: TRY003
+
+    def _lookup_note_folder_row_locked(self, conn: Any, folder_path: str) -> dict[str, Any] | None:
+        normalized_path = self._normalize_note_folder_path(folder_path)
+        if not normalized_path:
+            return None
+        return self._coerce_mapping_row(
+            conn.execute(
+                "SELECT id, path, deleted, version FROM note_folders WHERE LOWER(path) = LOWER(?)",
+                (normalized_path,),
+            ).fetchone()
+        )
+
+    def _ensure_note_folder_path_locked(self, conn: Any, folder_path: str) -> int:
+        normalized_path = self._normalize_note_folder_path(folder_path)
+        if not normalized_path:
+            raise InputError("Folder path cannot be empty.")  # noqa: TRY003
+
+        existing_row = self._lookup_note_folder_row_locked(conn, normalized_path)
+        if existing_row:
+            folder_id = int(existing_row["id"])
+            if bool(existing_row.get("deleted", False)):
+                now = self._get_current_utc_timestamp_iso()
+                deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+                conn.execute(
+                    "UPDATE note_folders SET deleted = ?, last_modified = ?, version = ?, client_id = ? WHERE id = ?",
+                    (
+                        deleted_value,
+                        now,
+                        int(existing_row.get("version") or 1) + 1,
+                        self.client_id,
+                        folder_id,
+                    ),
+                )
+            return folder_id
+
+        parent_path = normalized_path.rsplit("/", 1)[0] if "/" in normalized_path else None
+        parent_id = self._ensure_note_folder_path_locked(conn, parent_path) if parent_path else None
+        stored_path = normalized_path
+        if parent_id is not None:
+            parent_row = self._coerce_mapping_row(
+                conn.execute(
+                    "SELECT path FROM note_folders WHERE id = ?",
+                    (parent_id,),
+                ).fetchone()
+            ) or {}
+            parent_display_path = self._normalize_note_folder_path(parent_row.get("path")) or parent_path
+            stored_path = f"{parent_display_path}/{normalized_path.rsplit('/', 1)[-1]}"
+        now = self._get_current_utc_timestamp_iso()
+        deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        conn.execute(
+            """
+            INSERT INTO note_folders(
+              name, path, parent_id, created_at, last_modified, deleted, client_id, version
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                stored_path.rsplit("/", 1)[-1],
+                stored_path,
+                parent_id,
+                now,
+                now,
+                deleted_value,
+                self.client_id,
+                1,
+            ),
+        )
+        created_row = self._lookup_note_folder_row_locked(conn, stored_path)
+        if not created_row:
+            raise CharactersRAGDBError(f"Failed to create note folder path '{normalized_path}'.")  # noqa: TRY003
+        return int(created_row["id"])
+
+    def sync_note_folders(self, note_id: str, folder_paths: list[str] | tuple[str, ...]) -> list[dict[str, Any]]:
+        desired_paths = self._expand_note_folder_paths(list(folder_paths or []))
+        try:
+            with self.transaction() as conn:
+                self._ensure_note_exists_for_folder_sync(conn, note_id)
+                desired_ids = {
+                    self._ensure_note_folder_path_locked(conn, folder_path)
+                    for folder_path in desired_paths
+                }
+                existing_rows = conn.execute(
+                    "SELECT folder_id FROM note_folder_memberships WHERE note_id = ?",
+                    (note_id,),
+                ).fetchall()
+                existing_ids: set[int] = set()
+                for row in existing_rows:
+                    record = self._coerce_mapping_row(row) or {}
+                    folder_id = record.get("folder_id")
+                    if folder_id is None:
+                        continue
+                    existing_ids.add(int(folder_id))
+
+                for folder_id in existing_ids - desired_ids:
+                    conn.execute(
+                        "DELETE FROM note_folder_memberships WHERE note_id = ? AND folder_id = ?",
+                        (note_id, folder_id),
+                    )
+
+                now = self._get_current_utc_timestamp_iso()
+                for folder_id in desired_ids - existing_ids:
+                    conn.execute(
+                        """
+                        INSERT INTO note_folder_memberships(note_id, folder_id, created_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (note_id, folder_id, now),
+                    )
+        except CharactersRAGDBError:
+            raise
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed syncing manual note folders: {exc}") from exc  # noqa: TRY003
+        return self.get_note_folders_for_note(note_id)
+
+    def sync_note_source_folders(
+        self,
+        note_id: str,
+        source_id: int,
+        folder_paths: list[str] | tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        if int(source_id) <= 0:
+            raise InputError("source_id must be a positive integer.")  # noqa: TRY003
+
+        desired_paths = self._expand_note_folder_paths(list(folder_paths or []))
+        try:
+            with self.transaction() as conn:
+                self._ensure_note_exists_for_folder_sync(conn, note_id)
+                desired_pairs: list[tuple[str, int]] = []
+                for folder_path in desired_paths:
+                    folder_id = self._ensure_note_folder_path_locked(conn, folder_path)
+                    desired_pairs.append((folder_path, folder_id))
+
+                existing_rows = conn.execute(
+                    """
+                    SELECT folder_id
+                      FROM note_folder_source_memberships
+                     WHERE note_id = ? AND source_id = ?
+                    """,
+                    (note_id, int(source_id)),
+                ).fetchall()
+                existing_ids: set[int] = set()
+                for row in existing_rows:
+                    record = self._coerce_mapping_row(row) or {}
+                    folder_id = record.get("folder_id")
+                    if folder_id is None:
+                        continue
+                    existing_ids.add(int(folder_id))
+                desired_ids = {folder_id for _, folder_id in desired_pairs}
+                desired_keys = {
+                    canonical_key
+                    for folder_path, _ in desired_pairs
+                    for canonical_key in [self._note_folder_path_key(folder_path)]
+                    if canonical_key is not None
+                }
+
+                for folder_id in existing_ids - desired_ids:
+                    conn.execute(
+                        """
+                        DELETE FROM note_folder_source_memberships
+                         WHERE note_id = ? AND source_id = ? AND folder_id = ?
+                        """,
+                        (note_id, int(source_id), folder_id),
+                    )
+
+                existing_key_rows = conn.execute(
+                    """
+                    SELECT folder_key
+                      FROM note_folder_source_keys
+                     WHERE source_id = ?
+                    """,
+                    (int(source_id),),
+                ).fetchall()
+                existing_keys: set[str] = set()
+                for row in existing_key_rows:
+                    record = self._coerce_mapping_row(row) or {}
+                    folder_key = record.get("folder_key")
+                    if folder_key is None:
+                        continue
+                    existing_keys.add(str(folder_key))
+                for folder_key in existing_keys - desired_keys:
+                    conn.execute(
+                        """
+                        DELETE FROM note_folder_source_keys
+                         WHERE source_id = ? AND folder_key = ?
+                        """,
+                        (int(source_id), folder_key),
+                    )
+
+                now = self._get_current_utc_timestamp_iso()
+                for folder_path, folder_id in desired_pairs:
+                    folder_key = self._note_folder_path_key(folder_path)
+                    if not folder_key:
+                        continue
+                    conn.execute(
+                        """
+                        DELETE FROM note_folder_source_keys
+                         WHERE source_id = ? AND folder_key = ?
+                        """,
+                        (int(source_id), folder_key),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO note_folder_source_keys(source_id, folder_key, folder_id, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (int(source_id), folder_key, folder_id, now),
+                    )
+                    if folder_id in existing_ids:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO note_folder_source_memberships(note_id, source_id, folder_id, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (note_id, int(source_id), folder_id, now),
+                    )
+        except CharactersRAGDBError:
+            raise
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed syncing source-managed note folders: {exc}") from exc  # noqa: TRY003
+        return self.get_note_folders_for_note(note_id)
+
+    def get_note_folders_for_note(self, note_id: str) -> list[dict[str, Any]]:
+        order_clause = self._case_insensitive_order_clause("f.path")
+        query = """
+                SELECT f.id, f.name, f.path, f.parent_id
+                  FROM note_folders f
+                  JOIN (
+                        SELECT folder_id
+                          FROM note_folder_memberships
+                         WHERE note_id = ?
+                        UNION
+                        SELECT folder_id
+                          FROM note_folder_source_memberships
+                         WHERE note_id = ?
+                  ) memberships
+                    ON memberships.folder_id = f.id
+                 WHERE f.deleted = 0
+                {order_clause}
+                """.format_map(locals())  # nosec B608
+        cursor = self.execute_query(query, (note_id, note_id))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_note_folders_for_notes(self, note_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        if not note_ids:
+            return {}
+        out: dict[str, list[dict[str, Any]]] = {note_id: [] for note_id in note_ids}
+        max_vars = 450
+        path_order_expr = self._case_insensitive_order_expression("f.path")
+        for start in range(0, len(note_ids), max_vars):
+            batch = note_ids[start:start + max_vars]
+            placeholders = ",".join(["?"] * len(batch))
+            query = """
+                    SELECT memberships.note_id AS note_id, f.id, f.name, f.path, f.parent_id
+                      FROM note_folders f
+                      JOIN (
+                            SELECT note_id, folder_id
+                              FROM note_folder_memberships
+                             WHERE note_id IN ({placeholders})
+                            UNION
+                            SELECT note_id, folder_id
+                              FROM note_folder_source_memberships
+                             WHERE note_id IN ({placeholders})
+                      ) memberships
+                        ON memberships.folder_id = f.id
+                     WHERE f.deleted = 0
+                     ORDER BY memberships.note_id, {path_order_expr}
+                    """.format_map(locals())  # nosec B608
+            cursor = self.execute_query(query, tuple(batch + batch))
+            for row in cursor.fetchall():
+                record = dict(row)
+                current_note_id = str(record.pop("note_id"))
+                out.setdefault(current_note_id, []).append(record)
         return out
 
     def get_notes_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
