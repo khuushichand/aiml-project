@@ -26,9 +26,12 @@ def test_scheduler_schema_columns_exist_on_fresh_db(chacha_db: CharactersRAGDB):
     }
 
     assert "scheduler_settings_json" in deck_columns
+    assert "scheduler_type" in deck_columns
     assert "queue_state" in flashcard_columns
     assert "step_index" in flashcard_columns
     assert "suspended_reason" in flashcard_columns
+    assert "scheduler_state_json" in flashcard_columns
+    assert "scheduler_type" in review_columns
     assert "previous_queue_state" in review_columns
     assert "next_queue_state" in review_columns
     assert "previous_due_at" in review_columns
@@ -44,12 +47,21 @@ def test_new_deck_persists_default_scheduler_settings(chacha_db: CharactersRAGDB
     assert isinstance(raw_settings, str)
 
     settings = json.loads(raw_settings)
-    assert settings["new_steps_minutes"] == [1, 10]
-    assert settings["relearn_steps_minutes"] == [10]
-    assert settings["graduating_interval_days"] == 1
-    assert settings["easy_interval_days"] == 4
-    assert settings["easy_bonus"] == pytest.approx(1.3)
-    assert settings["interval_modifier"] == pytest.approx(1.0)
-    assert settings["max_interval_days"] == 36500
-    assert settings["leech_threshold"] == 8
-    assert settings["enable_fuzz"] is False
+    assert deck["scheduler_type"] == "sm2_plus"
+    assert set(settings.keys()) == {"sm2_plus", "fsrs"}
+
+    sm2_settings = settings["sm2_plus"]
+    assert sm2_settings["new_steps_minutes"] == [1, 10]
+    assert sm2_settings["relearn_steps_minutes"] == [10]
+    assert sm2_settings["graduating_interval_days"] == 1
+    assert sm2_settings["easy_interval_days"] == 4
+    assert sm2_settings["easy_bonus"] == pytest.approx(1.3)
+    assert sm2_settings["interval_modifier"] == pytest.approx(1.0)
+    assert sm2_settings["max_interval_days"] == 36500
+    assert sm2_settings["leech_threshold"] == 8
+    assert sm2_settings["enable_fuzz"] is False
+
+    fsrs_settings = settings["fsrs"]
+    assert fsrs_settings["target_retention"] == pytest.approx(0.9)
+    assert fsrs_settings["maximum_interval_days"] == 36500
+    assert fsrs_settings["enable_fuzz"] is False

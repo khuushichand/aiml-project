@@ -6572,6 +6572,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 conn.execute(
                     f"ALTER TABLE decks ADD COLUMN scheduler_settings_json TEXT NOT NULL DEFAULT '{default_settings_json}'"
                 )
+            if "scheduler_type" not in deck_cols:
+                conn.execute("ALTER TABLE decks ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
             conn.execute(
                 """
                 UPDATE decks
@@ -6579,6 +6581,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                  WHERE scheduler_settings_json IS NULL OR trim(scheduler_settings_json) = ''
                 """,
                 (default_settings_json,),
+            )
+            conn.execute(
+                """
+                UPDATE decks
+                   SET scheduler_type = 'sm2_plus'
+                 WHERE scheduler_type IS NULL OR trim(scheduler_type) = ''
+                """
             )
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring decks.scheduler_settings_json: {exc}") from exc  # noqa: TRY003
@@ -6591,6 +6600,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 conn.execute("ALTER TABLE flashcards ADD COLUMN step_index INTEGER")
             if "suspended_reason" not in flashcard_cols:
                 conn.execute("ALTER TABLE flashcards ADD COLUMN suspended_reason TEXT")
+            if "scheduler_state_json" not in flashcard_cols:
+                conn.execute("ALTER TABLE flashcards ADD COLUMN scheduler_state_json TEXT NOT NULL DEFAULT '{}'")
+            conn.execute(
+                """
+                UPDATE flashcards
+                   SET scheduler_state_json = '{}'
+                 WHERE scheduler_state_json IS NULL OR trim(scheduler_state_json) = ''
+                """
+            )
 
             rows = conn.execute(
                 """
@@ -6630,6 +6648,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         try:
             review_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcard_reviews')").fetchall()}
+            if "scheduler_type" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
             if "previous_queue_state" not in review_cols:
                 conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_queue_state TEXT")
             if "next_queue_state" not in review_cols:
@@ -6780,8 +6800,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 connection=conn,
             )
             self.backend.execute(
+                "ALTER TABLE decks ADD COLUMN IF NOT EXISTS scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'",
+                connection=conn,
+            )
+            self.backend.execute(
                 "UPDATE decks SET scheduler_settings_json = %s WHERE scheduler_settings_json IS NULL OR btrim(scheduler_settings_json) = ''",
                 (default_settings_json,),
+                connection=conn,
+            )
+            self.backend.execute(
+                "UPDATE decks SET scheduler_type = 'sm2_plus' WHERE scheduler_type IS NULL OR btrim(scheduler_type) = ''",
                 connection=conn,
             )
             self.backend.execute(
@@ -6794,6 +6822,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
             self.backend.execute(
                 "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS suspended_reason TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS scheduler_state_json TEXT NOT NULL DEFAULT '{}'",
+                connection=conn,
+            )
+            self.backend.execute(
+                "UPDATE flashcards SET scheduler_state_json = '{}' WHERE scheduler_state_json IS NULL OR btrim(scheduler_state_json) = ''",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'",
                 connection=conn,
             )
             self.backend.execute(
@@ -18810,13 +18850,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         )
                     return deck_id
                 insert_sql = (
-                    "INSERT INTO decks(name, description, scheduler_settings_json, created_at, last_modified, client_id, version, deleted)"
-                    " VALUES(?, ?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO decks(name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, client_id, version, deleted)"
+                    " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
                     scheduler_settings_json,
+                    "sm2_plus",
                     now,
                     now,
                     self.client_id,
@@ -18849,12 +18890,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def list_decks(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> list[dict[str, Any]]:
         if include_deleted:
             query = (
-                "SELECT id, name, description, scheduler_settings_json, created_at, last_modified, "
+                "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, "
                 "deleted, client_id, version FROM decks ORDER BY name LIMIT ? OFFSET ?"
             )
         else:
             query = (
-                "SELECT id, name, description, scheduler_settings_json, created_at, last_modified, "
+                "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, "
                 "deleted, client_id, version FROM decks WHERE deleted = 0 ORDER BY name LIMIT ? OFFSET ?"
             )
         try:
@@ -18866,7 +18907,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_deck(self, deck_id: int) -> dict[str, Any] | None:
         """Fetch a single deck row by id."""
         query = (
-            "SELECT id, name, description, scheduler_settings_json, created_at, last_modified, deleted, client_id, version "
+            "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, deleted, client_id, version "
             "FROM decks WHERE id = ?"
         )
         try:

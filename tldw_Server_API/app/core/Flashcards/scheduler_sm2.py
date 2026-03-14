@@ -21,6 +21,12 @@ DEFAULT_SCHEDULER_SETTINGS: dict[str, Any] = {
     "enable_fuzz": False,
 }
 
+DEFAULT_FSRS_SETTINGS: dict[str, Any] = {
+    "target_retention": 0.9,
+    "maximum_interval_days": 36500,
+    "enable_fuzz": False,
+}
+
 
 class SchedulerSettingsError(ValueError):
     """Raised when deck scheduler settings are invalid."""
@@ -28,6 +34,17 @@ class SchedulerSettingsError(ValueError):
 
 def get_default_scheduler_settings() -> dict[str, Any]:
     return copy.deepcopy(DEFAULT_SCHEDULER_SETTINGS)
+
+
+def get_default_fsrs_settings() -> dict[str, Any]:
+    return copy.deepcopy(DEFAULT_FSRS_SETTINGS)
+
+
+def get_default_scheduler_settings_envelope() -> dict[str, Any]:
+    return {
+        "sm2_plus": get_default_scheduler_settings(),
+        "fsrs": get_default_fsrs_settings(),
+    }
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -69,6 +86,9 @@ def normalize_scheduler_settings(raw: Mapping[str, Any] | str | None) -> dict[st
         source = dict(raw)
     else:
         raise SchedulerSettingsError("scheduler_settings must be a mapping or JSON string")
+
+    if isinstance(source.get("sm2_plus"), Mapping):
+        source = dict(source["sm2_plus"])
 
     settings = get_default_scheduler_settings()
     for key in settings:
@@ -130,7 +150,36 @@ def normalize_scheduler_settings(raw: Mapping[str, Any] | str | None) -> dict[st
 
 
 def scheduler_settings_to_json(raw: Mapping[str, Any] | str | None) -> str:
-    return json.dumps(normalize_scheduler_settings(raw), sort_keys=True)
+    envelope = get_default_scheduler_settings_envelope()
+    if raw is None:
+        return json.dumps(envelope, sort_keys=True)
+
+    if isinstance(raw, str):
+        if not raw.strip():
+            return json.dumps(envelope, sort_keys=True)
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise SchedulerSettingsError("scheduler_settings must be a JSON object")
+        raw = parsed
+
+    if not isinstance(raw, Mapping):
+        raise SchedulerSettingsError("scheduler_settings must be a mapping or JSON string")
+
+    raw_dict = dict(raw)
+    if "sm2_plus" in raw_dict or "fsrs" in raw_dict:
+        if isinstance(raw_dict.get("sm2_plus"), Mapping):
+            envelope["sm2_plus"] = normalize_scheduler_settings(raw_dict["sm2_plus"])
+        if isinstance(raw_dict.get("fsrs"), Mapping):
+            fsrs_source = dict(raw_dict["fsrs"])
+            fsrs_defaults = get_default_fsrs_settings()
+            for key in fsrs_defaults:
+                if key in fsrs_source and fsrs_source[key] is not None:
+                    fsrs_defaults[key] = fsrs_source[key]
+            envelope["fsrs"] = fsrs_defaults
+        return json.dumps(envelope, sort_keys=True)
+
+    envelope["sm2_plus"] = normalize_scheduler_settings(raw_dict)
+    return json.dumps(envelope, sort_keys=True)
 
 
 def coerce_queue_state(card: Mapping[str, Any]) -> str:
