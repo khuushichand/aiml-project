@@ -73,6 +73,21 @@ def _coalesce_update_value(value: Any, existing_value: Any) -> Any:
     return existing_value if value is _UNSET else value
 
 
+def _resolve_update_scope(
+    *,
+    owner_scope_type: str | None | object,
+    owner_scope_id: int | None | object,
+    existing_scope_type: str,
+    existing_scope_id: int | None,
+) -> tuple[str | None | object, int | None | object]:
+    """Mirror repo update semantics for scope-type/id transitions."""
+    next_scope_type = _coalesce_update_value(owner_scope_type, existing_scope_type)
+    next_scope_id = _coalesce_update_value(owner_scope_id, existing_scope_id)
+    if str(next_scope_type or "").strip().lower() == "global":
+        return next_scope_type, None
+    return next_scope_type, next_scope_id
+
+
 class McpHubCapabilityAdapterService:
     """Validate, preview, and persist scope-aware capability adapter mappings."""
 
@@ -176,13 +191,11 @@ class McpHubCapabilityAdapterService:
             description,
             existing.get("description"),
         )
-        next_owner_scope_type = _coalesce_update_value(
-            owner_scope_type,
-            str(existing["owner_scope_type"]),
-        )
-        next_owner_scope_id = _coalesce_update_value(
-            owner_scope_id,
-            existing.get("owner_scope_id"),
+        next_owner_scope_type, next_owner_scope_id = _resolve_update_scope(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            existing_scope_type=str(existing["owner_scope_type"]),
+            existing_scope_id=existing.get("owner_scope_id"),
         )
         next_capability_name = _coalesce_update_value(
             capability_name,
@@ -196,6 +209,8 @@ class McpHubCapabilityAdapterService:
             resolved_policy_document,
             dict(existing.get("resolved_policy_document") or {}),
         )
+        if next_resolved_policy_document is None:
+            next_resolved_policy_document = {}
         next_supported_environment_requirements = _coalesce_update_value(
             supported_environment_requirements,
             list(existing.get("supported_environment_requirements") or []),
@@ -278,17 +293,17 @@ class McpHubCapabilityAdapterService:
         self,
         capability_adapter_mapping_id: int,
         *,
-        mapping_id: str | None = None,
-        title: str | None = None,
-        description: str | None = None,
-        owner_scope_type: str | None = None,
-        owner_scope_id: int | None = None,
-        capability_name: str | None = None,
-        adapter_contract_version: int | None = None,
-        resolved_policy_document: dict[str, Any] | None = None,
-        supported_environment_requirements: list[str] | None = None,
+        mapping_id: str | None | object = _UNSET,
+        title: str | None | object = _UNSET,
+        description: str | None | object = _UNSET,
+        owner_scope_type: str | None | object = _UNSET,
+        owner_scope_id: int | None | object = _UNSET,
+        capability_name: str | None | object = _UNSET,
+        adapter_contract_version: int | None | object = _UNSET,
+        resolved_policy_document: dict[str, Any] | None | object = _UNSET,
+        supported_environment_requirements: list[str] | None | object = _UNSET,
         actor_id: int | None,
-        is_active: bool | None = None,
+        is_active: bool | None | object = _UNSET,
     ) -> dict[str, Any]:
         preview = await self.preview_update(
             capability_adapter_mapping_id,

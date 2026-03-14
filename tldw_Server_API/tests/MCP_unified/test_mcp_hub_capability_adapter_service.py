@@ -10,6 +10,7 @@ from tldw_Server_API.app.core.exceptions import BadRequestError
 class _FakeRepo:
     def __init__(self) -> None:
         self.created_payloads: list[dict] = []
+        self.updated_payloads: list[dict] = []
         self.inventory = {
             11: {
                 "id": 11,
@@ -49,6 +50,33 @@ class _FakeRepo:
     async def get_capability_adapter_mapping(self, capability_adapter_mapping_id: int):
         row = self.inventory.get(int(capability_adapter_mapping_id))
         return dict(row) if row is not None else None
+
+    async def update_capability_adapter_mapping(
+        self,
+        capability_adapter_mapping_id: int,
+        **kwargs,
+    ):
+        row = self.inventory.get(int(capability_adapter_mapping_id))
+        if row is None:
+            return None
+        self.updated_payloads.append({"id": capability_adapter_mapping_id, **dict(kwargs)})
+        updated = dict(row)
+        updated.update(
+            {
+                "mapping_id": kwargs["mapping_id"],
+                "title": kwargs["title"],
+                "description": kwargs.get("description"),
+                "owner_scope_type": kwargs["owner_scope_type"],
+                "owner_scope_id": kwargs.get("owner_scope_id"),
+                "capability_name": kwargs["capability_name"],
+                "adapter_contract_version": kwargs["adapter_contract_version"],
+                "resolved_policy_document": kwargs["resolved_policy_document"],
+                "supported_environment_requirements": kwargs["supported_environment_requirements"],
+                "is_active": kwargs.get("is_active", True),
+            }
+        )
+        self.inventory[int(capability_adapter_mapping_id)] = updated
+        return dict(updated)
 
 
 class _FakeToolRegistry:
@@ -236,3 +264,60 @@ async def test_preview_update_allows_clearing_nullable_description() -> None:
     )
 
     assert preview["normalized_mapping"]["description"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_mapping_preserves_existing_fields_for_omitted_values() -> None:
+    from tldw_Server_API.app.services.mcp_hub_capability_adapter_service import (
+        McpHubCapabilityAdapterService,
+    )
+
+    repo = _FakeRepo()
+    svc = McpHubCapabilityAdapterService(repo=repo, tool_registry=_FakeToolRegistry())
+
+    updated = await svc.update_mapping(
+        11,
+        title="Renamed Mapping",
+        actor_id=7,
+    )
+
+    assert updated["title"] == "Renamed Mapping"
+    assert updated["description"] == "Maps research capability to search tools"
+    assert updated["owner_scope_type"] == "team"
+    assert updated["owner_scope_id"] == 21
+
+
+@pytest.mark.asyncio
+async def test_preview_update_allows_switching_to_global_scope_without_scope_id() -> None:
+    from tldw_Server_API.app.services.mcp_hub_capability_adapter_service import (
+        McpHubCapabilityAdapterService,
+    )
+
+    repo = _FakeRepo()
+    svc = McpHubCapabilityAdapterService(repo=repo, tool_registry=_FakeToolRegistry())
+
+    preview = await svc.preview_update(
+        11,
+        owner_scope_type="global",
+    )
+
+    assert preview["normalized_mapping"]["owner_scope_type"] == "global"
+    assert preview["normalized_mapping"]["owner_scope_id"] is None
+    assert preview["affected_scope_summary"]["display_scope"] == "global"
+
+
+@pytest.mark.asyncio
+async def test_preview_update_allows_clearing_policy_document_with_null() -> None:
+    from tldw_Server_API.app.services.mcp_hub_capability_adapter_service import (
+        McpHubCapabilityAdapterService,
+    )
+
+    repo = _FakeRepo()
+    svc = McpHubCapabilityAdapterService(repo=repo, tool_registry=_FakeToolRegistry())
+
+    preview = await svc.preview_update(
+        11,
+        resolved_policy_document=None,
+    )
+
+    assert preview["normalized_mapping"]["resolved_policy_document"] == {}
