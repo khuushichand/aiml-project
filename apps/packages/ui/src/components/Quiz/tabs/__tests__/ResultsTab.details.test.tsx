@@ -5,22 +5,17 @@ import { ResultsTab } from "../ResultsTab"
 import {
   useAllAttemptsQuery,
   useAttemptQuery,
+  useAttemptRemediationConversionsQuery,
+  useConvertAttemptRemediationQuestionsMutation,
   useGenerateRemediationQuizMutation,
   useQuizAttemptQuestionAssistantQuery,
   useQuizAttemptQuestionAssistantRespondMutation,
   useQuizzesQuery
 } from "../../hooks"
-import {
-  useCreateDeckMutation,
-  useCreateFlashcardsBulkMutation,
-  useCreateFlashcardMutation,
-  useDecksQuery
-} from "@/components/Flashcards/hooks/useFlashcardQueries"
+import { useDecksQuery } from "@/components/Flashcards/hooks/useFlashcardQueries"
 
 const flashcardMocks = vi.hoisted(() => ({
-  createDeck: vi.fn(),
-  createFlashcardsBulk: vi.fn(),
-  createFlashcard: vi.fn(),
+  convertRemediationQuestions: vi.fn(),
   navigate: vi.fn()
 }))
 
@@ -60,16 +55,15 @@ vi.mock("../../hooks", () => ({
   useAllAttemptsQuery: vi.fn(),
   useQuizzesQuery: vi.fn(),
   useAttemptQuery: vi.fn(),
+  useAttemptRemediationConversionsQuery: vi.fn(),
+  useConvertAttemptRemediationQuestionsMutation: vi.fn(),
   useGenerateRemediationQuizMutation: vi.fn(),
   useQuizAttemptQuestionAssistantQuery: vi.fn(),
   useQuizAttemptQuestionAssistantRespondMutation: vi.fn()
 }))
 
 vi.mock("@/components/Flashcards/hooks/useFlashcardQueries", () => ({
-  useDecksQuery: vi.fn(),
-  useCreateDeckMutation: vi.fn(),
-  useCreateFlashcardsBulkMutation: vi.fn(),
-  useCreateFlashcardMutation: vi.fn()
+  useDecksQuery: vi.fn()
 }))
 
 if (!(globalThis as any).ResizeObserver) {
@@ -111,20 +105,14 @@ describe("ResultsTab drill-down details", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.sessionStorage.clear()
-    flashcardMocks.createDeck.mockReset()
-    flashcardMocks.createFlashcardsBulk.mockReset()
-    flashcardMocks.createFlashcard.mockReset()
+    flashcardMocks.convertRemediationQuestions.mockReset()
     flashcardMocks.navigate.mockReset()
-    flashcardMocks.createDeck.mockResolvedValue({
-      id: 99,
-      name: "New deck"
-    })
-    flashcardMocks.createFlashcardsBulk.mockResolvedValue([
-      { uuid: "new-card-1" },
-      { uuid: "new-card-2" }
-    ])
-    flashcardMocks.createFlashcard.mockResolvedValue({
-      uuid: "new-card"
+    flashcardMocks.convertRemediationQuestions.mockResolvedValue({
+      attempt_id: 101,
+      quiz_id: 7,
+      target_deck: { id: 3, name: "Biology Recovery Deck" },
+      results: [],
+      created_flashcard_uuids: []
     })
 
     vi.mocked(useAllAttemptsQuery).mockReturnValue({
@@ -170,6 +158,19 @@ describe("ResultsTab drill-down details", () => {
       mutateAsync: vi.fn(),
       isPending: false
     } as any)
+    vi.mocked(useAttemptRemediationConversionsQuery).mockReturnValue({
+      data: {
+        attempt_id: 101,
+        items: [],
+        count: 0,
+        superseded_count: 0
+      },
+      isLoading: false
+    } as any)
+    vi.mocked(useConvertAttemptRemediationQuestionsMutation).mockReturnValue({
+      mutateAsync: flashcardMocks.convertRemediationQuestions,
+      isPending: false
+    } as any)
     vi.mocked(useQuizAttemptQuestionAssistantQuery).mockReturnValue({
       data: null,
       isLoading: false,
@@ -183,18 +184,6 @@ describe("ResultsTab drill-down details", () => {
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [{ id: 3, name: "Biology Recovery Deck" }],
       isLoading: false
-    } as any)
-    vi.mocked(useCreateDeckMutation).mockReturnValue({
-      mutateAsync: flashcardMocks.createDeck,
-      isPending: false
-    } as any)
-    vi.mocked(useCreateFlashcardsBulkMutation).mockReturnValue({
-      mutateAsync: flashcardMocks.createFlashcardsBulk,
-      isPending: false
-    } as any)
-    vi.mocked(useCreateFlashcardMutation).mockReturnValue({
-      mutateAsync: flashcardMocks.createFlashcard,
-      isPending: false
     } as any)
   })
 
@@ -330,7 +319,7 @@ describe("ResultsTab drill-down details", () => {
     expect(screen.getByText("bar")).toBeInTheDocument()
   }, 15000)
 
-  it("creates flashcards from missed questions and marks converted entries in-session", async () => {
+  it("creates flashcards from missed questions through server-backed conversion state", async () => {
     vi.mocked(useAttemptQuery).mockReturnValue({
       data: {
         id: 101,
@@ -385,30 +374,19 @@ describe("ResultsTab drill-down details", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Flashcards" }))
 
     await waitFor(() => {
-      expect(flashcardMocks.createFlashcardsBulk).toHaveBeenCalledTimes(1)
+      expect(flashcardMocks.convertRemediationQuestions).toHaveBeenCalledTimes(1)
     })
-    expect(flashcardMocks.createDeck).not.toHaveBeenCalled()
-    expect(flashcardMocks.createFlashcard).not.toHaveBeenCalled()
-    expect(flashcardMocks.createFlashcardsBulk).toHaveBeenCalledWith([
-      expect.objectContaining({
-        deck_id: 3,
-        front: "Cells are not alive.",
-        tags: ["quiz-missed", "quiz-review"]
-      })
-    ])
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Create Flashcards from Missed Questions" })
-    )
-    expect(await screen.findByText("Already converted in this session.")).toBeInTheDocument()
+    expect(flashcardMocks.convertRemediationQuestions).toHaveBeenCalledWith({
+      attemptId: 101,
+      request: {
+        question_ids: [2],
+        target_deck_id: 3,
+        replace_active: false
+      }
+    })
   }, 15000)
 
   it("navigates to flashcards study route with attempt context from details modal", async () => {
-    window.sessionStorage.setItem(
-      "quiz-results-flashcard-deck-map-v1",
-      JSON.stringify({ "101": 3 })
-    )
-
     vi.mocked(useAttemptQuery).mockReturnValue({
       data: {
         id: 101,
@@ -438,7 +416,7 @@ describe("ResultsTab drill-down details", () => {
 
     expect(flashcardMocks.navigate).toHaveBeenCalledWith(
       expect.stringContaining(
-        "/flashcards?tab=review&study_source=quiz&quiz_id=7&attempt_id=101&deck_id=3"
+        "/flashcards?tab=review&study_source=quiz&quiz_id=7&attempt_id=101"
       )
     )
   })

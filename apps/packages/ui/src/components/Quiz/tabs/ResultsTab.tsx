@@ -30,15 +30,18 @@ import { useNavigate } from "react-router-dom"
 import {
   useAllAttemptsQuery,
   useAttemptQuery,
+  useAttemptRemediationConversionsQuery,
+  useConvertAttemptRemediationQuestionsMutation,
   useGenerateRemediationQuizMutation,
   useQuizzesQuery
 } from "../hooks"
-import {
-  useCreateDeckMutation,
-  useCreateFlashcardsBulkMutation,
-  useDecksQuery
-} from "@/components/Flashcards/hooks/useFlashcardQueries"
-import type { AnswerValue, QuestionPublic, QuizAnswer } from "@/services/quizzes"
+import { useDecksQuery } from "@/components/Flashcards/hooks/useFlashcardQueries"
+import type {
+  AnswerValue,
+  QuestionPublic,
+  QuizAnswer,
+  QuizRemediationConversionSummary
+} from "@/services/quizzes"
 import { buildFlashcardsStudyRouteFromQuiz } from "@/services/tldw/quiz-flashcards-handoff"
 import type { TakeTabNavigationIntent } from "../navigation"
 import { RESULTS_FILTER_PREFS_KEY } from "../stateKeys"
@@ -51,8 +54,6 @@ import { formatMatchingAnswer } from "../utils/matchingAnswer"
 const { Text } = Typography
 
 const DEFAULT_PASSING_SCORE = 70
-const MISSED_FLASHCARD_CONVERSION_KEY = "quiz-results-missed-flashcards-v1"
-const ATTEMPT_FLASHCARD_DECK_MAP_KEY = "quiz-results-flashcard-deck-map-v1"
 type PassFilterKey = "all" | "pass" | "fail"
 type DateRangeFilterKey = "all" | "7d" | "30d" | "90d"
 type DeckTargetValue = number | "__new__" | null
@@ -80,61 +81,6 @@ const normalizeMultiSelectAnswer = (value: unknown): number[] => {
     return [Math.floor(value)]
   }
   return []
-}
-
-type ConvertedMissedFlashcards = Record<string, true>
-type AttemptFlashcardDeckMap = Record<string, number>
-
-const toMissedFlashcardKey = (attemptId: number, questionId: number) =>
-  `${attemptId}:${questionId}`
-
-const readConvertedMissedFlashcards = (): ConvertedMissedFlashcards => {
-  if (typeof window === "undefined") return {}
-  try {
-    const raw = window.sessionStorage.getItem(MISSED_FLASHCARD_CONVERSION_KEY)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== "object") return {}
-    return Object.fromEntries(
-      Object.entries(parsed).filter(([, value]) => value === true)
-    ) as ConvertedMissedFlashcards
-  } catch {
-    return {}
-  }
-}
-
-const writeConvertedMissedFlashcards = (value: ConvertedMissedFlashcards) => {
-  if (typeof window === "undefined") return
-  try {
-    window.sessionStorage.setItem(MISSED_FLASHCARD_CONVERSION_KEY, JSON.stringify(value))
-  } catch {
-    // Ignore session-storage write failures.
-  }
-}
-
-const readAttemptFlashcardDeckMap = (): AttemptFlashcardDeckMap => {
-  if (typeof window === "undefined") return {}
-  try {
-    const raw = window.sessionStorage.getItem(ATTEMPT_FLASHCARD_DECK_MAP_KEY)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== "object") return {}
-
-    return Object.fromEntries(
-      Object.entries(parsed).filter(([, value]) => typeof value === "number" && value > 0)
-    ) as AttemptFlashcardDeckMap
-  } catch {
-    return {}
-  }
-}
-
-const writeAttemptFlashcardDeckMap = (value: AttemptFlashcardDeckMap) => {
-  if (typeof window === "undefined") return
-  try {
-    window.sessionStorage.setItem(ATTEMPT_FLASHCARD_DECK_MAP_KEY, JSON.stringify(value))
-  } catch {
-    // Ignore session-storage write failures.
-  }
 }
 
 type ResultsFilterPrefs = {
@@ -188,6 +134,11 @@ interface ResultsTabProps {
   onRetakeQuiz?: (intent: TakeTabNavigationIntent) => void
 }
 
+type RemediationConversionState = {
+  active: QuizRemediationConversionSummary | null
+  supersededCount: number
+}
+
 export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
   const { t } = useTranslation(["option", "common"])
   const navigate = useNavigate()
@@ -209,20 +160,18 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
   const [selectedMissedQuestions, setSelectedMissedQuestions] = React.useState<Record<number, boolean>>({})
   const [deckTarget, setDeckTarget] = React.useState<DeckTargetValue>(null)
   const [newDeckName, setNewDeckName] = React.useState("")
-  const [convertedMissedFlashcards, setConvertedMissedFlashcards] = React.useState<ConvertedMissedFlashcards>(
-    () => readConvertedMissedFlashcards()
-  )
-  const [attemptFlashcardDeckMap, setAttemptFlashcardDeckMap] = React.useState<AttemptFlashcardDeckMap>(
-    () => readAttemptFlashcardDeckMap()
-  )
+  const [replaceExistingQuestionIds, setReplaceExistingQuestionIds] = React.useState<number[]>([])
 
   const { data: decksData, isLoading: decksLoading } = useDecksQuery({
     enabled: selectedAttemptId != null
   })
-  const createDeckMutation = useCreateDeckMutation()
-  const createFlashcardsBulkMutation = useCreateFlashcardsBulkMutation()
+  const remediationConversionsQuery = useAttemptRemediationConversionsQuery(
+    selectedAttemptId,
+    { enabled: selectedAttemptId != null }
+  )
+  const convertRemediationQuestionsMutation = useConvertAttemptRemediationQuestionsMutation()
   const generateRemediationQuizMutation = useGenerateRemediationQuizMutation()
-  const flashcardMutationPending = createDeckMutation.isPending || createFlashcardsBulkMutation.isPending
+  const flashcardMutationPending = convertRemediationQuestionsMutation.isPending
 
   const attemptsQueryParams = React.useMemo(() => ({
     limit: 200,
@@ -248,24 +197,14 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
   React.useEffect(() => {
     if (selectedAttemptId == null) {
       setFlashcardModalOpen(false)
+      setReplaceExistingQuestionIds([])
     }
   }, [selectedAttemptId])
 
   React.useEffect(() => {
     setSelectedMissedQuestions({})
+    setReplaceExistingQuestionIds([])
   }, [selectedAttemptId])
-
-  const handleNavigateToFlashcardsStudy = React.useCallback(
-    (params: { quizId: number; attemptId: number }) => {
-      const route = buildFlashcardsStudyRouteFromQuiz({
-        quizId: params.quizId,
-        attemptId: params.attemptId,
-        deckId: attemptFlashcardDeckMap[String(params.attemptId)]
-      })
-      navigate(route)
-    },
-    [attemptFlashcardDeckMap, navigate]
-  )
 
   const { data: attemptsData, isLoading: attemptsLoading } = useAllAttemptsQuery({
     quiz_id: attemptsQueryParams.quiz_id
@@ -295,6 +234,52 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
   )
 
   const decks = decksData ?? []
+  const remediationConversions = remediationConversionsQuery.data?.items ?? []
+  const remediationConversionStateByQuestionId = React.useMemo(() => {
+    return remediationConversions.reduce<Map<number, RemediationConversionState>>((acc, item) => {
+      const existing = acc.get(item.question_id) ?? { active: null, supersededCount: 0 }
+      if (item.status === "active") {
+        existing.active = item
+      } else {
+        existing.supersededCount += 1
+      }
+      acc.set(item.question_id, existing)
+      return acc
+    }, new Map())
+  }, [remediationConversions])
+  const linkedStudyDeckId = React.useMemo(() => {
+    const activeConversions = remediationConversions.filter(
+      (item) => item.status === "active" && !item.orphaned
+    )
+    if (activeConversions.length === 0) return undefined
+
+    const liveDeckIds = new Set(decks.map((deck) => deck.id))
+    const firstDeckId = activeConversions[0]?.target_deck_id
+
+    if (
+      typeof firstDeckId !== "number" ||
+      !liveDeckIds.has(firstDeckId) ||
+      !activeConversions.every(
+        (item) => item.target_deck_id === firstDeckId && liveDeckIds.has(firstDeckId)
+      )
+    ) {
+      return undefined
+    }
+
+    return firstDeckId
+  }, [decks, remediationConversions])
+
+  const handleNavigateToFlashcardsStudy = React.useCallback(
+    (params: { quizId: number; attemptId: number }) => {
+      const route = buildFlashcardsStudyRouteFromQuiz({
+        quizId: params.quizId,
+        attemptId: params.attemptId,
+        deckId: linkedStudyDeckId
+      })
+      navigate(route)
+    },
+    [linkedStudyDeckId, navigate]
+  )
 
   const attempts = attemptsData?.items ?? []
   const quizzes = quizzesData?.items ?? []
@@ -656,28 +641,40 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
       .filter((answer) => answer.is_correct === false)
       .map((answer) => {
         const question = questionMap.get(answer.question_id)
-        const conversionKey = toMissedFlashcardKey(selectedAttemptDetails.id, answer.question_id)
+        const conversionState = remediationConversionStateByQuestionId.get(answer.question_id)
+        const activeConversion = conversionState?.active ?? null
+        const orphaned = Boolean(activeConversion?.orphaned)
         return {
           questionId: answer.question_id,
-          conversionKey,
           questionText:
             question?.question_text ||
             t("option:quiz.questionFallbackLabel", {
               defaultValue: "Question #{{id}}",
               id: answer.question_id
-            }),
+          }),
           correctAnswerText: formatAnswerValue(answer.correct_answer, question),
           userAnswerText: formatAnswerValue(answer.user_answer, question),
           explanation: answer.explanation ?? null,
-          alreadyConverted: Boolean(convertedMissedFlashcards[conversionKey])
+          alreadyConverted: Boolean(activeConversion && !orphaned),
+          orphaned,
+          convertedDeckName: activeConversion?.target_deck_name_snapshot ?? null,
+          linkedFlashcardCount: activeConversion?.flashcard_count ?? 0,
+          hasSupersededHistory: (conversionState?.supersededCount ?? 0) > 0
         }
       })
-  }, [convertedMissedFlashcards, formatAnswerValue, selectedAttemptDetails, t])
+  }, [formatAnswerValue, remediationConversionStateByQuestionId, selectedAttemptDetails, t])
 
   const hasMissedQuestions = missedQuestionEntries.length > 0
   const selectedMissedQuestionCount = React.useMemo(() => {
     return missedQuestionEntries.filter((entry) => selectedMissedQuestions[entry.questionId]).length
   }, [missedQuestionEntries, selectedMissedQuestions])
+
+  const updateSelectedMissedQuestions = React.useCallback((
+    updater: Record<number, boolean> | ((previous: Record<number, boolean>) => Record<number, boolean>)
+  ) => {
+    setReplaceExistingQuestionIds([])
+    setSelectedMissedQuestions(updater)
+  }, [])
 
   React.useEffect(() => {
     if (!flashcardModalOpen) return
@@ -703,18 +700,28 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
     const nextSelection = hasExistingSelection
       ? { ...selectedMissedQuestions }
       : missedQuestionEntries.reduce<Record<number, boolean>>((acc, entry) => {
-        acc[entry.questionId] = !entry.alreadyConverted
+        acc[entry.questionId] = !entry.alreadyConverted || entry.orphaned
         return acc
       }, {})
 
-    setSelectedMissedQuestions(nextSelection)
+    updateSelectedMissedQuestions(nextSelection)
     setDeckTarget(decks[0]?.id ?? "__new__")
+    setReplaceExistingQuestionIds([])
 
     const quizName =
       quizMap.get(selectedAttemptDetails.quiz_id)?.name ?? `Quiz #${selectedAttemptDetails.quiz_id}`
     setNewDeckName(`${quizName} - Missed Questions`)
     setFlashcardModalOpen(true)
-  }, [decks, messageApi, missedQuestionEntries, quizMap, selectedAttemptDetails, selectedMissedQuestions, t])
+  }, [
+    decks,
+    messageApi,
+    missedQuestionEntries,
+    quizMap,
+    selectedAttemptDetails,
+    selectedMissedQuestions,
+    t,
+    updateSelectedMissedQuestions
+  ])
 
   const handleCreateRemediationQuiz = React.useCallback(async (questionIds: number[]) => {
     if (!selectedAttemptDetails) return
@@ -774,8 +781,14 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
       return
     }
 
-    const pendingEntries = selectedEntries.filter((entry) => !entry.alreadyConverted)
-    if (pendingEntries.length === 0) {
+    const replaceActive = replaceExistingQuestionIds.length > 0
+    const questionIds = replaceActive
+      ? selectedEntries
+          .map((entry) => entry.questionId)
+          .filter((questionId) => replaceExistingQuestionIds.includes(questionId))
+      : selectedEntries.map((entry) => entry.questionId)
+
+    if (questionIds.length === 0) {
       messageApi.info(
         t("option:quiz.missedQuestionsAlreadyConverted", {
           defaultValue: "Selected questions were already converted for this attempt."
@@ -784,78 +797,83 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
       return
     }
 
-    let targetDeckId: number | null = null
+    const request =
+      deckTarget === "__new__" || deckTarget == null
+        ? (() => {
+            const trimmedDeckName = newDeckName.trim()
+            if (!trimmedDeckName) {
+              messageApi.warning(
+                t("option:quiz.deckNameRequired", {
+                  defaultValue: "Enter a deck name."
+                })
+              )
+              return null
+            }
+            return {
+              question_ids: questionIds,
+              create_deck_name: trimmedDeckName,
+              replace_active: replaceActive
+            } as const
+          })()
+        : ({
+            question_ids: questionIds,
+            target_deck_id: deckTarget,
+            replace_active: replaceActive
+          } as const)
 
-    if (deckTarget === "__new__" || deckTarget == null) {
-      const trimmedDeckName = newDeckName.trim()
-      if (!trimmedDeckName) {
-        messageApi.warning(
-          t("option:quiz.deckNameRequired", {
-            defaultValue: "Enter a deck name."
+    if (request == null) {
+      return
+    }
+
+    try {
+      const response = await convertRemediationQuestionsMutation.mutateAsync({
+        attemptId: selectedAttemptDetails.id,
+        request
+      })
+
+      const createdResults = response.results.filter(
+        (result) => result.status === "created" || result.status === "superseded_and_created"
+      )
+      const existingResults = response.results.filter((result) => result.status === "already_exists")
+      const failedResults = response.results.filter((result) => result.status === "failed")
+
+      if (createdResults.length > 0) {
+        messageApi.success(
+          t("option:quiz.flashcardsCreatedFromMissed", {
+            defaultValue: "Created {{count}} flashcards from missed questions.",
+            count: response.created_flashcard_uuids.length || createdResults.length
+          })
+        )
+      }
+
+      if (existingResults.length > 0) {
+        const conflictingQuestionIds = existingResults.map((result) => result.question_id)
+        setReplaceExistingQuestionIds(conflictingQuestionIds)
+        setSelectedMissedQuestions(
+          conflictingQuestionIds.reduce<Record<number, boolean>>((acc, questionId) => {
+            acc[questionId] = true
+            return acc
+          }, {})
+        )
+        messageApi.info(
+          t("option:quiz.remediationConvertAgainPrompt", {
+            defaultValue: "Some selected questions already have active remediation flashcards. Use Convert Again Anyway to supersede them."
           })
         )
         return
       }
-      const createdDeck = await createDeckMutation.mutateAsync({
-        name: trimmedDeckName
-      })
-      targetDeckId = createdDeck.id
-    } else {
-      targetDeckId = deckTarget
-    }
 
-    const dedupedEntries = Array.from(
-      pendingEntries.reduce<Map<string, (typeof pendingEntries)[number]>>((acc, entry) => {
-        const dedupeKey = `${entry.questionText.trim().toLowerCase()}::${entry.correctAnswerText
-          .trim()
-          .toLowerCase()}`
-        if (!acc.has(dedupeKey)) {
-          acc.set(dedupeKey, entry)
-        }
-        return acc
-      }, new Map()).values()
-    )
-
-    const quizName =
-      quizMap.get(selectedAttemptDetails.quiz_id)?.name ?? `Quiz #${selectedAttemptDetails.quiz_id}`
-
-    try {
-      await createFlashcardsBulkMutation.mutateAsync(
-        dedupedEntries.map((entry) => ({
-          deck_id: targetDeckId,
-          front: entry.questionText,
-          back: `Correct answer: ${entry.correctAnswerText}${
-            entry.explanation ? `\n\nExplanation: ${entry.explanation}` : ""
-          }`,
-          notes: `Created from quiz "${quizName}" (attempt #${selectedAttemptDetails.id}). Your answer: ${entry.userAnswerText}`,
-          tags: ["quiz-missed", "quiz-review"],
-          source_ref_type: "manual",
-          source_ref_id: `quiz-attempt:${selectedAttemptDetails.id}:question:${entry.questionId}`
-        }))
-      )
-
-      const updatedConversions = { ...convertedMissedFlashcards }
-      pendingEntries.forEach((entry) => {
-        updatedConversions[entry.conversionKey] = true
-      })
-      setConvertedMissedFlashcards(updatedConversions)
-      writeConvertedMissedFlashcards(updatedConversions)
-      const updatedAttemptDeckMap: AttemptFlashcardDeckMap = {
-        ...attemptFlashcardDeckMap
+      if (failedResults.length > 0) {
+        messageApi.error(
+          t("option:quiz.flashcardsCreateFromMissedError", {
+            defaultValue: "Failed to create flashcards from missed questions."
+          })
+        )
+        return
       }
-      if (targetDeckId != null && targetDeckId > 0) {
-        updatedAttemptDeckMap[String(selectedAttemptDetails.id)] = targetDeckId
-      }
-      setAttemptFlashcardDeckMap(updatedAttemptDeckMap)
-      writeAttemptFlashcardDeckMap(updatedAttemptDeckMap)
+
+      setReplaceExistingQuestionIds([])
       setFlashcardModalOpen(false)
-
-      messageApi.success(
-        t("option:quiz.flashcardsCreatedFromMissed", {
-          defaultValue: "Created {{count}} flashcards from missed questions.",
-          count: dedupedEntries.length
-        })
-      )
     } catch (error) {
       messageApi.error(
         t("option:quiz.flashcardsCreateFromMissedError", {
@@ -867,18 +885,15 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
       }
     }
   }, [
-    convertedMissedFlashcards,
-    createDeckMutation,
-    createFlashcardsBulkMutation,
+    convertRemediationQuestionsMutation,
     deckTarget,
     messageApi,
     missedQuestionEntries,
     newDeckName,
-    attemptFlashcardDeckMap,
-    quizMap,
+    replaceExistingQuestionIds,
     selectedAttemptDetails,
     selectedMissedQuestions,
-    t
+    t,
   ])
 
   const renderFlashcardConversionModal = () => (
@@ -887,11 +902,16 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
         defaultValue: "Create Flashcards from Missed Questions"
       })}
       open={flashcardModalOpen}
-      onCancel={() => setFlashcardModalOpen(false)}
+      onCancel={() => {
+        setReplaceExistingQuestionIds([])
+        setFlashcardModalOpen(false)
+      }}
       onOk={() => {
         void handleCreateFlashcardsFromMissedQuestions()
       }}
-      okText={t("option:quiz.createFlashcards", { defaultValue: "Create Flashcards" })}
+      okText={replaceExistingQuestionIds.length > 0
+        ? t("option:quiz.convertAgainAnyway", { defaultValue: "Convert Again Anyway" })
+        : t("option:quiz.createFlashcards", { defaultValue: "Create Flashcards" })}
       okButtonProps={{
         loading: flashcardMutationPending
       }}
@@ -905,6 +925,13 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
         />
       ) : (
         <div className="space-y-4">
+          {replaceExistingQuestionIds.length > 0 && (
+            <div className="rounded border border-warning/40 bg-warning/10 p-3 text-sm text-text">
+              {t("option:quiz.remediationConvertAgainPrompt", {
+                defaultValue: "Some selected questions already have active remediation flashcards. Convert Again Anyway will supersede those prior conversions."
+              })}
+            </div>
+          )}
           <div className="space-y-2">
             <div className="text-sm font-medium text-text">
               {t("option:quiz.flashcardDestination", {
@@ -955,7 +982,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
                   acc[entry.questionId] = checked
                   return acc
                 }, {})
-                setSelectedMissedQuestions(next)
+                updateSelectedMissedQuestions(next)
               }}
             >
               {t("option:quiz.selectAllMissedQuestions", {
@@ -971,7 +998,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
                     <Checkbox
                       checked={Boolean(selectedMissedQuestions[entry.questionId])}
                       onChange={(event) => {
-                        setSelectedMissedQuestions((previous) => ({
+                        updateSelectedMissedQuestions((previous) => ({
                           ...previous,
                           [entry.questionId]: event.target.checked
                         }))
@@ -987,10 +1014,28 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
                       {t("option:quiz.yourAnswer", { defaultValue: "Your answer" })}:{" "}
                       {entry.userAnswerText}
                     </div>
-                    {entry.alreadyConverted && (
+                    {entry.orphaned ? (
+                      <div className="pl-6 text-xs text-warning">
+                        {t("option:quiz.linkedCardsDeleted", {
+                          defaultValue: "Linked cards were deleted. Convert again to recreate them."
+                        })}
+                      </div>
+                    ) : entry.alreadyConverted ? (
                       <div className="pl-6 text-xs text-text-subtle">
-                        {t("option:quiz.alreadyConverted", {
-                          defaultValue: "Already converted in this session."
+                        {entry.convertedDeckName
+                          ? t("option:quiz.alreadyConvertedDeckLabel", {
+                              defaultValue: "Converted in deck {{deckName}}.",
+                              deckName: entry.convertedDeckName
+                            })
+                          : t("option:quiz.alreadyConverted", {
+                              defaultValue: "Remediation flashcards already exist for this miss."
+                            })}
+                      </div>
+                    ) : null}
+                    {entry.hasSupersededHistory && (
+                      <div className="pl-6 text-xs text-text-subtle">
+                        {t("option:quiz.supersededRemediationHistory", {
+                          defaultValue: "Superseded remediation history exists for this question."
                         })}
                       </div>
                     )}
@@ -1090,7 +1135,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
               quizId={selectedAttemptDetails.quiz_id}
               missedQuestionEntries={missedQuestionEntries}
               selectedMissedQuestions={selectedMissedQuestions}
-              onSelectedMissedQuestionsChange={setSelectedMissedQuestions}
+              onSelectedMissedQuestionsChange={updateSelectedMissedQuestions}
               onCreateRemediationQuiz={handleCreateRemediationQuiz}
               onCreateRemediationFlashcards={openFlashcardModal}
               onStudyLinkedCards={() => {

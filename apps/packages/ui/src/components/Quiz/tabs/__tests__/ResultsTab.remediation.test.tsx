@@ -1,26 +1,23 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ResultsTab } from "../ResultsTab"
 import {
   useAllAttemptsQuery,
   useAttemptQuery,
+  useAttemptRemediationConversionsQuery,
+  useConvertAttemptRemediationQuestionsMutation,
   useGenerateRemediationQuizMutation,
   useQuizAttemptQuestionAssistantQuery,
   useQuizAttemptQuestionAssistantRespondMutation,
   useQuizzesQuery
 } from "../../hooks"
 import {
-  useCreateDeckMutation,
-  useCreateFlashcardsBulkMutation,
-  useCreateFlashcardMutation,
   useDecksQuery
 } from "@/components/Flashcards/hooks/useFlashcardQueries"
 
 const mocks = vi.hoisted(() => ({
-  createDeck: vi.fn(),
-  createFlashcard: vi.fn(),
-  createFlashcardsBulk: vi.fn(),
+  convertRemediationQuestions: vi.fn(),
   navigate: vi.fn(),
   remediationQuiz: vi.fn(),
   assistantRespond: vi.fn()
@@ -62,16 +59,15 @@ vi.mock("../../hooks", () => ({
   useAllAttemptsQuery: vi.fn(),
   useQuizzesQuery: vi.fn(),
   useAttemptQuery: vi.fn(),
+  useAttemptRemediationConversionsQuery: vi.fn(),
+  useConvertAttemptRemediationQuestionsMutation: vi.fn(),
   useGenerateRemediationQuizMutation: vi.fn(),
   useQuizAttemptQuestionAssistantQuery: vi.fn(),
   useQuizAttemptQuestionAssistantRespondMutation: vi.fn()
 }))
 
 vi.mock("@/components/Flashcards/hooks/useFlashcardQueries", () => ({
-  useDecksQuery: vi.fn(),
-  useCreateDeckMutation: vi.fn(),
-  useCreateFlashcardMutation: vi.fn(),
-  useCreateFlashcardsBulkMutation: vi.fn()
+  useDecksQuery: vi.fn()
 }))
 
 vi.mock("@/hooks/useTTS", () => ({
@@ -113,12 +109,37 @@ describe("ResultsTab remediation panel", () => {
     assistantQueryState = null
     assistantRefetchMock.mockReset()
 
-    mocks.createDeck.mockResolvedValue({ id: 99, name: "Recovery Deck" })
-    mocks.createFlashcard.mockResolvedValue({ uuid: "new-card" })
-    mocks.createFlashcardsBulk.mockResolvedValue([
-      { uuid: "new-card-1" },
-      { uuid: "new-card-2" }
-    ])
+    mocks.convertRemediationQuestions.mockResolvedValue({
+      attempt_id: 101,
+      quiz_id: 7,
+      target_deck: { id: 3, name: "Renal Recovery Deck" },
+      results: [
+        {
+          question_id: 13,
+          status: "created",
+          conversion: {
+            id: 902,
+            attempt_id: 101,
+            quiz_id: 7,
+            question_id: 13,
+            status: "active",
+            orphaned: false,
+            target_deck_id: 3,
+            target_deck_name_snapshot: "Renal Recovery Deck",
+            flashcard_count: 1,
+            flashcard_uuids_json: ["fc-13"],
+            source_ref_id: "quiz-attempt:101:question:13",
+            created_at: "2026-03-13T09:16:00Z",
+            last_modified: "2026-03-13T09:16:00Z",
+            client_id: "test",
+            version: 1
+          },
+          flashcard_uuids: ["fc-13"],
+          error: null
+        }
+      ],
+      created_flashcard_uuids: ["fc-13"]
+    })
     mocks.remediationQuiz.mockResolvedValue({
       quiz: {
         id: 55,
@@ -246,6 +267,55 @@ describe("ResultsTab remediation panel", () => {
       mutateAsync: mocks.remediationQuiz,
       isPending: false
     } as any)
+    vi.mocked(useAttemptRemediationConversionsQuery).mockReturnValue({
+      data: {
+        attempt_id: 101,
+        items: [
+          {
+            id: 901,
+            attempt_id: 101,
+            quiz_id: 7,
+            question_id: 12,
+            status: "active",
+            orphaned: false,
+            target_deck_id: 3,
+            target_deck_name_snapshot: "Renal Recovery Deck",
+            flashcard_count: 1,
+            flashcard_uuids_json: ["fc-12"],
+            source_ref_id: "quiz-attempt:101:question:12",
+            created_at: "2026-03-13T09:15:00Z",
+            last_modified: "2026-03-13T09:15:00Z",
+            client_id: "test",
+            version: 1
+          },
+          {
+            id: 811,
+            attempt_id: 101,
+            quiz_id: 7,
+            question_id: 12,
+            status: "superseded",
+            orphaned: false,
+            superseded_by_id: 901,
+            target_deck_id: 2,
+            target_deck_name_snapshot: "Old Renal Deck",
+            flashcard_count: 1,
+            flashcard_uuids_json: ["fc-old-12"],
+            source_ref_id: "quiz-attempt:101:question:12",
+            created_at: "2026-03-12T09:15:00Z",
+            last_modified: "2026-03-12T09:15:00Z",
+            client_id: "test",
+            version: 1
+          }
+        ],
+        count: 2,
+        superseded_count: 1
+      },
+      isLoading: false
+    } as any)
+    vi.mocked(useConvertAttemptRemediationQuestionsMutation).mockReturnValue({
+      mutateAsync: mocks.convertRemediationQuestions,
+      isPending: false
+    } as any)
 
     assistantRefetchMock.mockImplementation(async () => {
       const nextMessageId = 201 + (assistantQueryState.data?.messages?.length ?? 1)
@@ -343,18 +413,6 @@ describe("ResultsTab remediation panel", () => {
       data: [{ id: 3, name: "Renal Recovery Deck" }],
       isLoading: false
     } as any)
-    vi.mocked(useCreateDeckMutation).mockReturnValue({
-      mutateAsync: mocks.createDeck,
-      isPending: false
-    } as any)
-    vi.mocked(useCreateFlashcardMutation).mockReturnValue({
-      mutateAsync: mocks.createFlashcard,
-      isPending: false
-    } as any)
-    vi.mocked(useCreateFlashcardsBulkMutation).mockReturnValue({
-      mutateAsync: mocks.createFlashcardsBulk,
-      isPending: false
-    } as any)
   })
 
   const openDetails = async () => {
@@ -405,8 +463,22 @@ describe("ResultsTab remediation panel", () => {
     })
   })
 
+  it("does not read remediation conversion state from session storage", async () => {
+    const getItemSpy = vi.spyOn(window.sessionStorage, "getItem")
+
+    await openDetails()
+
+    expect(getItemSpy).not.toHaveBeenCalledWith("quiz-results-missed-flashcards-v1")
+    expect(getItemSpy).not.toHaveBeenCalledWith("quiz-results-flashcard-deck-map-v1")
+  })
+
   it("opens remediation flashcards and preserves study handoff actions", async () => {
     await openDetails()
+
+    expect(screen.getByText("Converted in deck Renal Recovery Deck.")).toBeInTheDocument()
+    expect(
+      screen.getByText("Superseded remediation history exists for this question.")
+    ).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: /create remediation flashcards/i }))
 
@@ -419,9 +491,10 @@ describe("ResultsTab remediation panel", () => {
     expect(mocks.navigate).toHaveBeenCalledWith(
       expect.stringContaining("/flashcards?tab=review&study_source=quiz&quiz_id=7&attempt_id=101")
     )
+    expect(mocks.navigate).toHaveBeenCalledWith(expect.stringContaining("deck_id=3"))
   })
 
-  it("creates missed-question flashcards with one bulk mutation", async () => {
+  it("creates missed-question flashcards through the quiz remediation conversion endpoint", async () => {
     await openDetails()
 
     fireEvent.click(screen.getByRole("button", { name: /create remediation flashcards/i }))
@@ -433,20 +506,172 @@ describe("ResultsTab remediation panel", () => {
     fireEvent.click(screen.getByRole("button", { name: /^create flashcards$/i }))
 
     await waitFor(() => {
-      expect(mocks.createFlashcardsBulk).toHaveBeenCalledWith([
-        expect.objectContaining({
-          deck_id: 3,
-          front: "Which structure filters blood?",
-          source_ref_id: "quiz-attempt:101:question:12"
-        }),
-        expect.objectContaining({
-          deck_id: 3,
-          front: "Which nephron segment reabsorbs sodium without water?",
-          source_ref_id: "quiz-attempt:101:question:13"
-        })
-      ])
+      expect(mocks.convertRemediationQuestions).toHaveBeenCalledWith({
+        attemptId: 101,
+        request: {
+          question_ids: [13],
+          target_deck_id: 3,
+          replace_active: false
+        }
+      })
     })
-    expect(mocks.createFlashcard).not.toHaveBeenCalled()
+  })
+
+  it("resubmits already-converted questions with replace_active when confirmed", async () => {
+    mocks.convertRemediationQuestions
+      .mockResolvedValueOnce({
+        attempt_id: 101,
+        quiz_id: 7,
+        target_deck: { id: 3, name: "Renal Recovery Deck" },
+        results: [
+          {
+            question_id: 12,
+            status: "already_exists",
+            conversion: {
+              id: 901,
+              attempt_id: 101,
+              quiz_id: 7,
+              question_id: 12,
+              status: "active",
+              orphaned: false,
+              target_deck_id: 3,
+              target_deck_name_snapshot: "Renal Recovery Deck",
+              flashcard_count: 1,
+              flashcard_uuids_json: ["fc-12"],
+              source_ref_id: "quiz-attempt:101:question:12",
+              created_at: "2026-03-13T09:15:00Z",
+              last_modified: "2026-03-13T09:15:00Z",
+              client_id: "test",
+              version: 1
+            },
+            flashcard_uuids: ["fc-12"],
+            error: null
+          }
+        ],
+        created_flashcard_uuids: []
+      })
+      .mockResolvedValueOnce({
+        attempt_id: 101,
+        quiz_id: 7,
+        target_deck: { id: 3, name: "Renal Recovery Deck" },
+        results: [
+          {
+            question_id: 12,
+            status: "superseded_and_created",
+            conversion: {
+              id: 903,
+              attempt_id: 101,
+              quiz_id: 7,
+              question_id: 12,
+              status: "active",
+              orphaned: false,
+              target_deck_id: 3,
+              target_deck_name_snapshot: "Renal Recovery Deck",
+              flashcard_count: 1,
+              flashcard_uuids_json: ["fc-12-new"],
+              source_ref_id: "quiz-attempt:101:question:12",
+              created_at: "2026-03-13T09:18:00Z",
+              last_modified: "2026-03-13T09:18:00Z",
+              client_id: "test",
+              version: 1
+            },
+            flashcard_uuids: ["fc-12-new"],
+            error: null
+          }
+        ],
+        created_flashcard_uuids: ["fc-12-new"]
+      })
+
+    await openDetails()
+
+    fireEvent.click(screen.getByRole("button", { name: /create remediation flashcards/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Destination deck")).toBeInTheDocument()
+    })
+
+    const modal = screen.getAllByRole("dialog")[1]
+    fireEvent.click(within(modal).getByRole("checkbox", { name: /which structure filters blood/i }))
+    fireEvent.click(screen.getByRole("button", { name: /^create flashcards$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /convert again anyway/i })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /convert again anyway/i }))
+
+    await waitFor(() => {
+      expect(mocks.convertRemediationQuestions).toHaveBeenNthCalledWith(2, {
+        attemptId: 101,
+        request: {
+          question_ids: [12],
+          target_deck_id: 3,
+          replace_active: true
+        }
+      })
+    })
+  }, 12000)
+
+  it("drops the deck filter when active remediation conversions span multiple decks", async () => {
+    vi.mocked(useAttemptRemediationConversionsQuery).mockReturnValue({
+      data: {
+        attempt_id: 101,
+        items: [
+          {
+            id: 901,
+            attempt_id: 101,
+            quiz_id: 7,
+            question_id: 12,
+            status: "active",
+            orphaned: false,
+            target_deck_id: 3,
+            target_deck_name_snapshot: "Renal Recovery Deck",
+            flashcard_count: 1,
+            flashcard_uuids_json: ["fc-12"],
+            source_ref_id: "quiz-attempt:101:question:12",
+            created_at: "2026-03-13T09:15:00Z",
+            last_modified: "2026-03-13T09:15:00Z",
+            client_id: "test",
+            version: 1
+          },
+          {
+            id: 902,
+            attempt_id: 101,
+            quiz_id: 7,
+            question_id: 13,
+            status: "active",
+            orphaned: false,
+            target_deck_id: 4,
+            target_deck_name_snapshot: "Renal Backup Deck",
+            flashcard_count: 1,
+            flashcard_uuids_json: ["fc-13"],
+            source_ref_id: "quiz-attempt:101:question:13",
+            created_at: "2026-03-13T09:16:00Z",
+            last_modified: "2026-03-13T09:16:00Z",
+            client_id: "test",
+            version: 1
+          }
+        ],
+        count: 2,
+        superseded_count: 0
+      },
+      isLoading: false
+    } as any)
+    vi.mocked(useDecksQuery).mockReturnValue({
+      data: [
+        { id: 3, name: "Renal Recovery Deck" },
+        { id: 4, name: "Renal Backup Deck" }
+      ],
+      isLoading: false
+    } as any)
+
+    await openDetails()
+
+    fireEvent.click(screen.getByRole("button", { name: /study linked cards/i }))
+
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      "/flashcards?tab=review&study_source=quiz&quiz_id=7&attempt_id=101"
+    )
   })
 
   it("recovers remediation assistant conflicts in place", async () => {

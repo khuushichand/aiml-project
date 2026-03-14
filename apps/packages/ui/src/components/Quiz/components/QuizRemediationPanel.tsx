@@ -18,6 +18,10 @@ export type MissedQuestionEntry = {
   userAnswerText: string
   explanation: string | null
   alreadyConverted: boolean
+  orphaned: boolean
+  convertedDeckName: string | null
+  linkedFlashcardCount: number
+  hasSupersededHistory: boolean
 }
 
 interface QuizRemediationPanelProps {
@@ -194,10 +198,28 @@ export const QuizRemediationPanel: React.FC<QuizRemediationPanelProps> = ({
                           {t("option:quiz.yourAnswer", { defaultValue: "Your answer" })}:{" "}
                           {entry.userAnswerText}
                         </div>
-                        {entry.alreadyConverted && (
+                        {entry.orphaned ? (
+                          <div className="pl-6 text-xs text-warning">
+                            {t("option:quiz.linkedCardsDeleted", {
+                              defaultValue: "Linked cards were deleted. Convert again to recreate them."
+                            })}
+                          </div>
+                        ) : entry.alreadyConverted ? (
                           <div className="pl-6 text-xs text-text-subtle">
-                            {t("option:quiz.alreadyConvertedRemediation", {
-                              defaultValue: "Remediation flashcards already exist for this miss."
+                            {entry.convertedDeckName
+                              ? t("option:quiz.alreadyConvertedDeckLabel", {
+                                  defaultValue: "Converted in deck {{deckName}}.",
+                                  deckName: entry.convertedDeckName
+                                })
+                              : t("option:quiz.alreadyConvertedRemediation", {
+                                  defaultValue: "Remediation flashcards already exist for this miss."
+                                })}
+                          </div>
+                        ) : null}
+                        {entry.hasSupersededHistory && (
+                          <div className="pl-6 text-xs text-text-subtle">
+                            {t("option:quiz.supersededRemediationHistory", {
+                              defaultValue: "Superseded remediation history exists for this question."
                             })}
                           </div>
                         )}

@@ -1,10 +1,18 @@
 import React from "react"
-import { act, renderHook } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { useGenerateRemediationQuizMutation } from "../useQuizQueries"
-import { generateRemediationQuiz } from "@/services/quizzes"
+import {
+  useAttemptRemediationConversionsQuery,
+  useConvertAttemptRemediationQuestionsMutation,
+  useGenerateRemediationQuizMutation
+} from "../useQuizQueries"
+import {
+  convertAttemptRemediationQuestions,
+  generateRemediationQuiz,
+  listAttemptRemediationConversions
+} from "@/services/quizzes"
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
   useServerCapabilities: () => ({
@@ -23,6 +31,87 @@ vi.mock("@/services/quizzes", async () => {
   )
   return {
     ...actual,
+    listAttemptRemediationConversions: vi.fn(async () => ({
+      attempt_id: 301,
+      items: [
+        {
+          id: 71,
+          attempt_id: 301,
+          quiz_id: 21,
+          question_id: 12,
+          status: "active",
+          orphaned: false,
+          target_deck_id: 9,
+          target_deck_name_snapshot: "Renal Recovery",
+          flashcard_count: 1,
+          flashcard_uuids_json: ["fc-1"],
+          source_ref_id: "quiz-attempt:301:question:12",
+          created_at: "2026-03-13T09:00:00Z",
+          last_modified: "2026-03-13T09:00:00Z",
+          client_id: "test-client",
+          version: 1
+        }
+      ],
+      count: 1,
+      superseded_count: 0
+    })),
+    convertAttemptRemediationQuestions: vi.fn(async () => ({
+      attempt_id: 301,
+      quiz_id: 21,
+      target_deck: {
+        id: 9,
+        name: "Renal Recovery"
+      },
+      results: [
+        {
+          question_id: 12,
+          status: "already_exists",
+          conversion: {
+            id: 71,
+            attempt_id: 301,
+            quiz_id: 21,
+            question_id: 12,
+            status: "active",
+            orphaned: false,
+            target_deck_id: 9,
+            target_deck_name_snapshot: "Renal Recovery",
+            flashcard_count: 1,
+            flashcard_uuids_json: ["fc-1"],
+            source_ref_id: "quiz-attempt:301:question:12",
+            created_at: "2026-03-13T09:00:00Z",
+            last_modified: "2026-03-13T09:00:00Z",
+            client_id: "test-client",
+            version: 1
+          },
+          flashcard_uuids: ["fc-1"],
+          error: null
+        },
+        {
+          question_id: 19,
+          status: "created",
+          conversion: {
+            id: 72,
+            attempt_id: 301,
+            quiz_id: 21,
+            question_id: 19,
+            status: "active",
+            orphaned: false,
+            target_deck_id: 9,
+            target_deck_name_snapshot: "Renal Recovery",
+            flashcard_count: 1,
+            flashcard_uuids_json: ["fc-2"],
+            source_ref_id: "quiz-attempt:301:question:19",
+            created_at: "2026-03-13T09:05:00Z",
+            last_modified: "2026-03-13T09:05:00Z",
+            client_id: "test-client",
+            version: 1
+          },
+          flashcard_uuids: ["fc-2"],
+          error: null
+        }
+      ],
+      created_flashcard_uuids: ["fc-2"]
+    })),
     generateRemediationQuiz: vi.fn(async () => ({
       quiz: {
         id: 21,
@@ -85,6 +174,87 @@ describe("useGenerateRemediationQuizMutation", () => {
       difficulty: "medium",
       focus_topics: ["renal"],
       workspace_tag: "workspace:med-school"
+    })
+  })
+
+  it("loads server-backed remediation conversion state for an attempt", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false }
+      }
+    })
+
+    const { result } = renderHook(
+      () => useAttemptRemediationConversionsQuery(301),
+      { wrapper: buildWrapper(queryClient) }
+    )
+
+    await waitFor(() => {
+      expect(result.current.data?.items).toHaveLength(1)
+    })
+
+    expect(listAttemptRemediationConversions).toHaveBeenCalledWith(301, expect.any(Object))
+    expect(result.current.data?.items[0]?.target_deck_name_snapshot).toBe("Renal Recovery")
+  })
+
+  it("converts remediation questions through the quiz-owned conversion endpoint", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false }
+      }
+    })
+
+    queryClient.setQueryData(["quizzes:attempt:remediation-conversions", 301], {
+      attempt_id: 301,
+      items: [
+        {
+          id: 71,
+          attempt_id: 301,
+          quiz_id: 21,
+          question_id: 12,
+          status: "active",
+          orphaned: false,
+          target_deck_id: 9,
+          target_deck_name_snapshot: "Renal Recovery",
+          flashcard_count: 1,
+          flashcard_uuids_json: ["fc-1"],
+          source_ref_id: "quiz-attempt:301:question:12",
+          created_at: "2026-03-13T09:00:00Z",
+          last_modified: "2026-03-13T09:00:00Z",
+          client_id: "test-client",
+          version: 1
+        }
+      ],
+      count: 1,
+      superseded_count: 0
+    })
+
+    const { result } = renderHook(
+      () => useConvertAttemptRemediationQuestionsMutation(),
+      { wrapper: buildWrapper(queryClient) }
+    )
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        attemptId: 301,
+        request: {
+          question_ids: [12, 19],
+          target_deck_id: 9
+        }
+      })
+    })
+
+    expect(convertAttemptRemediationQuestions).toHaveBeenCalledWith(301, {
+      question_ids: [12, 19],
+      target_deck_id: 9
+    }, undefined)
+
+    await waitFor(() => {
+      const cached = queryClient.getQueryData<any>(["quizzes:attempt:remediation-conversions", 301])
+      expect(cached?.items).toHaveLength(2)
+      expect(cached?.items.some((item: any) => item.question_id === 19)).toBe(true)
     })
   })
 })

@@ -452,7 +452,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 37  # Schema v37 adds workspace sub-resources, settings, and flashcard scheduler state
+    _CURRENT_SCHEMA_VERSION = 38  # Schema v38 adds quiz remediation conversion state
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -3165,6 +3165,24 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 37;
 """
+    _MIGRATION_SQL_V37_TO_V38 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 38 - Quiz remediation conversion state (2026-03-13)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 38
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 38;
+"""
+    _MIGRATION_SQL_V37_TO_V38_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 38 - Quiz remediation conversion state (2026-03-13)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 38
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 38;
+"""
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4923,6 +4941,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V36->V37: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V37 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v37_to_v38(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V37 to V38 (quiz remediation conversion state)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V37 to V38 for DB: {self.db_path_str}...")
+        try:
+            self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
+            conn.executescript(self._MIGRATION_SQL_V37_TO_V38)
+            final_version = self._get_db_version(conn)
+            if final_version != 38:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V37->V38 failed version check. Expected 38, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V38 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V37->V38 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V37->V38 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V37->V38: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V38 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -5293,6 +5332,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._ensure_flashcard_asset_schema_sqlite(conn)
                     self._ensure_flashcard_scheduler_schema_sqlite(conn)
                     self._ensure_study_assistant_schema_sqlite(conn)
+                    self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
                     self._ensure_flashcard_fts_triggers_sqlite(conn)
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
                     self._ensure_notes_fts_triggers_sqlite(conn)
@@ -5407,6 +5447,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 37 and current_db_version == 36:
                         self._migrate_from_v36_to_v37(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 38 and current_db_version == 37:
+                        self._migrate_from_v37_to_v38(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -5736,6 +5779,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v35_to_v36(conn)
                             elif fallback_version == 36:
                                 self._migrate_from_v36_to_v37(conn)
+                            elif fallback_version == 37:
+                                self._migrate_from_v37_to_v38(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5823,6 +5868,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 37 and current_db_version == 36:
                     self._migrate_from_v36_to_v37(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 38 and current_db_version == 37:
+                    self._migrate_from_v37_to_v38(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
 
@@ -5836,6 +5884,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_flashcard_asset_schema_sqlite(conn)
                 self._ensure_flashcard_scheduler_schema_sqlite(conn)
                 self._ensure_study_assistant_schema_sqlite(conn)
+                self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
                 self._ensure_flashcard_fts_triggers_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
                 self._ensure_notes_fts_triggers_sqlite(conn)
@@ -6665,6 +6714,94 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise SchemaError(f"Failed ensuring PostgreSQL study assistant schema: {exc}") from exc  # noqa: TRY003
 
+    def _ensure_quiz_remediation_conversion_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure quiz remediation conversion storage exists for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS quiz_remediation_conversions(
+                  id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+                  attempt_id                INTEGER NOT NULL REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                  quiz_id                   INTEGER NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+                  question_id               INTEGER NOT NULL REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                  status                    TEXT NOT NULL CHECK(status IN ('active', 'superseded')),
+                  superseded_by_id          INTEGER REFERENCES quiz_remediation_conversions(id) ON DELETE SET NULL,
+                  target_deck_id            INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  target_deck_name_snapshot TEXT,
+                  flashcard_count           INTEGER NOT NULL DEFAULT 0,
+                  flashcard_uuids_json      TEXT,
+                  source_ref_id             TEXT,
+                  created_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  client_id                 TEXT NOT NULL DEFAULT 'unknown',
+                  version                   INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_attempt_id "
+                "ON quiz_remediation_conversions(attempt_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_attempt_question "
+                "ON quiz_remediation_conversions(attempt_id, question_id)"
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_active_unique
+                    ON quiz_remediation_conversions(attempt_id, question_id)
+                 WHERE status = 'active'
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite remediation conversion schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_quiz_remediation_conversion_schema_postgres(self, conn) -> None:
+        """Ensure quiz remediation conversion storage exists for PostgreSQL."""
+        try:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS quiz_remediation_conversions(
+                  id BIGSERIAL PRIMARY KEY,
+                  attempt_id INTEGER NOT NULL REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                  quiz_id INTEGER NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+                  question_id INTEGER NOT NULL REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                  status TEXT NOT NULL CHECK(status IN ('active', 'superseded')),
+                  superseded_by_id BIGINT REFERENCES quiz_remediation_conversions(id) ON DELETE SET NULL,
+                  target_deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  target_deck_name_snapshot TEXT,
+                  flashcard_count INTEGER NOT NULL DEFAULT 0,
+                  flashcard_uuids_json TEXT,
+                  source_ref_id TEXT,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_attempt_id "
+                "ON quiz_remediation_conversions(attempt_id)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_attempt_question "
+                "ON quiz_remediation_conversions(attempt_id, question_id)",
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_active_unique
+                    ON quiz_remediation_conversions(attempt_id, question_id)
+                 WHERE status = 'active'
+                """,
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL remediation conversion schema: {exc}") from exc  # noqa: TRY003
+
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
 
@@ -6842,6 +6979,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 37:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V36_TO_V37_POSTGRES, conn, expected_version=37)
                 current_version = 37
+            if current_version < 38:
+                self._ensure_quiz_remediation_conversion_schema_postgres(conn)
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V37_TO_V38_POSTGRES, conn, expected_version=38)
+                current_version = 38
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -6851,6 +6992,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self._ensure_flashcard_asset_schema_postgres(conn)
             self._ensure_flashcard_scheduler_schema_postgres(conn)
             self._ensure_study_assistant_schema_postgres(conn)
+            self._ensure_quiz_remediation_conversion_schema_postgres(conn)
             self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
             self._ensure_workspace_subresource_schema_postgres(conn)
@@ -19604,6 +19746,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             item["source_bundle_json"] = None
         return item
 
+    def _deserialize_quiz_remediation_conversion_row(self, row: Any) -> dict[str, Any] | None:
+        item = self._deserialize_row_fields(row, ["flashcard_uuids_json"])
+        if not item:
+            return None
+        flashcard_uuids = item.get("flashcard_uuids_json")
+        if isinstance(flashcard_uuids, list):
+            item["flashcard_uuids_json"] = flashcard_uuids
+        else:
+            item["flashcard_uuids_json"] = []
+        return item
+
     def _public_quiz_question(self, question: dict[str, Any]) -> dict[str, Any]:
         payload = dict(question)
         payload.pop("correct_answer", None)
@@ -20275,6 +20428,481 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             count_row = count_cursor.fetchone()
             total = int(count_row["count"]) if count_row else 0
             return {"items": items, "count": total}  # noqa: TRY300
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def _format_quiz_answer_value_for_remediation(
+        self,
+        value: Any,
+        question: dict[str, Any] | None,
+    ) -> str:
+        """Format a graded quiz answer into stable remediation text."""
+        if value is None:
+            return "No answer"
+
+        question_type = str((question or {}).get("question_type") or "").strip().lower()
+        options = (question or {}).get("options") or []
+
+        if question_type == "fill_blank":
+            if isinstance(value, str):
+                parsed_rules = self._parse_fill_blank_json_rules(value)
+                if parsed_rules:
+                    accepted = [entry for entry, _fuzzy, _threshold in parsed_rules if entry]
+                    if accepted:
+                        return " / ".join(accepted)
+            if isinstance(value, list):
+                return " / ".join(str(item) for item in value if str(item).strip())
+            return str(value)
+
+        if question_type == "multi_select":
+            indices = self._normalize_multi_select_indices(value)
+            if not indices:
+                return str(value)
+            labels = [options[index] if 0 <= index < len(options) else str(index) for index in indices]
+            return " / ".join(str(label) for label in labels)
+
+        if question_type == "multiple_choice":
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                return str(value)
+            if 0 <= index < len(options):
+                return str(options[index])
+            return str(value)
+
+        if question_type == "matching":
+            pairs = self._normalize_matching_map(value)
+            if not pairs:
+                return str(value)
+            return " / ".join(f"{left} -> {right}" for left, right in pairs.items())
+
+        if question_type == "true_false":
+            normalized = str(value).strip().lower()
+            if normalized == "true":
+                return "True"
+            if normalized == "false":
+                return "False"
+
+        if isinstance(value, list):
+            return " / ".join(str(item) for item in value)
+
+        return str(value)
+
+    def _build_quiz_remediation_entries(
+        self,
+        *,
+        attempt_id: int,
+        question_ids: list[int],
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        """Load and validate missed question entries for remediation conversion."""
+        attempt = self.get_attempt(attempt_id, include_questions=True, include_answers=True)
+        if not attempt:
+            raise ConflictError("Attempt not found", entity="quiz_attempts", identifier=attempt_id)  # noqa: TRY003
+        if not attempt.get("completed_at"):
+            raise InputError("Quiz attempt must be completed before remediation flashcards can be created.")  # noqa: TRY003
+
+        normalized_question_ids: list[int] = []
+        seen_question_ids: set[int] = set()
+        for question_id in question_ids:
+            try:
+                normalized_question_id = int(question_id)
+            except (TypeError, ValueError) as exc:
+                raise InputError("question_ids must contain integers.") from exc  # noqa: TRY003
+            if normalized_question_id in seen_question_ids:
+                continue
+            normalized_question_ids.append(normalized_question_id)
+            seen_question_ids.add(normalized_question_id)
+
+        if not normalized_question_ids:
+            raise InputError("Select at least one missed question to convert.")  # noqa: TRY003
+
+        questions = attempt.get("questions") or []
+        answers = attempt.get("answers") or []
+        questions_by_id = {int(question["id"]): question for question in questions if question.get("id") is not None}
+        answers_by_id = {
+            int(answer["question_id"]): answer
+            for answer in answers
+            if answer.get("question_id") is not None
+        }
+
+        invalid_ids = [question_id for question_id in normalized_question_ids if question_id not in questions_by_id]
+        if invalid_ids:
+            raise InputError(f"Question IDs not found in quiz attempt: {invalid_ids}")  # noqa: TRY003
+
+        quiz = self.get_quiz(int(attempt["quiz_id"]))
+        if not quiz:
+            raise ConflictError("Quiz not found", entity="quizzes", identifier=attempt["quiz_id"])  # noqa: TRY003
+        quiz_name = str(quiz.get("name") or f"Quiz #{attempt['quiz_id']}")
+
+        entries: list[dict[str, Any]] = []
+        for question_id in normalized_question_ids:
+            question = questions_by_id[question_id]
+            answer = answers_by_id.get(question_id)
+            if not answer or answer.get("is_correct") is not False:
+                raise InputError(f"Question {question_id} was not missed in this completed attempt.")  # noqa: TRY003
+
+            question_text = str(
+                question.get("question_text") or f"Question #{question_id}"
+            ).strip() or f"Question #{question_id}"
+            correct_answer_text = self._format_quiz_answer_value_for_remediation(
+                answer.get("correct_answer"),
+                question,
+            )
+            user_answer_text = self._format_quiz_answer_value_for_remediation(
+                answer.get("user_answer"),
+                question,
+            )
+            explanation = answer.get("explanation")
+            explanation_suffix = f"\n\nExplanation: {explanation}" if explanation else ""
+            dedupe_key = f"{question_text.strip().lower()}::{correct_answer_text.strip().lower()}"
+            entries.append(
+                {
+                    "question_id": question_id,
+                    "question_text": question_text,
+                    "correct_answer_text": correct_answer_text,
+                    "user_answer_text": user_answer_text,
+                    "explanation": explanation,
+                    "dedupe_key": dedupe_key,
+                    "source_ref_id": f"quiz-attempt:{attempt_id}:question:{question_id}",
+                    "flashcard_payload": {
+                        "front": question_text,
+                        "back": f"Correct answer: {correct_answer_text}{explanation_suffix}",
+                        "notes": (
+                            f'Created from quiz "{quiz_name}" (attempt #{attempt_id}). '
+                            f"Your answer: {user_answer_text}"
+                        ),
+                        "tags_json": self._ensure_json_string(["quiz-missed", "quiz-review"]) or "[]",
+                        "source_ref_type": "manual",
+                        "source_ref_id": f"quiz-attempt:{attempt_id}:question:{question_id}",
+                    },
+                }
+            )
+
+        return attempt, quiz, entries
+
+    def convert_quiz_remediation_questions(
+        self,
+        *,
+        attempt_id: int,
+        question_ids: list[int],
+        target_deck_id: int | None = None,
+        create_deck_name: str | None = None,
+        replace_active: bool = False,
+    ) -> dict[str, Any]:
+        """Convert missed attempt questions into flashcards plus remediation conversion rows."""
+        normalized_create_deck_name = (create_deck_name or "").strip() or None
+        if target_deck_id is not None and normalized_create_deck_name is not None:
+            raise InputError("Specify either target_deck_id or create_deck_name, not both.")  # noqa: TRY003
+        if target_deck_id is None and normalized_create_deck_name is None:
+            raise InputError("Provide target_deck_id or create_deck_name for remediation conversion.")  # noqa: TRY003
+
+        attempt, quiz, entries = self._build_quiz_remediation_entries(
+            attempt_id=int(attempt_id),
+            question_ids=question_ids,
+        )
+        ordered_question_ids = [int(entry["question_id"]) for entry in entries]
+        target_deck: dict[str, Any] | None = None
+
+        if target_deck_id is not None:
+            deck = self.get_deck(int(target_deck_id))
+            if not deck or bool(deck.get("deleted")):
+                raise InputError(f"Deck {target_deck_id} does not exist or is deleted.")  # noqa: TRY003
+            target_deck = {"id": int(deck["id"]), "name": str(deck.get("name") or f"Deck #{deck['id']}")}
+
+        try:
+            with self.transaction() as conn:
+                placeholders = ", ".join("?" for _ in ordered_question_ids)
+                active_rows = conn.execute(
+                    "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
+                    "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
+                    "source_ref_id, created_at, last_modified, client_id, version "
+                    f"FROM quiz_remediation_conversions WHERE attempt_id = ? AND status = ? AND question_id IN ({placeholders})",  # nosec B608
+                    (int(attempt_id), "active", *ordered_question_ids),
+                ).fetchall()
+                existing_by_question = {
+                    int(item["question_id"]): item
+                    for item in (
+                        self._deserialize_quiz_remediation_conversion_row(row)
+                        for row in active_rows
+                    )
+                    if item is not None
+                }
+
+                pending_entries: list[dict[str, Any]] = []
+                results_by_question: dict[int, dict[str, Any]] = {}
+                for entry in entries:
+                    existing = existing_by_question.get(int(entry["question_id"]))
+                    if existing and not replace_active:
+                        results_by_question[int(entry["question_id"])] = {
+                            "question_id": int(entry["question_id"]),
+                            "status": "already_exists",
+                            "conversion": existing,
+                            "flashcard_uuids": list(existing.get("flashcard_uuids_json") or []),
+                        }
+                        continue
+                    pending_entries.append(entry)
+
+                if pending_entries and normalized_create_deck_name is not None and target_deck is None:
+                    created_deck_id = self.add_deck(normalized_create_deck_name, description=None)
+                    deck = self.get_deck(int(created_deck_id))
+                    target_deck = {
+                        "id": int(created_deck_id),
+                        "name": str((deck or {}).get("name") or normalized_create_deck_name),
+                    }
+
+                deduped_entries: dict[str, dict[str, Any]] = {}
+                for entry in pending_entries:
+                    deduped_entries.setdefault(str(entry["dedupe_key"]), entry)
+
+                dedupe_uuid_map: dict[str, list[str]] = {}
+                created_flashcard_uuids: list[str] = []
+                if pending_entries:
+                    if target_deck is None:
+                        raise InputError("Target deck resolution failed for remediation conversion.")  # noqa: TRY003
+                    flashcard_payloads = []
+                    for dedupe_entry in deduped_entries.values():
+                        payload = dict(dedupe_entry["flashcard_payload"])
+                        payload["deck_id"] = int(target_deck["id"])
+                        flashcard_payloads.append(payload)
+                    created_flashcard_uuids = self.add_flashcards_bulk(flashcard_payloads)
+                    for dedupe_entry, flashcard_uuid in zip(deduped_entries.values(), created_flashcard_uuids, strict=False):
+                        dedupe_uuid_map[str(dedupe_entry["dedupe_key"])] = [flashcard_uuid]
+
+                for entry in pending_entries:
+                    question_id = int(entry["question_id"])
+                    previous_active = existing_by_question.get(question_id)
+                    now = self._get_current_utc_timestamp_iso()
+                    if previous_active and replace_active:
+                        conn.execute(
+                            "UPDATE quiz_remediation_conversions "
+                            "SET status = ?, superseded_by_id = NULL, last_modified = ?, client_id = ?, version = version + 1 "
+                            "WHERE id = ?",
+                            ("superseded", now, self.client_id, int(previous_active["id"])),
+                        )
+
+                    flashcard_uuids = list(dedupe_uuid_map.get(str(entry["dedupe_key"])) or [])
+                    insert_sql = (
+                        "INSERT INTO quiz_remediation_conversions("
+                        "attempt_id, quiz_id, question_id, status, superseded_by_id, target_deck_id, "
+                        "target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, source_ref_id, "
+                        "created_at, last_modified, client_id, version"
+                        ") VALUES(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    )
+                    insert_params = (
+                        int(attempt_id),
+                        int(quiz["id"]),
+                        question_id,
+                        "active",
+                        int(target_deck["id"]) if target_deck is not None else None,
+                        str((target_deck or {}).get("name") or ""),
+                        len(flashcard_uuids),
+                        self._ensure_json_string(flashcard_uuids) or "[]",
+                        str(entry["source_ref_id"]),
+                        now,
+                        now,
+                        self.client_id,
+                        1,
+                    )
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        cursor = conn.execute(insert_sql + " RETURNING id", insert_params)
+                        row = cursor.fetchone()
+                        conversion_id = int(row["id"]) if row else None
+                    else:
+                        cursor = conn.execute(insert_sql, insert_params)
+                        conversion_id = int(cursor.lastrowid)
+                    if conversion_id is None:
+                        raise CharactersRAGDBError("Failed to determine remediation conversion ID after insert")  # noqa: TRY003
+
+                    if previous_active and replace_active:
+                        conn.execute(
+                            "UPDATE quiz_remediation_conversions "
+                            "SET superseded_by_id = ?, last_modified = ?, client_id = ?, version = version + 1 "
+                            "WHERE id = ?",
+                            (conversion_id, now, self.client_id, int(previous_active["id"])),
+                        )
+
+                    conversion_row = conn.execute(
+                        "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
+                        "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
+                        "source_ref_id, created_at, last_modified, client_id, version "
+                        "FROM quiz_remediation_conversions WHERE id = ?",
+                        (conversion_id,),
+                    ).fetchone()
+                    conversion = self._deserialize_quiz_remediation_conversion_row(conversion_row)
+                    if not conversion:
+                        raise CharactersRAGDBError("Failed to load remediation conversion after insert")  # noqa: TRY003
+
+                    results_by_question[question_id] = {
+                        "question_id": question_id,
+                        "status": "superseded_and_created" if previous_active and replace_active else "created",
+                        "conversion": conversion,
+                        "flashcard_uuids": flashcard_uuids,
+                    }
+
+                ordered_results = [results_by_question[question_id] for question_id in ordered_question_ids]
+                return {
+                    "attempt_id": int(attempt_id),
+                    "quiz_id": int(quiz["id"]),
+                    "target_deck": target_deck,
+                    "results": ordered_results,
+                    "created_flashcard_uuids": created_flashcard_uuids,
+                }
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to convert remediation questions: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to convert remediation questions: {exc}") from exc  # noqa: TRY003
+
+    def create_quiz_remediation_conversion(
+        self,
+        *,
+        attempt_id: int,
+        quiz_id: int,
+        question_id: int,
+        target_deck_id: int | None,
+        target_deck_name_snapshot: str | None,
+        flashcard_uuids: list[str] | None,
+        source_ref_id: str | None,
+    ) -> dict[str, Any]:
+        """Create an active remediation conversion row for a quiz attempt question."""
+        now = self._get_current_utc_timestamp_iso()
+        normalized_flashcard_uuids = [str(uuid) for uuid in (flashcard_uuids or []) if str(uuid).strip()]
+        flashcard_uuids_json = self._ensure_json_string(normalized_flashcard_uuids) or "[]"
+        normalized_deck_name = (target_deck_name_snapshot or "").strip() or None
+        normalized_source_ref = (source_ref_id or "").strip() or None
+        params = (
+            int(attempt_id),
+            int(quiz_id),
+            int(question_id),
+            "active",
+            target_deck_id,
+            normalized_deck_name,
+            len(normalized_flashcard_uuids),
+            flashcard_uuids_json,
+            normalized_source_ref,
+            now,
+            now,
+            self.client_id,
+            1,
+        )
+        insert_sql = (
+            "INSERT INTO quiz_remediation_conversions("
+            "attempt_id, quiz_id, question_id, status, superseded_by_id, target_deck_id, "
+            "target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, source_ref_id, "
+            "created_at, last_modified, client_id, version"
+            ") VALUES(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        try:
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    conversion_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    conversion_id = int(cursor.lastrowid)
+                if conversion_id is None:
+                    raise CharactersRAGDBError("Failed to determine remediation conversion ID after insert")  # noqa: TRY003
+            created = self.execute_query(
+                "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
+                "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
+                "source_ref_id, created_at, last_modified, client_id, version "
+                "FROM quiz_remediation_conversions WHERE id = ?",
+                (conversion_id,),
+            ).fetchone()
+            payload = self._deserialize_quiz_remediation_conversion_row(created)
+            if not payload:
+                raise CharactersRAGDBError("Failed to load remediation conversion after insert")  # noqa: TRY003
+            return payload
+        except sqlite3.IntegrityError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Active remediation conversion already exists for this attempt question.",
+                    entity="quiz_remediation_conversions",
+                    entity_id=f"{attempt_id}:{question_id}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to create remediation conversion: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Active remediation conversion already exists for this attempt question.",
+                    entity="quiz_remediation_conversions",
+                    entity_id=f"{attempt_id}:{question_id}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to create remediation conversion: {exc}") from exc  # noqa: TRY003
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def supersede_quiz_remediation_conversion(
+        self,
+        *,
+        attempt_id: int,
+        question_id: int,
+        superseded_by_id: int | None,
+    ) -> dict[str, Any] | None:
+        """Mark the active remediation conversion for an attempt question as superseded."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                existing = conn.execute(
+                    "SELECT id FROM quiz_remediation_conversions "
+                    "WHERE attempt_id = ? AND question_id = ? AND status = ?",
+                    (int(attempt_id), int(question_id), "active"),
+                ).fetchone()
+                if not existing:
+                    return None
+                conversion_id = int(existing["id"])
+                conn.execute(
+                    "UPDATE quiz_remediation_conversions "
+                    "SET status = ?, superseded_by_id = ?, last_modified = ?, client_id = ?, version = version + 1 "
+                    "WHERE id = ?",
+                    ("superseded", superseded_by_id, now, self.client_id, conversion_id),
+                )
+            row = self.execute_query(
+                "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
+                "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
+                "source_ref_id, created_at, last_modified, client_id, version "
+                "FROM quiz_remediation_conversions WHERE id = ?",
+                (conversion_id,),
+            ).fetchone()
+            return self._deserialize_quiz_remediation_conversion_row(row)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to supersede remediation conversion: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to supersede remediation conversion: {exc}") from exc  # noqa: TRY003
+
+    def list_attempt_remediation_conversions(self, attempt_id: int) -> dict[str, Any]:
+        """List active remediation conversions for an attempt with superseded history count."""
+        try:
+            active_cursor = self.execute_query(
+                "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
+                "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
+                "source_ref_id, created_at, last_modified, client_id, version "
+                "FROM quiz_remediation_conversions WHERE attempt_id = ? AND status = ? "
+                "ORDER BY question_id ASC, created_at DESC, id DESC",
+                (int(attempt_id), "active"),
+            )
+            items = [
+                item
+                for item in (
+                    self._deserialize_quiz_remediation_conversion_row(row)
+                    for row in active_cursor.fetchall()
+                )
+                if item is not None
+            ]
+            count_row = self.execute_query(
+                "SELECT COUNT(*) AS count FROM quiz_remediation_conversions "
+                "WHERE attempt_id = ? AND status = ?",
+                (int(attempt_id), "superseded"),
+            ).fetchone()
+            superseded_count = int(count_row["count"]) if count_row else 0
+            return {
+                "attempt_id": int(attempt_id),
+                "items": items,
+                "count": len(items),
+                "superseded_count": superseded_count,
+            }
         except CharactersRAGDBError:  # noqa: TRY203
             raise
 

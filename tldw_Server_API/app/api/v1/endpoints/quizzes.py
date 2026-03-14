@@ -21,6 +21,9 @@ from tldw_Server_API.app.api.v1.schemas.quizzes import (
     QuizImportRequest,
     QuizImportResponse,
     QuizListResponse,
+    QuizRemediationConversionListResponse,
+    QuizRemediationConvertRequest,
+    QuizRemediationConvertResponse,
     QuizResponse,
     QuizUpdate,
 )
@@ -33,6 +36,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
+    InputError,
 )
 from tldw_Server_API.app.core.Flashcards.study_assistant import (
     build_quiz_attempt_question_context,
@@ -65,6 +69,20 @@ def _default_study_assistant_message(action: str, context: dict[str, Any]) -> st
         "fact_check": f"Fact-check my explanation of this question: {question_text}",
         "freeform": f"Help me review this question: {question_text}",
     }.get(action, f"Help me review this question: {question_text}")
+
+
+def _mark_orphaned_remediation_items(
+    items: list[dict[str, Any]],
+    db: CharactersRAGDB,
+) -> list[dict[str, Any]]:
+    marked_items: list[dict[str, Any]] = []
+    for item in items:
+        flashcard_uuids = list(item.get("flashcard_uuids_json") or [])
+        orphaned = bool(flashcard_uuids) and not any(db.get_flashcard(card_uuid) for card_uuid in flashcard_uuids)
+        marked_item = dict(item)
+        marked_item["orphaned"] = orphaned
+        marked_items.append(marked_item)
+    return marked_items
 
 
 @router.get("", response_model=QuizListResponse)
@@ -367,6 +385,54 @@ def get_attempt(
     if not attempt:
         raise HTTPException(status_code=404, detail="Attempt not found")
     return attempt
+
+
+@router.get(
+    "/attempts/{attempt_id:int}/remediation-conversions",
+    response_model=QuizRemediationConversionListResponse,
+)
+def get_attempt_remediation_conversions(
+    attempt_id: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Return server-backed remediation conversion state for a completed attempt."""
+    attempt = db.get_attempt(attempt_id, include_questions=False, include_answers=False)
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+    try:
+        payload = db.list_attempt_remediation_conversions(attempt_id)
+        payload["items"] = _mark_orphaned_remediation_items(list(payload.get("items") or []), db)
+        return payload
+    except CharactersRAGDBError as exc:
+        logger.error(f"Failed to list remediation conversions for attempt {attempt_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list remediation conversions") from exc
+
+
+@router.post(
+    "/attempts/{attempt_id:int}/remediation-conversions/convert",
+    response_model=QuizRemediationConvertResponse,
+)
+def convert_attempt_remediation_conversions(
+    attempt_id: int,
+    payload: QuizRemediationConvertRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Create remediation flashcards plus conversion records for missed attempt questions."""
+    try:
+        return db.convert_quiz_remediation_questions(
+            attempt_id=attempt_id,
+            question_ids=payload.question_ids,
+            target_deck_id=payload.target_deck_id,
+            create_deck_name=payload.create_deck_name,
+            replace_active=payload.replace_active,
+        )
+    except InputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CharactersRAGDBError as exc:
+        logger.error(f"Failed to convert remediation questions for attempt {attempt_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to convert remediation questions") from exc
 
 
 @router.get(

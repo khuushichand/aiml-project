@@ -282,6 +282,152 @@ def test_get_quiz_attempt_question_assistant_returns_thread_messages_and_context
     assert "follow_up" in payload["available_actions"]
 
 
+def test_get_attempt_remediation_conversions_returns_active_rows(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    conversion_payload = quizzes_db.convert_quiz_remediation_questions(
+        attempt_id=attempt_id,
+        question_ids=[question_ids[0]],
+        create_deck_name="Renal Remediation",
+        replace_active=False,
+    )
+
+    response = client_with_quizzes_db.get(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["attempt_id"] == attempt_id
+    assert payload["count"] == 1
+    assert payload["superseded_count"] == 0
+    assert payload["items"][0]["question_id"] == question_ids[0]
+    assert payload["items"][0]["target_deck_id"] == conversion_payload["target_deck"]["id"]
+    assert payload["items"][0]["orphaned"] is False
+
+
+def test_convert_remediation_questions_creates_new_deck(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": question_ids,
+            "create_deck_name": "Quiz Remediation Deck",
+            "replace_active": False,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["attempt_id"] == attempt_id
+    assert payload["target_deck"]["name"] == "Quiz Remediation Deck"
+    assert {result["status"] for result in payload["results"]} == {"created"}
+    assert len(payload["created_flashcard_uuids"]) == 2
+
+
+def test_convert_remediation_questions_returns_mixed_results_without_replace_active(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    deck_id = quizzes_db.add_deck("Renal Deck")
+    quizzes_db.convert_quiz_remediation_questions(
+        attempt_id=attempt_id,
+        question_ids=[question_ids[0]],
+        target_deck_id=deck_id,
+        replace_active=False,
+    )
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": question_ids,
+            "target_deck_id": deck_id,
+            "replace_active": False,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    statuses = {result["question_id"]: result["status"] for result in payload["results"]}
+    assert statuses[question_ids[0]] == "already_exists"
+    assert statuses[question_ids[1]] == "created"
+    assert len(payload["created_flashcard_uuids"]) == 1
+
+
+def test_convert_remediation_questions_replace_active_returns_superseded_and_created(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    deck_id = quizzes_db.add_deck("Renal Deck")
+    quizzes_db.convert_quiz_remediation_questions(
+        attempt_id=attempt_id,
+        question_ids=[question_ids[0]],
+        target_deck_id=deck_id,
+        replace_active=False,
+    )
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": [question_ids[0]],
+            "target_deck_id": deck_id,
+            "replace_active": True,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["results"][0]["status"] == "superseded_and_created"
+
+    read_response = client_with_quizzes_db.get(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions",
+        headers=AUTH_HEADERS,
+    )
+    assert read_response.status_code == 200
+    read_payload = read_response.json()
+    assert read_payload["count"] == 1
+    assert read_payload["superseded_count"] == 1
+
+
+def test_get_attempt_remediation_conversions_marks_orphaned_linked_flashcards(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    conversion_payload = quizzes_db.convert_quiz_remediation_questions(
+        attempt_id=attempt_id,
+        question_ids=[question_ids[0]],
+        create_deck_name="Renal Remediation",
+        replace_active=False,
+    )
+    flashcard_uuid = conversion_payload["created_flashcard_uuids"][0]
+    flashcard = quizzes_db.get_flashcard(flashcard_uuid)
+    assert flashcard is not None
+    quizzes_db.soft_delete_flashcard(flashcard_uuid, expected_version=int(flashcard["version"]))
+
+    response = client_with_quizzes_db.get(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["question_id"] == question_ids[0]
+    assert payload["items"][0]["orphaned"] is True
+
+
 def test_quiz_attempt_question_assistant_respond_persists_user_and_assistant_messages(
     client_with_quizzes_db: TestClient,
     quizzes_db: CharactersRAGDB,

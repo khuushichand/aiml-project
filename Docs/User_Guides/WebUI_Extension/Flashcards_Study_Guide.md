@@ -45,6 +45,22 @@ Retry labels:
 - Text questions use `Retry my message`.
 - Voice transcript fact-checks use `Retry transcript review`.
 
+## Quiz Remediation Conversion State
+
+Quiz-results remediation flashcards now use server-backed conversion records instead of browser-only session state.
+
+What changed:
+
+- `Already converted` status survives reloads, browser changes, and new devices.
+- Each missed question keeps one active remediation conversion plus any superseded history.
+- `Convert Again Anyway` creates a fresh active conversion and leaves the older one in history as `superseded`.
+- If linked remediation cards were deleted later, the quiz results view marks that conversion as stale and lets you reconvert normally.
+
+`Study Linked Cards` behavior:
+
+- If all active remediation conversions for an attempt point to the same live deck, the handoff keeps that deck filter.
+- If conversions span multiple decks, the handoff still opens Flashcards study for the quiz attempt, but without a deck filter.
+
 ## Scheduler Tab
 
 Open `Scheduler` from the top-level Flashcards tabs to edit deck-level review policy.

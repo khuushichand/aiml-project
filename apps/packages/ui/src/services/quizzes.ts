@@ -218,6 +218,60 @@ export type QuizRemediationGenerateRequest = {
   workspace_tag?: string | null
 }
 
+export type QuizRemediationConversionSummary = {
+  id: number
+  attempt_id: number
+  quiz_id: number
+  question_id: number
+  status: "active" | "superseded"
+  orphaned: boolean
+  superseded_by_id?: number | null
+  target_deck_id?: number | null
+  target_deck_name_snapshot?: string | null
+  flashcard_count: number
+  flashcard_uuids_json: string[]
+  source_ref_id?: string | null
+  created_at?: string | null
+  last_modified?: string | null
+  client_id: string
+  version: number
+}
+
+export type QuizRemediationConversionListResponse = {
+  attempt_id: number
+  items: QuizRemediationConversionSummary[]
+  count: number
+  superseded_count: number
+}
+
+export type QuizRemediationTargetDeck = {
+  id: number
+  name: string
+}
+
+export type QuizRemediationConvertRequest = {
+  question_ids: number[]
+  target_deck_id?: number | null
+  create_deck_name?: string | null
+  replace_active?: boolean
+}
+
+export type QuizRemediationConvertResult = {
+  question_id: number
+  status: "created" | "already_exists" | "superseded_and_created" | "failed"
+  conversion?: QuizRemediationConversionSummary | null
+  flashcard_uuids: string[]
+  error?: string | null
+}
+
+export type QuizRemediationConvertResponse = {
+  attempt_id: number
+  quiz_id: number
+  target_deck?: QuizRemediationTargetDeck | null
+  results: QuizRemediationConvertResult[]
+  created_flashcard_uuids: string[]
+}
+
 // List response types
 export type QuizListResponse = {
   items: Quiz[]
@@ -405,6 +459,31 @@ export async function getAttempt(
   return await quizAttemptsClient.get<QuizAttempt>(attemptId, {
     include_questions: params?.include_questions ? true : undefined,
     include_answers: params?.include_answers ? true : undefined
+  })
+}
+
+export async function listAttemptRemediationConversions(
+  attemptId: number,
+  options?: { signal?: AbortSignal }
+): Promise<QuizRemediationConversionListResponse> {
+  return await bgRequest<QuizRemediationConversionListResponse, AllowedPath, "GET">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/remediation-conversions` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function convertAttemptRemediationQuestions(
+  attemptId: number,
+  input: QuizRemediationConvertRequest,
+  options?: { signal?: AbortSignal }
+): Promise<QuizRemediationConvertResponse> {
+  return await bgRequest<QuizRemediationConvertResponse, AllowedPath, "POST">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/remediation-conversions/convert` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input,
+    abortSignal: options?.signal
   })
 }
 
