@@ -199,3 +199,10 @@ Record any substitutions or higher-level verification limitations directly in th
 git add tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py tldw_Server_API/tests/DB_Management/test_chacha_conversations_fts_healing.py Docs/Plans/2026-03-13-chachanotes-conversations-fts-healing-implementation-plan.md
 git commit -m "test: verify chachanotes conversations fts repair"
 ```
+
+## Execution Notes
+
+- The focused conversations-FTS regression passed after adding `_ensure_conversations_fts_triggers_sqlite()` and `_rebuild_conversations_fts_sqlite()` and wiring them into both V31->V32 and recent-persona schema backfills.
+- Verification against a copied real `ChaChaNotes.db` then surfaced a second legacy SQLite blocker in the V36->V37 flashcard scheduler path. That follow-on issue came from legacy `flashcards_fts` triggers firing during flashcard shadow/scheduler backfills.
+- The final fix set therefore also normalizes flashcard FTS before flashcard asset/scheduler backfills and adds a dedicated regression for that legacy path.
+- Live workspace verification was completed against a fresh backend instance on `http://127.0.0.1:8002`, because the long-running server on `:8000` was still serving the pre-fix code path.

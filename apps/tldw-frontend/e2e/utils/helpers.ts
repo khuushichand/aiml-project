@@ -72,6 +72,24 @@ export async function waitForConnection(page: Page, timeoutMs = 20000): Promise<
     // Log connection snapshot for debugging
     await logConnectionState(page, 'connection-timeout');
   }
+
+  // Dismiss any connection error modals that might block interaction
+  await dismissConnectionModals(page);
+}
+
+/**
+ * Dismiss any connection/server error modals (Ant Design modals)
+ */
+export async function dismissConnectionModals(page: Page): Promise<void> {
+  try {
+    const dismissBtn = page.getByRole('button', { name: /dismiss/i });
+    if (await dismissBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await dismissBtn.click();
+      await page.waitForTimeout(500);
+    }
+  } catch {
+    // No modal to dismiss
+  }
 }
 
 /**

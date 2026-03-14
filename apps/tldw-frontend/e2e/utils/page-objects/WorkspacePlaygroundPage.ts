@@ -85,9 +85,8 @@ export class WorkspacePlaygroundPage {
 
   async hideSourcesPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
+    await this.sourcesPanel
       .getByRole("button", { name: /hide sources/i })
-      .first()
       .click({ force: true })
     await expect(this.sourcesPanel).toBeHidden({ timeout: 10_000 })
   }
@@ -103,9 +102,8 @@ export class WorkspacePlaygroundPage {
 
   async hideStudioPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
+    await this.studioPanel
       .getByRole("button", { name: /hide studio/i })
-      .first()
       .click({ force: true })
     await expect(this.studioPanel).toBeHidden({ timeout: 10_000 })
   }

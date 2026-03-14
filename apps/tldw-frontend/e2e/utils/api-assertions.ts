@@ -238,7 +238,12 @@ export function startApiCapture(page: Page): void {
 
   page.on("requestfinished", async (request: Request) => {
     if (!request.url().includes("/api/")) return
-    const response = await request.response()
+    let response: Response | null = null
+    try {
+      response = await request.response()
+    } catch {
+      return
+    }
     if (!response) return
 
     let requestBody: unknown = null

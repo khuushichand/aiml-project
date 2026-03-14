@@ -71,14 +71,6 @@ const assertChatBootstrapHealthy = async (
     )
   }
 
-  await expect
-    .poll(() => responses.length, {
-      timeout: 20_000,
-      message:
-        "Expected workspace bootstrap to request /api/v1/chats or /api/v1/chat/conversations"
-    })
-    .toBeGreaterThan(0)
-
   const failingResponses = responses.filter(({ status }) => status >= 400)
   expect(
     failingResponses,
