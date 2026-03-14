@@ -261,7 +261,25 @@ def _probe_media_duration_seconds(media_path: Path) -> float | None:
             stderr=subprocess.PIPE,
             timeout=_DEFAULT_FFPROBE_TIMEOUT_SECONDS,
         )
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except FileNotFoundError:
+        logger.warning("ffprobe duration probe failed for {}: ffprobe executable is unavailable", media_path)
+        return None
+    except subprocess.TimeoutExpired as exc:
+        logger.warning(
+            "ffprobe duration probe failed for {}: {} timed out after {} seconds",
+            media_path,
+            exc.cmd,
+            exc.timeout,
+        )
+        return None
+    except subprocess.CalledProcessError as exc:
+        stderr_text = (exc.stderr or b"").decode("utf-8", "ignore").strip()
+        logger.warning(
+            "ffprobe duration probe failed for {}: exit code {}{}",
+            media_path,
+            exc.returncode,
+            f" ({stderr_text})" if stderr_text else "",
+        )
         return None
 
     try:
@@ -736,12 +754,12 @@ def _build_transition_video_command(
             boundary_transition = boundary_transitions[index - 1]
             output_label = f"v{index}"
             next_label = f"{index}:v"
+            cumulative_offset += effective_durations_seconds[index - 1]
             if boundary_transition == "cut":
                 filter_parts.append(
                     f"[{current_label}][{next_label}]concat=n=2:v=1:a=0[{output_label}]"
                 )
             else:
-                cumulative_offset += effective_durations_seconds[index - 1]
                 filter_parts.append(
                     f"[{current_label}][{next_label}]xfade=transition={boundary_transition}:duration={_TRANSITION_DURATION_SECONDS:.2f}:offset={cumulative_offset:.2f}[{output_label}]"
                 )

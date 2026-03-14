@@ -147,6 +147,18 @@ const normalizeTimingMode = (
     : fallback
 }
 
+const resolveTimingMode = (
+  candidate: unknown,
+  manualDurationMs: number | null,
+  fallback: PresentationStudioTimingMode = "auto"
+): PresentationStudioTimingMode => {
+  if (!manualDurationMs) {
+    return "auto"
+  }
+
+  return normalizeTimingMode(candidate, fallback === "manual" ? "manual" : "auto")
+}
+
 const normalizeSlide = (
   slide: Partial<PresentationStudioSlide> & { metadata?: Record<string, any> },
   order: number
@@ -172,8 +184,9 @@ const normalizeSlide = (
       ? studio.slideId
       : createSlideId()
   const manualDurationMs = normalizeManualDuration(studio.manual_duration_ms)
-  const timingMode = normalizeTimingMode(
+  const timingMode = resolveTimingMode(
     studio.timing_mode,
+    manualDurationMs,
     manualDurationMs ? "manual" : "auto"
   )
 
@@ -290,8 +303,9 @@ const mergeSlideMetadata = (
         localStudio.transition ?? remoteStudio.transition,
         normalizeTransition(remoteStudio.transition)
       ),
-      timing_mode: normalizeTimingMode(
+      timing_mode: resolveTimingMode(
         localStudio.timing_mode ?? remoteStudio.timing_mode,
+        mergedManualDurationMs,
         mergedManualDurationMs ? "manual" : "auto"
       ),
       manual_duration_ms: mergedManualDurationMs,
@@ -618,6 +632,9 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
             studioUpdates &&
               Object.prototype.hasOwnProperty.call(studioUpdates, "manual_duration_ms")
           )
+          const hasTimingModeUpdate = Boolean(
+            studioUpdates && Object.prototype.hasOwnProperty.call(studioUpdates, "timing_mode")
+          )
           const nextManualDurationMs = hasManualDurationUpdate
             ? normalizeManualDuration(studioUpdates?.manual_duration_ms)
             : slide.metadata.studio.manual_duration_ms
@@ -625,10 +642,16 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
             studioUpdates?.transition,
             slide.metadata.studio.transition
           )
-          const nextTimingMode = normalizeTimingMode(
-            studioUpdates?.timing_mode,
-            nextManualDurationMs ? "manual" : slide.metadata.studio.timing_mode
-          )
+          const nextTimingMode = hasTimingModeUpdate
+            ? normalizeTimingMode(
+                studioUpdates?.timing_mode,
+                nextManualDurationMs ? "manual" : "auto"
+              )
+            : hasManualDurationUpdate
+              ? nextManualDurationMs
+                ? "manual"
+                : "auto"
+              : slide.metadata.studio.timing_mode
           const nextMetadata =
             updates.metadata && typeof updates.metadata === "object"
               ? {

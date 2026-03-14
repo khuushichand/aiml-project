@@ -136,7 +136,6 @@ Required coverage:
 - manual timing padding for narrated slides
 - transition mapping from UI preset to ffmpeg filter name
 - transitioned deck runtime preserving the sum of effective slide durations
-- transition mapping from UI preset to ffmpeg filter name
 - cut-only decks still using the concat path
 - transitioned decks using filtered final video assembly
 - timeout/runtime math using resolved deck runtime

@@ -45,18 +45,23 @@ export const formatNarrationDuration = (durationMs: number | null | undefined): 
 export const getEffectiveSlideDurationMs = (
   slide: PresentationStudioEditorSlide
 ): number | null => {
+  const audioDurationMs =
+    typeof slide.metadata.studio.audio.duration_ms === "number" &&
+    slide.metadata.studio.audio.duration_ms > 0
+      ? slide.metadata.studio.audio.duration_ms
+      : null
+
   if (
     slide.metadata.studio.timing_mode === "manual" &&
     typeof slide.metadata.studio.manual_duration_ms === "number" &&
     slide.metadata.studio.manual_duration_ms > 0
   ) {
-    return slide.metadata.studio.manual_duration_ms
+    return audioDurationMs
+      ? Math.max(audioDurationMs, slide.metadata.studio.manual_duration_ms)
+      : slide.metadata.studio.manual_duration_ms
   }
 
-  return typeof slide.metadata.studio.audio.duration_ms === "number" &&
-    slide.metadata.studio.audio.duration_ms > 0
-    ? slide.metadata.studio.audio.duration_ms
-    : null
+  return audioDurationMs
 }
 
 export const formatTransitionLabel = (

@@ -197,4 +197,46 @@ describe("presentation studio store", () => {
     expect(slide?.metadata?.studio?.timing_mode).toBe("manual")
     expect(slide?.metadata?.studio?.manual_duration_ms).toBe(45_000)
   })
+
+  it("keeps manual timing selected while the duration is being authored", () => {
+    const store = usePresentationStudioStore.getState()
+    store.loadProject(sampleProject)
+
+    store.updateSlide("slide-1", {
+      metadata: {
+        studio: {
+          timing_mode: "manual"
+        }
+      }
+    })
+
+    const slide = usePresentationStudioStore.getState().slides[0]
+    expect(slide?.metadata?.studio?.timing_mode).toBe("manual")
+    expect(slide?.metadata?.studio?.manual_duration_ms).toBeNull()
+  })
+
+  it("switches back to auto timing when manual duration is cleared", () => {
+    const store = usePresentationStudioStore.getState()
+    store.loadProject(sampleProject)
+
+    store.updateSlide("slide-1", {
+      metadata: {
+        studio: {
+          timing_mode: "manual",
+          manual_duration_ms: 45_000
+        }
+      }
+    })
+    store.updateSlide("slide-1", {
+      metadata: {
+        studio: {
+          manual_duration_ms: null
+        }
+      }
+    })
+
+    const slide = usePresentationStudioStore.getState().slides[0]
+    expect(slide?.metadata?.studio?.manual_duration_ms).toBeNull()
+    expect(slide?.metadata?.studio?.timing_mode).toBe("auto")
+  })
 })

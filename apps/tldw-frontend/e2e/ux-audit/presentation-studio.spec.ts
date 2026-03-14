@@ -88,6 +88,17 @@ const setLightMode = async (page: Page) => {
   })
 }
 
+const waitForStablePaint = async (page: Page) => {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve())
+        })
+      })
+  )
+}
+
 const captureViewportState = async (
   page: Page,
   viewport: ViewportConfig
@@ -98,7 +109,7 @@ const captureViewportState = async (
 }> => {
   await page.setViewportSize({ width: viewport.width, height: viewport.height })
   await setLightMode(page)
-  await page.waitForTimeout(500)
+  await waitForStablePaint(page)
 
   const screenshotName = `presentation-studio-${viewport.key}.png`
   const screenshotPath = path.join(SCREENSHOTS_DIR, screenshotName)
@@ -181,7 +192,10 @@ const writeAuditData = (data: PresentationStudioAuditData) => {
 
 const createSeedProject = async () => {
   const serverUrl = process.env.TLDW_SERVER_URL || "http://127.0.0.1:8000"
-  const apiKey = process.env.TLDW_API_KEY || "THIS-IS-A-SECURE-KEY-123-FAKE-KEY"
+  const apiKey = process.env.TLDW_API_KEY
+  if (!apiKey) {
+    throw new Error("presentation_studio_audit_requires_tldw_api_key")
+  }
   const uniqueId = Date.now()
   const response = await fetchWithApiKey(`${serverUrl}/api/v1/slides/presentations`, apiKey, {
     method: "POST",
@@ -271,7 +285,6 @@ test.describe("Presentation Studio UX Audit", () => {
     }
 
     await dismissModals(page)
-    await page.waitForTimeout(1500)
 
     const slideRail = page.getByTestId("presentation-studio-slide-rail")
     let editorVisible = false
@@ -330,8 +343,7 @@ test.describe("Presentation Studio UX Audit", () => {
       await expect(page.getByTestId("presentation-studio-slide-card").nth(0)).toContainText(
         "Problem framing"
       )
-
-      await page.waitForTimeout(1800)
+      await expect(page.getByLabel("Slide title")).toHaveValue("Problem framing")
     } else {
       detailFlowScreenshot = "presentation-studio-detail-loading.png"
       await setLightMode(page)

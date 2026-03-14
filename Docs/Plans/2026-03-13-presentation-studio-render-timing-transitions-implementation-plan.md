@@ -26,7 +26,7 @@ Add tests that expect helper behavior for:
 
 **Step 2: Run test to verify it fails**
 
-Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides/test_presentation_rendering.py -k "timing or transition" -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides/test_presentation_rendering.py -k "timing or transition" -v`
 
 Expected: FAIL because the helpers do not exist yet.
 
@@ -62,7 +62,7 @@ Add a render test expecting narrated slides with longer manual timing to emit a 
 
 **Step 2: Run test to verify it fails**
 
-Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides/test_presentation_rendering.py -k "padding or cut_only" -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides/test_presentation_rendering.py -k "padding or cut_only" -v`
 
 Expected: FAIL because segment commands still rely on `-shortest`.
 
@@ -99,7 +99,7 @@ Add a render test expecting:
 
 **Step 2: Run test to verify it fails**
 
-Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides/test_presentation_rendering.py -k "transitioned or filter_complex" -v`
+Run: `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides/test_presentation_rendering.py -k "transitioned or filter_complex" -v`
 
 Expected: FAIL because final assembly still always uses concat-copy.
 
@@ -132,7 +132,7 @@ git commit -m "feat: add presentation render transition assembly"
 Run:
 
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides/test_presentation_rendering.py tldw_Server_API/tests/Slides/test_presentation_render_jobs.py -v
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides/test_presentation_rendering.py tldw_Server_API/tests/Slides/test_presentation_render_jobs.py -v
 ```
 
 Expected: PASS for all affected Slides render tests.
@@ -142,7 +142,7 @@ Expected: PASS for all affected Slides render tests.
 Run:
 
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides -v
+source .venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides -v
 ```
 
 Expected: PASS with no render regressions.
@@ -152,7 +152,7 @@ Expected: PASS with no render regressions.
 Run:
 
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/presentation-studio-ux-audit/tldw_Server_API/app/core/Slides/presentation_rendering.py /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/presentation-studio-ux-audit/tldw_Server_API/tests/Slides/test_presentation_rendering.py -f json -o /tmp/bandit_presentation_render_timing_transitions.json
+source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/Slides/presentation_rendering.py tldw_Server_API/tests/Slides/test_presentation_rendering.py -f json -o /tmp/bandit_presentation_render_timing_transitions.json
 ```
 
 Expected: `0` findings in touched code.

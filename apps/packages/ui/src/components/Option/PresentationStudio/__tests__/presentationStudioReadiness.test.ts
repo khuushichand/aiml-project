@@ -64,7 +64,7 @@ describe("presentationStudioReadiness", () => {
     ])
   })
 
-  it("prefers manual slide timing over narration duration when present", () => {
+  it("uses the longer of manual timing and narration duration", () => {
     const readiness = describeSlideReadiness(
       createSlide({
         metadata: {
@@ -73,14 +73,14 @@ describe("presentationStudioReadiness", () => {
             transition: "wipe",
             timing_mode: "manual",
             manual_duration_ms: 45_000,
-            audio: { status: "ready", duration_ms: 18_000, asset_ref: "output:1" },
+            audio: { status: "ready", duration_ms: 60_000, asset_ref: "output:1" },
             image: { status: "ready", asset_ref: "output:2" }
           }
         }
       })
     )
 
-    expect((readiness as any).effectiveTiming).toBe("45s")
+    expect((readiness as any).effectiveTiming).toBe("1m 0s")
     expect((readiness as any).transitionLabel).toBe("Wipe")
   })
 

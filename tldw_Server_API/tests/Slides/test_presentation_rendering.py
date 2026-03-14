@@ -7,6 +7,8 @@ from PIL import Image, ImageChops
 from tldw_Server_API.app.core.Slides.presentation_rendering import (
     PresentationRenderError,
     _TRANSITION_DURATION_SECONDS,
+    _build_transition_video_command,
+    _probe_media_duration_seconds,
     _resolve_effective_slide_duration_seconds,
     _resolve_ffmpeg_timeout_seconds,
     _resolve_slide_audio_duration_seconds,
@@ -82,6 +84,30 @@ def test_resolve_slide_audio_duration_prefers_metadata_and_probes_asset_when_nee
     )
 
 
+def test_probe_media_duration_logs_ffprobe_failures(monkeypatch, tmp_path):
+    media_path = tmp_path / "slide.wav"
+    media_path.write_bytes(b"audio")
+    logged_messages: list[str] = []
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._resolve_ffprobe_path",
+        lambda: "/usr/bin/ffprobe",
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired("ffprobe", 5)),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering.logger.warning",
+        lambda message, *args: logged_messages.append(message.format(*args)),
+    )
+
+    assert _probe_media_duration_seconds(media_path) is None
+    assert logged_messages == [
+        f"ffprobe duration probe failed for {media_path}: ffprobe timed out after 5 seconds"
+    ]
+
+
 def test_resolve_effective_slide_duration_and_transition_filter():
     slide = {
         "speaker_notes": "Short narration",
@@ -97,6 +123,30 @@ def test_resolve_effective_slide_duration_and_transition_filter():
     assert _resolve_effective_slide_duration_seconds(slide, audio_duration_seconds=18.0) == 45.0
     assert _resolve_slide_transition_filter(slide) == "wipeleft"
     assert _resolve_slide_transition_filter({"metadata": {"studio": {"transition": "unknown"}}}) == "fade"
+
+
+def test_build_transition_video_command_offsets_xfade_after_prior_cut_boundaries(tmp_path):
+    command = _build_transition_video_command(
+        ffmpeg_path="/usr/bin/ffmpeg",
+        video_paths=[
+            tmp_path / "slide-0.mp4",
+            tmp_path / "slide-1.mp4",
+            tmp_path / "slide-2.mp4",
+        ],
+        effective_durations_seconds=[5.0, 4.0, 6.0],
+        boundary_transitions=["cut", "wipeleft"],
+        output_path=tmp_path / "transitioned.mp4",
+        output_format="mp4",
+    )
+
+    filter_index = command.index("-filter_complex") + 1
+    filter_complex = command[filter_index]
+
+    assert "concat=n=2:v=1:a=0" in filter_complex
+    assert (
+        f"xfade=transition=wipeleft:duration={_TRANSITION_DURATION_SECONDS:.2f}:offset=9.00"
+        in filter_complex
+    )
 
 
 def test_render_presentation_video_builds_slide_segments_from_visuals_and_audio(tmp_path, monkeypatch):
