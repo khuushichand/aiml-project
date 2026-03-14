@@ -17,6 +17,8 @@ class QuizSourceType(str, Enum):
     NOTE = "note"
     FLASHCARD_DECK = "flashcard_deck"
     FLASHCARD_CARD = "flashcard_card"
+    QUIZ_ATTEMPT = "quiz_attempt"
+    QUIZ_ATTEMPT_QUESTION = "quiz_attempt_question"
 
 
 AnswerValue = int | str | list[int] | dict[str, str]

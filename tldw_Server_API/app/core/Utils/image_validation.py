@@ -3,11 +3,13 @@
 #
 # Imports
 import base64
+import io
 import os
 import re
 from typing import Optional
 
 from loguru import logger
+from PIL import Image
 
 _IMAGE_VALIDATION_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -55,6 +57,25 @@ def get_allowed_image_mime_types() -> set[str]:
     except (TypeError, ValueError):
         pass
     return {"image/png", "image/jpeg", "image/webp"}
+
+
+def get_max_flashcard_asset_bytes() -> int:
+    """Resolve the flashcard asset byte cap (defaulting to chat image limits)."""
+    raw_bytes = os.getenv("FLASHCARD_ASSET_MAX_BYTES")
+    if raw_bytes is not None:
+        try:
+            return max(1, int(raw_bytes))
+        except (TypeError, ValueError):
+            logger.warning("Invalid FLASHCARD_ASSET_MAX_BYTES={!r}; falling back to defaults.", raw_bytes)
+
+    raw_mb = os.getenv("FLASHCARD_ASSET_MAX_MB")
+    if raw_mb is not None:
+        try:
+            return max(1, int(raw_mb)) * 1024 * 1024
+        except (TypeError, ValueError):
+            logger.warning("Invalid FLASHCARD_ASSET_MAX_MB={!r}; falling back to defaults.", raw_mb)
+
+    return get_max_base64_bytes()
 
 # Expose module-level variables for convenience (computed at import time)
 MAX_BASE64_BYTES = get_max_base64_bytes()
@@ -210,6 +231,34 @@ def validate_image_url(url: str) -> tuple[bool, Optional[str], Optional[bytes]]:
         # For now, we don't support external URLs for security reasons
         logger.warning(f"External image URLs not supported: {url[:100]}")
         return False, None, None
+
+
+def validate_uploaded_image_bytes(
+    image_bytes: bytes,
+    mime_type: str,
+) -> tuple[bool, Optional[str], Optional[int], Optional[int]]:
+    """Validate uploaded raster image bytes and return dimensions when possible."""
+    normalized_mime = str(mime_type or "").lower().strip()
+    if not validate_mime_type(normalized_mime):
+        return False, f"Unsupported image MIME type: {mime_type}", None, None
+
+    max_bytes = get_max_flashcard_asset_bytes()
+    if len(image_bytes) > max_bytes:
+        return False, f"Image exceeds max size of {max_bytes} bytes", None, None
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            width, height = img.size
+            detected_mime = Image.MIME.get(img.format or "")
+            img.verify()
+    except _IMAGE_VALIDATION_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Uploaded image failed integrity validation: {}", exc)
+        return False, "Uploaded image failed integrity validation", None, None
+
+    if detected_mime and detected_mime.lower() != normalized_mime:
+        return False, f"Uploaded image MIME mismatch: expected {normalized_mime}, detected {detected_mime.lower()}", None, None
+
+    return True, None, int(width), int(height)
 
 
 #

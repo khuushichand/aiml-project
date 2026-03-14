@@ -1559,6 +1559,11 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
 
   const renderAssignmentAlert = () => {
     if (!hasAssignmentContext || assignmentAlertDismissed) return null
+    const assignmentPastDueMessage = assignmentIsOverdue
+      ? t("option:quiz.assignmentPastDue", {
+        defaultValue: "This shared assignment is past due."
+      })
+      : null
     return (
       <Alert
         data-testid="quiz-assignment-alert"
@@ -1566,15 +1571,16 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
         showIcon
         closable
         onClose={() => setAssignmentAlertDismissed(true)}
-        title={assignmentIsOverdue
-          ? t("option:quiz.assignmentPastDue", {
-            defaultValue: "This shared assignment is past due."
-          })
-          : t("option:quiz.assignmentActive", {
-            defaultValue: "This quiz was opened from a shared assignment link."
-          })}
+        title={t("option:quiz.assignmentActive", {
+          defaultValue: "This quiz was opened from a shared assignment link."
+        })}
         description={(
           <div className="space-y-1 text-sm">
+            {assignmentPastDueMessage && (
+              <Typography.Text className="block">
+                {assignmentPastDueMessage}
+              </Typography.Text>
+            )}
             {assignmentDueAtLabel && (
               <Typography.Text className="block">
                 {t("option:quiz.assignmentDueAt", {

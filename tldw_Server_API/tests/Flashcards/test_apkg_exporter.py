@@ -4,6 +4,8 @@ import sqlite3
 import zipfile
 from datetime import datetime, timezone
 
+import pytest
+
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
@@ -62,16 +64,19 @@ def _import_rows_from_apkg(apkg_bytes: bytes):
                 front = fields[0] if len(fields) > 0 else ''
                 back = fields[1] if len(fields) > 1 else ''
                 extra = fields[2] if len(fields) > 2 else ''
+                notes = fields[3] if len(fields) > 3 else ''
                 model_type = 'basic' if ords == [0] else 'basic_reverse'
             elif model_name == 'Cloze':
                 front = fields[0] if len(fields) > 0 else ''
                 back = ''
                 extra = fields[1] if len(fields) > 1 else ''
+                notes = fields[2] if len(fields) > 2 else ''
                 model_type = 'cloze'
             else:
                 front = fields[0] if fields else ''
                 back = ''
                 extra = ''
+                notes = ''
                 model_type = ''
             # Parse tags (space-delimited with leading/trailing spaces)
             tags = [t for t in tags_str.split(' ') if t]
@@ -82,6 +87,7 @@ def _import_rows_from_apkg(apkg_bytes: bytes):
                 'front': front,
                 'back': back,
                 'extra': extra,
+                'notes': notes,
                 'tags': tags,
                 'ords': ords,
                 'cards': cards,
@@ -253,12 +259,12 @@ def test_apkg_round_trip_models_and_fields():
         # First is basic_reverse
         mid0, flds0 = notes[0]
         fields0 = flds0.split('\x1f')
-        # Basic has 3 fields
-        assert len(fields0) == 3
+        # Basic has 4 fields with Notes preserved for tldw exports
+        assert len(fields0) == 4
         # Second is cloze
         mid1, flds1 = notes[1]
         fields1 = flds1.split('\x1f')
-        assert len(fields1) == 2
+        assert len(fields1) == 3
 
         # Cards ords: expect [0,1] for basic_reverse and [0,1] for cloze
         cards = conn.execute("SELECT nid, ord FROM cards ORDER BY nid, ord").fetchall()
@@ -301,10 +307,70 @@ def test_apkg_importer_stub_round_trip_content():
     basic = next(r for r in imported if r['model_type'] in ('basic', 'basic_reverse'))
     cloze = next(r for r in imported if r['model_type'] == 'cloze')
     assert basic['front'] == 'F0' and basic['back'] == 'B0' and basic['extra'] == 'E0'
+    assert basic['notes'] == ''
     assert cloze['front'].startswith('x') and '{{c1::' in rows[1]['front']
     assert cloze['extra'] == 'EC'
+    assert cloze['notes'] == ''
     # Cloze should have two ords [0,1]
     assert cloze['ords'] == [0, 1]
+
+
+def test_apkg_export_translates_managed_asset_refs_and_preserves_notes():
+    rows = [
+        {
+            "deck_name": "ManagedDeck",
+            "model_type": "basic",
+            "front": "Question ![Slide](flashcard-asset://asset-1)",
+            "back": "Answer",
+            "extra": "",
+            "notes": "Notes ![Notes image](flashcard-asset://asset-2)",
+            "tags_json": json.dumps(["managed"]),
+        }
+    ]
+
+    def asset_loader(asset_uuid: str):
+        return {
+            "content": b"\x89PNG\r\n\x1a\nmanaged-" + asset_uuid.encode("utf-8"),
+            "mime_type": "image/png",
+            "original_filename": f"{asset_uuid}.png",
+        }
+
+    apkg = export_apkg_from_rows(rows, asset_loader=asset_loader)
+    conn, zf = _open_sqlite_from_apkg(apkg)
+    try:
+        media_map = json.loads(zf.read("media").decode("utf-8"))
+        assert len(media_map) == 2
+
+        flds = conn.execute("SELECT flds FROM notes").fetchone()[0].split("\x1f")
+        assert len(flds) == 4
+        assert "flashcard-asset://" not in flds[0]
+        assert "flashcard-asset://" not in flds[3]
+        assert "<img" in flds[0]
+        assert "<img" in flds[3]
+    finally:
+        conn.close()
+        zf.close()
+
+
+def test_apkg_export_rejects_oversized_total_media():
+    rows = [
+        {
+            "deck_name": "TooBigDeck",
+            "model_type": "basic",
+            "front": "![Slide](flashcard-asset://asset-1)",
+            "back": "Answer",
+        }
+    ]
+
+    def asset_loader(asset_uuid: str):
+        return {
+            "content": b"0123456789",
+            "mime_type": "image/png",
+            "original_filename": f"{asset_uuid}.png",
+        }
+
+    with pytest.raises(ValueError, match="APKG media exceeds max total size"):
+        export_apkg_from_rows(rows, asset_loader=asset_loader, max_total_media_bytes=4)
 
 
 def test_apkg_importer_stub_scheduling_and_decks():

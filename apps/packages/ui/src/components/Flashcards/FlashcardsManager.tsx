@@ -3,7 +3,7 @@ import { Button, Space, Tabs, Tooltip } from "antd"
 import { HelpCircle } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
-import { ReviewTab, ManageTab, ImportExportTab } from "./tabs"
+import { ReviewTab, ManageTab, ImportExportTab, SchedulerTab } from "./tabs"
 import { KeyboardShortcutsModal } from "./components"
 import type { Flashcard } from "@/services/flashcards"
 import { parseFlashcardsGenerateIntentFromLocation } from "@/services/tldw/flashcards-generate-handoff"
@@ -20,6 +20,7 @@ import {
  * - Study: Spaced repetition review and cram loops
  * - Manage: Browse, filter, create, edit, bulk operations
  * - Transfer: CSV/APKG import and export workflows
+ * - Scheduler: Deck-level scheduler policy editing and queue visibility
  */
 export const FlashcardsManager: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
@@ -47,6 +48,8 @@ export const FlashcardsManager: React.FC = () => {
   const [reviewOverrideCard, setReviewOverrideCard] = React.useState<Flashcard | null>(null)
   const [openCreateSignal, setOpenCreateSignal] = React.useState(0)
   const [shortcutsModalOpen, setShortcutsModalOpen] = React.useState(false)
+  const [schedulerDirty, setSchedulerDirty] = React.useState(false)
+  const [schedulerDiscardSignal, setSchedulerDiscardSignal] = React.useState(0)
 
   // Listen for "?" key to open keyboard shortcuts modal
   React.useEffect(() => {
@@ -95,12 +98,30 @@ export const FlashcardsManager: React.FC = () => {
     })
   }, [initialStudyIntent?.attemptId, initialStudyIntent?.deckId, initialStudyIntent?.quizId, reviewDeckId])
 
+  const handleTabChange = React.useCallback(
+    (nextTab: string) => {
+      if (activeTab === "scheduler" && nextTab !== "scheduler" && schedulerDirty) {
+        const shouldDiscard = window.confirm(
+          t("option:flashcards.schedulerDiscardChangesPrompt", {
+            defaultValue: "Discard unsaved scheduler changes?"
+          })
+        )
+        if (!shouldDiscard) return
+        setSchedulerDirty(false)
+        setSchedulerDiscardSignal((current) => current + 1)
+      }
+
+      setActiveTab(nextTab)
+    },
+    [activeTab, schedulerDirty, t]
+  )
+
   return (
     <div className="mx-auto max-w-6xl p-4">
       <Tabs
         data-testid="flashcards-tabs"
         activeKey={activeTab}
-        onChange={setActiveTab}
+        onChange={handleTabChange}
         tabBarExtraContent={(
           <Space size={4}>
             <Button
@@ -163,6 +184,19 @@ export const FlashcardsManager: React.FC = () => {
               defaultValue: "Transfer"
             }),
             children: <ImportExportTab generateIntent={initialGenerateIntent} />
+          },
+          {
+            key: "scheduler",
+            label: t("option:flashcards.tabScheduler", {
+              defaultValue: "Scheduler"
+            }),
+            children: (
+              <SchedulerTab
+                isActive={activeTab === "scheduler"}
+                onDirtyChange={setSchedulerDirty}
+                discardSignal={schedulerDiscardSignal}
+              />
+            )
           }
         ]}
       />
@@ -170,7 +204,13 @@ export const FlashcardsManager: React.FC = () => {
       <KeyboardShortcutsModal
         open={shortcutsModalOpen}
         onClose={() => setShortcutsModalOpen(false)}
-        activeTab={activeTab === "importExport" ? "import" : (activeTab as "review" | "cards")}
+        activeTab={
+          activeTab === "importExport"
+            ? "import"
+            : activeTab === "scheduler"
+              ? "scheduler"
+              : (activeTab as "review" | "cards")
+        }
       />
     </div>
   )
