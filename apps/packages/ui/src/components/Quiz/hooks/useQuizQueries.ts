@@ -480,13 +480,28 @@ export function useQuizAttemptQuestionAssistantRespondMutation() {
       questionId: number
       request: StudyAssistantRespondRequest
       signal?: AbortSignal
-    }) =>
-      respondQuizAttemptQuestionAssistant(
+    }) => {
+      const cached = qc.getQueryData<StudyAssistantContextResponse>([
+        "quizzes:assistant",
+        params.attemptId,
+        params.questionId
+      ])
+      const request = params.request.expected_thread_version != null
+        ? params.request
+        : cached?.thread?.version != null
+          ? {
+              ...params.request,
+              expected_thread_version: cached.thread.version
+            }
+          : params.request
+
+      return respondQuizAttemptQuestionAssistant(
         params.attemptId,
         params.questionId,
-        params.request,
+        request,
         params.signal ? { signal: params.signal } : undefined
-      ),
+      )
+    },
     onSuccess: (response, variables) => {
       qc.setQueryData<StudyAssistantContextResponse>(
         ["quizzes:assistant", variables.attemptId, variables.questionId],

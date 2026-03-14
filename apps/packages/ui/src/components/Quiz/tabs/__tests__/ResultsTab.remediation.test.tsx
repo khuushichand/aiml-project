@@ -12,6 +12,7 @@ import {
 } from "../../hooks"
 import {
   useCreateDeckMutation,
+  useCreateFlashcardsBulkMutation,
   useCreateFlashcardMutation,
   useDecksQuery
 } from "@/components/Flashcards/hooks/useFlashcardQueries"
@@ -19,6 +20,7 @@ import {
 const mocks = vi.hoisted(() => ({
   createDeck: vi.fn(),
   createFlashcard: vi.fn(),
+  createFlashcardsBulk: vi.fn(),
   navigate: vi.fn(),
   remediationQuiz: vi.fn(),
   assistantRespond: vi.fn()
@@ -68,7 +70,8 @@ vi.mock("../../hooks", () => ({
 vi.mock("@/components/Flashcards/hooks/useFlashcardQueries", () => ({
   useDecksQuery: vi.fn(),
   useCreateDeckMutation: vi.fn(),
-  useCreateFlashcardMutation: vi.fn()
+  useCreateFlashcardMutation: vi.fn(),
+  useCreateFlashcardsBulkMutation: vi.fn()
 }))
 
 vi.mock("@/hooks/useTTS", () => ({
@@ -108,6 +111,10 @@ describe("ResultsTab remediation panel", () => {
 
     mocks.createDeck.mockResolvedValue({ id: 99, name: "Recovery Deck" })
     mocks.createFlashcard.mockResolvedValue({ uuid: "new-card" })
+    mocks.createFlashcardsBulk.mockResolvedValue([
+      { uuid: "new-card-1" },
+      { uuid: "new-card-2" }
+    ])
     mocks.remediationQuiz.mockResolvedValue({
       quiz: {
         id: 55,
@@ -293,6 +300,10 @@ describe("ResultsTab remediation panel", () => {
       mutateAsync: mocks.createFlashcard,
       isPending: false
     } as any)
+    vi.mocked(useCreateFlashcardsBulkMutation).mockReturnValue({
+      mutateAsync: mocks.createFlashcardsBulk,
+      isPending: false
+    } as any)
   })
 
   const openDetails = async () => {
@@ -357,5 +368,33 @@ describe("ResultsTab remediation panel", () => {
     expect(mocks.navigate).toHaveBeenCalledWith(
       expect.stringContaining("/flashcards?tab=review&study_source=quiz&quiz_id=7&attempt_id=101")
     )
+  })
+
+  it("creates missed-question flashcards with one bulk mutation", async () => {
+    await openDetails()
+
+    fireEvent.click(screen.getByRole("button", { name: /create remediation flashcards/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Destination deck")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /^create flashcards$/i }))
+
+    await waitFor(() => {
+      expect(mocks.createFlashcardsBulk).toHaveBeenCalledWith([
+        expect.objectContaining({
+          deck_id: 3,
+          front: "Which structure filters blood?",
+          source_ref_id: "quiz-attempt:101:question:12"
+        }),
+        expect.objectContaining({
+          deck_id: 3,
+          front: "Which nephron segment reabsorbs sodium without water?",
+          source_ref_id: "quiz-attempt:101:question:13"
+        })
+      ])
+    })
+    expect(mocks.createFlashcard).not.toHaveBeenCalled()
   })
 })

@@ -35,7 +35,7 @@ import {
 } from "../hooks"
 import {
   useCreateDeckMutation,
-  useCreateFlashcardMutation,
+  useCreateFlashcardsBulkMutation,
   useDecksQuery
 } from "@/components/Flashcards/hooks/useFlashcardQueries"
 import type { AnswerValue, QuestionPublic, QuizAnswer } from "@/services/quizzes"
@@ -220,9 +220,9 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
     enabled: selectedAttemptId != null
   })
   const createDeckMutation = useCreateDeckMutation()
-  const createFlashcardMutation = useCreateFlashcardMutation()
+  const createFlashcardsBulkMutation = useCreateFlashcardsBulkMutation()
   const generateRemediationQuizMutation = useGenerateRemediationQuizMutation()
-  const flashcardMutationPending = createDeckMutation.isPending || createFlashcardMutation.isPending
+  const flashcardMutationPending = createDeckMutation.isPending || createFlashcardsBulkMutation.isPending
 
   const attemptsQueryParams = React.useMemo(() => ({
     limit: 200,
@@ -820,20 +820,18 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
       quizMap.get(selectedAttemptDetails.quiz_id)?.name ?? `Quiz #${selectedAttemptDetails.quiz_id}`
 
     try {
-      await Promise.all(
-        dedupedEntries.map((entry) =>
-          createFlashcardMutation.mutateAsync({
-            deck_id: targetDeckId,
-            front: entry.questionText,
-            back: `Correct answer: ${entry.correctAnswerText}${
-              entry.explanation ? `\n\nExplanation: ${entry.explanation}` : ""
-            }`,
-            notes: `Created from quiz "${quizName}" (attempt #${selectedAttemptDetails.id}). Your answer: ${entry.userAnswerText}`,
-            tags: ["quiz-missed", "quiz-review"],
-            source_ref_type: "manual",
-            source_ref_id: `quiz-attempt:${selectedAttemptDetails.id}:question:${entry.questionId}`
-          })
-        )
+      await createFlashcardsBulkMutation.mutateAsync(
+        dedupedEntries.map((entry) => ({
+          deck_id: targetDeckId,
+          front: entry.questionText,
+          back: `Correct answer: ${entry.correctAnswerText}${
+            entry.explanation ? `\n\nExplanation: ${entry.explanation}` : ""
+          }`,
+          notes: `Created from quiz "${quizName}" (attempt #${selectedAttemptDetails.id}). Your answer: ${entry.userAnswerText}`,
+          tags: ["quiz-missed", "quiz-review"],
+          source_ref_type: "manual",
+          source_ref_id: `quiz-attempt:${selectedAttemptDetails.id}:question:${entry.questionId}`
+        }))
       )
 
       const updatedConversions = { ...convertedMissedFlashcards }
@@ -871,7 +869,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
   }, [
     convertedMissedFlashcards,
     createDeckMutation,
-    createFlashcardMutation,
+    createFlashcardsBulkMutation,
     deckTarget,
     messageApi,
     missedQuestionEntries,

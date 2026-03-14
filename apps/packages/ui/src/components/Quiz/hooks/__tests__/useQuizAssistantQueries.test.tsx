@@ -4,19 +4,21 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
-  useFlashcardAssistantQuery,
-  useFlashcardAssistantRespondMutation
-} from "../useFlashcardQueries"
+  useQuizAttemptQuestionAssistantQuery,
+  useQuizAttemptQuestionAssistantRespondMutation
+} from "../useQuizQueries"
 import {
-  getFlashcardAssistant,
-  respondFlashcardAssistant,
-  type StudyAssistantContextResponse,
-  type StudyAssistantRespondResponse
+  getQuizAttemptQuestionAssistant,
+  respondQuizAttemptQuestionAssistant
+} from "@/services/quizzes"
+import type {
+  StudyAssistantContextResponse,
+  StudyAssistantRespondResponse
 } from "@/services/flashcards"
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
   useServerCapabilities: () => ({
-    capabilities: { hasFlashcards: true },
+    capabilities: { hasQuizzes: true },
     loading: false
   })
 }))
@@ -25,58 +27,55 @@ vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
 }))
 
-vi.mock("@/services/flashcards", async () => {
-  const actual = await vi.importActual<typeof import("@/services/flashcards")>(
-    "@/services/flashcards"
+vi.mock("@/services/quizzes", async () => {
+  const actual = await vi.importActual<typeof import("@/services/quizzes")>(
+    "@/services/quizzes"
   )
   return {
     ...actual,
-    getFlashcardAssistant: vi.fn(),
-    respondFlashcardAssistant: vi.fn()
+    getQuizAttemptQuestionAssistant: vi.fn(),
+    respondQuizAttemptQuestionAssistant: vi.fn()
   }
 })
 
 const baseAssistantContext: StudyAssistantContextResponse = {
   thread: {
-    id: 7,
-    context_type: "flashcard",
-    flashcard_uuid: "card-1",
-    quiz_attempt_id: null,
-    question_id: null,
+    id: 19,
+    context_type: "quiz_attempt_question",
+    flashcard_uuid: null,
+    quiz_attempt_id: 301,
+    question_id: 12,
     last_message_at: "2026-03-13T08:00:00Z",
     message_count: 0,
     deleted: false,
     client_id: "test-client",
-    version: 1,
+    version: 4,
     created_at: "2026-03-13T08:00:00Z",
     last_modified: "2026-03-13T08:00:00Z"
   },
   messages: [],
   context_snapshot: {
-    flashcard: {
-      uuid: "card-1",
-      front: "Front",
-      back: "Back"
-    }
+    quiz_attempt_id: 301,
+    question_id: 12
   },
-  available_actions: ["explain", "mnemonic", "follow_up", "fact_check", "freeform"]
+  available_actions: ["explain", "follow_up", "freeform"]
 }
 
 const buildAssistantResponse = (): StudyAssistantRespondResponse => ({
   thread: {
     ...baseAssistantContext.thread,
     message_count: 2,
-    version: 3,
+    version: 6,
     last_message_at: "2026-03-13T08:05:00Z",
     last_modified: "2026-03-13T08:05:00Z"
   },
   user_message: {
-    id: 11,
-    thread_id: 7,
+    id: 51,
+    thread_id: 19,
     role: "user",
     action_type: "explain",
     input_modality: "text",
-    content: "Explain this card",
+    content: "Explain this miss",
     structured_payload: {},
     context_snapshot: baseAssistantContext.context_snapshot,
     provider: null,
@@ -85,12 +84,12 @@ const buildAssistantResponse = (): StudyAssistantRespondResponse => ({
     client_id: "test-client"
   },
   assistant_message: {
-    id: 12,
-    thread_id: 7,
+    id: 52,
+    thread_id: 19,
     role: "assistant",
     action_type: "explain",
     input_modality: "text",
-    content: "Here is the explanation.",
+    content: "Here's where the reasoning broke down.",
     structured_payload: {},
     context_snapshot: baseAssistantContext.context_snapshot,
     provider: "openai",
@@ -108,39 +107,15 @@ const buildWrapper = (queryClient: QueryClient) => {
   )
 }
 
-describe("useFlashcardAssistantQuery + useFlashcardAssistantRespondMutation", () => {
+describe("useQuizAttemptQuestionAssistantQuery + useQuizAttemptQuestionAssistantRespondMutation", () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it("fetches flashcard assistant history for the active card", async () => {
-    vi.mocked(getFlashcardAssistant).mockResolvedValue(baseAssistantContext)
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false }
-      }
-    })
+  it("posts quiz assistant actions with the cached thread version", async () => {
+    vi.mocked(getQuizAttemptQuestionAssistant).mockResolvedValue(baseAssistantContext)
+    vi.mocked(respondQuizAttemptQuestionAssistant).mockResolvedValue(buildAssistantResponse())
 
-    const { result } = renderHook(() => useFlashcardAssistantQuery("card-1"), {
-      wrapper: buildWrapper(queryClient)
-    })
-
-    await waitFor(() => {
-      expect(result.current.data?.thread.id).toBe(7)
-    })
-
-    expect(getFlashcardAssistant).toHaveBeenCalledWith(
-      "card-1",
-      expect.objectContaining({
-        signal: expect.any(AbortSignal)
-      })
-    )
-    expect(result.current.data?.available_actions).toContain("fact_check")
-  })
-
-  it("posts assistant actions and updates the cached conversation", async () => {
-    vi.mocked(getFlashcardAssistant).mockResolvedValue(baseAssistantContext)
-    vi.mocked(respondFlashcardAssistant).mockResolvedValue(buildAssistantResponse())
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -149,44 +124,47 @@ describe("useFlashcardAssistantQuery + useFlashcardAssistantRespondMutation", ()
     })
 
     const wrapper = buildWrapper(queryClient)
-    const query = renderHook(() => useFlashcardAssistantQuery("card-1"), {
-      wrapper
-    })
+    const query = renderHook(
+      () => useQuizAttemptQuestionAssistantQuery(301, 12),
+      { wrapper }
+    )
 
     await waitFor(() => {
-      expect(query.result.current.data?.thread.id).toBe(7)
+      expect(query.result.current.data?.thread.id).toBe(19)
     })
 
-    const mutation = renderHook(() => useFlashcardAssistantRespondMutation(), {
+    const mutation = renderHook(() => useQuizAttemptQuestionAssistantRespondMutation(), {
       wrapper
     })
 
     await act(async () => {
       await mutation.result.current.mutateAsync({
-        cardUuid: "card-1",
+        attemptId: 301,
+        questionId: 12,
         request: {
           action: "explain",
-          message: "Explain this card"
+          message: "Explain this miss"
         }
       })
     })
 
-    expect(respondFlashcardAssistant).toHaveBeenCalledWith(
-      "card-1",
+    expect(respondQuizAttemptQuestionAssistant).toHaveBeenCalledWith(
+      301,
+      12,
       {
         action: "explain",
-        message: "Explain this card",
-        expected_thread_version: 1
+        message: "Explain this miss",
+        expected_thread_version: 4
       },
       undefined
     )
 
     const cached = queryClient.getQueryData<StudyAssistantContextResponse>([
-      "flashcards:assistant",
-      "card-1"
+      "quizzes:assistant",
+      301,
+      12
     ])
-    expect(cached?.thread.version).toBe(3)
+    expect(cached?.thread.version).toBe(6)
     expect(cached?.messages.map((message) => message.role)).toEqual(["user", "assistant"])
-    expect(cached?.messages[1]?.content).toBe("Here is the explanation.")
   })
 })

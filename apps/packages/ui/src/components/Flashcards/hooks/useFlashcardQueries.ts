@@ -567,12 +567,26 @@ export function useFlashcardAssistantRespondMutation() {
       cardUuid: string
       request: StudyAssistantRespondRequest
       signal?: AbortSignal
-    }) =>
-      respondFlashcardAssistant(
+    }) => {
+      const cached = qc.getQueryData<StudyAssistantContextResponse>([
+        "flashcards:assistant",
+        params.cardUuid
+      ])
+      const request = params.request.expected_thread_version != null
+        ? params.request
+        : cached?.thread?.version != null
+          ? {
+              ...params.request,
+              expected_thread_version: cached.thread.version
+            }
+          : params.request
+
+      return respondFlashcardAssistant(
         params.cardUuid,
-        params.request,
+        request,
         params.signal ? { signal: params.signal } : undefined
-      ),
+      )
+    },
     onSuccess: (response, variables) => {
       qc.setQueryData<StudyAssistantContextResponse>(
         ["flashcards:assistant", variables.cardUuid],
