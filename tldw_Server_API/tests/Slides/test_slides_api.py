@@ -364,6 +364,53 @@ def test_slides_create_and_export_json(slides_client):
     assert exported["studio_data"] == payload["studio_data"]
 
 
+def test_slides_create_canonicalizes_presentation_studio_slide_metadata(slides_client):
+    payload = {
+        "title": "Deck",
+        "description": None,
+        "theme": "black",
+        "studio_data": {
+            "origin": "blank",
+        },
+        "slides": [
+            {
+                "order": 0,
+                "layout": "title",
+                "title": "Deck",
+                "content": "",
+                "speaker_notes": "",
+                "metadata": {
+                    "studio": {
+                        "slideId": "slide-1",
+                        "audio": {"status": "missing"},
+                        "image": {"status": "missing"},
+                    }
+                },
+            }
+        ],
+        "custom_css": None,
+    }
+
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    studio = data["slides"][0]["metadata"]["studio"]
+    assert studio["slideId"] == "slide-1"
+    assert studio["transition"] == "fade"
+    assert studio["timing_mode"] == "auto"
+    assert studio["manual_duration_ms"] is None
+    assert studio["audio"]["status"] == "missing"
+    assert studio["image"]["status"] == "missing"
+
+    export_resp = slides_client.get(f"/api/v1/slides/presentations/{data['id']}/export?format=json")
+    assert export_resp.status_code == 200
+    exported = export_resp.json()
+    exported_studio = exported["slides"][0]["metadata"]["studio"]
+    assert exported_studio["transition"] == "fade"
+    assert exported_studio["timing_mode"] == "auto"
+    assert exported_studio["manual_duration_ms"] is None
+
+
 def test_slides_create_rejects_invalid_image(slides_client):
     payload = {
         "title": "Deck",
@@ -745,6 +792,94 @@ def test_slides_versions_and_restore(slides_client):
     assert restore_resp.status_code == 200
     assert restore_resp.json()["title"] == "Deck"
     assert restore_resp.json()["studio_data"] == payload["studio_data"]
+
+
+def test_slides_patch_persists_presentation_studio_timing_and_transition_metadata(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "Deck",
+            "description": None,
+            "theme": "black",
+            "studio_data": {"origin": "blank"},
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "content",
+                    "title": "Slide",
+                    "content": "Body",
+                    "speaker_notes": "Narration",
+                    "metadata": {
+                        "studio": {
+                            "slideId": "slide-1",
+                            "audio": {"status": "ready", "duration_ms": 12000},
+                            "image": {"status": "ready"},
+                        }
+                    },
+                }
+            ],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    presentation_id = create_resp.json()["id"]
+    etag = create_resp.headers["ETag"]
+
+    patch_resp = slides_client.patch(
+        f"/api/v1/slides/presentations/{presentation_id}",
+        json={
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "content",
+                    "title": "Slide",
+                    "content": "Body",
+                    "speaker_notes": "Narration",
+                    "metadata": {
+                        "studio": {
+                            "slideId": "slide-1",
+                            "transition": "wipe",
+                            "timing_mode": "manual",
+                            "manual_duration_ms": 45000,
+                            "audio": {"status": "ready", "duration_ms": 12000},
+                            "image": {"status": "ready"},
+                        }
+                    },
+                }
+            ]
+        },
+        headers={"If-Match": etag},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    patched = patch_resp.json()
+    patched_studio = patched["slides"][0]["metadata"]["studio"]
+    assert patched_studio["transition"] == "wipe"
+    assert patched_studio["timing_mode"] == "manual"
+    assert patched_studio["manual_duration_ms"] == 45000
+    new_etag = patch_resp.headers["ETag"]
+
+    version_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/versions/1")
+    assert version_resp.status_code == 200
+    version_studio = version_resp.json()["slides"][0]["metadata"]["studio"]
+    assert version_studio["transition"] == "fade"
+    assert version_studio["timing_mode"] == "auto"
+    assert version_studio["manual_duration_ms"] is None
+
+    restore_resp = slides_client.post(
+        f"/api/v1/slides/presentations/{presentation_id}/versions/1/restore",
+        headers={"If-Match": new_etag},
+    )
+    assert restore_resp.status_code == 200
+    restored_studio = restore_resp.json()["slides"][0]["metadata"]["studio"]
+    assert restored_studio["transition"] == "fade"
+    assert restored_studio["timing_mode"] == "auto"
+    assert restored_studio["manual_duration_ms"] is None
+
+    export_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/export?format=json")
+    assert export_resp.status_code == 200
+    exported_studio = export_resp.json()["slides"][0]["metadata"]["studio"]
+    assert exported_studio["transition"] == "fade"
+    assert exported_studio["timing_mode"] == "auto"
+    assert exported_studio["manual_duration_ms"] is None
 
 def test_slides_generate_from_prompt_uses_stubbed_llm(slides_client, monkeypatch):
     monkeypatch.setattr(

@@ -148,6 +148,9 @@ _SLIDES_NONCRITICAL_EXCEPTIONS = (
     json.JSONDecodeError,
 )
 
+_PRESENTATION_STUDIO_TRANSITIONS = {"fade", "cut", "wipe", "zoom"}
+_PRESENTATION_STUDIO_TIMING_MODES = {"auto", "manual"}
+
 
 def _parse_etag(raw: str | None) -> int:
     if not raw:
@@ -204,6 +207,50 @@ def _slide_from_obj(obj: Any) -> Slide:
     return Slide.parse_obj(obj)
 
 
+def _normalize_presentation_studio_transition(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _PRESENTATION_STUDIO_TRANSITIONS else "fade"
+
+
+def _normalize_presentation_studio_manual_duration_ms(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric_value <= 0:
+        return None
+    return int(round(numeric_value))
+
+
+def _normalize_presentation_studio_timing_mode(value: Any, *, has_manual_duration: bool) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in _PRESENTATION_STUDIO_TIMING_MODES:
+        return "manual" if has_manual_duration else "auto"
+    if normalized == "manual" and not has_manual_duration:
+        return "auto"
+    return normalized
+
+
+def _normalize_slide_studio_metadata(metadata: dict[str, Any]) -> None:
+    studio = metadata.get("studio")
+    if studio is None:
+        return
+    if not isinstance(studio, dict):
+        raise HTTPException(status_code=422, detail="slide_studio_metadata_invalid")
+
+    manual_duration_ms = _normalize_presentation_studio_manual_duration_ms(
+        studio.get("manual_duration_ms")
+    )
+    studio["transition"] = _normalize_presentation_studio_transition(studio.get("transition"))
+    studio["manual_duration_ms"] = manual_duration_ms
+    studio["timing_mode"] = _normalize_presentation_studio_timing_mode(
+        studio.get("timing_mode"),
+        has_manual_duration=manual_duration_ms is not None,
+    )
+
+
 def _normalize_slides(slides: list[Slide]) -> list[Slide]:
     orders = [slide.order for slide in slides]
     if any(order < 0 for order in orders):
@@ -217,6 +264,7 @@ def _normalize_slides(slides: list[Slide]) -> list[Slide]:
             slide.metadata = {}
         if not isinstance(slide.metadata, dict):
             raise HTTPException(status_code=422, detail="slide_metadata_invalid")
+        _normalize_slide_studio_metadata(slide.metadata)
         _validate_slide_images(slide.metadata)
     return ordered
 

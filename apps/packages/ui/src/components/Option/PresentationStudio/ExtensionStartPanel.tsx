@@ -182,6 +182,9 @@ export const ExtensionStartPanel: React.FC = () => {
     const metadata: Record<string, unknown> = {
       studio: {
         slideId,
+        transition: "fade",
+        timing_mode: "auto",
+        manual_duration_ms: null,
         audio: { status: "missing" },
         image: { status: imageSeed ? "ready" : "missing" }
       }

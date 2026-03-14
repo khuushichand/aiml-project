@@ -12,8 +12,14 @@ export type PresentationStudioAssetStatus =
   | "generating"
   | "failed"
 
+export type PresentationStudioTransition = "fade" | "cut" | "wipe" | "zoom"
+export type PresentationStudioTimingMode = "auto" | "manual"
+
 export type PresentationStudioSlideStudioMeta = {
   slideId: string
+  transition: PresentationStudioTransition
+  timing_mode: PresentationStudioTimingMode
+  manual_duration_ms: number | null
   audio: {
     status: PresentationStudioAssetStatus
     asset_ref?: string | null
@@ -41,6 +47,7 @@ export type PresentationStudioPatchPayload = {
 }
 
 type AutosaveState = "idle" | "saving" | "error"
+type SlideMoveDirection = "earlier" | "later"
 
 type PresentationStudioStore = {
   projectId: string | null
@@ -68,6 +75,10 @@ type PresentationStudioStore = {
   }) => void
   selectSlide: (slideId: string) => void
   addSlide: () => void
+  duplicateSlide: (slideId: string) => void
+  removeSlide: (slideId: string) => void
+  moveSlide: (slideId: string, direction: SlideMoveDirection) => void
+  reorderSlides: (fromIndex: number, toIndex: number) => void
   updateSlide: (
     slideId: string,
     updates: Partial<PresentationStudioEditorSlide>
@@ -97,6 +108,57 @@ const normalizeAssetStatus = (
     : fallback
 }
 
+const normalizeTransition = (
+  candidate: unknown,
+  fallback: PresentationStudioTransition = "fade"
+): PresentationStudioTransition => {
+  const normalized = String(candidate || "").trim().toLowerCase()
+  return ["fade", "cut", "wipe", "zoom"].includes(normalized)
+    ? (normalized as PresentationStudioTransition)
+    : fallback
+}
+
+const normalizeManualDuration = (candidate: unknown): number | null => {
+  if (candidate === null || candidate === undefined || candidate === "") {
+    return null
+  }
+
+  const numericValue =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string"
+        ? Number(candidate)
+        : NaN
+
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return null
+  }
+
+  return Math.round(numericValue)
+}
+
+const normalizeTimingMode = (
+  candidate: unknown,
+  fallback: PresentationStudioTimingMode = "auto"
+): PresentationStudioTimingMode => {
+  const normalized = String(candidate || "").trim().toLowerCase()
+  return ["auto", "manual"].includes(normalized)
+    ? (normalized as PresentationStudioTimingMode)
+    : fallback
+}
+
+const resolveTimingMode = (
+  candidate: unknown,
+  manualDurationMs: number | null,
+  fallback: PresentationStudioTimingMode = "auto"
+): PresentationStudioTimingMode => {
+  if (!manualDurationMs) {
+    return "auto"
+  }
+
+  return normalizeTimingMode(candidate, fallback === "manual" ? "manual" : "auto")
+}
+
 const normalizeSlide = (
   slide: Partial<PresentationStudioSlide> & { metadata?: Record<string, any> },
   order: number
@@ -121,6 +183,12 @@ const normalizeSlide = (
     typeof studio.slideId === "string" && studio.slideId.trim().length > 0
       ? studio.slideId
       : createSlideId()
+  const manualDurationMs = normalizeManualDuration(studio.manual_duration_ms)
+  const timingMode = resolveTimingMode(
+    studio.timing_mode,
+    manualDurationMs,
+    manualDurationMs ? "manual" : "auto"
+  )
 
   return {
     order,
@@ -133,6 +201,9 @@ const normalizeSlide = (
       studio: {
         ...studio,
         slideId,
+        transition: normalizeTransition(studio.transition),
+        timing_mode: timingMode,
+        manual_duration_ms: manualDurationMs,
         audio: {
           ...audioState,
           status: normalizeAssetStatus(
@@ -187,6 +258,14 @@ const mergeSlideMetadata = (
     local.studio && typeof local.studio === "object" && !Array.isArray(local.studio)
       ? local.studio
       : {}
+  const remoteManualDurationMs = normalizeManualDuration(remoteStudio.manual_duration_ms)
+  const localHasManualDuration = Object.prototype.hasOwnProperty.call(
+    localStudio,
+    "manual_duration_ms"
+  )
+  const mergedManualDurationMs = localHasManualDuration
+    ? normalizeManualDuration(localStudio.manual_duration_ms)
+    : remoteManualDurationMs
   const remoteAudio =
     remoteStudio.audio && typeof remoteStudio.audio === "object" && !Array.isArray(remoteStudio.audio)
       ? remoteStudio.audio
@@ -220,6 +299,16 @@ const mergeSlideMetadata = (
           : typeof remoteStudio.slideId === "string" && remoteStudio.slideId.trim().length > 0
             ? remoteStudio.slideId
             : createSlideId(),
+      transition: normalizeTransition(
+        localStudio.transition ?? remoteStudio.transition,
+        normalizeTransition(remoteStudio.transition)
+      ),
+      timing_mode: resolveTimingMode(
+        localStudio.timing_mode ?? remoteStudio.timing_mode,
+        mergedManualDurationMs,
+        mergedManualDurationMs ? "manual" : "auto"
+      ),
+      manual_duration_ms: mergedManualDurationMs,
       audio: {
         ...remoteAudio,
         ...localAudio,
@@ -315,6 +404,32 @@ const createBlankSlide = (order: number): PresentationStudioEditorSlide =>
     order
   )
 
+const createDuplicatedSlide = (
+  slide: PresentationStudioEditorSlide,
+  order: number
+): PresentationStudioEditorSlide =>
+  normalizeSlide(
+    {
+      ...slide,
+      order,
+      title: slide.title ? `${slide.title} copy` : `Slide ${order + 1}`,
+      metadata: {
+        ...slide.metadata,
+        studio: {
+          ...slide.metadata.studio,
+          slideId: createSlideId(),
+          audio: {
+            ...slide.metadata.studio.audio
+          },
+          image: {
+            ...slide.metadata.studio.image
+          }
+        }
+      }
+    },
+    order
+  )
+
 const createInitialState = () => ({
   projectId: null,
   title: "Untitled Presentation",
@@ -391,12 +506,152 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
         }
       }),
 
+    duplicateSlide: (slideId) =>
+      set((state) => {
+        const sourceIndex = state.slides.findIndex(
+          (slide) => slide.metadata.studio.slideId === slideId
+        )
+        if (sourceIndex === -1) {
+          return state
+        }
+        const duplicate = createDuplicatedSlide(state.slides[sourceIndex]!, sourceIndex + 1)
+        const slides = [
+          ...state.slides.slice(0, sourceIndex + 1),
+          duplicate,
+          ...state.slides.slice(sourceIndex + 1)
+        ].map((slide, index) => ({
+          ...slide,
+          order: index
+        }))
+
+        return {
+          slides,
+          selectedSlideId: duplicate.metadata.studio.slideId,
+          isDirty: true
+        }
+      }),
+
+    removeSlide: (slideId) =>
+      set((state) => {
+        if (state.slides.length <= 1) {
+          return state
+        }
+        const sourceIndex = state.slides.findIndex(
+          (slide) => slide.metadata.studio.slideId === slideId
+        )
+        if (sourceIndex === -1) {
+          return state
+        }
+        const slides = state.slides
+          .filter((slide) => slide.metadata.studio.slideId !== slideId)
+          .map((slide, index) => ({
+            ...slide,
+            order: index
+          }))
+        const nextSelectedSlideId =
+          state.selectedSlideId === slideId
+            ? slides[Math.max(0, sourceIndex - 1)]?.metadata.studio.slideId ||
+              slides[0]?.metadata.studio.slideId ||
+              null
+            : state.selectedSlideId
+
+        return {
+          slides,
+          selectedSlideId: nextSelectedSlideId,
+          isDirty: true
+        }
+      }),
+
+    moveSlide: (slideId, direction) =>
+      set((state) => {
+        const sourceIndex = state.slides.findIndex(
+          (slide) => slide.metadata.studio.slideId === slideId
+        )
+        if (sourceIndex === -1) {
+          return state
+        }
+
+        const targetIndex = direction === "earlier" ? sourceIndex - 1 : sourceIndex + 1
+        if (targetIndex < 0 || targetIndex >= state.slides.length) {
+          return state
+        }
+
+        const slides = [...state.slides]
+        const [movedSlide] = slides.splice(sourceIndex, 1)
+        slides.splice(targetIndex, 0, movedSlide!)
+
+        return {
+          slides: slides.map((slide, index) => ({
+            ...slide,
+            order: index
+          })),
+          selectedSlideId: slideId,
+          isDirty: true
+        }
+      }),
+
+    reorderSlides: (fromIndex, toIndex) =>
+      set((state) => {
+        if (
+          fromIndex < 0 ||
+          toIndex < 0 ||
+          fromIndex >= state.slides.length ||
+          toIndex >= state.slides.length ||
+          fromIndex === toIndex
+        ) {
+          return state
+        }
+
+        const slides = [...state.slides]
+        const [movedSlide] = slides.splice(fromIndex, 1)
+        slides.splice(toIndex, 0, movedSlide!)
+
+        return {
+          slides: slides.map((slide, index) => ({
+            ...slide,
+            order: index
+          })),
+          selectedSlideId: movedSlide?.metadata.studio.slideId || state.selectedSlideId,
+          isDirty: true
+        }
+      }),
+
     updateSlide: (slideId, updates) =>
       set((state) => {
         const slides = state.slides.map((slide, index) => {
           if (slide.metadata.studio.slideId !== slideId) {
             return slide
           }
+          const studioUpdates =
+            updates.metadata?.studio &&
+            typeof updates.metadata.studio === "object" &&
+            !Array.isArray(updates.metadata.studio)
+              ? updates.metadata.studio
+              : null
+          const hasManualDurationUpdate = Boolean(
+            studioUpdates &&
+              Object.prototype.hasOwnProperty.call(studioUpdates, "manual_duration_ms")
+          )
+          const hasTimingModeUpdate = Boolean(
+            studioUpdates && Object.prototype.hasOwnProperty.call(studioUpdates, "timing_mode")
+          )
+          const nextManualDurationMs = hasManualDurationUpdate
+            ? normalizeManualDuration(studioUpdates?.manual_duration_ms)
+            : slide.metadata.studio.manual_duration_ms
+          const nextTransition = normalizeTransition(
+            studioUpdates?.transition,
+            slide.metadata.studio.transition
+          )
+          const nextTimingMode = hasTimingModeUpdate
+            ? normalizeTimingMode(
+                studioUpdates?.timing_mode,
+                nextManualDurationMs ? "manual" : "auto"
+              )
+            : hasManualDurationUpdate
+              ? nextManualDurationMs
+                ? "manual"
+                : "auto"
+              : slide.metadata.studio.timing_mode
           const nextMetadata =
             updates.metadata && typeof updates.metadata === "object"
               ? {
@@ -404,7 +659,36 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
                   ...updates.metadata,
                   studio: {
                     ...slide.metadata.studio,
-                    ...(updates.metadata.studio || {})
+                    ...(studioUpdates || {}),
+                    transition: nextTransition,
+                    timing_mode: nextTimingMode,
+                    manual_duration_ms: nextManualDurationMs,
+                    audio: studioUpdates?.audio
+                      ? {
+                          ...slide.metadata.studio.audio,
+                          ...studioUpdates.audio,
+                          status: normalizeAssetStatus(
+                            studioUpdates.audio.status ?? slide.metadata.studio.audio.status,
+                            studioUpdates.audio.asset_ref ||
+                              slide.metadata.studio.audio.asset_ref
+                              ? "ready"
+                              : "missing"
+                          )
+                        }
+                      : slide.metadata.studio.audio,
+                    image: studioUpdates?.image
+                      ? {
+                          ...slide.metadata.studio.image,
+                          ...studioUpdates.image,
+                          status: normalizeAssetStatus(
+                            studioUpdates.image.status ?? slide.metadata.studio.image.status,
+                            studioUpdates.image.asset_ref ||
+                              slide.metadata.studio.image.asset_ref
+                              ? "ready"
+                              : "missing"
+                          )
+                        }
+                      : slide.metadata.studio.image
                   }
                 }
               : slide.metadata

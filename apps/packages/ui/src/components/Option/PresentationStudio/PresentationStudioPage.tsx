@@ -2,7 +2,7 @@ import React from "react"
 import { useNavigate } from "react-router-dom"
 
 import { ProjectWorkspace } from "./ProjectWorkspace"
-import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { tldwClient, type PresentationStudioRecord } from "@/services/tldw/TldwApiClient"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { usePresentationStudioStore } from "@/store/presentation-studio"
@@ -22,6 +22,11 @@ const createBlankSlideId = (): string =>
   globalThis.crypto?.randomUUID?.() ||
   `slide-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
 
+type InFlightProjectRequest = {
+  projectId: string | null
+  promise: Promise<PresentationStudioRecord>
+}
+
 export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
   mode = "index",
   projectId = null
@@ -35,72 +40,76 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
   const currentProjectId = usePresentationStudioStore((state) => state.projectId)
   const [isProjectLoading, setIsProjectLoading] = React.useState(mode === "new")
   const [loadError, setLoadError] = React.useState<string | null>(null)
-  const newProjectStartedRef = React.useRef(false)
+  const createRequestRef = React.useRef<InFlightProjectRequest | null>(null)
+  const detailRequestRef = React.useRef<InFlightProjectRequest | null>(null)
 
   React.useEffect(() => {
     if (mode !== "new") {
       return
     }
-    if (newProjectStartedRef.current) {
-      return
-    }
-    newProjectStartedRef.current = true
-    let active = true
+    let cancelled = false
     setIsProjectLoading(true)
     setLoadError(null)
-    const blankSlideId = createBlankSlideId()
-
-    void tldwClient
-      .createPresentation({
-        title: "Untitled Presentation",
-        description: null,
-        theme: "black",
-        studio_data: {
-          origin: "blank",
-          entry_surface: "webui_new"
-        },
-        slides: [
-          {
-            order: 0,
-            layout: "title",
-            title: "Title slide",
-            content: "",
-            speaker_notes: "",
-            metadata: {
-              studio: {
-                slideId: blankSlideId,
-                audio: { status: "missing" },
-                image: { status: "missing" }
+    if (!createRequestRef.current) {
+      const blankSlideId = createBlankSlideId()
+      createRequestRef.current = {
+        projectId: null,
+        promise: tldwClient.createPresentation({
+          title: "Untitled Presentation",
+          description: null,
+          theme: "black",
+          studio_data: {
+            origin: "blank",
+            entry_surface: "webui_new"
+          },
+          slides: [
+            {
+              order: 0,
+              layout: "title",
+              title: "Title slide",
+              content: "",
+              speaker_notes: "",
+              metadata: {
+                studio: {
+                  slideId: blankSlideId,
+                  transition: "fade",
+                  timing_mode: "auto",
+                  manual_duration_ms: null,
+                  audio: { status: "missing" },
+                  image: { status: "missing" }
+                }
               }
             }
-          }
-        ]
-      })
+          ]
+        })
+      }
+    }
+
+    void createRequestRef.current.promise
       .then((project) => {
-        if (!active) {
+        if (cancelled) {
           return
         }
+        setIsProjectLoading(false)
         loadProject(project, {
           etag: formatEtag(project.version)
         })
         navigate(`/presentation-studio/${project.id}`, {
           replace: true
         })
+        createRequestRef.current = null
       })
       .catch((error) => {
-        if (!active) {
+        if (cancelled) {
           return
         }
+        createRequestRef.current = null
         setLoadError(toErrorMessage(error))
-      })
-      .finally(() => {
-        if (active) {
-          setIsProjectLoading(false)
-        }
+        setIsProjectLoading(false)
       })
 
     return () => {
-      active = false
+      cancelled = true
     }
   }, [loadProject, mode, navigate])
 
@@ -109,34 +118,40 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
       return
     }
     if (currentProjectId === projectId) {
+      setIsProjectLoading(false)
       return
     }
-    let active = true
+    let cancelled = false
     setIsProjectLoading(true)
     setLoadError(null)
-    void tldwClient
-      .getPresentation(projectId)
+    if (!detailRequestRef.current || detailRequestRef.current.projectId !== projectId) {
+      detailRequestRef.current = {
+        projectId,
+        promise: tldwClient.getPresentation(projectId)
+      }
+    }
+
+    void detailRequestRef.current.promise
       .then((project) => {
-        if (!active) {
+        if (cancelled) {
           return
         }
+        setIsProjectLoading(false)
         loadProject(project, {
           etag: formatEtag(project.version)
         })
+        detailRequestRef.current = null
       })
       .catch((error) => {
-        if (!active) {
+        if (cancelled) {
           return
         }
+        detailRequestRef.current = null
         setLoadError(toErrorMessage(error))
-      })
-      .finally(() => {
-        if (active) {
-          setIsProjectLoading(false)
-        }
+        setIsProjectLoading(false)
       })
     return () => {
-      active = false
+      cancelled = true
     }
   }, [currentProjectId, loadProject, mode, projectId])
 
