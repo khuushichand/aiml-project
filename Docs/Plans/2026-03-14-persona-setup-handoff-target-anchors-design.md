@@ -123,6 +123,22 @@ The setup analytics work already records:
 That is enough for this slice. It is acceptable to ship the targeting behavior
 without adding a new `handoff_target_reached` event yet.
 
+### 6. Async-loaded panels must not consume targets too early
+
+`Commands`, `Connections`, and `Assistant Defaults` all fetch data after mount.
+That means a section request can arrive before:
+
+- command rows exist
+- saved connection rows exist
+- the confirmation-mode select is ready
+
+This design requires panels to keep a request pending until they can either:
+
+- fulfill the requested target, or
+- choose a deterministic fallback after load completes
+
+The route must not clear requests on a blind “panel mounted” signal.
+
 ## Chosen Approach
 
 Use a route-owned `setupHandoffFocusRequest` model plus panel-local target refs.
@@ -148,7 +164,12 @@ Add a small route-owned request object:
 ```ts
 type SetupHandoffSectionTarget =
   | { tab: "commands"; section: "command_form" | "command_list" }
-  | { tab: "connections"; section: "connection_form" | "saved_connections" }
+  | {
+      tab: "connections"
+      section: "connection_form" | "saved_connections"
+      connectionId?: string | null
+      connectionName?: string | null
+    }
   | { tab: "profiles"; section: "assistant_defaults" | "confirmation_mode" }
   | { tab: "test-lab"; section: "dry_run_form" }
 
@@ -156,6 +177,8 @@ type SetupHandoffFocusRequest = {
   tab: SetupHandoffSectionTarget["tab"]
   section: SetupHandoffSectionTarget["section"]
   token: number
+  connectionId?: string | null
+  connectionName?: string | null
 }
 ```
 
@@ -194,7 +217,8 @@ This slice maps them to concrete destinations.
 - approval mode row -> `profiles.confirmation_mode`
 - connection row:
   - `skipped` -> `connections.connection_form`
-  - `created` or `available` -> `connections.saved_connections`
+  - `created` or `available` -> `connections.saved_connections` with the frozen
+    connection name, and id when available later
 - `Open Test Lab` -> `test-lab.dry_run_form`
 
 This keeps the action model specific to what setup just produced, rather than
@@ -240,9 +264,19 @@ The focus request is transient UI state. It should clear when:
 - the persona changes
 - setup context changes
 - the handoff is dismissed
-- the destination panel reports it has consumed the request
+- the destination panel reports that it has fulfilled or deterministically
+  fallen back from the request
 
 It should not clear simply because the handoff remains visible.
+
+Add an explicit route callback, for example:
+
+```ts
+onSetupHandoffFocusConsumed(token: number): void
+```
+
+The route should ignore stale tokens and only clear the current request when the
+reported token matches the active one.
 
 ## Panel Contracts
 
@@ -265,7 +299,14 @@ Panel behavior on a fresh request:
 1. scroll the section container into view
 2. focus the first useful control inside that section
 3. apply a short visual highlight phase
-4. optionally notify the route that the request was consumed
+4. notify the route that the request token was consumed
+
+Panels should only consume a token after:
+
+- the requested control is ready, or
+- a documented fallback target has been used after load settled
+
+They should not consume tokens just because the panel rendered.
 
 ### Commands
 
@@ -277,8 +318,8 @@ Targets:
 Destination behavior:
 
 - `command_form`: focus `persona-commands-name-input`
-- `command_list`: focus the first command row if present; otherwise focus the
-  empty-state block or fall back to the form
+- `command_list`: focus the first actionable control in the first command row,
+  preferably the `Edit` button; otherwise fall back to the command form
 
 ### Connections
 
@@ -290,8 +331,10 @@ Targets:
 Destination behavior:
 
 - `connection_form`: focus `persona-connections-name-input`
-- `saved_connections`: focus the first saved connection row if present;
-  otherwise fall back to the form
+- `saved_connections`: if a target connection id or name is present, focus that
+  row’s first actionable control, preferably `Edit`; otherwise focus the first
+  saved connection’s `Edit` button; if no saved rows exist, fall back to the
+  connection form
 
 ### Profiles
 
@@ -302,7 +345,8 @@ Targets:
 
 Destination behavior:
 
-- `assistant_defaults`: focus the panel root
+- `assistant_defaults`: focus the first meaningful control in
+  `AssistantDefaultsPanel`, not a passive wrapper
 - `confirmation_mode`: focus the confirmation-mode select inside
   `AssistantDefaultsPanel`
 
@@ -349,8 +393,8 @@ Examples:
 - `commands.command_list` with no commands -> focus command form
 - `connections.saved_connections` with no saved rows -> focus connection form
 - `profiles.confirmation_mode` while defaults are not loaded yet -> focus the
-  assistant defaults panel root first, then the select once available if
-  possible
+  first meaningful defaults control once the panel is ready; if the select still
+  is not available, use the first defaults input as the fallback
 
 ## Testing Strategy
 
@@ -372,7 +416,11 @@ is focused:
 - `AssistantDefaultsPanel.test.tsx`
 - `TestLabPanel.test.tsx`
 
-Each should also cover replay via a newer request token.
+Each should also cover:
+
+- replay via a newer request token
+- async-loaded targets that only consume after data is ready
+- fallback behavior when the preferred target is unavailable
 
 ### Handoff card tests
 

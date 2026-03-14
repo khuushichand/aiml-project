@@ -69,7 +69,12 @@ token:
 ```ts
 type SetupHandoffSectionTarget =
   | { tab: "commands"; section: "command_form" | "command_list" }
-  | { tab: "connections"; section: "connection_form" | "saved_connections" }
+  | {
+      tab: "connections"
+      section: "connection_form" | "saved_connections"
+      connectionId?: string | null
+      connectionName?: string | null
+    }
   | { tab: "profiles"; section: "assistant_defaults" | "confirmation_mode" }
   | { tab: "test-lab"; section: "dry_run_form" }
 
@@ -77,6 +82,8 @@ type SetupHandoffFocusRequest = {
   tab: SetupHandoffSectionTarget["tab"]
   section: SetupHandoffSectionTarget["section"]
   token: number
+  connectionId?: string | null
+  connectionName?: string | null
 }
 ```
 
@@ -96,6 +103,8 @@ that:
 - preserves the handoff for same-tab actions
 - retargets the handoff for cross-tab actions
 - stores a section request when the action has a concrete destination
+- only clears a request after the active panel reports the matching token as
+  consumed
 
 **Step 4: Re-run the targeted route tests**
 
@@ -105,7 +114,8 @@ Run:
 cd /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/persona-voice-assistant-builder/apps/packages/ui && bunx vitest run src/routes/__tests__/sidepanel-persona.test.tsx -t "handoff visible and issues a focus request|retargets the handoff to connections|try_live"
 ```
 
-Expected: still FAIL until the destination panels consume the request.
+Expected: still FAIL until the destination panels consume the request through a
+real callback.
 
 **Step 5: Commit**
 
@@ -135,7 +145,9 @@ it("focuses the command name input for command_form requests", async () => {
     />
   )
 
-  expect(screen.getByTestId("persona-commands-name-input")).toHaveFocus()
+  await waitFor(() =>
+    expect(screen.getByTestId("persona-commands-name-input")).toHaveFocus()
+  )
 })
 ```
 
@@ -144,6 +156,8 @@ Also add:
 - `command_list` focuses the first command row when commands exist
 - `command_list` falls back to the form when commands are empty
 - a newer token replays the highlight/focus
+
+Mock the panel loads explicitly so the target is asserted after data is ready.
 
 **Step 2: Run the targeted Commands tests to verify they fail**
 
@@ -168,7 +182,7 @@ handoffFocusRequest?: {
 
 Add refs for:
 
-- command list container / first command row
+- command list container / first row `Edit` button
 - empty-state container
 - command form root
 - command name input
@@ -178,10 +192,12 @@ React to fresh tokens with an effect that:
 - scrolls the chosen section into view
 - focuses the best control
 - sets a short-lived highlight state
+- calls `onSetupHandoffFocusConsumed(token)` only after the final destination is
+  chosen
 
 Keep the fallback rules small:
 
-- `command_list` with rows -> first row
+- `command_list` with rows -> first row `Edit` button
 - `command_list` without rows -> command form
 
 **Step 4: Re-run the targeted Commands tests**
@@ -212,7 +228,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/persona-voice
 Add tests that prove:
 
 - `connection_form` focuses `persona-connections-name-input`
-- `saved_connections` focuses the first saved connection row
+- `saved_connections` focuses the requested saved connection’s `Edit` button
 - `saved_connections` falls back to the form when the list is empty
 
 Example:
@@ -228,7 +244,9 @@ it("focuses the connection form for connection_form requests", async () => {
     />
   )
 
-  expect(screen.getByTestId("persona-connections-name-input")).toHaveFocus()
+  await waitFor(() =>
+    expect(screen.getByTestId("persona-connections-name-input")).toHaveFocus()
+  )
 })
 ```
 
@@ -257,9 +275,19 @@ Add refs for:
 
 - connection form root
 - name input
-- saved-connections container / first row
+- saved-connections container
+- saved row `Edit` buttons keyed by connection id
 
 Use the same token-driven effect pattern as `CommandsPanel`.
+
+When `section === "saved_connections"`:
+
+- prefer the requested `connectionId`
+- otherwise try to match by `connectionName`
+- otherwise use the first saved row
+- otherwise fall back to the connection form
+
+Only call `onSetupHandoffFocusConsumed(token)` after that choice is complete.
 
 **Step 4: Re-run the targeted Connections tests**
 
@@ -292,7 +320,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/persona-voice
 Add tests that prove:
 
 - `confirmation_mode` focuses the confirmation mode select
-- `assistant_defaults` focuses the defaults panel root
+- `assistant_defaults` focuses the first meaningful defaults control
 - `dry_run_form` focuses `persona-test-lab-heard-input`
 
 Example:
@@ -308,9 +336,9 @@ it("focuses confirmation mode for setup handoff requests", async () => {
     />
   )
 
-  expect(
-    screen.getByLabelText("Confirmation mode")
-  ).toHaveFocus()
+  await waitFor(() =>
+    expect(screen.getByLabelText("Confirmation mode")).toHaveFocus()
+  )
 })
 ```
 
@@ -337,7 +365,7 @@ handoffFocusRequest?: {
 
 Add refs for:
 
-- panel root
+- first meaningful defaults control
 - confirmation mode select
 
 In `ProfilePanel.tsx`, thread the target through to `AssistantDefaultsPanel`.
@@ -352,6 +380,9 @@ handoffFocusRequest?: {
 ```
 
 and focus the heard-text textarea on fresh requests.
+
+In all async-loaded panels, mock `tldwClient.fetchWithAuth` in the tests and
+assert focus after the loaded state renders.
 
 **Step 4: Re-run the targeted panel tests**
 
@@ -385,7 +416,8 @@ Add route tests that prove action mapping is specific:
 - `Open connections` focuses the form when the frozen summary says
   `connection.mode === "skipped"`
 - `Open connections` focuses saved connections when the frozen summary says
-  `connection.mode === "created"` or `"available"`
+  `connection.mode === "created"` or `"available"` and prefers the matching
+  saved connection by id or name
 - `Open Test Lab` focuses the dry-run input
 
 Example:
@@ -403,7 +435,9 @@ it("opens saved connections for handoff review when a connection already exists"
 
   await user.click(screen.getByRole("button", { name: "Open connections" }))
 
-  expect(screen.getByTestId("persona-connections-row-slack")).toHaveFocus()
+  await waitFor(() =>
+    expect(screen.getByTestId(`persona-connections-edit-${slackId}`)).toHaveFocus()
+  )
 })
 ```
 
@@ -424,6 +458,7 @@ In `sidepanel-persona.tsx`:
 - replace the old tab-only callbacks with target-aware callbacks
 - map recommended action and review rows to concrete targets
 - pass the panel-specific request down only to the active destination panel
+- pass a consume callback down with the request
 - keep `try_live` tab-only
 
 In `PersonaSetupHandoffCard.tsx`:
