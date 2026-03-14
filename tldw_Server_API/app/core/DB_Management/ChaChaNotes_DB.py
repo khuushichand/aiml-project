@@ -20587,6 +20587,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         question_ids: list[int],
         target_deck_id: int | None = None,
         create_deck_name: str | None = None,
+        create_deck_scheduler_settings: Mapping[str, Any] | str | None = None,
         replace_active: bool = False,
     ) -> dict[str, Any]:
         """Convert missed attempt questions into flashcards plus remediation conversion rows."""
@@ -20643,7 +20644,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     pending_entries.append(entry)
 
                 if pending_entries and normalized_create_deck_name is not None and target_deck is None:
-                    created_deck_id = self.add_deck(normalized_create_deck_name, description=None)
+                    created_deck_id = self.add_deck(
+                        normalized_create_deck_name,
+                        description=None,
+                        scheduler_settings=create_deck_scheduler_settings,
+                    )
                     deck = self.get_deck(int(created_deck_id))
                     target_deck = {
                         "id": int(created_deck_id),

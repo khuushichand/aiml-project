@@ -18,13 +18,15 @@ const {
   generateImageOcclusionAssetsMock,
   uploadFlashcardAssetMock,
   createBulkMutateAsync,
-  invalidateQueriesMock
+  invalidateQueriesMock,
+  createDeckMutateAsync
 } = vi.hoisted(() => ({
   showUndoNotificationMock: vi.fn(),
   generateImageOcclusionAssetsMock: vi.fn(),
   uploadFlashcardAssetMock: vi.fn(),
   createBulkMutateAsync: vi.fn(),
-  invalidateQueriesMock: vi.fn().mockResolvedValue(undefined)
+  invalidateQueriesMock: vi.fn().mockResolvedValue(undefined),
+  createDeckMutateAsync: vi.fn()
 }))
 
 vi.mock("@tanstack/react-query", async () => {
@@ -72,7 +74,7 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("../../hooks", () => ({
   useCreateDeckMutation: vi.fn(() => ({
-    mutateAsync: vi.fn(),
+    mutateAsync: createDeckMutateAsync,
     isPending: false
   })),
   useCreateFlashcardsBulkMutation: vi.fn(() => ({
@@ -148,6 +150,7 @@ vi.mock("@/services/flashcard-assets", () => ({
 describe("ImageOcclusionTransferPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    createDeckMutateAsync.mockReset()
     generateImageOcclusionAssetsMock.mockResolvedValue({
       source: {
         blob: new Blob(["source"], { type: "image/webp" }),
@@ -236,5 +239,54 @@ describe("ImageOcclusionTransferPanel", () => {
         }
       ])
     })
+  })
+
+  it("creates a new occlusion deck with scheduler settings from the selector flow", async () => {
+    const fastAcquisitionSettings = {
+      new_steps_minutes: [1, 5, 15],
+      relearn_steps_minutes: [10],
+      graduating_interval_days: 1,
+      easy_interval_days: 3,
+      easy_bonus: 1.15,
+      interval_modifier: 0.9,
+      max_interval_days: 3650,
+      leech_threshold: 10,
+      enable_fuzz: false
+    }
+    createDeckMutateAsync.mockResolvedValue({
+      id: 9,
+      name: "Occlusion deck",
+      description: null,
+      deleted: false,
+      client_id: "test",
+      version: 1,
+      scheduler_settings_json: JSON.stringify(fastAcquisitionSettings),
+      scheduler_settings: fastAcquisitionSettings
+    })
+
+    render(<ImageOcclusionTransferPanel />)
+
+    fireEvent.mouseDown(screen.getByTestId("flashcards-occlusion-deck"))
+    fireEvent.click(await screen.findByText("Create new deck"))
+    fireEvent.change(screen.getByTestId("flashcards-occlusion-new-deck-name"), {
+      target: { value: "Occlusion deck" }
+    })
+    fireEvent.click(screen.getByTestId("deck-scheduler-editor-preset-fast_acquisition"))
+
+    fireEvent.click(screen.getByTestId("mock-occlusion-panel-load"))
+    fireEvent.click(screen.getByTestId("flashcards-occlusion-generate-button"))
+
+    await waitFor(() => {
+      expect(uploadFlashcardAssetMock).toHaveBeenCalledTimes(3)
+    })
+
+    fireEvent.click(await screen.findByTestId("flashcards-occlusion-save-button"))
+
+    await waitFor(() =>
+      expect(createDeckMutateAsync).toHaveBeenCalledWith({
+        name: "Occlusion deck",
+        scheduler_settings: fastAcquisitionSettings
+      })
+    )
   })
 })

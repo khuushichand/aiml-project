@@ -3,6 +3,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .flashcards import DeckSchedulerSettings
+
 
 class QuestionType(str, Enum):
     MULTIPLE_CHOICE = "multiple_choice"
@@ -223,6 +225,7 @@ class QuizRemediationConvertRequest(BaseModel):
     question_ids: list[int] = Field(..., min_length=1)
     target_deck_id: Optional[int] = Field(None, ge=1)
     create_deck_name: Optional[str] = None
+    create_deck_scheduler_settings: Optional[DeckSchedulerSettings] = None
     replace_active: bool = False
 
     @model_validator(mode="after")
@@ -231,6 +234,8 @@ class QuizRemediationConvertRequest(BaseModel):
         has_create_deck = bool((self.create_deck_name or "").strip())
         if has_target_deck == has_create_deck:
             raise ValueError("Provide exactly one of target_deck_id or create_deck_name")
+        if self.create_deck_scheduler_settings is not None and not has_create_deck:
+            raise ValueError("create_deck_scheduler_settings requires create_deck_name")
         return self
 
 

@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 
@@ -331,6 +332,43 @@ def test_convert_remediation_questions_creates_new_deck(
     assert payload["target_deck"]["name"] == "Quiz Remediation Deck"
     assert {result["status"] for result in payload["results"]} == {"created"}
     assert len(payload["created_flashcard_uuids"]) == 2
+
+
+def test_convert_remediation_questions_creates_new_deck_with_scheduler_settings(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": question_ids,
+            "create_deck_name": "Quiz Remediation Deck",
+            "create_deck_scheduler_settings": {
+                "new_steps_minutes": [1, 5, 15],
+                "relearn_steps_minutes": [10],
+                "graduating_interval_days": 1,
+                "easy_interval_days": 3,
+                "easy_bonus": 1.15,
+                "interval_modifier": 0.9,
+                "max_interval_days": 3650,
+                "leech_threshold": 10,
+                "enable_fuzz": False,
+            },
+            "replace_active": False,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    created_deck = quizzes_db.get_deck(payload["target_deck"]["id"])
+    assert created_deck is not None
+    scheduler_settings = json.loads(created_deck["scheduler_settings_json"])
+    assert scheduler_settings["new_steps_minutes"] == [1, 5, 15]
+    assert scheduler_settings["easy_interval_days"] == 3
+    assert scheduler_settings["enable_fuzz"] is False
 
 
 def test_convert_remediation_questions_returns_mixed_results_without_replace_active(

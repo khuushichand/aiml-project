@@ -155,6 +155,12 @@ export type DeckUpdate = {
   expected_version?: number | null
 }
 
+export type DeckCreateInput = {
+  name: string
+  description?: string | null
+  scheduler_settings?: DeckSchedulerSettings | null
+}
+
 export type FlashcardCreate = {
   deck_id?: number | null
   front: string
@@ -356,7 +362,7 @@ export async function listDecks(options?: { signal?: AbortSignal }): Promise<Dec
 }
 
 export async function createDeck(
-  input: { name: string; description?: string | null; scheduler_settings?: Partial<DeckSchedulerSettings> | null },
+  input: DeckCreateInput,
   options?: { signal?: AbortSignal }
 ): Promise<Deck> {
   return await decksClient.create<Deck>(input, {

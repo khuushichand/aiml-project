@@ -6,7 +6,6 @@ import {
   Select,
   Descriptions,
   Empty,
-  Input,
   List,
   Modal,
   Progress,
@@ -36,6 +35,9 @@ import {
   useQuizzesQuery
 } from "../hooks"
 import { useDecksQuery } from "@/components/Flashcards/hooks/useFlashcardQueries"
+import { NewDeckConfigurationFields } from "@/components/Flashcards/components/NewDeckConfigurationFields"
+import { useDeckSchedulerDraft } from "@/components/Flashcards/hooks/useDeckSchedulerDraft"
+import { formatSchedulerSummary } from "@/components/Flashcards/utils/scheduler-settings"
 import type {
   AnswerValue,
   QuestionPublic,
@@ -161,6 +163,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
   const [deckTarget, setDeckTarget] = React.useState<DeckTargetValue>(null)
   const [newDeckName, setNewDeckName] = React.useState("")
   const [replaceExistingQuestionIds, setReplaceExistingQuestionIds] = React.useState<number[]>([])
+  const newDeckSchedulerDraft = useDeckSchedulerDraft()
 
   const { data: decksData, isLoading: decksLoading } = useDecksQuery({
     enabled: selectedAttemptId != null
@@ -234,6 +237,10 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
   )
 
   const decks = decksData ?? []
+  const selectedDeck = React.useMemo(
+    () => (typeof deckTarget === "number" ? decks.find((deck) => deck.id === deckTarget) ?? null : null),
+    [deckTarget, decks]
+  )
   const remediationConversions = remediationConversionsQuery.data?.items ?? []
   const remediationConversionStateByQuestionId = React.useMemo(() => {
     return remediationConversions.reduce<Map<number, RemediationConversionState>>((acc, item) => {
@@ -707,6 +714,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
     updateSelectedMissedQuestions(nextSelection)
     setDeckTarget(decks[0]?.id ?? "__new__")
     setReplaceExistingQuestionIds([])
+    newDeckSchedulerDraft.resetToDefaults()
 
     const quizName =
       quizMap.get(selectedAttemptDetails.quiz_id)?.name ?? `Quiz #${selectedAttemptDetails.quiz_id}`
@@ -716,6 +724,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
     decks,
     messageApi,
     missedQuestionEntries,
+    newDeckSchedulerDraft,
     quizMap,
     selectedAttemptDetails,
     selectedMissedQuestions,
@@ -809,9 +818,19 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
               )
               return null
             }
+            const schedulerSettings = newDeckSchedulerDraft.getValidatedSettings()
+            if (!schedulerSettings) {
+              messageApi.warning(
+                t("option:flashcards.schedulerSettingsInvalid", {
+                  defaultValue: "Fix the scheduler settings before creating the deck."
+                })
+              )
+              return null
+            }
             return {
               question_ids: questionIds,
               create_deck_name: trimmedDeckName,
+              create_deck_scheduler_settings: schedulerSettings,
               replace_active: replaceActive
             } as const
           })()
@@ -889,6 +908,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
     deckTarget,
     messageApi,
     missedQuestionEntries,
+    newDeckSchedulerDraft,
     newDeckName,
     replaceExistingQuestionIds,
     selectedAttemptDetails,
@@ -956,14 +976,28 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
               ]}
             />
             {deckTarget === "__new__" && (
-              <Input
-                value={newDeckName}
-                onChange={(event) => setNewDeckName(event.target.value)}
-                placeholder={t("option:quiz.newDeckNamePlaceholder", {
-                  defaultValue: "e.g. Biology Basics - Missed Questions"
+              <NewDeckConfigurationFields
+                deckName={newDeckName}
+                onDeckNameChange={setNewDeckName}
+                schedulerDraft={newDeckSchedulerDraft}
+                nameTestId="quiz-remediation-new-deck-name"
+                hint={t("option:quiz.newDeckSchedulerHint", {
+                  defaultValue: "These scheduler settings will be applied to the new remediation deck."
                 })}
               />
             )}
+            {deckTarget !== "__new__" && selectedDeck?.scheduler_settings ? (
+              <Text
+                type="secondary"
+                className="block text-xs"
+                data-testid="quiz-remediation-selected-deck-summary"
+              >
+                {t("option:flashcards.selectedDeckSchedulerSummary", {
+                  defaultValue: "Scheduler: {{summary}}",
+                  summary: formatSchedulerSummary(selectedDeck.scheduler_settings)
+                })}
+              </Text>
+            ) : null}
           </div>
 
           <div className="space-y-2">

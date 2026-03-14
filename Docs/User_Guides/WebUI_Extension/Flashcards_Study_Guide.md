@@ -84,6 +84,34 @@ Important behavior:
 - Unsaved scheduler drafts are guarded when you switch decks or leave the `Scheduler` tab.
 - If another client updates the same deck first, the tab shows `Reload latest` and `Reapply my draft` actions.
 
+## Scheduler Settings During Deck Creation
+
+You can now set scheduler policy at deck-creation time instead of creating the deck first and fixing it later.
+
+Flashcards creation flows:
+
+- `Manage` manual card creation
+- `Transfer` structured Q&A preview save
+- `Transfer` generated flashcards save
+- `Transfer` image occlusion save
+
+How it works:
+
+- Existing deck selectors now include `Create new deck`.
+- Choosing that option opens a deck-name field plus the same scheduler preset/editor used by the scheduler UI.
+- Existing decks remain read-only in those flows and show a compact scheduler summary instead.
+- New decks created there start with exactly the scheduler settings you selected.
+
+Quiz remediation:
+
+- `Results` → `Create Flashcards from Missed Questions` also supports `Create new deck`.
+- The remediation modal lets you set scheduler settings for the new deck before conversion runs.
+- If you choose an existing deck, the modal shows that deck's scheduler summary.
+
+Later edits:
+
+- If you need to change a deck after creation, open the `Scheduler` tab and edit that deck there.
+
 ## Queue States
 
 Queue-state badges now appear on the active card in `Study`, on expanded cards in `Manage`, and on document-mode rows.

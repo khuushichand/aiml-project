@@ -424,6 +424,11 @@ def convert_attempt_remediation_conversions(
             question_ids=payload.question_ids,
             target_deck_id=payload.target_deck_id,
             create_deck_name=payload.create_deck_name,
+            create_deck_scheduler_settings=(
+                payload.create_deck_scheduler_settings.model_dump()
+                if payload.create_deck_scheduler_settings
+                else None
+            ),
             replace_active=payload.replace_active,
         )
     except InputError as exc:

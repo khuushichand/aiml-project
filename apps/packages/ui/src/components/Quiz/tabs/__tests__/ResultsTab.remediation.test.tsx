@@ -410,7 +410,21 @@ describe("ResultsTab remediation panel", () => {
     } as any)
 
     vi.mocked(useDecksQuery).mockReturnValue({
-      data: [{ id: 3, name: "Renal Recovery Deck" }],
+      data: [{
+        id: 3,
+        name: "Renal Recovery Deck",
+        scheduler_settings: {
+          new_steps_minutes: [1, 10],
+          relearn_steps_minutes: [10],
+          graduating_interval_days: 1,
+          easy_interval_days: 4,
+          easy_bonus: 1.3,
+          interval_modifier: 1,
+          max_interval_days: 36500,
+          leech_threshold: 8,
+          enable_fuzz: false
+        }
+      }],
       isLoading: false
     } as any)
   })
@@ -502,6 +516,9 @@ describe("ResultsTab remediation panel", () => {
     await waitFor(() => {
       expect(screen.getByText("Destination deck")).toBeInTheDocument()
     })
+    expect(screen.getByTestId("quiz-remediation-selected-deck-summary")).toHaveTextContent(
+      "Scheduler: 1m,10m -> 1d / easy 4d / leech 8 / fuzz off"
+    )
 
     fireEvent.click(screen.getByRole("button", { name: /^create flashcards$/i }))
 
@@ -511,6 +528,50 @@ describe("ResultsTab remediation panel", () => {
         request: {
           question_ids: [13],
           target_deck_id: 3,
+          replace_active: false
+        }
+      })
+    })
+  })
+
+  it("submits scheduler settings when remediation creates a new deck", async () => {
+    await openDetails()
+
+    fireEvent.click(screen.getByRole("button", { name: /create remediation flashcards/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Destination deck")).toBeInTheDocument()
+    })
+
+    const dialog = screen
+      .getAllByRole("dialog")
+      .find((element) => within(element).queryByText("Destination deck"))
+    expect(dialog).not.toBeNull()
+    fireEvent.mouseDown(within(dialog as HTMLElement).getByRole("combobox"))
+    fireEvent.click(await screen.findByText("Create new deck"))
+    fireEvent.change(screen.getByTestId("quiz-remediation-new-deck-name"), {
+      target: { value: "Missed Questions Deck" }
+    })
+    fireEvent.click(screen.getByTestId("deck-scheduler-editor-preset-fast_acquisition"))
+    fireEvent.click(screen.getByRole("button", { name: /^create flashcards$/i }))
+
+    await waitFor(() => {
+      expect(mocks.convertRemediationQuestions).toHaveBeenCalledWith({
+        attemptId: 101,
+        request: {
+          question_ids: [13],
+          create_deck_name: "Missed Questions Deck",
+          create_deck_scheduler_settings: {
+            new_steps_minutes: [1, 5, 15],
+            relearn_steps_minutes: [10],
+            graduating_interval_days: 1,
+            easy_interval_days: 3,
+            easy_bonus: 1.15,
+            interval_modifier: 0.9,
+            max_interval_days: 3650,
+            leech_threshold: 10,
+            enable_fuzz: false
+          },
           replace_active: false
         }
       })
