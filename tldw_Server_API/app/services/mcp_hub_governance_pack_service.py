@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+    ApprovalTemplate,
+    AssignmentTemplate,
+    CapabilityProfile,
     GovernancePack,
+    GovernancePackManifest,
+    PersonaTemplate,
     build_opa_bundle,
     normalize_governance_pack,
     validate_governance_pack,
@@ -15,6 +21,22 @@ from tldw_Server_API.app.core.MCP_unified.governance_packs import (
 _RUNTIME_APPROVAL_MODE_MAP = {
     "allow": "allow_silently",
     "ask": "ask_every_time",
+}
+_SUPPORTED_PORTABLE_CAPABILITIES = {
+    "filesystem.read",
+    "filesystem.write",
+    "mcp.server.connect",
+    "network.external.fetch",
+    "network.external.search",
+    "process.execute.safe",
+    "tool.invoke.code_edit",
+    "tool.invoke.research",
+}
+_SUPPORTED_ENVIRONMENT_REQUIREMENTS = {
+    "local_mapping_required",
+    "no_external_secrets",
+    "workspace_bounded_read",
+    "workspace_bounded_write",
 }
 
 
@@ -35,11 +57,174 @@ class GovernancePackImportResult(BaseModel):
     blocked_objects: list[str] = Field(default_factory=list)
 
 
+class GovernancePackDryRunReport(BaseModel):
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    digest: str
+    resolved_capabilities: list[str] = Field(default_factory=list)
+    unresolved_capabilities: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    blocked_objects: list[str] = Field(default_factory=list)
+    verdict: str
+
+
 class McpHubGovernancePackService:
     """Materialize schema-first governance packs into immutable MCP Hub base objects."""
 
     def __init__(self, repo: McpHubRepo):
         self.repo = repo
+
+    @staticmethod
+    def build_pack_from_document(document: dict[str, Any]) -> GovernancePack:
+        payload = dict(document or {})
+        return GovernancePack(
+            source_path=Path("<api>"),
+            manifest=GovernancePackManifest.model_validate(payload.get("manifest") or {}),
+            profiles=[
+                CapabilityProfile.model_validate(item)
+                for item in payload.get("profiles") or []
+            ],
+            approvals=[
+                ApprovalTemplate.model_validate(item)
+                for item in payload.get("approvals") or []
+            ],
+            personas=[
+                PersonaTemplate.model_validate(item)
+                for item in payload.get("personas") or []
+            ],
+            assignments=[
+                AssignmentTemplate.model_validate(item)
+                for item in payload.get("assignments") or []
+            ],
+            raw_profiles=[dict(item) for item in payload.get("profiles") or []],
+            raw_approvals=[dict(item) for item in payload.get("approvals") or []],
+            raw_personas=[dict(item) for item in payload.get("personas") or []],
+            raw_assignments=[dict(item) for item in payload.get("assignments") or []],
+        )
+
+    async def dry_run_pack(
+        self,
+        *,
+        pack: GovernancePack,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> GovernancePackDryRunReport:
+        del owner_scope_type, owner_scope_id
+
+        validation = validate_governance_pack(pack)
+        if validation.errors:
+            raise ValueError("; ".join(validation.errors))
+
+        bundle = build_opa_bundle(pack)
+        resolved_capabilities: list[str] = []
+        unresolved_capabilities: list[str] = []
+        warnings: list[str] = []
+        blocked_objects: list[str] = []
+
+        for profile in pack.profiles:
+            for capability in list(profile.capabilities.allow) + list(profile.capabilities.deny):
+                capability_value = str(capability or "").strip()
+                if not capability_value:
+                    continue
+                if capability_value in _SUPPORTED_PORTABLE_CAPABILITIES:
+                    if capability_value not in resolved_capabilities:
+                        resolved_capabilities.append(capability_value)
+                elif capability_value not in unresolved_capabilities:
+                    unresolved_capabilities.append(capability_value)
+            for requirement in profile.environment_requirements:
+                requirement_value = str(requirement or "").strip()
+                if requirement_value and requirement_value not in _SUPPORTED_ENVIRONMENT_REQUIREMENTS:
+                    warnings.append(
+                        f"profile:{profile.profile_id} uses unsupported environment requirement '{requirement_value}'"
+                    )
+
+        for approval in pack.approvals:
+            if str(approval.mode or "").strip().lower() not in _RUNTIME_APPROVAL_MODE_MAP:
+                blocked_objects.append(f"approval_template:{approval.approval_template_id}")
+                warnings.append(
+                    f"approval template '{approval.approval_template_id}' cannot map to a local runtime approval mode"
+                )
+
+        verdict = "importable"
+        if unresolved_capabilities or blocked_objects:
+            verdict = "blocked"
+
+        return GovernancePackDryRunReport(
+            manifest={
+                "pack_id": pack.manifest.pack_id,
+                "pack_version": pack.manifest.pack_version,
+                "title": pack.manifest.title,
+                "description": pack.manifest.description,
+            },
+            digest=bundle.digest,
+            resolved_capabilities=resolved_capabilities,
+            unresolved_capabilities=unresolved_capabilities,
+            warnings=warnings,
+            blocked_objects=blocked_objects,
+            verdict=verdict,
+        )
+
+    async def dry_run_pack_document(
+        self,
+        *,
+        document: dict[str, Any],
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> GovernancePackDryRunReport:
+        pack = self.build_pack_from_document(document)
+        return await self.dry_run_pack(
+            pack=pack,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+
+    async def import_pack_document(
+        self,
+        *,
+        document: dict[str, Any],
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+    ) -> dict[str, Any]:
+        pack = self.build_pack_from_document(document)
+        report = await self.dry_run_pack(
+            pack=pack,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+        if report.verdict != "importable":
+            raise ValueError("Governance pack dry-run did not pass")
+        imported = await self.import_pack(
+            pack=pack,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            actor_id=actor_id,
+        )
+        return {
+            "governance_pack_id": imported.governance_pack_id,
+            "imported_object_counts": dict(imported.imported_object_counts),
+            "blocked_objects": list(imported.blocked_objects),
+            "report": report.model_dump(),
+        }
+
+    async def list_governance_packs(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.repo.list_governance_packs(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+
+    async def get_governance_pack_detail(self, governance_pack_id: int) -> dict[str, Any] | None:
+        pack_row = await self.repo.get_governance_pack(governance_pack_id)
+        if pack_row is None:
+            return None
+        return {
+            **pack_row,
+            "imported_objects": await self.repo.list_governance_pack_objects(governance_pack_id),
+        }
 
     async def import_pack(
         self,

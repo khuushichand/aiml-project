@@ -458,6 +458,41 @@ class McpHubRepo:
         )
         return self._normalize_governance_pack_row(self._row_to_dict(row) if row else None)
 
+    async def list_governance_packs(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_scope_type = (
+            _normalize_scope_type(owner_scope_type)
+            if owner_scope_type is not None
+            else None
+        )
+        normalized_scope_id = int(owner_scope_id) if owner_scope_id is not None else None
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
+                   adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
+                   bundle_digest, manifest_json, normalized_ir_json, created_by, updated_by,
+                   created_at, updated_at
+            FROM mcp_governance_packs
+            WHERE (? IS NULL OR owner_scope_type = ?)
+              AND (? IS NULL OR owner_scope_id = ?)
+            ORDER BY pack_id, pack_version, id
+            """,
+            (
+                normalized_scope_type,
+                normalized_scope_type,
+                normalized_scope_id,
+                normalized_scope_id,
+            ),
+        )
+        return [
+            self._normalize_governance_pack_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
+
     async def create_governance_pack_object(
         self,
         *,
@@ -509,6 +544,21 @@ class McpHubRepo:
             (str(object_type or "").strip().lower(), str(object_id).strip()),
         )
         return self._normalize_governance_pack_object_row(self._row_to_dict(row) if row else None)
+
+    async def list_governance_pack_objects(self, governance_pack_id: int) -> list[dict[str, Any]]:
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, governance_pack_id, object_type, object_id, source_object_id, created_at
+            FROM mcp_governance_pack_objects
+            WHERE governance_pack_id = ?
+            ORDER BY object_type, source_object_id, id
+            """,
+            (int(governance_pack_id),),
+        )
+        return [
+            self._normalize_governance_pack_object_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
 
     async def create_acp_profile(
         self,
