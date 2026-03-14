@@ -452,6 +452,28 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockMessageSuccess).not.toHaveBeenCalled()
   })
 
+  it("marks summary artifacts failed when ragSearch returns a voice assistant backend error string", async () => {
+    mockRagSearch.mockResolvedValue({
+      generation: "I'm sorry, I encountered an error processing your request."
+    })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable summary")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+  })
+
   it("still completes valid summary artifacts", async () => {
     mockRagSearch.mockResolvedValue({ generation: "Generated summary" })
 

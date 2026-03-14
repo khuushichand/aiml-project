@@ -363,6 +363,7 @@ const TEXT_FAILURE_SENTINELS: Partial<Record<ArtifactType, string[]>> = {
 
 const KNOWN_ERROR_RESPONSE_TEXTS = new Set([
   "sorry, i encountered an error. please try again.",
+  "i'm sorry, i encountered an error processing your request.",
   "i encountered an error generating a response.",
   "the workflow encountered an error."
 ])
