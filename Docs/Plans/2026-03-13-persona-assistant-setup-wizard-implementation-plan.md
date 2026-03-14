@@ -8,9 +8,11 @@
 
 **Tech Stack:** FastAPI, Pydantic, existing `CharactersRAGDB` persona storage, React, Ant Design, React Router, existing Persona Garden route/hooks, Vitest, pytest.
 
+**Execution Status:** Complete
+
 ---
 
-### Task 1: Add persona setup metadata to the backend profile model
+### Task 1: Add persona setup metadata to the backend profile model [Complete]
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/schemas/persona.py`
@@ -78,7 +80,7 @@ git add tldw_Server_API/app/api/v1/schemas/persona.py tldw_Server_API/app/core/D
 git commit -m "feat: add persona setup metadata"
 ```
 
-### Task 2: Add route-owned setup gating and baseline hook wiring
+### Task 2: Add route-owned setup gating and baseline hook wiring [Complete]
 
 **Files:**
 - Create: `apps/packages/ui/src/hooks/usePersonaSetupWizard.ts`
@@ -137,7 +139,7 @@ git add apps/packages/ui/src/hooks/usePersonaSetupWizard.ts apps/packages/ui/src
 git commit -m "feat: gate persona garden with assistant setup state"
 ```
 
-### Task 3: Build the wizard shell and explicit persona-choice step
+### Task 3: Build the wizard shell and explicit persona-choice step [Complete]
 
 **Files:**
 - Create: `apps/packages/ui/src/components/PersonaGarden/AssistantSetupWizard.tsx`
@@ -191,7 +193,7 @@ git add apps/packages/ui/src/components/PersonaGarden/AssistantSetupWizard.tsx a
 git commit -m "feat: add explicit persona choice setup step"
 ```
 
-### Task 4: Reuse saved voice defaults in the setup voice step
+### Task 4: Reuse saved voice defaults in the setup voice step [Complete]
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/PersonaGarden/AssistantDefaultsPanel.tsx`
@@ -246,7 +248,7 @@ git add apps/packages/ui/src/components/PersonaGarden/AssistantDefaultsPanel.tsx
 git commit -m "feat: add assistant setup voice defaults step"
 ```
 
-### Task 5: Add the starter-commands step using existing persona command APIs
+### Task 5: Add the starter-commands step using existing persona command APIs [Complete]
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/PersonaGarden/AssistantSetupWizard.tsx`
@@ -299,7 +301,7 @@ git add apps/packages/ui/src/components/PersonaGarden/AssistantSetupWizard.tsx a
 git commit -m "feat: add starter commands setup step"
 ```
 
-### Task 6: Add the explicit safety-and-connections step
+### Task 6: Add the explicit safety-and-connections step [Complete]
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/PersonaGarden/AssistantSetupWizard.tsx`
@@ -354,7 +356,7 @@ git add apps/packages/ui/src/components/PersonaGarden/AssistantSetupWizard.tsx a
 git commit -m "feat: add safety and connections setup step"
 ```
 
-### Task 7: Add the required test-and-finish step with explicit test type recording
+### Task 7: Add the required test-and-finish step with explicit test type recording [Complete]
 
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/endpoints/persona.py`
@@ -412,7 +414,7 @@ git add tldw_Server_API/app/api/v1/endpoints/persona.py tldw_Server_API/tests/Pe
 git commit -m "feat: require successful test for assistant setup completion"
 ```
 
-### Task 8: Regression, verification, and docs cleanup
+### Task 8: Regression, verification, and docs cleanup [Complete]
 
 **Files:**
 - Modify: `Docs/Plans/2026-03-13-persona-assistant-setup-wizard-implementation-plan.md`
