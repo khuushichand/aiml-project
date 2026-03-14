@@ -3,6 +3,7 @@
 # Imports
 import io
 import json
+import mimetypes
 import os
 import sqlite3
 import tempfile
@@ -13,6 +14,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from loguru import logger
+
+from tldw_Server_API.app.core.Flashcards.asset_refs import replace_markdown_asset_refs_for_export
 
 #
 ########################################################################################################################
@@ -39,6 +42,18 @@ def _sha1_8_int(s: str) -> int:
     return int(h[:8], 16)
 
 
+def _guess_extension(mime_type: str | None, original_filename: str | None = None) -> str:
+    if original_filename:
+        ext = os.path.splitext(original_filename)[1].lstrip(".").lower()
+        if ext:
+            return "jpg" if ext == "jpeg" else ext
+    guessed = mimetypes.guess_extension(str(mime_type or "").strip().lower()) or ""
+    ext = guessed.lstrip(".").lower()
+    if ext:
+        return "jpg" if ext == "jpeg" else ext
+    return "bin"
+
+
 def _build_models_json(basic_mid: int, cloze_mid: int) -> dict:
     # Basic model
     basic = {
@@ -48,6 +63,7 @@ def _build_models_json(basic_mid: int, cloze_mid: int) -> dict:
             {"name": "Front", "ord": 0, "sticky": False, "rtl": False, "font": "Arial", "size": 20, "media": []},
             {"name": "Back", "ord": 1, "sticky": False, "rtl": False, "font": "Arial", "size": 20, "media": []},
             {"name": "Extra", "ord": 2, "sticky": False, "rtl": False, "font": "Arial", "size": 16, "media": []},
+            {"name": "Notes", "ord": 3, "sticky": False, "rtl": False, "font": "Arial", "size": 16, "media": []},
         ],
         "id": basic_mid,
         "latexPost": "\\end{document}",
@@ -88,6 +104,7 @@ def _build_models_json(basic_mid: int, cloze_mid: int) -> dict:
         "flds": [
             {"name": "Text", "ord": 0, "sticky": False, "rtl": False, "font": "Arial", "size": 20, "media": []},
             {"name": "Back Extra", "ord": 1, "sticky": False, "rtl": False, "font": "Arial", "size": 16, "media": []},
+            {"name": "Notes", "ord": 2, "sticky": False, "rtl": False, "font": "Arial", "size": 16, "media": []},
         ],
         "id": cloze_mid,
         "latexPost": basic["latexPost"],
@@ -233,7 +250,14 @@ def _compute_card_sched(model_type: str, ef: float, interval_days: int, repetiti
 import re
 
 
-def _extract_media_from_html(html: str, media_accum: list[tuple[str, bytes]], media_map: dict[str, int]) -> str:
+def _extract_media_from_html(
+    html: str,
+    media_accum: list[tuple[str, bytes]],
+    media_map: dict[str, int],
+    *,
+    media_total_bytes: list[int] | None = None,
+    max_total_media_bytes: int | None = None,
+) -> str:
     """
     Extract data URIs in img/audio tags, store as files, and replace src with filename.
     media_accum: list of (filename, bytes) to be written later
@@ -256,6 +280,10 @@ def _extract_media_from_html(html: str, media_accum: list[tuple[str, bytes]], me
                     ext = 'jpg'
             import base64
             content = base64.b64decode(b64data)
+            if media_total_bytes is not None:
+                media_total_bytes[0] += len(content)
+                if max_total_media_bytes is not None and media_total_bytes[0] > max_total_media_bytes:
+                    raise ValueError(f"APKG media exceeds max total size of {max_total_media_bytes} bytes")
             # filename
             fname_base = f"media_{uuid.uuid4().hex[:8]}.{ext}"
             # avoid collision
@@ -288,6 +316,10 @@ def _extract_media_from_html(html: str, media_accum: list[tuple[str, bytes]], me
                     ext = 'jpg'
             import base64
             content = base64.b64decode(b64data)
+            if media_total_bytes is not None:
+                media_total_bytes[0] += len(content)
+                if max_total_media_bytes is not None and media_total_bytes[0] > max_total_media_bytes:
+                    raise ValueError(f"APKG media exceeds max total size of {max_total_media_bytes} bytes")
             filename = f"media_{uuid.uuid4().hex[:8]}.{ext}"
             idx = len(media_accum)
             media_map[filename] = idx
@@ -301,7 +333,14 @@ def _extract_media_from_html(html: str, media_accum: list[tuple[str, bytes]], me
     return html
 
 
-def export_apkg_from_rows(rows: list[dict], default_deck_name: str = "Default", include_reverse: bool = False) -> bytes:
+def export_apkg_from_rows(
+    rows: list[dict],
+    default_deck_name: str = "Default",
+    include_reverse: bool = False,
+    *,
+    asset_loader=None,
+    max_total_media_bytes: int | None = None,
+) -> bytes:
     """
     Build an APKG bytes object from flashcard rows returned by list_flashcards().
     Each row should contain: deck_name, front, back, notes, extra, model_type, ef, interval_days, repetitions, lapses, due_at.
@@ -414,6 +453,39 @@ def export_apkg_from_rows(rows: list[dict], default_deck_name: str = "Default", 
         card_seq = 0
         media_accum: list[tuple[str, bytes]] = []
         media_idx_map: dict[str, int] = {}
+        media_total_bytes = [0]
+        managed_asset_filenames: dict[str, str] = {}
+
+        def _register_managed_asset(asset_uuid: str) -> str:
+            if asset_uuid in managed_asset_filenames:
+                return managed_asset_filenames[asset_uuid]
+            if asset_loader is None:
+                raise ValueError(f"Managed flashcard asset export is unavailable for {asset_uuid}")
+
+            loaded = asset_loader(asset_uuid)
+            if isinstance(loaded, dict):
+                content = loaded.get("content") or loaded.get("bytes")
+                mime_type = loaded.get("mime_type")
+                original_filename = loaded.get("original_filename")
+            elif isinstance(loaded, (tuple, list)) and len(loaded) >= 2:
+                content = loaded[0]
+                mime_type = loaded[1]
+                original_filename = loaded[2] if len(loaded) > 2 else None
+            else:
+                raise ValueError(f"Unsupported asset loader payload for {asset_uuid}")
+
+            if not isinstance(content, (bytes, bytearray, memoryview)):
+                raise ValueError(f"Managed flashcard asset {asset_uuid} is missing bytes")
+            content_bytes = bytes(content)
+            media_total_bytes[0] += len(content_bytes)
+            if max_total_media_bytes is not None and media_total_bytes[0] > max_total_media_bytes:
+                raise ValueError(f"APKG media exceeds max total size of {max_total_media_bytes} bytes")
+
+            filename = f"managed_{asset_uuid.replace('-', '')[:12]}.{_guess_extension(mime_type, original_filename)}"
+            media_idx_map[filename] = len(media_accum)
+            media_accum.append((filename, content_bytes))
+            managed_asset_filenames[asset_uuid] = filename
+            return filename
 
         for i, r in enumerate(rows):
             deck_name = r.get("deck_name") or default_deck_name
@@ -429,11 +501,42 @@ def export_apkg_from_rows(rows: list[dict], default_deck_name: str = "Default", 
 
             front = r.get("front") or ""
             back = r.get("back") or ""
+            notes = r.get("notes") or ""
             extra = r.get("extra") or ""
+            if asset_loader is not None:
+                front = replace_markdown_asset_refs_for_export(front, _register_managed_asset)
+                back = replace_markdown_asset_refs_for_export(back, _register_managed_asset)
+                extra = replace_markdown_asset_refs_for_export(extra, _register_managed_asset)
+                notes = replace_markdown_asset_refs_for_export(notes, _register_managed_asset)
             # Extract media from HTML fields and replace with filenames
-            front = _extract_media_from_html(front, media_accum, media_idx_map)
-            back = _extract_media_from_html(back, media_accum, media_idx_map)
-            extra = _extract_media_from_html(extra, media_accum, media_idx_map)
+            front = _extract_media_from_html(
+                front,
+                media_accum,
+                media_idx_map,
+                media_total_bytes=media_total_bytes,
+                max_total_media_bytes=max_total_media_bytes,
+            )
+            back = _extract_media_from_html(
+                back,
+                media_accum,
+                media_idx_map,
+                media_total_bytes=media_total_bytes,
+                max_total_media_bytes=max_total_media_bytes,
+            )
+            extra = _extract_media_from_html(
+                extra,
+                media_accum,
+                media_idx_map,
+                media_total_bytes=media_total_bytes,
+                max_total_media_bytes=max_total_media_bytes,
+            )
+            notes = _extract_media_from_html(
+                notes,
+                media_accum,
+                media_idx_map,
+                media_total_bytes=media_total_bytes,
+                max_total_media_bytes=max_total_media_bytes,
+            )
             tags_json_str = r.get("tags_json")
             tags_list = []
             if tags_json_str:
@@ -445,11 +548,11 @@ def export_apkg_from_rows(rows: list[dict], default_deck_name: str = "Default", 
 
             if is_cloze:
                 mid = cloze_mid
-                flds = f"{front}\x1f{extra}"
+                flds = f"{front}\x1f{extra}\x1f{notes}"
                 sfld = 0
             else:
                 mid = basic_mid
-                flds = f"{front}\x1f{back}\x1f{extra}"
+                flds = f"{front}\x1f{back}\x1f{extra}\x1f{notes}"
                 sfld = 0
 
             nid = nid_base + i

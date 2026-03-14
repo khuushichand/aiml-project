@@ -2,18 +2,30 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
+import mimetypes
 import os
+import re
 import sqlite3
 import tempfile
 import zipfile
 from datetime import datetime, timezone
 from typing import Any
 
+from tldw_Server_API.app.core.Flashcards.asset_refs import build_flashcard_asset_markdown
+
 
 class APKGImportError(ValueError):
     """Raised when APKG content cannot be parsed into importable rows."""
+
+
+_IMG_TAG_RE = re.compile(
+    r"<img\b(?P<attrs>[^>]*?)\bsrc\s*=\s*(['\"])(?P<src>.+?)\2(?P<tail>[^>]*)>",
+    re.IGNORECASE,
+)
+_ALT_ATTR_RE = re.compile(r"\balt\s*=\s*(['\"])(?P<alt>.*?)\1", re.IGNORECASE)
 
 
 def _to_int(value: Any, default: int = 0) -> int:
@@ -90,6 +102,7 @@ def _validate_field_lengths(
     deck_name: str,
     front: str,
     back: str,
+    notes: str | None,
     extra: str | None,
     tags: list[str],
     max_field_length: int,
@@ -100,6 +113,7 @@ def _validate_field_lengths(
         "Front": front,
         "Back": back,
         "Extra": extra or "",
+        "Notes": notes or "",
         "Tags": " ".join(tags),
     }
     for field_name, value in fields.items():
@@ -114,11 +128,64 @@ def _validate_field_lengths(
     return True
 
 
+def _guess_media_mime(filename: str, content: bytes) -> str:
+    guessed, _ = mimetypes.guess_type(filename)
+    if guessed:
+        return guessed
+    if content[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if content[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+def _rewrite_media_html_to_markdown(
+    value: str | None,
+    *,
+    media_files: dict[str, bytes],
+    asset_importer,
+    seen_media_names: set[str],
+    total_media_bytes: list[int],
+    max_total_media_bytes: int | None,
+) -> str | None:
+    if not value or asset_importer is None:
+        return value
+
+    per_note_asset_cache: dict[str, str] = {}
+
+    def repl(match: re.Match[str]) -> str:
+        src = match.group("src").strip()
+        if src not in media_files:
+            return match.group(0)
+
+        if src not in seen_media_names:
+            total_media_bytes[0] += len(media_files[src])
+            if max_total_media_bytes is not None and total_media_bytes[0] > max_total_media_bytes:
+                raise APKGImportError(
+                    f"APKG media exceeds max total size of {max_total_media_bytes} bytes"
+                )
+            seen_media_names.add(src)
+
+        if src not in per_note_asset_cache:
+            asset_uuid = asset_importer(media_files[src], _guess_media_mime(src, media_files[src]), src)
+            per_note_asset_cache[src] = str(asset_uuid)
+
+        alt_match = _ALT_ATTR_RE.search(match.group(0))
+        alt_text = alt_match.group("alt") if alt_match else os.path.splitext(src)[0]
+        return build_flashcard_asset_markdown(per_note_asset_cache[src], alt_text)
+
+    return _IMG_TAG_RE.sub(repl, value)
+
+
 def import_rows_from_apkg_bytes(
     apkg_bytes: bytes,
     *,
     max_notes: int,
     max_field_length: int,
+    max_total_media_bytes: int | None = None,
+    asset_importer=None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Parse APKG bytes into normalized flashcard rows.
@@ -148,6 +215,15 @@ def import_rows_from_apkg_bytes(
         if not collection_member:
             raise APKGImportError("APKG is missing collection database")
         collection_bytes = zf.read(collection_member)
+        media_files: dict[str, bytes] = {}
+        with contextlib.suppress(KeyError, json.JSONDecodeError):
+            media_mapping = json.loads(zf.read("media").decode("utf-8"))
+            if isinstance(media_mapping, dict):
+                for archive_name, original_name in media_mapping.items():
+                    try:
+                        media_files[str(original_name)] = zf.read(str(archive_name))
+                    except KeyError:
+                        continue
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         collection_path = os.path.join(tmp_dir, "collection.anki2")
@@ -191,6 +267,8 @@ def import_rows_from_apkg_bytes(
                 ).fetchall()
                 parsed_rows: list[dict[str, Any]] = []
                 processed = 0
+                seen_media_names: set[str] = set()
+                total_media_bytes = [0]
 
                 for note_index, note_row in enumerate(note_rows, start=1):
                     if processed >= max_notes:
@@ -235,18 +313,54 @@ def import_rows_from_apkg_bytes(
                         front = fields[0] if len(fields) > 0 else ""
                         back = ""
                         extra = fields[1] if len(fields) > 1 else None
+                        notes = fields[2] if len(fields) > 2 else None
                         model_type = "cloze"
                         reverse = False
                     else:
                         front = fields[0] if len(fields) > 0 else ""
                         back = fields[1] if len(fields) > 1 else ""
                         extra = fields[2] if len(fields) > 2 else None
+                        notes = fields[3] if len(fields) > 3 else None
                         reverse = any(_to_int(row["ord"], -1) == 1 for row in card_rows)
                         model_type = "basic_reverse" if reverse else "basic"
+
+                    front = _rewrite_media_html_to_markdown(
+                        front,
+                        media_files=media_files,
+                        asset_importer=asset_importer,
+                        seen_media_names=seen_media_names,
+                        total_media_bytes=total_media_bytes,
+                        max_total_media_bytes=max_total_media_bytes,
+                    ) or ""
+                    back = _rewrite_media_html_to_markdown(
+                        back,
+                        media_files=media_files,
+                        asset_importer=asset_importer,
+                        seen_media_names=seen_media_names,
+                        total_media_bytes=total_media_bytes,
+                        max_total_media_bytes=max_total_media_bytes,
+                    ) or ""
+                    extra = _rewrite_media_html_to_markdown(
+                        extra,
+                        media_files=media_files,
+                        asset_importer=asset_importer,
+                        seen_media_names=seen_media_names,
+                        total_media_bytes=total_media_bytes,
+                        max_total_media_bytes=max_total_media_bytes,
+                    )
+                    notes = _rewrite_media_html_to_markdown(
+                        notes,
+                        media_files=media_files,
+                        asset_importer=asset_importer,
+                        seen_media_names=seen_media_names,
+                        total_media_bytes=total_media_bytes,
+                        max_total_media_bytes=max_total_media_bytes,
+                    )
 
                     front = str(front or "").strip()
                     back = str(back or "").strip()
                     extra = str(extra or "").strip() or None
+                    notes = str(notes or "").strip() or None
                     if not front:
                         errors.append({"index": note_index, "error": "Missing required field: Front"})
                         continue
@@ -256,6 +370,7 @@ def import_rows_from_apkg_bytes(
                         deck_name=deck_name,
                         front=front,
                         back=back,
+                        notes=notes,
                         extra=extra,
                         tags=tags,
                         max_field_length=max_field_length,
@@ -283,7 +398,7 @@ def import_rows_from_apkg_bytes(
                             "deck_name": deck_name,
                             "front": front,
                             "back": back,
-                            "notes": None,
+                            "notes": notes,
                             "extra": extra,
                             "tags": tags,
                             "model_type": model_type,

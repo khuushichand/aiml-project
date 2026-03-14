@@ -1,5 +1,5 @@
 export const FLASHCARDS_HELP_DOC_BASE_URL =
-  "https://github.com/rmusser01/tldw_server/blob/HEAD/Docs/User_Guides/Flashcards_Study_Guide.md"
+  "https://github.com/rmusser01/tldw_server/blob/HEAD/Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md"
 
 const withAnchor = (anchor: string) => `${FLASHCARDS_HELP_DOC_BASE_URL}#${anchor}`
 
@@ -8,6 +8,7 @@ export const FLASHCARDS_HELP_LINKS = {
   ratings: withAnchor("ratings-and-scheduling-basics"),
   cloze: withAnchor("cloze-syntax"),
   importFormats: withAnchor("import-and-export-formats"),
+  structuredImport: withAnchor("structured-q-and-a-preview"),
   troubleshooting: withAnchor("troubleshooting")
 } as const
 

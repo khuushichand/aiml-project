@@ -1,6 +1,11 @@
 import { bgRequest } from "@/services/background-proxy"
 import type { AllowedPath } from "@/services/tldw/openapi-guard"
 import { createResourceClient } from "@/services/resource-client"
+import type {
+  StudyAssistantContextResponse,
+  StudyAssistantRespondRequest,
+  StudyAssistantRespondResponse
+} from "@/services/flashcards"
 
 const quizzesClient = createResourceClient({
   basePath: "/api/v1/quizzes" as AllowedPath
@@ -26,7 +31,13 @@ const getQuizAttemptsClient = (quizId: number) =>
 // Question types
 export type QuestionType = "multiple_choice" | "multi_select" | "matching" | "true_false" | "fill_blank"
 export type AnswerValue = number | string | number[] | Record<string, string>
-export type QuizGenerateSourceType = "media" | "note" | "flashcard_deck" | "flashcard_card"
+export type QuizGenerateSourceType =
+  | "media"
+  | "note"
+  | "flashcard_deck"
+  | "flashcard_card"
+  | "quiz_attempt"
+  | "quiz_attempt_question"
 export type QuizGenerateSource = {
   source_type: QuizGenerateSourceType
   source_id: string
@@ -195,6 +206,17 @@ type QuizGenerateRequestWithSources = QuizGenerateRequestBase & {
 }
 
 export type QuizGenerateRequest = QuizGenerateRequestWithMedia | QuizGenerateRequestWithSources
+
+export type QuizRemediationGenerateRequest = {
+  attemptId: number
+  questionIds: number[]
+  num_questions?: number
+  question_types?: QuestionType[]
+  difficulty?: "easy" | "medium" | "hard" | "mixed"
+  focus_topics?: string[]
+  model?: string
+  workspace_tag?: string | null
+}
 
 // List response types
 export type QuizListResponse = {
@@ -386,6 +408,33 @@ export async function getAttempt(
   })
 }
 
+export async function getQuizAttemptQuestionAssistant(
+  attemptId: number,
+  questionId: number,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantContextResponse> {
+  return await bgRequest<StudyAssistantContextResponse, AllowedPath, "GET">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/questions/${questionId}/assistant` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function respondQuizAttemptQuestionAssistant(
+  attemptId: number,
+  questionId: number,
+  input: StudyAssistantRespondRequest,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantRespondResponse> {
+  return await bgRequest<StudyAssistantRespondResponse, AllowedPath, "POST">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/questions/${questionId}/assistant/respond` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input,
+    abortSignal: options?.signal
+  })
+}
+
 // --- AI Generation ---
 
 export async function generateQuiz(
@@ -405,6 +454,34 @@ export async function generateQuiz(
     abortSignal: options?.signal,
     timeoutMs
   })
+}
+
+export function buildQuizAttemptQuestionSources(
+  attemptId: number,
+  questionIds: number[]
+): QuizGenerateSource[] {
+  return questionIds.map((questionId) => ({
+    source_type: "quiz_attempt_question",
+    source_id: `${attemptId}:${questionId}`
+  }))
+}
+
+export async function generateRemediationQuiz(
+  request: QuizRemediationGenerateRequest,
+  options?: { signal?: AbortSignal; timeoutMs?: number }
+): Promise<QuizGenerateResponse> {
+  return await generateQuiz(
+    {
+      num_questions: request.num_questions,
+      question_types: request.question_types,
+      difficulty: request.difficulty,
+      focus_topics: request.focus_topics,
+      model: request.model,
+      workspace_tag: request.workspace_tag,
+      sources: buildQuizAttemptQuestionSources(request.attemptId, request.questionIds)
+    },
+    options
+  )
 }
 
 export async function importQuizzesJson(

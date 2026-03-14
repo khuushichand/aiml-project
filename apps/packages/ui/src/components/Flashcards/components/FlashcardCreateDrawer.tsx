@@ -11,6 +11,7 @@ import {
   Space,
   Typography
 } from "antd"
+import type { TextAreaRef } from "antd/es/input/TextArea"
 import { Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
@@ -22,7 +23,14 @@ import {
 } from "../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
+import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
+import {
+  getSelectionFromElement,
+  insertTextAtSelection,
+  restoreSelection,
+  type TextSelection
+} from "../utils/text-selection"
 import {
   FLASHCARD_FIELD_MAX_BYTES,
   getFlashcardFieldLimitState,
@@ -33,6 +41,7 @@ import type { FlashcardCreate, Deck } from "@/services/flashcards"
 const { Text } = Typography
 const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
 type FlashcardModelType = NonNullable<FlashcardCreate["model_type"]>
+type EditableTextField = "front" | "back" | "extra" | "notes"
 
 interface PreviewProps {
   content?: string
@@ -83,6 +92,18 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const tagsValue = useDebouncedFormField(form, "tags")
   const frontValue = Form.useWatch("front", form) as string | undefined
   const backValue = Form.useWatch("back", form) as string | undefined
+  const textAreaRefs = React.useRef<Record<EditableTextField, TextAreaRef | null>>({
+    front: null,
+    back: null,
+    extra: null,
+    notes: null
+  })
+  const selectionRef = React.useRef<Record<EditableTextField, TextSelection>>({
+    front: { start: 0, end: 0 },
+    back: { start: 0, end: 0 },
+    extra: { start: 0, end: 0 },
+    notes: { start: 0, end: 0 }
+  })
 
   // Count how many advanced fields have values for the badge indicator
   const advancedFieldCount = React.useMemo(() => {
@@ -228,6 +249,52 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
       message.error(errorMessage)
     }
   }
+
+  const updateSelection = React.useCallback(
+    (
+      field: EditableTextField,
+      element: HTMLTextAreaElement | null | undefined
+    ) => {
+      const currentValue = String(form.getFieldValue(field) ?? "")
+      selectionRef.current[field] = getSelectionFromElement(element, currentValue)
+    },
+    [form]
+  )
+
+  const handleInsertImage = React.useCallback(
+    async (field: EditableTextField, markdownSnippet: string) => {
+      const currentValue = String(form.getFieldValue(field) ?? "")
+      const textArea =
+        textAreaRefs.current[field]?.resizableTextArea?.textArea ?? null
+      const selection =
+        selectionRef.current[field] ?? getSelectionFromElement(textArea, currentValue)
+      const { nextValue, cursor } = insertTextAtSelection(
+        currentValue,
+        selection,
+        markdownSnippet
+      )
+      form.setFieldsValue({ [field]: nextValue })
+      restoreSelection(textArea, cursor)
+    },
+    [form]
+  )
+
+  const renderFieldLabel = React.useCallback(
+    (field: EditableTextField, label: string) => (
+      <div className="flex items-center justify-between gap-3">
+        <span>{label}</span>
+        <FlashcardImageInsertButton
+          ariaLabel={`Upload image for ${label}`}
+          buttonLabel={t("option:flashcards.insertImage", {
+            defaultValue: "Insert image"
+          })}
+          onInsert={(markdownSnippet) => handleInsertImage(field, markdownSnippet)}
+          onError={(error) => message.error(error.message)}
+        />
+      </div>
+    ),
+    [handleInsertImage, message, t]
+  )
 
   return (
     <Drawer
@@ -412,7 +479,10 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
           {/* Front - required */}
           <Form.Item
             name="front"
-            label={t("option:flashcards.front", { defaultValue: "Front" })}
+            label={renderFieldLabel(
+              "front",
+              t("option:flashcards.front", { defaultValue: "Front" })
+            )}
             rules={[
               {
                 required: true,
@@ -460,10 +530,16 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
             ]}
           >
             <Input.TextArea
+              ref={(instance) => {
+                textAreaRefs.current.front = instance
+              }}
               rows={3}
               placeholder={t("option:flashcards.frontPlaceholder", {
                 defaultValue: "Question or prompt..."
               })}
+              onSelect={(event) => updateSelection("front", event.currentTarget)}
+              onClick={(event) => updateSelection("front", event.currentTarget)}
+              onKeyUp={(event) => updateSelection("front", event.currentTarget)}
             />
           </Form.Item>
           <Text
@@ -477,7 +553,10 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
           {/* Back - required */}
           <Form.Item
             name="back"
-            label={t("option:flashcards.back", { defaultValue: "Back" })}
+            label={renderFieldLabel(
+              "back",
+              t("option:flashcards.back", { defaultValue: "Back" })
+            )}
             rules={[
               {
                 required: true,
@@ -505,10 +584,16 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
             ]}
           >
             <Input.TextArea
+              ref={(instance) => {
+                textAreaRefs.current.back = instance
+              }}
               rows={5}
               placeholder={t("option:flashcards.backPlaceholder", {
                 defaultValue: "Answer..."
               })}
+              onSelect={(event) => updateSelection("back", event.currentTarget)}
+              onClick={(event) => updateSelection("back", event.currentTarget)}
+              onKeyUp={(event) => updateSelection("back", event.currentTarget)}
             />
           </Form.Item>
           <Text
@@ -583,28 +668,46 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
 
                   <Form.Item
                     name="extra"
-                    label={t("option:flashcards.extra", { defaultValue: "Extra" })}
+                    label={renderFieldLabel(
+                      "extra",
+                      t("option:flashcards.extra", { defaultValue: "Extra" })
+                    )}
                     className="!mb-0"
                   >
                     <Input.TextArea
+                      ref={(instance) => {
+                        textAreaRefs.current.extra = instance
+                      }}
                       rows={2}
                       placeholder={t("option:flashcards.extraPlaceholder", {
                         defaultValue: "Optional hints or explanations..."
                       })}
+                      onSelect={(event) => updateSelection("extra", event.currentTarget)}
+                      onClick={(event) => updateSelection("extra", event.currentTarget)}
+                      onKeyUp={(event) => updateSelection("extra", event.currentTarget)}
                     />
                   </Form.Item>
                   <Preview content={extraPreview} showPreview={showPreview} />
 
                   <Form.Item
                     name="notes"
-                    label={t("option:flashcards.notes", { defaultValue: "Notes" })}
+                    label={renderFieldLabel(
+                      "notes",
+                      t("option:flashcards.notes", { defaultValue: "Notes" })
+                    )}
                     className="!mb-0"
                   >
                     <Input.TextArea
+                      ref={(instance) => {
+                        textAreaRefs.current.notes = instance
+                      }}
                       rows={2}
                       placeholder={t("option:flashcards.notesPlaceholder", {
                         defaultValue: "Internal notes (not shown during review)..."
                       })}
+                      onSelect={(event) => updateSelection("notes", event.currentTarget)}
+                      onClick={(event) => updateSelection("notes", event.currentTarget)}
+                      onKeyUp={(event) => updateSelection("notes", event.currentTarget)}
                     />
                   </Form.Item>
                   <Preview content={notesPreview} showPreview={showPreview} />
