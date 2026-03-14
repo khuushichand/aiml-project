@@ -1575,7 +1575,142 @@ describe("SidepanelPersona", () => {
       .getByText("knowledge.search")
       .closest("[data-approval-key]")
     expect(knowledgeRow).toHaveAttribute("data-highlighted", "true")
+    expect(knowledgeRow).toHaveAttribute("data-highlight-phase", "landing_primary")
     expect(within(knowledgeRow as HTMLElement).getByText("Needs your approval")).toBeInTheDocument()
+  })
+
+  it("replays the primary landing pulse when jump to approval is pressed again on the same row", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-highlight-replay" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-highlight-replay",
+      planId: "plan-approval-highlight-replay",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+
+    const knowledgeRow = screen
+      .getByText("knowledge.search")
+      .closest("[data-approval-key]") as HTMLElement
+    const firstSequence = Number(knowledgeRow.getAttribute("data-highlight-seq"))
+
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+
+    expect(knowledgeRow).toHaveAttribute("data-highlight-phase", "landing_primary")
+    expect(Number(knowledgeRow.getAttribute("data-highlight-seq"))).toBeGreaterThan(
+      firstSequence
+    )
+  })
+
+  it("settles the landing pulse into a steady highlight after its timer elapses", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-highlight-steady" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-highlight-steady",
+      planId: "plan-approval-highlight-steady",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    vi.useFakeTimers()
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+
+    const knowledgeRow = screen
+      .getByText("knowledge.search")
+      .closest("[data-approval-key]") as HTMLElement
+    expect(knowledgeRow).toHaveAttribute("data-highlight-phase", "landing_primary")
+
+    await act(async () => {
+      await vi.runAllTimersAsync()
+    })
+
+    expect(knowledgeRow).toHaveAttribute("data-highlight-phase", "steady")
   })
 
   it("keeps the current highlighted approval when a new approval arrives", async () => {
@@ -1802,6 +1937,7 @@ describe("SidepanelPersona", () => {
     await screen.findByText("Waiting for approval: notes.export")
     const exportRow = screen.getByText("notes.export").closest("[data-approval-key]")
     expect(exportRow).toHaveAttribute("data-highlighted", "true")
+    expect(exportRow).toHaveAttribute("data-highlight-phase", "landing_secondary")
   })
 
   it("moves the highlight to the next pending approval after the active one is denied", async () => {
@@ -1881,6 +2017,7 @@ describe("SidepanelPersona", () => {
     await screen.findByText("Waiting for approval: notes.export")
     const exportRow = screen.getByText("notes.export").closest("[data-approval-key]")
     expect(exportRow).toHaveAttribute("data-highlighted", "true")
+    expect(exportRow).toHaveAttribute("data-highlight-phase", "landing_secondary")
   })
 
   it("shows a transient answered banner after the last highlighted approval is resolved", async () => {

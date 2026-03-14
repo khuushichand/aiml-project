@@ -11,6 +11,7 @@
 ---
 
 ### Task 1: Red-Test Primary Landing Pulse State
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/routes/__tests__/sidepanel-persona.test.tsx`
@@ -69,6 +70,7 @@ git commit -m "feat: add primary approval landing pulse state"
 ```
 
 ### Task 2: Red-Test Settle-To-Steady Behavior
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/routes/__tests__/sidepanel-persona.test.tsx`
@@ -123,6 +125,7 @@ git commit -m "feat: settle approval landing pulse into steady highlight"
 ```
 
 ### Task 3: Red-Test Secondary Auto-Advance Pulse
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/routes/__tests__/sidepanel-persona.test.tsx`
@@ -177,6 +180,7 @@ git commit -m "feat: add secondary pulse for approval queue progression"
 ```
 
 ### Task 4: Add Motion Styling And Reduced-Motion Fallback
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/routes/sidepanel-persona.tsx`
@@ -231,6 +235,7 @@ git commit -m "feat: animate guided approval rows with reduced-motion fallback"
 ```
 
 ### Task 5: Verify The Slice
+**Status:** Complete
 
 **Files:**
 - Verify touched route and docs from Tasks 1-4

@@ -215,6 +215,14 @@ const PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY =
   "sidepanel:persona:state-editor-expanded"
 const PERSONA_STATE_HISTORY_ORDER_PREF_KEY = "sidepanel:persona:state-history-order"
 const RESOLVED_RUNTIME_APPROVAL_FADE_MS = 1500
+const APPROVAL_HIGHLIGHT_PRIMARY_MS = 900
+const APPROVAL_HIGHLIGHT_SECONDARY_MS = 650
+
+type ApprovalHighlightPhase =
+  | "none"
+  | "landing_primary"
+  | "landing_secondary"
+  | "steady"
 
 const _approvalRequestKey = (
   approval: PersonaRuntimeApprovalPayload,
@@ -332,6 +340,7 @@ const SidepanelPersona = ({
     new Map()
   )
   const resolvedApprovalFadeTimerRef = React.useRef<number | null>(null)
+  const approvalHighlightPhaseTimerRef = React.useRef<number | null>(null)
 
   const [catalog, setCatalog] = React.useState<PersonaInfo[]>([])
   const [selectedPersonaId, setSelectedPersonaId] =
@@ -402,6 +411,9 @@ const SidepanelPersona = ({
     PersonaRuntimeApprovalRequest[]
   >([])
   const [activeApprovalKey, setActiveApprovalKey] = React.useState<string | null>(null)
+  const [approvalHighlightPhase, setApprovalHighlightPhase] =
+    React.useState<ApprovalHighlightPhase>("none")
+  const [approvalHighlightSequence, setApprovalHighlightSequence] = React.useState(0)
   const [resolvedApprovalSnapshot, setResolvedApprovalSnapshot] = React.useState<{
     key: string
     toolName: string
@@ -434,13 +446,50 @@ const SidepanelPersona = ({
     resolvedApprovalFadeTimerRef.current = null
   }, [])
 
+  const clearApprovalHighlightPhaseTimer = React.useCallback(() => {
+    if (approvalHighlightPhaseTimerRef.current == null) return
+    window.clearTimeout(approvalHighlightPhaseTimerRef.current)
+    approvalHighlightPhaseTimerRef.current = null
+  }, [])
+
+  const resetApprovalHighlightMotion = React.useCallback(() => {
+    clearApprovalHighlightPhaseTimer()
+    setApprovalHighlightPhase("none")
+  }, [clearApprovalHighlightPhaseTimer])
+
+  const triggerApprovalHighlightPhase = React.useCallback(
+    (phase: Extract<ApprovalHighlightPhase, "landing_primary" | "landing_secondary">) => {
+      const durationMs =
+        phase === "landing_primary"
+          ? APPROVAL_HIGHLIGHT_PRIMARY_MS
+          : APPROVAL_HIGHLIGHT_SECONDARY_MS
+      clearApprovalHighlightPhaseTimer()
+      setApprovalHighlightPhase(phase)
+      setApprovalHighlightSequence((prev) => prev + 1)
+      approvalHighlightPhaseTimerRef.current = window.setTimeout(() => {
+        approvalHighlightPhaseTimerRef.current = null
+        setApprovalHighlightPhase("steady")
+      }, durationMs)
+    },
+    [clearApprovalHighlightPhaseTimer]
+  )
+
   React.useEffect(() => {
     if (!activeApprovalKey) return
     if (pendingApprovals.some((approval) => approval.key === activeApprovalKey)) return
-    setActiveApprovalKey(
-      pendingApprovals.length ? pendingApprovals[0]?.key || null : null
-    )
-  }, [activeApprovalKey, pendingApprovals])
+    const nextApprovalKey = pendingApprovals.length ? pendingApprovals[0]?.key || null : null
+    setActiveApprovalKey(nextApprovalKey)
+    if (nextApprovalKey) {
+      triggerApprovalHighlightPhase("landing_secondary")
+      return
+    }
+    resetApprovalHighlightMotion()
+  }, [
+    activeApprovalKey,
+    pendingApprovals,
+    resetApprovalHighlightMotion,
+    triggerApprovalHighlightPhase
+  ])
 
   React.useEffect(() => {
     if (!resolvedApprovalSnapshot) {
@@ -470,6 +519,12 @@ const SidepanelPersona = ({
       clearResolvedApprovalFadeTimer()
     }
   }, [clearResolvedApprovalFadeTimer])
+
+  React.useEffect(() => {
+    return () => {
+      clearApprovalHighlightPhaseTimer()
+    }
+  }, [clearApprovalHighlightPhaseTimer])
 
   React.useEffect(() => {
     const normalizedPersonaId = String(selectedPersonaId || "").trim()
@@ -794,12 +849,17 @@ const SidepanelPersona = ({
     setPersonaStateHistory([])
     setPersonaStateHistoryLoaded(false)
     setActiveApprovalKey(null)
+    resetApprovalHighlightMotion()
     clearResolvedApprovalFadeTimer()
     setResolvedApprovalSnapshot(null)
     runtimeApprovalRowRefs.current.clear()
     setPendingApprovals([])
     return true
-  }, [clearResolvedApprovalFadeTimer, confirmDiscardUnsavedStateDrafts])
+  }, [
+    clearResolvedApprovalFadeTimer,
+    confirmDiscardUnsavedStateDrafts,
+    resetApprovalHighlightMotion
+  ])
 
   const handleIncomingPayload = React.useCallback(
     (payload: any) => {
@@ -1173,6 +1233,7 @@ const SidepanelPersona = ({
       setPersonaStateHistory([])
       setPersonaStateHistoryLoaded(false)
       setActiveApprovalKey(null)
+      resetApprovalHighlightMotion()
       clearResolvedApprovalFadeTimer()
       setResolvedApprovalSnapshot(null)
       runtimeApprovalRowRefs.current.clear()
@@ -1352,6 +1413,7 @@ const SidepanelPersona = ({
     isCompanionMode,
     loadPersonaStateDocs,
     applySessionPreferences,
+    resetApprovalHighlightMotion,
     resumeSessionId,
     routeBootstrap.personaId,
     selectedPersonaId
@@ -1786,11 +1848,11 @@ const SidepanelPersona = ({
   const handleJumpToRuntimeApproval = React.useCallback(() => {
     if (!pendingApprovals.length) return
     const targetApprovalKey = activeApprovalKey || pendingApprovals[0]?.key || null
-    setActiveApprovalKey((current) => current || targetApprovalKey)
+    if (!targetApprovalKey) return
+    setActiveApprovalKey(targetApprovalKey)
+    triggerApprovalHighlightPhase("landing_primary")
     const card = runtimeApprovalCardRef.current
-    const targetRow = targetApprovalKey
-      ? runtimeApprovalRowRefs.current.get(targetApprovalKey) || null
-      : null
+    const targetRow = runtimeApprovalRowRefs.current.get(targetApprovalKey) || null
     const scrollTarget = targetRow || card
     if (!scrollTarget) return
     try {
@@ -1805,7 +1867,7 @@ const SidepanelPersona = ({
         String(button.textContent || "").toLowerCase().includes("approve")
       ) || buttons.find((button) => !button.disabled)
     preferredButton?.focus()
-  }, [activeApprovalKey, pendingApprovals])
+  }, [activeApprovalKey, pendingApprovals, triggerApprovalHighlightPhase])
   const personaUnsupported =
     !capsLoading &&
     capabilities &&
@@ -1997,18 +2059,22 @@ const SidepanelPersona = ({
         {pendingApprovals.map((approval) => {
           const isSubmitting = submittingApprovalKey === approval.key
           const isHighlighted = approval.key === activeApprovalKey
+          const highlightPhase = isHighlighted ? approvalHighlightPhase : "none"
           return (
             <div
               key={approval.key}
               ref={(node) => {
                 registerRuntimeApprovalRow(approval.key, node)
               }}
+              data-testid={`persona-runtime-approval-row-${approval.key}`}
               data-approval-key={approval.key}
               data-highlighted={isHighlighted ? "true" : "false"}
+              data-highlight-phase={highlightPhase}
+              data-highlight-seq={isHighlighted ? String(approvalHighlightSequence) : "0"}
               className={`rounded-md border p-3 ${
                 isHighlighted
-                  ? "border-warning/60 bg-warning/10"
-                  : "border-warning/30 bg-surface"
+                  ? "persona-runtime-approval-row border-warning/60 bg-warning/10"
+                  : "persona-runtime-approval-row border-warning/30 bg-surface"
               }`}
             >
               <div className="flex flex-wrap items-center gap-2">
