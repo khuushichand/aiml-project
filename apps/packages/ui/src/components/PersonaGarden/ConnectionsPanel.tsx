@@ -2,6 +2,7 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { toAllowedPath } from "@/services/tldw/path-utils"
 
 type PersonaConnection = {
   id: string
@@ -73,6 +74,18 @@ const parseHeadersTemplate = (
 const formatHeadersTemplate = (value?: Record<string, string>) =>
   JSON.stringify(value ?? {}, null, 2)
 
+const isPersonaConnection = (value: unknown): value is PersonaConnection => {
+  if (!value || typeof value !== "object") return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.id === "string" &&
+    typeof record.persona_id === "string" &&
+    typeof record.name === "string" &&
+    typeof record.base_url === "string" &&
+    typeof record.auth_type === "string"
+  )
+}
+
 const summarizeTestBodyPreview = (value: unknown): string | null => {
   if (typeof value === "string") {
     const trimmed = value.trim()
@@ -114,6 +127,15 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
   const [formState, setFormState] =
     React.useState<ConnectionFormState>(DEFAULT_FORM_STATE)
 
+  const resetConnectionUiState = React.useCallback(() => {
+    setEditingConnectionId(null)
+    setDeletingConnectionId(null)
+    setTestingConnectionId(null)
+    setTestResults({})
+    setFormState(DEFAULT_FORM_STATE)
+    setValidationError(null)
+  }, [])
+
   React.useEffect(() => {
     let cancelled = false
 
@@ -121,19 +143,15 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
       if (!isActive || !selectedPersonaId) {
         setConnections([])
         setError(null)
-        setEditingConnectionId(null)
-        setDeletingConnectionId(null)
-        setTestingConnectionId(null)
-        setTestResults({})
-        setFormState(DEFAULT_FORM_STATE)
-        setValidationError(null)
+        resetConnectionUiState()
         return
       }
       setLoading(true)
-      setError(null)
       try {
         const response = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections` as any,
+          toAllowedPath(
+            `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections`
+          ),
           { method: "GET" }
         )
         if (!response.ok) {
@@ -145,13 +163,18 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
           )
         }
         const payload = await response.json()
-        const nextRows = Array.isArray(payload) ? payload : []
+        const nextRows = Array.isArray(payload)
+          ? payload.filter(isPersonaConnection)
+          : []
         if (!cancelled) {
-          setConnections(nextRows as PersonaConnection[])
+          setConnections(nextRows)
+          resetConnectionUiState()
+          setError(null)
         }
       } catch (loadError) {
         if (!cancelled) {
           setConnections([])
+          resetConnectionUiState()
           setError(
             loadError instanceof Error
               ? loadError.message
@@ -171,7 +194,7 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
     return () => {
       cancelled = true
     }
-  }, [isActive, selectedPersonaId])
+  }, [isActive, resetConnectionUiState, selectedPersonaId])
 
   const updateField = React.useCallback(
     (field: keyof ConnectionFormState, value: string) => {
@@ -241,7 +264,7 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
         ? `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections/${encodeURIComponent(editingConnectionId)}`
         : `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections`
       const response = await tldwClient.fetchWithAuth(
-        requestPath as any,
+        toAllowedPath(requestPath),
         {
           method: editingConnectionId ? "PUT" : "POST",
           body: payload
@@ -273,11 +296,19 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
 
   const handleDelete = React.useCallback(async (connectionId: string) => {
     if (!selectedPersonaId) return
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm("Delete this persona connection?")
+    ) {
+      return
+    }
     setDeletingConnectionId(connectionId)
     setError(null)
     try {
       const response = await tldwClient.fetchWithAuth(
-        `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections/${encodeURIComponent(connectionId)}` as any,
+        toAllowedPath(
+          `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections/${encodeURIComponent(connectionId)}`
+        ),
         {
           method: "DELETE"
         }
@@ -311,7 +342,9 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
     setError(null)
     try {
       const response = await tldwClient.fetchWithAuth(
-        `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections/${encodeURIComponent(connectionId)}/test` as any,
+        toAllowedPath(
+          `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections/${encodeURIComponent(connectionId)}/test`
+        ),
         {
           method: "POST",
           body: {}

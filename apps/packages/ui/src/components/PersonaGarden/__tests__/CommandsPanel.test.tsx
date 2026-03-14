@@ -59,6 +59,16 @@ vi.mock("@/services/tldw/mcp", () => ({
 
 import { CommandsPanel } from "../CommandsPanel"
 
+const createDeferred = <T,>() => {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 const renderWithQueryClient = (ui: React.ReactNode) => {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -346,7 +356,7 @@ describe("CommandsPanel", () => {
       />
     )
 
-    await screen.findByText("Search Notes")
+    await screen.findByTestId("persona-commands-row-cmd-search")
     fireEvent.change(screen.getByTestId("persona-commands-name-input"), {
       target: { value: "Call Slack Alerts API" }
     })
@@ -471,6 +481,104 @@ describe("CommandsPanel", () => {
           })
         })
       )
+    )
+  })
+
+  it("clears stale command data and editor state when switching personas", async () => {
+    const persona2Commands = createDeferred<{ commands: unknown[] }>()
+    const persona2Connections = createDeferred<unknown[]>()
+
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (
+        path === "/api/v1/persona/profiles/persona-1/voice-commands" &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            commands: [existingCommand]
+          })
+        })
+      }
+      if (
+        path === "/api/v1/persona/profiles/persona-1/connections" &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => connections
+        })
+      }
+      if (
+        path === "/api/v1/persona/profiles/persona-2/voice-commands" &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => persona2Commands.promise
+        })
+      }
+      if (
+        path === "/api/v1/persona/profiles/persona-2/connections" &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => persona2Connections.promise
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `Unhandled path: ${path}`
+      })
+    })
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false
+        }
+      }
+    })
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <CommandsPanel
+          selectedPersonaId="persona-1"
+          selectedPersonaName="Garden Helper"
+          isActive
+        />
+      </QueryClientProvider>
+    )
+
+    await screen.findByText("Search Notes")
+    fireEvent.click(screen.getByTestId("persona-commands-edit-cmd-search"))
+    fireEvent.change(screen.getByTestId("persona-commands-name-input"), {
+      target: { value: "Stale edited name" }
+    })
+    expect(screen.getByTestId("persona-commands-name-input")).toHaveValue(
+      "Stale edited name"
+    )
+
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <CommandsPanel
+          selectedPersonaId="persona-2"
+          selectedPersonaName="Other Helper"
+          isActive
+        />
+      </QueryClientProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("persona-commands-row-cmd-search")).not.toBeInTheDocument()
+      expect(screen.getByTestId("persona-commands-name-input")).toHaveValue("")
+    })
+
+    persona2Commands.resolve({ commands: [] })
+    persona2Connections.resolve([])
+
+    await waitFor(() =>
+      expect(screen.getByTestId("persona-commands-empty")).toBeInTheDocument()
     )
   })
 

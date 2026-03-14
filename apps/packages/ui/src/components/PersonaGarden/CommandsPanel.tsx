@@ -2,6 +2,7 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { toAllowedPath } from "@/services/tldw/path-utils"
 import {
   buildDraftAssistSuggestions,
   type DraftAssistSuggestion
@@ -320,6 +321,12 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     )
   }, [analytics])
 
+  const clearCommandEditor = React.useCallback(() => {
+    setFormState(DEFAULT_FORM_STATE)
+    setDraftSourcePhrase(null)
+    setValidationError(null)
+  }, [])
+
   React.useEffect(() => {
     let cancelled = false
 
@@ -329,20 +336,28 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
         setConnections([])
         setCommandsLoaded(false)
         setError(null)
+        clearCommandEditor()
         return
       }
 
+      clearCommandEditor()
       setLoading(true)
+      setCommands([])
+      setConnections([])
       setCommandsLoaded(false)
       setError(null)
       try {
         const [commandsResp, connectionsResp] = await Promise.all([
           tldwClient.fetchWithAuth(
-            `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands` as any,
+            toAllowedPath(
+              `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands`
+            ),
             { method: "GET" }
           ),
           tldwClient.fetchWithAuth(
-            `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections` as any,
+            toAllowedPath(
+              `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/connections`
+            ),
             { method: "GET" }
           )
         ])
@@ -382,6 +397,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
           setCommands([])
           setConnections([])
           setCommandsLoaded(false)
+          clearCommandEditor()
           setError(
             loadError instanceof Error
               ? loadError.message
@@ -401,13 +417,11 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     return () => {
       cancelled = true
     }
-  }, [isActive, selectedPersonaId])
+  }, [clearCommandEditor, isActive, selectedPersonaId])
 
   const resetForm = React.useCallback(() => {
-    setFormState(DEFAULT_FORM_STATE)
-    setDraftSourcePhrase(null)
-    setValidationError(null)
-  }, [])
+    clearCommandEditor()
+  }, [clearCommandEditor])
 
   const updateFormField = React.useCallback(
     (field: keyof CommandFormState, value: string | boolean | null) => {
@@ -496,7 +510,9 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
       setError(null)
       try {
         const response = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands/${encodeURIComponent(command.id)}/toggle` as any,
+          toAllowedPath(
+            `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands/${encodeURIComponent(command.id)}/toggle`
+          ),
           {
             method: "POST",
             body: { enabled: !command.enabled }
@@ -534,7 +550,9 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
       setError(null)
       try {
         const response = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands/${encodeURIComponent(commandId)}` as any,
+          toAllowedPath(
+            `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands/${encodeURIComponent(commandId)}`
+          ),
           {
             method: "DELETE"
           }
@@ -655,8 +673,12 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
       const isEditing = Boolean(formState.commandId)
       const response = await tldwClient.fetchWithAuth(
         isEditing
-          ? (`/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands/${encodeURIComponent(formState.commandId || "")}` as any)
-          : (`/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands` as any),
+          ? toAllowedPath(
+              `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands/${encodeURIComponent(formState.commandId || "")}`
+            )
+          : toAllowedPath(
+              `/api/v1/persona/profiles/${encodeURIComponent(selectedPersonaId)}/voice-commands`
+            ),
         {
           method: isEditing ? "PUT" : "POST",
           body: payload

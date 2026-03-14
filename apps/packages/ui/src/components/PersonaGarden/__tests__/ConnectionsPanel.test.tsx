@@ -32,6 +32,16 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 
 import { ConnectionsPanel } from "../ConnectionsPanel"
 
+const createDeferred = <T,>() => {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 describe("ConnectionsPanel", () => {
   beforeEach(() => {
     mocks.fetchWithAuth.mockReset()
@@ -229,6 +239,8 @@ describe("ConnectionsPanel", () => {
   })
 
   it("tests and deletes a saved connection", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+
     render(
       <ConnectionsPanel
         selectedPersonaId="persona-1"
@@ -264,5 +276,153 @@ describe("ConnectionsPanel", () => {
       )
     )
     expect(await screen.findByTestId("persona-connections-empty")).toBeInTheDocument()
+
+    confirmSpy.mockRestore()
+  })
+
+  it("filters malformed connection rows before rendering them", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string }) => {
+      if (
+        path === "/api/v1/persona/profiles/persona-1/connections" &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            {
+              id: "conn-valid",
+              persona_id: "persona-1",
+              name: "Valid API",
+              base_url: "https://valid.example.com",
+              auth_type: "bearer"
+            },
+            {
+              id: 7,
+              persona_id: "persona-1",
+              name: "Broken API",
+              base_url: "https://broken.example.com",
+              auth_type: "bearer"
+            },
+            {
+              id: "conn-missing-name",
+              persona_id: "persona-1",
+              name: null,
+              base_url: "https://missing-name.example.com",
+              auth_type: "bearer"
+            }
+          ]
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `Unhandled path: ${path}`
+      })
+    })
+
+    render(
+      <ConnectionsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+      />
+    )
+
+    expect(await screen.findByText("Valid API")).toBeInTheDocument()
+    expect(screen.queryByText("Broken API")).not.toBeInTheDocument()
+  })
+
+  it("requires delete confirmation before removing a connection", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false)
+
+    render(
+      <ConnectionsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+      />
+    )
+
+    expect(await screen.findByText("Existing API")).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("persona-connections-delete-conn-existing"))
+
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled())
+
+    expect(mocks.fetchWithAuth).not.toHaveBeenCalledWith(
+      "/api/v1/persona/profiles/persona-1/connections/conn-existing",
+      expect.objectContaining({
+        method: "DELETE"
+      })
+    )
+
+    confirmSpy.mockRestore()
+  })
+
+  it("keeps current rows visible while loading a different active persona", async () => {
+    const persona2Connections = createDeferred<any[]>()
+
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string }) => {
+      if (
+        path === "/api/v1/persona/profiles/persona-1/connections" &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            {
+              id: "conn-existing",
+              persona_id: "persona-1",
+              name: "Existing API",
+              base_url: "https://existing.example.com",
+              auth_type: "bearer"
+            }
+          ]
+        })
+      }
+      if (
+        path === "/api/v1/persona/profiles/persona-2/connections" &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => persona2Connections.promise
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `Unhandled path: ${path}`
+      })
+    })
+
+    const view = render(
+      <ConnectionsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+      />
+    )
+
+    expect(await screen.findByText("Existing API")).toBeInTheDocument()
+
+    view.rerender(
+      <ConnectionsPanel
+        selectedPersonaId="persona-2"
+        selectedPersonaName="Other Helper"
+        isActive
+      />
+    )
+
+    expect(screen.getByText("Existing API")).toBeInTheDocument()
+
+    persona2Connections.resolve([
+      {
+        id: "conn-next",
+        persona_id: "persona-2",
+        name: "Other API",
+        base_url: "https://other.example.com",
+        auth_type: "none"
+      }
+    ])
+
+    expect(await screen.findByText("Other API")).toBeInTheDocument()
   })
 })
