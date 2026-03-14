@@ -30,6 +30,14 @@ def _expected_version(binding: dict[str, Any]) -> int:
 
 
 def _folder_paths_from_relative_path(relative_path: str) -> list[str]:
+    """Return folder ancestors from shallowest to deepest for a repo-relative file path.
+
+    Example:
+        ``docs/api/alpha.md`` -> ``["docs", "docs/api"]``
+
+    The helper normalizes separators to POSIX form, trims leading/trailing separators,
+    and excludes the file name itself from the returned folder path list.
+    """
     normalized = str(relative_path or "").strip().replace("\\", "/").strip("/")
     if not normalized:
         return []

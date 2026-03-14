@@ -236,6 +236,62 @@ describe("SourceForm", () => {
     expect(screen.queryByText("Destination")).not.toBeInTheDocument()
   })
 
+  it("omits immutable git repository config when editing a locked source", async () => {
+    const mutateAsync = vi.fn(async () => ({ id: "42" }))
+    hookMocks.useUpdateIngestionSourceMutation.mockReturnValue({
+      mutateAsync,
+      isPending: false
+    })
+
+    render(
+      <SourceForm
+        mode="edit"
+        source={{
+          id: "42",
+          user_id: 7,
+          source_type: "git_repository",
+          sink_type: "notes",
+          policy: "canonical",
+          enabled: true,
+          schedule_enabled: false,
+          schedule_config: {},
+          config: {
+            mode: "remote_github_repo",
+            repo_url: "https://github.com/example/repo",
+            account_id: 12,
+            ref: "main",
+            root_subpath: "docs"
+          },
+          last_successful_snapshot_id: "9",
+          last_successful_sync_summary: {
+            changed_count: 2,
+            degraded_count: 0,
+            conflict_count: 0,
+            sink_failure_count: 0,
+            ingestion_failure_count: 0,
+            created_count: 1,
+            updated_count: 1,
+            deleted_count: 0,
+            unchanged_count: 3
+          }
+        }}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        source_type: "git_repository",
+        sink_type: "notes",
+        policy: "canonical",
+        enabled: true,
+        schedule_enabled: false,
+        schedule: {}
+      })
+    })
+  })
+
   it("keeps source identity editable until a successful snapshot exists", () => {
     render(
       <SourceForm

@@ -9,6 +9,7 @@ import {
 } from "@/hooks/use-ingestion-sources"
 import type {
   CreateIngestionSourceRequest,
+  UpdateIngestionSourceRequest,
   IngestionSourceSummary,
   IngestionSourceType
 } from "@/types/ingestion-sources"
@@ -154,58 +155,67 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
           : values.git_repository_mode ?? gitRepositoryMode
         : "local_repo"
 
-    const payload: CreateIngestionSourceRequest = {
+    const sourceConfig = (() => {
+      if (identityLocked && mode === "edit" && source) {
+        return undefined
+      }
+      if (effectiveSourceType === "local_directory") {
+        return {
+          path:
+            identityLocked && typeof source?.config?.path === "string"
+              ? source.config.path
+              : (values.path || "").trim()
+        }
+      }
+      if (effectiveSourceType === "git_repository") {
+        const ref = (values.ref || "").trim()
+        const rootSubpath = (values.root_subpath || "").trim()
+        const accountId = (values.account_id || "").trim()
+        if (effectiveGitRepositoryMode === "remote_github_repo") {
+          return {
+            mode: "remote_github_repo",
+            repo_url:
+              identityLocked && typeof source?.config?.repo_url === "string"
+                ? source.config.repo_url
+                : (values.repo_url || "").trim(),
+            ...(accountId ? { account_id: accountId } : {}),
+            ...(ref ? { ref } : {}),
+            ...(rootSubpath ? { root_subpath: rootSubpath } : {})
+          }
+        }
+        return {
+          mode: "local_repo",
+          path:
+            identityLocked && typeof source?.config?.path === "string"
+              ? source.config.path
+              : (values.repo_path || "").trim(),
+          ...(ref ? { ref } : {}),
+          ...(rootSubpath ? { root_subpath: rootSubpath } : {}),
+          respect_gitignore: values.respect_gitignore !== false
+        }
+      }
+      return {}
+    })()
+    const basePayload = {
       source_type: effectiveSourceType,
       sink_type: identityLocked && source ? source.sink_type : values.sink_type,
       policy: values.policy,
       enabled: values.enabled,
       schedule_enabled: values.schedule_enabled ?? false,
-      schedule: {},
-      config: (() => {
-        if (effectiveSourceType === "local_directory") {
-          return {
-            path:
-              identityLocked && typeof source?.config?.path === "string"
-                ? source.config.path
-                : (values.path || "").trim()
-          }
-        }
-        if (effectiveSourceType === "git_repository") {
-          const ref = (values.ref || "").trim()
-          const rootSubpath = (values.root_subpath || "").trim()
-          const accountId = (values.account_id || "").trim()
-          if (effectiveGitRepositoryMode === "remote_github_repo") {
-            return {
-              mode: "remote_github_repo",
-              repo_url:
-                identityLocked && typeof source?.config?.repo_url === "string"
-                  ? source.config.repo_url
-                  : (values.repo_url || "").trim(),
-              ...(accountId ? { account_id: accountId } : {}),
-              ...(ref ? { ref } : {}),
-              ...(rootSubpath ? { root_subpath: rootSubpath } : {})
-            }
-          }
-          return {
-            mode: "local_repo",
-            path:
-              identityLocked && typeof source?.config?.path === "string"
-                ? source.config.path
-                : (values.repo_path || "").trim(),
-            ...(ref ? { ref } : {}),
-            ...(rootSubpath ? { root_subpath: rootSubpath } : {}),
-            respect_gitignore: values.respect_gitignore !== false
-          }
-        }
-        return {}
-      })()
+      schedule: {}
     }
 
     try {
       const result =
         mode === "edit" && source
-          ? await updateMutation.mutateAsync(payload)
-          : await createMutation.mutateAsync(payload)
+          ? await updateMutation.mutateAsync({
+              ...basePayload,
+              ...(typeof sourceConfig === "undefined" ? {} : { config: sourceConfig })
+            } satisfies UpdateIngestionSourceRequest)
+          : await createMutation.mutateAsync({
+              ...basePayload,
+              config: sourceConfig ?? {}
+            } satisfies CreateIngestionSourceRequest)
 
       if (mode === "create") {
         navigate(`/sources/${result.id}`)

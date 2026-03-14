@@ -123,7 +123,13 @@ def test_git_repository_snapshot_loads_remote_github_tree(monkeypatch):
 
     seen_calls: list[tuple[str, str | None]] = []
 
-    def _fake_github_api_get_json(url: str, *, access_token: str | None, accept: str = "application/vnd.github+json"):
+    def _fake_github_api_get_json(
+        url: str,
+        *,
+        access_token: str | None,
+        accept: str = "application/vnd.github+json",
+        max_response_bytes: int | None = None,
+    ):
         seen_calls.append((url, access_token))
         if url == "https://api.github.com/repos/example/project":
             return {"default_branch": "main"}
@@ -181,6 +187,7 @@ def test_git_repository_snapshot_rejects_truncated_remote_tree(monkeypatch):
         *,
         access_token: str | None,
         accept: str = "application/vnd.github+json",
+        max_response_bytes: int | None = None,
     ):
         if url == "https://api.github.com/repos/example/project":
             return {"default_branch": "main"}
@@ -202,3 +209,64 @@ def test_git_repository_snapshot_rejects_truncated_remote_tree(monkeypatch):
             sink_type="notes",
             access_token="token-123",
         )
+
+
+@pytest.mark.unit
+def test_git_repository_snapshot_marks_oversized_remote_blob_as_failure(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Sources.git_repository as git_repository
+
+    seen_calls: list[str] = []
+
+    def _fake_github_api_get_json(
+        url: str,
+        *,
+        access_token: str | None,
+        accept: str = "application/vnd.github+json",
+        max_response_bytes: int | None = None,
+    ):
+        seen_calls.append(url)
+        if url == "https://api.github.com/repos/example/project":
+            return {"default_branch": "main"}
+        if "/git/trees/main?recursive=1" in url:
+            return {
+                "tree": [
+                    {
+                        "path": "notes/huge.md",
+                        "type": "blob",
+                        "url": "https://api.github.com/blob-huge",
+                        "size": 10 * 1024 * 1024,
+                        "sha": "sha-huge",
+                    }
+                ]
+            }
+        if url == "https://api.github.com/blob-huge":
+            return {
+                "content": base64.b64encode(b"# huge\n").decode("ascii"),
+                "encoding": "base64",
+            }
+        raise AssertionError(f"Unexpected GitHub API request: {url}")
+
+    monkeypatch.setattr(git_repository, "_github_api_get_json", _fake_github_api_get_json)
+
+    items, failures = git_repository.build_git_repository_snapshot_with_failures(
+        {
+            "mode": "remote_github_repo",
+            "repo_url": "https://github.com/example/project",
+            "root_subpath": "notes",
+        },
+        sink_type="notes",
+        access_token="token-123",
+    )
+
+    assert items == {}
+    assert failures == {
+        "huge.md": {
+            "relative_path": "huge.md",
+            "source_format": "md",
+            "size": 10 * 1024 * 1024,
+            "modified_at": failures["huge.md"]["modified_at"],
+            "error": failures["huge.md"]["error"],
+        }
+    }
+    assert "too large" in failures["huge.md"]["error"].lower()
+    assert "https://api.github.com/blob-huge" not in seen_calls

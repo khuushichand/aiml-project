@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import subprocess  # nosec B404
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -22,6 +23,9 @@ from tldw_Server_API.app.core.Ingestion_Sources.local_directory import (
 GIT_REPOSITORY_MODES: frozenset[str] = frozenset({"local_repo", "remote_github_repo"})
 GIT_NOTES_SUPPORTED_SUFFIXES: frozenset[str] = frozenset({".markdown", ".md", ".txt"})
 _GITHUB_API_BASE = "https://api.github.com"
+_GITHUB_API_READ_CHUNK_BYTES = 64 * 1024
+_MAX_GITHUB_BLOB_BYTES = 5 * 1024 * 1024
+_GITHUB_BLOB_RESPONSE_OVERHEAD_BYTES = 64 * 1024
 
 
 def _utc_now_text() -> str:
@@ -328,12 +332,29 @@ def _github_api_get_json(
     *,
     access_token: str | None,
     accept: str = "application/vnd.github+json",
+    max_response_bytes: int | None = None,
 ) -> dict[str, Any]:
     with urlopen(  # nosec B310
         _github_request(url, access_token=access_token, accept=accept),
         timeout=30,
     ) as response:
-        payload = response.read().decode("utf-8")
+        if max_response_bytes is None:
+            payload_bytes = response.read()
+        else:
+            chunks: list[bytes] = []
+            total_read = 0
+            while True:
+                chunk = response.read(_GITHUB_API_READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_read += len(chunk)
+                if total_read > max_response_bytes:
+                    raise ValueError(
+                        f"GitHub API response exceeded size limit of {max_response_bytes} bytes"
+                    )
+                chunks.append(chunk)
+            payload_bytes = b"".join(chunks)
+        payload = payload_bytes.decode("utf-8")
     return json.loads(payload)
 
 
@@ -358,16 +379,45 @@ def _github_repository_ref(
     return default_branch
 
 
-def _github_fetch_blob_text(blob_url: str, *, access_token: str | None) -> str:
-    payload = _github_api_get_json(blob_url, access_token=access_token)
+def _max_github_blob_response_bytes(blob_size: int | None) -> int:
+    target_size = _MAX_GITHUB_BLOB_BYTES if blob_size is None else max(int(blob_size), 0)
+    encoded_bytes = int(math.ceil(target_size / 3) * 4)
+    return encoded_bytes + _GITHUB_BLOB_RESPONSE_OVERHEAD_BYTES
+
+
+def _github_fetch_blob_text(
+    blob_url: str,
+    *,
+    access_token: str | None,
+    blob_size: int | None,
+    relative_path: str,
+) -> str:
+    if blob_size is not None and blob_size > _MAX_GITHUB_BLOB_BYTES:
+        raise ValueError(
+            f"Git repository blob '{relative_path}' is too large ({blob_size} bytes > {_MAX_GITHUB_BLOB_BYTES} bytes)"
+        )
+    payload = _github_api_get_json(
+        blob_url,
+        access_token=access_token,
+        max_response_bytes=_max_github_blob_response_bytes(blob_size),
+    )
     content = str(payload.get("content") or "")
     encoding = str(payload.get("encoding") or "").strip().lower()
     if encoding == "base64":
         decoded = base64.b64decode(content.encode("utf-8"), validate=False)
+        if len(decoded) > _MAX_GITHUB_BLOB_BYTES:
+            raise ValueError(
+                f"Git repository blob '{relative_path}' is too large ({len(decoded)} bytes > {_MAX_GITHUB_BLOB_BYTES} bytes)"
+            )
         try:
             return decoded.decode("utf-8")
         except UnicodeDecodeError:
             return decoded.decode("latin-1")
+    content_bytes = len(content.encode("utf-8"))
+    if content_bytes > _MAX_GITHUB_BLOB_BYTES:
+        raise ValueError(
+            f"Git repository blob '{relative_path}' is too large ({content_bytes} bytes > {_MAX_GITHUB_BLOB_BYTES} bytes)"
+        )
     return content
 
 
@@ -508,6 +558,8 @@ def build_git_repository_snapshot_with_failures(
             text = _github_fetch_blob_text(
                 str(entry.get("url") or ""),
                 access_token=access_token,
+                blob_size=int(entry.get("size") or 0) or None,
+                relative_path=relative_path,
             )
         except (AttributeError, LookupError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as exc:
             failed_items[relative_path] = {

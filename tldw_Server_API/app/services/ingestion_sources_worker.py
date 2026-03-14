@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-from typing import Any
+from typing import Any, Protocol
 
 from loguru import logger
 
@@ -86,6 +86,13 @@ _SINK_ITEM_EXCEPTIONS = tuple(
     )
     if exc is not None
 ) + _NONCRITICAL_EXCEPTIONS
+
+
+class _AccountTokenPool(Protocol):
+    """Minimal pool interface required for linked-account token lookups."""
+
+    def transaction(self) -> Any:
+        ...
 
 
 def _previous_snapshot_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, str | None]]:
@@ -254,7 +261,7 @@ def _load_git_repository_snapshot_data(
 
 async def _resolve_git_repository_access_token(
     *,
-    pool,
+    pool: _AccountTokenPool,
     source: dict[str, Any],
     user_id: int,
 ) -> str | None:

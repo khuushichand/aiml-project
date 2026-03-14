@@ -5073,6 +5073,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             """,
             "CREATE INDEX IF NOT EXISTS idx_note_folders_parent ON note_folders(parent_id)",
             "CREATE INDEX IF NOT EXISTS idx_note_folders_path ON note_folders(path)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_note_folders_path_nocase ON note_folders(LOWER(path))",
             """
             CREATE TABLE IF NOT EXISTS note_folder_memberships(
               note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -17410,6 +17411,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         normalized = "/".join(parts)
         return normalized or None
 
+    def _note_folder_path_key(self, value: Any) -> str | None:
+        normalized = self._normalize_note_folder_path(value)
+        if not normalized:
+            return None
+        return normalized.lower()
+
     def _expand_note_folder_paths(self, folder_paths: list[str] | tuple[str, ...]) -> list[str]:
         expanded: list[str] = []
         seen: set[str] = set()
@@ -17420,7 +17427,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             segments = normalized.split("/")
             for index in range(1, len(segments) + 1):
                 candidate = "/".join(segments[:index])
-                key = candidate.lower()
+                key = self._note_folder_path_key(candidate)
+                if key is None:
+                    continue
                 if key in seen:
                     continue
                 seen.add(key)
@@ -17432,17 +17441,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if row is None:
             raise ConflictError("Note not found.", entity="notes", entity_id=note_id)  # noqa: TRY003
 
+    def _lookup_note_folder_row_locked(self, conn: Any, folder_path: str) -> dict[str, Any] | None:
+        normalized_path = self._normalize_note_folder_path(folder_path)
+        if not normalized_path:
+            return None
+        return self._coerce_mapping_row(
+            conn.execute(
+                "SELECT id, path, deleted, version FROM note_folders WHERE LOWER(path) = LOWER(?)",
+                (normalized_path,),
+            ).fetchone()
+        )
+
     def _ensure_note_folder_path_locked(self, conn: Any, folder_path: str) -> int:
         normalized_path = self._normalize_note_folder_path(folder_path)
         if not normalized_path:
             raise InputError("Folder path cannot be empty.")  # noqa: TRY003
 
-        existing_row = self._coerce_mapping_row(
-            conn.execute(
-                "SELECT id, deleted, version FROM note_folders WHERE path = ?",
-                (normalized_path,),
-            ).fetchone()
-        )
+        existing_row = self._lookup_note_folder_row_locked(conn, normalized_path)
         if existing_row:
             folder_id = int(existing_row["id"])
             if bool(existing_row.get("deleted", False)):
@@ -17462,6 +17477,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         parent_path = normalized_path.rsplit("/", 1)[0] if "/" in normalized_path else None
         parent_id = self._ensure_note_folder_path_locked(conn, parent_path) if parent_path else None
+        stored_path = normalized_path
+        if parent_id is not None:
+            parent_row = self._coerce_mapping_row(
+                conn.execute(
+                    "SELECT path FROM note_folders WHERE id = ?",
+                    (parent_id,),
+                ).fetchone()
+            ) or {}
+            parent_display_path = self._normalize_note_folder_path(parent_row.get("path")) or parent_path
+            stored_path = f"{parent_display_path}/{normalized_path.rsplit('/', 1)[-1]}"
         now = self._get_current_utc_timestamp_iso()
         deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
         conn.execute(
@@ -17472,8 +17497,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                normalized_path.rsplit("/", 1)[-1],
-                normalized_path,
+                stored_path.rsplit("/", 1)[-1],
+                stored_path,
                 parent_id,
                 now,
                 now,
@@ -17482,12 +17507,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 1,
             ),
         )
-        created_row = self._coerce_mapping_row(
-            conn.execute(
-                "SELECT id FROM note_folders WHERE path = ?",
-                (normalized_path,),
-            ).fetchone()
-        )
+        created_row = self._lookup_note_folder_row_locked(conn, stored_path)
         if not created_row:
             raise CharactersRAGDBError(f"Failed to create note folder path '{normalized_path}'.")  # noqa: TRY003
         return int(created_row["id"])
@@ -17568,6 +17588,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         continue
                     existing_ids.add(int(folder_id))
                 desired_ids = {folder_id for _, folder_id in desired_pairs}
+                desired_keys = {
+                    canonical_key
+                    for folder_path, _ in desired_pairs
+                    for canonical_key in [self._note_folder_path_key(folder_path)]
+                    if canonical_key is not None
+                }
 
                 for folder_id in existing_ids - desired_ids:
                     conn.execute(
@@ -17578,8 +17604,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         (note_id, int(source_id), folder_id),
                     )
 
+                existing_key_rows = conn.execute(
+                    """
+                    SELECT folder_key
+                      FROM note_folder_source_keys
+                     WHERE source_id = ?
+                    """,
+                    (int(source_id),),
+                ).fetchall()
+                existing_keys: set[str] = set()
+                for row in existing_key_rows:
+                    record = self._coerce_mapping_row(row) or {}
+                    folder_key = record.get("folder_key")
+                    if folder_key is None:
+                        continue
+                    existing_keys.add(str(folder_key))
+                for folder_key in existing_keys - desired_keys:
+                    conn.execute(
+                        """
+                        DELETE FROM note_folder_source_keys
+                         WHERE source_id = ? AND folder_key = ?
+                        """,
+                        (int(source_id), folder_key),
+                    )
+
                 now = self._get_current_utc_timestamp_iso()
-                for folder_key, folder_id in desired_pairs:
+                for folder_path, folder_id in desired_pairs:
+                    folder_key = self._note_folder_path_key(folder_path)
+                    if not folder_key:
+                        continue
                     conn.execute(
                         """
                         DELETE FROM note_folder_source_keys
