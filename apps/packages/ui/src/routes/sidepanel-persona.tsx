@@ -16,6 +16,7 @@ import {
 } from "@/components/PersonaGarden/CommandAnalyticsSummary"
 import type { PersonaTurnDetectionValues } from "@/components/PersonaGarden/PersonaTurnDetectionControls"
 import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCard"
+import { AssistantSetupWizard } from "@/components/PersonaGarden/AssistantSetupWizard"
 import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
 import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
 import { LiveSessionPanel } from "@/components/PersonaGarden/LiveSessionPanel"
@@ -399,6 +400,8 @@ const SidepanelPersona = ({
   const [savedPersonaSetup, setSavedPersonaSetup] =
     React.useState<PersonaSetupState | null>(null)
   const [personaProfileLoading, setPersonaProfileLoading] = React.useState(false)
+  const [setupWizardSaving, setSetupWizardSaving] = React.useState(false)
+  const [setupWizardError, setSetupWizardError] = React.useState<string | null>(null)
   const [liveSessionVoiceDefaultsBaseline, setLiveSessionVoiceDefaultsBaseline] =
     React.useState<PersonaVoiceDefaults | null>(null)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
@@ -633,6 +636,17 @@ const SidepanelPersona = ({
     loading: personaProfileLoading,
     setup: savedPersonaSetup
   })
+
+  const buildPersonaSetupInProgress = React.useCallback(
+    (step: PersonaSetupState["current_step"] = "voice"): PersonaSetupState => ({
+      status: "in_progress",
+      version: 1,
+      current_step: step || "voice",
+      completed_at: null,
+      last_test_type: null
+    }),
+    []
+  )
 
   const resolvedLivePersonaVoiceDefaults = useResolvedPersonaVoiceDefaults(
     connected ? liveSessionVoiceDefaultsBaseline : savedPersonaVoiceDefaults
@@ -1737,6 +1751,93 @@ const SidepanelPersona = ({
       setSelectedPersonaId(nextPersonaId)
     },
     [confirmDiscardUnsavedStateDrafts, selectedPersonaId]
+  )
+
+  const handleUsePersonaForSetup = React.useCallback(
+    async (personaId: string) => {
+      const nextPersonaId = String(personaId || "").trim()
+      if (!nextPersonaId) return
+      if (nextPersonaId !== selectedPersonaId && !confirmDiscardUnsavedStateDrafts("persona_switch")) {
+        return
+      }
+      setSetupWizardSaving(true)
+      setSetupWizardError(null)
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(nextPersonaId)}` as any,
+          {
+            method: "PATCH",
+            body: {
+              setup: buildPersonaSetupInProgress("voice")
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to update persona setup")
+        }
+        const payload = (await response.json()) as PersonaProfileResponse
+        setSelectedPersonaId(nextPersonaId)
+        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress("voice"))
+        setSavedPersonaVoiceDefaults(payload?.voice_defaults || null)
+      } catch (setupError: any) {
+        setSetupWizardError(String(setupError?.message || "Failed to update persona setup"))
+      } finally {
+        setSetupWizardSaving(false)
+      }
+    },
+    [
+      buildPersonaSetupInProgress,
+      confirmDiscardUnsavedStateDrafts,
+      selectedPersonaId
+    ]
+  )
+
+  const handleCreatePersonaForSetup = React.useCallback(
+    async (name: string) => {
+      const normalizedName = String(name || "").trim()
+      if (!normalizedName) return
+      setSetupWizardSaving(true)
+      setSetupWizardError(null)
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          "/api/v1/persona/profiles" as any,
+          {
+            method: "POST",
+            body: {
+              name: normalizedName,
+              mode: "persistent_scoped",
+              setup: buildPersonaSetupInProgress("voice")
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to create persona")
+        }
+        const payload = (await response.json()) as PersonaProfileResponse
+        const createdPersonaId = String(payload?.id || "").trim()
+        if (createdPersonaId) {
+          setCatalog((current) => {
+            const exists = current.some((persona) => String(persona.id || "") === createdPersonaId)
+            if (exists) return current
+            return [
+              ...current,
+              {
+                id: createdPersonaId,
+                name: normalizedName
+              }
+            ]
+          })
+          setSelectedPersonaId(createdPersonaId)
+        }
+        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress("voice"))
+        setSavedPersonaVoiceDefaults(payload?.voice_defaults || null)
+      } catch (setupError: any) {
+        setSetupWizardError(String(setupError?.message || "Failed to create persona"))
+      } finally {
+        setSetupWizardSaving(false)
+      }
+    },
+    [buildPersonaSetupInProgress]
   )
 
   const handleResumeSessionSelectionChange = React.useCallback(
@@ -2953,37 +3054,19 @@ const SidepanelPersona = ({
       ) : (
         <div className="flex flex-1 flex-col p-3">
           {personaSetupWizard.isSetupRequired ? (
-            <div
-              data-testid="assistant-setup-overlay"
-              className="flex flex-1 flex-col gap-3 rounded-xl border border-border bg-surface p-4"
-            >
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-text-subtle">
-                  {t(
-                    "sidepanel:personaGarden.setup.heading",
-                    "Assistant Setup"
-                  )}
-                </div>
-                <div className="mt-2 text-sm text-text">
-                  {t(
-                    "sidepanel:personaGarden.setup.description",
-                    "Finish setup before using this persona in Persona Garden."
-                  )}
-                </div>
-              </div>
-              <div
-                data-testid="assistant-setup-current-step"
-                className="text-sm text-text"
-              >
-                {personaSetupWizard.currentStep}
-              </div>
-              <div
-                data-testid="assistant-setup-post-target"
-                className="text-xs text-text-muted"
-              >
-                {personaSetupWizard.postSetupTargetTab}
-              </div>
-            </div>
+            <AssistantSetupWizard
+              catalog={catalog.map((persona) => ({
+                id: String(persona.id || ""),
+                name: String(persona.name || persona.id || "")
+              }))}
+              selectedPersonaId={selectedPersonaId}
+              currentStep={personaSetupWizard.currentStep}
+              postSetupTargetTab={personaSetupWizard.postSetupTargetTab}
+              saving={setupWizardSaving}
+              error={setupWizardError}
+              onUsePersona={handleUsePersonaForSetup}
+              onCreatePersona={handleCreatePersonaForSetup}
+            />
           ) : (
             <PersonaGardenTabs
               activeKey={activeTab}
