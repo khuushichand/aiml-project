@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 
 PersonaMode = Literal["session_scoped", "persistent_scoped"]
@@ -82,6 +82,11 @@ class PersonaVoiceDefaults(BaseModel):
     voice_chat_trigger_phrases: list[str] = Field(default_factory=list)
     auto_resume: bool | None = None
     barge_in: bool | None = None
+    auto_commit_enabled: bool | None = None
+    vad_threshold: float | None = None
+    min_silence_ms: int | None = None
+    turn_stop_secs: float | None = None
+    min_utterance_secs: float | None = None
 
     @field_validator("stt_language", "stt_model", "tts_provider", "tts_voice", mode="before")
     @classmethod
@@ -106,6 +111,34 @@ class PersonaVoiceDefaults(BaseModel):
             seen.add(text)
             normalized.append(text)
         return normalized
+
+    @field_validator("vad_threshold", "turn_stop_secs", "min_utterance_secs", mode="before")
+    @classmethod
+    def _normalize_turn_detection_floats(cls, value: Any, info: ValidationInfo) -> float | None:
+        if value is None or value == "":
+            return None
+        bounds = {
+            "vad_threshold": (0.0, 1.0),
+            "turn_stop_secs": (0.05, 10.0),
+            "min_utterance_secs": (0.0, 10.0),
+        }
+        min_value, max_value = bounds[info.field_name]
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        return max(min_value, min(max_value, numeric))
+
+    @field_validator("min_silence_ms", mode="before")
+    @classmethod
+    def _normalize_min_silence_ms(cls, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return None
+        return max(50, min(10_000, numeric))
 
 
 class PersonaProfileCreate(BaseModel):

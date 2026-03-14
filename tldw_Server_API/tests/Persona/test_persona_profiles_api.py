@@ -277,6 +277,11 @@ def test_persona_profile_voice_defaults_roundtrip(persona_db: CharactersRAGDB):
                     "voice_chat_trigger_phrases": ["hey helper", "okay helper"],
                     "auto_resume": True,
                     "barge_in": False,
+                    "auto_commit_enabled": True,
+                    "vad_threshold": 0.35,
+                    "min_silence_ms": 150,
+                    "turn_stop_secs": 0.1,
+                    "min_utterance_secs": 0.25,
                 },
             },
         )
@@ -289,6 +294,11 @@ def test_persona_profile_voice_defaults_roundtrip(persona_db: CharactersRAGDB):
             "hey helper",
             "okay helper",
         ]
+        assert payload["voice_defaults"]["auto_commit_enabled"] is True
+        assert payload["voice_defaults"]["vad_threshold"] == 0.35
+        assert payload["voice_defaults"]["min_silence_ms"] == 150
+        assert payload["voice_defaults"]["turn_stop_secs"] == 0.1
+        assert payload["voice_defaults"]["min_utterance_secs"] == 0.25
 
         fetched = client.get(f"/api/v1/persona/profiles/{persona_id}")
         assert fetched.status_code == 200, fetched.text
@@ -297,6 +307,11 @@ def test_persona_profile_voice_defaults_roundtrip(persona_db: CharactersRAGDB):
         assert fetched_payload["voice_defaults"]["tts_voice"] == "af_heart"
         assert fetched_payload["voice_defaults"]["auto_resume"] is True
         assert fetched_payload["voice_defaults"]["barge_in"] is False
+        assert fetched_payload["voice_defaults"]["auto_commit_enabled"] is True
+        assert fetched_payload["voice_defaults"]["vad_threshold"] == 0.35
+        assert fetched_payload["voice_defaults"]["min_silence_ms"] == 150
+        assert fetched_payload["voice_defaults"]["turn_stop_secs"] == 0.1
+        assert fetched_payload["voice_defaults"]["min_utterance_secs"] == 0.25
 
         updated = client.patch(
             f"/api/v1/persona/profiles/{persona_id}",
@@ -307,6 +322,11 @@ def test_persona_profile_voice_defaults_roundtrip(persona_db: CharactersRAGDB):
                     "voice_chat_trigger_phrases": ["bonjour helper"],
                     "auto_resume": False,
                     "barge_in": True,
+                    "auto_commit_enabled": False,
+                    "vad_threshold": 0.61,
+                    "min_silence_ms": 640,
+                    "turn_stop_secs": 0.48,
+                    "min_utterance_secs": 0.82,
                 }
             },
         )
@@ -319,6 +339,59 @@ def test_persona_profile_voice_defaults_roundtrip(persona_db: CharactersRAGDB):
         ]
         assert updated_payload["voice_defaults"]["auto_resume"] is False
         assert updated_payload["voice_defaults"]["barge_in"] is True
+        assert updated_payload["voice_defaults"]["auto_commit_enabled"] is False
+        assert updated_payload["voice_defaults"]["vad_threshold"] == 0.61
+        assert updated_payload["voice_defaults"]["min_silence_ms"] == 640
+        assert updated_payload["voice_defaults"]["turn_stop_secs"] == 0.48
+        assert updated_payload["voice_defaults"]["min_utterance_secs"] == 0.82
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_profile_voice_defaults_clamps_turn_detection_values(persona_db: CharactersRAGDB):
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={
+                "name": "Voice Clamp Helper",
+                "mode": "persistent_scoped",
+                "voice_defaults": {
+                    "auto_commit_enabled": True,
+                    "vad_threshold": 8,
+                    "min_silence_ms": -1,
+                    "turn_stop_secs": 0.001,
+                    "min_utterance_secs": -2,
+                },
+            },
+        )
+        assert created.status_code == 201, created.text
+        payload = created.json()
+        persona_id = payload["id"]
+        assert payload["voice_defaults"]["auto_commit_enabled"] is True
+        assert payload["voice_defaults"]["vad_threshold"] == 1.0
+        assert payload["voice_defaults"]["min_silence_ms"] == 50
+        assert payload["voice_defaults"]["turn_stop_secs"] == 0.05
+        assert payload["voice_defaults"]["min_utterance_secs"] == 0.0
+
+        updated = client.patch(
+            f"/api/v1/persona/profiles/{persona_id}",
+            json={
+                "voice_defaults": {
+                    "auto_commit_enabled": False,
+                    "vad_threshold": -4,
+                    "min_silence_ms": 200_000,
+                    "turn_stop_secs": 99,
+                    "min_utterance_secs": 11,
+                }
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        updated_payload = updated.json()
+        assert updated_payload["voice_defaults"]["auto_commit_enabled"] is False
+        assert updated_payload["voice_defaults"]["vad_threshold"] == 0.0
+        assert updated_payload["voice_defaults"]["min_silence_ms"] == 10_000
+        assert updated_payload["voice_defaults"]["turn_stop_secs"] == 10.0
+        assert updated_payload["voice_defaults"]["min_utterance_secs"] == 10.0
 
     fastapi_app.dependency_overrides.clear()
 
