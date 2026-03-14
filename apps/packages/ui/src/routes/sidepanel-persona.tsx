@@ -17,7 +17,10 @@ import {
 import type { PersonaTurnDetectionValues } from "@/components/PersonaGarden/PersonaTurnDetectionControls"
 import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCard"
 import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
-import { PersonaSetupHandoffCard } from "@/components/PersonaGarden/PersonaSetupHandoffCard"
+import {
+  PersonaSetupHandoffCard,
+  type SetupReviewSummary
+} from "@/components/PersonaGarden/PersonaSetupHandoffCard"
 import { AssistantSetupWizard } from "@/components/PersonaGarden/AssistantSetupWizard"
 import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
 import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
@@ -214,6 +217,13 @@ type SetupStepErrors = {
 type SetupHandoffState = {
   targetTab: PersonaGardenTabKey
   completionType: "dry_run" | "live_session"
+  reviewSummary: SetupReviewSummary
+}
+
+const DEFAULT_SETUP_REVIEW_SUMMARY: SetupReviewSummary = {
+  starterCommands: { mode: "skipped" },
+  confirmationMode: null,
+  connection: { mode: "skipped" }
 }
 
 type PersonaStateDocsResponse = {
@@ -545,6 +555,8 @@ const SidepanelPersona = ({
   const setupWizardAwaitingLiveResponseRef = React.useRef(false)
   const setupWizardLastLiveTextRef = React.useRef("")
   const [setupHandoff, setSetupHandoff] = React.useState<SetupHandoffState | null>(null)
+  const [setupReviewSummaryDraft, setSetupReviewSummaryDraft] =
+    React.useState<SetupReviewSummary>(DEFAULT_SETUP_REVIEW_SUMMARY)
   const [liveSessionVoiceDefaultsBaseline, setLiveSessionVoiceDefaultsBaseline] =
     React.useState<PersonaVoiceDefaults | null>(null)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
@@ -866,6 +878,7 @@ const SidepanelPersona = ({
     if (setupIntentPersonaId !== normalizedPersonaId) {
       setSetupIntentPersonaId(normalizedPersonaId)
       setSetupIntentTargetTab(activeTab)
+      setSetupReviewSummaryDraft(DEFAULT_SETUP_REVIEW_SUMMARY)
       return
     }
     if (!setupIntentTargetTab) {
@@ -2322,6 +2335,10 @@ const SidepanelPersona = ({
         if (!response.ok) {
           throw new Error(response.error || "Failed to create starter command")
         }
+        setSetupReviewSummaryDraft((current) => ({
+          ...current,
+          starterCommands: { mode: "added", count: 1 }
+        }))
         await advancePersonaSetupStep(
           "safety",
           "Failed to advance assistant setup",
@@ -2369,6 +2386,10 @@ const SidepanelPersona = ({
         if (!response.ok) {
           throw new Error(response.error || "Failed to create starter command")
         }
+        setSetupReviewSummaryDraft((current) => ({
+          ...current,
+          starterCommands: { mode: "added", count: 1 }
+        }))
         await advancePersonaSetupStep(
           "safety",
           "Failed to advance assistant setup",
@@ -2445,6 +2466,17 @@ const SidepanelPersona = ({
           throw new Error(response.error || "Failed to save assistant safety settings")
         }
         const payload = (await response.json()) as PersonaProfileResponse
+        setSetupReviewSummaryDraft((current) => ({
+          ...current,
+          confirmationMode,
+          connection:
+            connectionMode === "create" && String(connection?.name || "").trim()
+              ? {
+                  mode: "created",
+                  name: String(connection?.name || "").trim()
+                }
+              : { mode: "skipped" }
+        }))
         applyPersonaProfileResponse(payload, {
           voiceDefaults: mergedVoiceDefaults,
           setup: buildPersonaSetupInProgress("test", mergeCompletedSetupSteps("safety"))
@@ -2503,7 +2535,8 @@ const SidepanelPersona = ({
         setActiveTab(handoffTargetTab)
         setSetupHandoff({
           targetTab: handoffTargetTab,
-          completionType: testType
+          completionType: testType,
+          reviewSummary: setupReviewSummaryDraft
         })
         setSetupIntentPersonaId("")
         setSetupIntentTargetTab(null)
@@ -2524,6 +2557,7 @@ const SidepanelPersona = ({
       buildSetupProfileUpdatePath,
       clearSetupStepError,
       selectedPersonaId,
+      setupReviewSummaryDraft,
       setupIntentTargetTab,
       setSetupHandoff,
       setSetupStepError
@@ -2540,6 +2574,7 @@ const SidepanelPersona = ({
       setSetupIntentPersonaId(personaId)
       setSetupIntentTargetTab(activeTab)
       setSetupTestOutcome(null)
+      setSetupReviewSummaryDraft(DEFAULT_SETUP_REVIEW_SUMMARY)
       setupWizardLastLiveTextRef.current = ""
       setSetupHandoff(null)
       setupWizardAwaitingLiveResponseRef.current = false
@@ -3795,11 +3830,13 @@ const SidepanelPersona = ({
         <PersonaSetupHandoffCard
           targetTab={setupHandoff.targetTab}
           completionType={setupHandoff.completionType}
+          reviewSummary={setupHandoff.reviewSummary}
           onDismiss={dismissSetupHandoff}
           onOpenCommands={() => openSetupHandoffTab("commands")}
           onOpenTestLab={() => openSetupHandoffTab("test-lab")}
           onOpenLive={() => openSetupHandoffTab("live")}
           onOpenProfiles={() => openSetupHandoffTab("profiles")}
+          onOpenConnections={() => openSetupHandoffTab("connections")}
         />
       )
     },
@@ -4131,6 +4168,10 @@ const SidepanelPersona = ({
                       void handleCreateMcpStarterCommand(toolName, phrase)
                     }}
                     onSkip={() => {
+                      setSetupReviewSummaryDraft((current) => ({
+                        ...current,
+                        starterCommands: { mode: "skipped" }
+                      }))
                       void advancePersonaSetupStep(
                         "safety",
                         "Failed to advance assistant setup",

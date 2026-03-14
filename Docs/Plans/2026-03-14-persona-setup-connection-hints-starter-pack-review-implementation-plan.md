@@ -8,6 +8,8 @@
 
 **Tech Stack:** React, TypeScript, Vitest, React Testing Library, Bun.
 
+**Status:** Complete
+
 ---
 
 ### Task 1: Add Shallow Connection Validation Hints To The Setup Step
