@@ -2257,6 +2257,196 @@ describe("SidepanelPersona", () => {
     expect(screen.getByTestId("persona-setup-handoff-card")).toBeInTheDocument()
   })
 
+  it("collapses the setup handoff after the first successful post-setup action", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=connections"
+
+    let profileVersion = 2
+    let currentSetup = {
+      status: "in_progress",
+      version: 1,
+      run_id: "setup-run-1",
+      current_step: "test",
+      completed_steps: ["persona", "voice", "commands", "safety"],
+      completed_at: null,
+      last_test_type: null
+    }
+    const currentVoiceDefaults = {
+      confirmation_mode: "destructive_only"
+    }
+    const setupEventBodies: Array<Record<string, unknown>> = []
+
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/setup-events") && method === "POST") {
+        setupEventBodies.push(init?.body || {})
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            event_id: init?.body?.event_id || "evt-1",
+            run_id: init?.body?.run_id || "setup-run-1",
+            event_type: init?.body?.event_type || "step_viewed",
+            deduped: false,
+            created_at: "2026-03-14T10:00:00.000Z"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_runs: 0, matched_runs: 0, fallback_runs: 0 }
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper/voice-commands/test") &&
+        method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            heard_text: init?.body?.heard_text,
+            matched: true,
+            command_name: "Search Notes"
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper/voice-commands") &&
+        method === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ commands: [] })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper/voice-commands") &&
+        method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "cmd-hello",
+            persona_id: "garden-helper",
+            name: init?.body?.name ?? "Hello there",
+            phrases: init?.body?.phrases ?? ["hello there"],
+            action_type: init?.body?.action_type ?? "custom",
+            action_config: init?.body?.action_config ?? { action: "say_hello" },
+            priority: 50,
+            enabled: true,
+            requires_confirmation: false
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper/connections") &&
+        method === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        if (method === "PATCH") {
+          profileVersion += 1
+          currentSetup = {
+            ...currentSetup,
+            ...(init?.body?.setup || {})
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: "garden-helper",
+              version: profileVersion,
+              voice_defaults: currentVoiceDefaults,
+              setup: currentSetup,
+              use_persona_state_context_default: true
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: profileVersion,
+            voice_defaults: currentVoiceDefaults,
+            setup: currentSetup,
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("test")
+    })
+
+    fireEvent.change(screen.getByPlaceholderText("Try a spoken phrase"), {
+      target: { value: "search notes for project alpha" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Run dry-run test" }))
+
+    await screen.findByText(/Matched Search Notes/i)
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish with dry-run test" }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("persona-setup-handoff-card")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Review commands" }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Commands" })).toHaveAttribute(
+        "aria-selected",
+        "true"
+      )
+    })
+
+    fireEvent.change(screen.getByTestId("persona-commands-name-input"), {
+      target: { value: "Hello there" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-phrases-input"), {
+      target: { value: "hello there" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-action-type-select"), {
+      target: { value: "custom" }
+    })
+    fireEvent.change(screen.getByTestId("persona-commands-custom-action-input"), {
+      target: { value: "say_hello" }
+    })
+    fireEvent.click(screen.getByTestId("persona-commands-save"))
+
+    await waitFor(() => {
+      expect(screen.getByText("Setup complete")).toBeInTheDocument()
+      expect(screen.getByText("Add your first command")).toBeInTheDocument()
+    })
+
+    expect(
+      setupEventBodies.some(
+        (body) =>
+          body.event_type === "first_post_setup_action" &&
+          body.action_target === "commands"
+      )
+    ).toBe(true)
+  })
+
   it("renders a dedicated companion conversation mode", () => {
     render(<SidepanelPersona mode="companion" />)
 

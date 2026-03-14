@@ -233,9 +233,17 @@ type SetupHandoffState = {
   completionType: "dry_run" | "live_session"
   reviewSummary: SetupReviewSummary
   recommendedAction: SetupHandoffRecommendedAction
-  consumedAction: null
+  consumedAction: SetupHandoffConsumedAction | null
   compact: boolean
 }
+
+type SetupHandoffConsumedAction =
+  | "command_saved"
+  | "connection_saved"
+  | "connection_test_succeeded"
+  | "voice_defaults_saved"
+  | "dry_run_match"
+  | "live_response_received"
 
 type SetupCommandDetourState = {
   phrase: string
@@ -324,6 +332,18 @@ const deriveSetupHandoffRecommendedAction = ({
     return "try_live"
   }
   return "review_commands"
+}
+
+const toSetupHandoffActionTarget = (
+  action: SetupHandoffConsumedAction
+): PersonaGardenTabKey => {
+  if (action === "command_saved") return "commands"
+  if (action === "connection_saved" || action === "connection_test_succeeded") {
+    return "connections"
+  }
+  if (action === "voice_defaults_saved") return "profiles"
+  if (action === "live_response_received") return "live"
+  return "test-lab"
 }
 
 type PersonaStateDocsResponse = {
@@ -634,6 +654,8 @@ const SidepanelPersona = ({
   )
   const emittedSetupEventKeysRef = React.useRef<Set<string>>(new Set())
   const setupLiveDetourRef = React.useRef<SetupLiveDetourState | null>(null)
+  const setupHandoffRef = React.useRef<SetupHandoffState | null>(null)
+  const activeTabRef = React.useRef<PersonaGardenTabKey>("live")
   const resolvedApprovalFadeTimerRef = React.useRef<number | null>(null)
   const approvalHighlightPhaseTimerRef = React.useRef<number | null>(null)
 
@@ -762,6 +784,14 @@ const SidepanelPersona = ({
   React.useEffect(() => {
     setupLiveDetourRef.current = setupLiveDetour
   }, [setupLiveDetour])
+
+  React.useEffect(() => {
+    setupHandoffRef.current = setupHandoff
+  }, [setupHandoff])
+
+  React.useEffect(() => {
+    activeTabRef.current = activeTab
+  }, [activeTab])
 
   React.useEffect(() => {
     if (!isCompanionMode) return
@@ -1474,6 +1504,36 @@ const SidepanelPersona = ({
     setRerunAfterSaveCommandId(null)
   }, [lastTestLabPhrase, rerunAfterSaveCommandId])
 
+  const consumeSetupHandoffAction = React.useCallback(
+    (action: SetupHandoffConsumedAction) => {
+      const currentHandoff = setupHandoffRef.current
+      if (!currentHandoff || currentHandoff.compact || currentHandoff.consumedAction) {
+        return
+      }
+      void emitSetupAnalyticsEvent({
+        runId: currentHandoff.runId,
+        eventType: "first_post_setup_action",
+        actionTarget: toSetupHandoffActionTarget(action)
+      })
+      setSetupHandoff((existing) => {
+        if (
+          !existing ||
+          existing.runId !== currentHandoff.runId ||
+          existing.compact ||
+          existing.consumedAction
+        ) {
+          return existing
+        }
+        return {
+          ...existing,
+          compact: true,
+          consumedAction: action
+        }
+      })
+    },
+    [emitSetupAnalyticsEvent]
+  )
+
   const handleSetupDetourCommandSaved = React.useCallback(
     (_commandId: string, context: { fromDraft: boolean }) => {
       if (!setupCommandDetour || !context.fromDraft) return
@@ -1496,6 +1556,14 @@ const SidepanelPersona = ({
       setActiveTab(setupIntentTargetTab || "live")
     },
     [emitSetupAnalyticsEvent, setupCommandDetour, setupIntentTargetTab]
+  )
+
+  const handleCommandSaved = React.useCallback(
+    (commandId: string, context: { fromDraft: boolean }) => {
+      handleSetupDetourCommandSaved(commandId, context)
+      consumeSetupHandoffAction("command_saved")
+    },
+    [consumeSetupHandoffAction, handleSetupDetourCommandSaved]
   )
 
   React.useEffect(() => {
@@ -1815,12 +1883,12 @@ const SidepanelPersona = ({
       }
 
       if (eventType === "assistant_delta") {
+        const textDelta = String(payload?.text_delta || "").trim()
         if (
           personaSetupWizard.isSetupRequired &&
           personaSetupWizard.currentStep === "test" &&
           setupWizardAwaitingLiveResponseRef.current
         ) {
-          const textDelta = String(payload?.text_delta || "").trim()
           if (textDelta) {
             setSetupTestOutcome({
               kind: "live_success",
@@ -1840,6 +1908,14 @@ const SidepanelPersona = ({
               )
             }
           }
+        }
+        if (
+          textDelta &&
+          activeTabRef.current === "live" &&
+          setupHandoffRef.current &&
+          !setupHandoffRef.current.compact
+        ) {
+          consumeSetupHandoffAction("live_response_received")
         }
         appendLog("assistant", String(payload?.text_delta || ""))
         return
@@ -1966,6 +2042,7 @@ const SidepanelPersona = ({
     },
     [
       appendLog,
+      consumeSetupHandoffAction,
       liveVoiceController,
       personaSetupWizard.currentStep,
       personaSetupWizard.isSetupRequired,
@@ -4311,6 +4388,23 @@ const SidepanelPersona = ({
     })
   }, [emitSetupAnalyticsEvent, setupHandoff])
 
+  const handleProfileDefaultsSaved = React.useCallback(() => {
+    consumeSetupHandoffAction("voice_defaults_saved")
+  }, [consumeSetupHandoffAction])
+
+  const handleConnectionSaved = React.useCallback(() => {
+    consumeSetupHandoffAction("connection_saved")
+  }, [consumeSetupHandoffAction])
+
+  const handleConnectionTestSucceeded = React.useCallback(() => {
+    consumeSetupHandoffAction("connection_test_succeeded")
+  }, [consumeSetupHandoffAction])
+
+  const handleTestLabDryRunCompleted = React.useCallback((matched: boolean) => {
+    if (!matched) return
+    consumeSetupHandoffAction("dry_run_match")
+  }, [consumeSetupHandoffAction])
+
   const renderSetupHandoffCard = React.useCallback(
     (tab: PersonaGardenTabKey) => {
       if (!setupHandoff || setupHandoff.targetTab !== tab) return null
@@ -4362,7 +4456,7 @@ const SidepanelPersona = ({
           onDraftCommandPhraseHandled={handleDraftCommandPhraseHandled}
           rerunAfterSaveCommandId={rerunAfterSaveCommandId}
           onRerunAfterSave={handleRerunAfterCommandSave}
-          onCommandSaved={handleSetupDetourCommandSaved}
+          onCommandSaved={handleCommandSaved}
         />
       )
     },
@@ -4380,6 +4474,7 @@ const SidepanelPersona = ({
           rerunRequestToken={testLabRerunToken}
           onOpenCommand={handleOpenCommandFromTestLab}
           onCreateCommandDraft={handleCreateCommandFromTestLab}
+          onDryRunCompleted={handleTestLabDryRunCompleted}
         />
       )
     },
@@ -4414,6 +4509,7 @@ const SidepanelPersona = ({
           onResumeSetup={handleResumeSetup}
           onResetSetup={handleResetSetup}
           onRerunSetup={handleRerunSetup}
+          onDefaultsSaved={handleProfileDefaultsSaved}
           isActive={activeTab === "profiles"}
           analytics={voiceAnalytics}
           analyticsLoading={voiceAnalyticsLoading}
@@ -4440,6 +4536,8 @@ const SidepanelPersona = ({
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "connections"}
+          onConnectionSaved={handleConnectionSaved}
+          onConnectionTestSucceeded={handleConnectionTestSucceeded}
         />
       )
     },
