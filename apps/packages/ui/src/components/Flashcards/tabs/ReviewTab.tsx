@@ -976,11 +976,13 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
 
             <FlashcardStudyAssistantPanel
               cardUuid={activeCard.uuid}
+              threadVersion={assistantQuery.data?.thread.version ?? null}
               messages={assistantQuery.data?.messages ?? []}
               availableActions={assistantQuery.data?.available_actions ?? null}
               isLoading={assistantQuery.isLoading}
               isError={assistantQuery.isError}
               isResponding={assistantRespondMutation.isPending}
+              onReloadContext={() => assistantQuery.refetch()}
               onRespond={handleAssistantRespond}
             />
 

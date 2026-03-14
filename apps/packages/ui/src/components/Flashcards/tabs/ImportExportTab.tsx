@@ -18,6 +18,7 @@ import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { processInChunks } from "@/utils/chunk-processing"
 import { ImageOcclusionTransferPanel } from "./ImageOcclusionTransferPanel"
+import { NewDeckConfigurationFields } from "../components/NewDeckConfigurationFields"
 import {
   useCreateDeckMutation,
   useCreateFlashcardMutation,
@@ -31,8 +32,10 @@ import {
   usePreviewStructuredQaImportMutation
 } from "../hooks"
 import { getUtf8ByteLength } from "../utils/field-byte-limit"
+import { useDeckSchedulerDraft } from "../hooks/useDeckSchedulerDraft"
 import { FileDropZone } from "../components"
 import { FLASHCARDS_HELP_LINKS } from "../constants"
+import { formatSchedulerSummary } from "../utils/scheduler-settings"
 import {
   deleteFlashcard,
   exportFlashcards,
@@ -111,6 +114,8 @@ const LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS = 300
 const LARGE_IMPORT_CONFIRM_THRESHOLD_APKG_BYTES = 5 * 1024 * 1024
 const APKG_ESTIMATED_BYTES_PER_CARD = 4096
 const SUPPORTED_DELIMITERS: SupportedDelimiter[] = ["\t", ",", ";", "|"]
+const NEW_DECK_OPTION_VALUE = "__new__" as const
+type DeckSelectionValue = number | typeof NEW_DECK_OPTION_VALUE | null | undefined
 const IMPORT_HELP_ANCHORS = {
   columns: "flashcards-import-help-columns",
   delimiter: "flashcards-import-help-delimiter",
@@ -385,6 +390,7 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
   const importJsonMutation = useImportFlashcardsJsonMutation()
   const importApkgMutation = useImportFlashcardsApkgMutation()
   const previewStructuredMutation = usePreviewStructuredQaImportMutation()
+  const decks = decksQuery.data || []
 
   const [content, setContent] = React.useState("")
   const [importMode, setImportMode] = React.useState<ImportMode>("delimited")
@@ -396,13 +402,40 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
   const [structuredPreviewErrors, setStructuredPreviewErrors] = React.useState<
     FlashcardsImportError[]
   >([])
-  const [structuredTargetDeckId, setStructuredTargetDeckId] = React.useState<
-    number | null | undefined
-  >(undefined)
+  const [structuredTargetDeckId, setStructuredTargetDeckId] =
+    React.useState<DeckSelectionValue>(undefined)
+  const [structuredNewDeckName, setStructuredNewDeckName] = React.useState(() =>
+    t("option:flashcards.structuredImportDeckName", {
+      defaultValue: "Structured Import"
+    })
+  )
   const [confirmLargeImportOpen, setConfirmLargeImportOpen] = React.useState(false)
   const [importHelpActiveKeys, setImportHelpActiveKeys] = React.useState<string[]>([
     "columns"
   ])
+  const structuredSchedulerDraft = useDeckSchedulerDraft()
+  const structuredSelectedDeck = React.useMemo(
+    () =>
+      typeof structuredTargetDeckId === "number"
+        ? decks.find((deck) => deck.id === structuredTargetDeckId) ?? null
+        : null,
+    [decks, structuredTargetDeckId]
+  )
+  const structuredDeckOptions = React.useMemo(
+    () => [
+      ...decks.map((deck) => ({
+        label: deck.name,
+        value: deck.id
+      })),
+      {
+        label: t("option:flashcards.createNewDeck", {
+          defaultValue: "Create new deck"
+        }),
+        value: NEW_DECK_OPTION_VALUE
+      }
+    ],
+    [decks, t]
+  )
 
   const selectedDelimiterLabel = React.useMemo(() => {
     if (delimiter === "\t") {
@@ -419,10 +452,12 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
 
   React.useEffect(() => {
     if (structuredTargetDeckId !== undefined) return
-    if ((decksQuery.data || []).length > 0) {
-      setStructuredTargetDeckId((decksQuery.data || [])[0].id)
+    if (decks.length > 0) {
+      setStructuredTargetDeckId(decks[0].id)
+      return
     }
-  }, [decksQuery.data, structuredTargetDeckId])
+    setStructuredTargetDeckId(NEW_DECK_OPTION_VALUE)
+  }, [decks, structuredTargetDeckId])
 
   const structuredMaxFieldLength = React.useMemo(() => {
     const rawValue = limitsQuery.data?.max_field_length
@@ -444,17 +479,52 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
 
   const resolveStructuredTargetDeckId = React.useCallback(async (): Promise<number> => {
     if (typeof structuredTargetDeckId === "number") return structuredTargetDeckId
-    if (structuredTargetDeckId === undefined && (decksQuery.data || []).length > 0) {
-      return (decksQuery.data || [])[0].id
+    if (structuredTargetDeckId === undefined && decks.length > 0) {
+      return decks[0].id
     }
-    const createdDeck = await createDeckMutation.mutateAsync({
-      name: t("option:flashcards.structuredImportDeckName", {
-        defaultValue: "Structured Import"
+    if (
+      structuredTargetDeckId === NEW_DECK_OPTION_VALUE ||
+      (structuredTargetDeckId == null && decks.length === 0)
+    ) {
+      const name = structuredNewDeckName.trim()
+      if (!name) {
+        throw new Error(
+          t("option:flashcards.newDeckNameRequired", {
+            defaultValue: "Enter a deck name."
+          })
+        )
+      }
+      const schedulerSettings = structuredSchedulerDraft.getValidatedSettings()
+      if (!schedulerSettings) {
+        throw new Error(
+          t("option:flashcards.schedulerDraftInvalid", {
+            defaultValue: "Draft has validation errors."
+          })
+        )
+      }
+      const createdDeck = await createDeckMutation.mutateAsync({
+        name,
+        scheduler_settings: schedulerSettings
       })
-    })
-    setStructuredTargetDeckId(createdDeck.id)
-    return createdDeck.id
-  }, [createDeckMutation, decksQuery.data, structuredTargetDeckId, t])
+      setStructuredTargetDeckId(createdDeck.id)
+      return createdDeck.id
+    }
+    if (structuredTargetDeckId == null && decks.length > 0) {
+      return decks[0].id
+    }
+    throw new Error(
+      t("option:flashcards.newDeckNameRequired", {
+        defaultValue: "Enter a deck name."
+      })
+    )
+  }, [
+    createDeckMutation,
+    decks,
+    structuredNewDeckName,
+    structuredSchedulerDraft,
+    structuredTargetDeckId,
+    t
+  ])
 
   const scrollToImportHelp = React.useCallback((anchorId?: string) => {
     if (!anchorId || typeof document === "undefined") return
@@ -1224,15 +1294,28 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                   allowClear
                   value={structuredTargetDeckId ?? undefined}
                   onChange={(value) => {
-                    setStructuredTargetDeckId(value ?? null)
+                    setStructuredTargetDeckId((value as DeckSelectionValue) ?? null)
                   }}
-                  options={(decksQuery.data || []).map((deck) => ({
-                    label: deck.name,
-                    value: deck.id
-                  }))}
+                  options={structuredDeckOptions}
                   data-testid="flashcards-structured-target-deck"
                 />
               </Form.Item>
+              {structuredTargetDeckId === NEW_DECK_OPTION_VALUE ? (
+                <NewDeckConfigurationFields
+                  deckName={structuredNewDeckName}
+                  onDeckNameChange={setStructuredNewDeckName}
+                  schedulerDraft={structuredSchedulerDraft}
+                  nameTestId="flashcards-structured-new-deck-name"
+                />
+              ) : structuredSelectedDeck?.scheduler_settings ? (
+                <Text
+                  type="secondary"
+                  className="block text-xs"
+                  data-testid="flashcards-structured-selected-deck-summary"
+                >
+                  {formatSchedulerSummary(structuredSelectedDeck.scheduler_settings)}
+                </Text>
+              ) : null}
               <Button
                 type="primary"
                 onClick={() => void handleStructuredPreview()}
@@ -1895,6 +1978,7 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
   const generateMutation = useGenerateFlashcardsMutation()
   const createMutation = useCreateFlashcardMutation()
   const createDeckMutation = useCreateDeckMutation()
+  const decks = decksQuery.data || []
 
   const sourceContext = React.useMemo<GenerateSourceContext | null>(() => {
     if (!initialIntent) return null
@@ -1919,17 +2003,44 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
   const [provider, setProvider] = React.useState("")
   const [model, setModel] = React.useState("")
   const [focusTopicsInput, setFocusTopicsInput] = React.useState("")
-  const [targetDeckId, setTargetDeckId] = React.useState<number | null | undefined>(undefined)
+  const [targetDeckId, setTargetDeckId] = React.useState<DeckSelectionValue>(undefined)
+  const [newDeckName, setNewDeckName] = React.useState(() =>
+    t("option:flashcards.generatedDeckName", {
+      defaultValue: "Generated Flashcards"
+    })
+  )
   const [generatedCards, setGeneratedCards] = React.useState<GeneratedCardDraft[]>([])
   const [generationError, setGenerationError] = React.useState<string | null>(null)
   const [isSaving, setIsSaving] = React.useState(false)
+  const generatedDeckSchedulerDraft = useDeckSchedulerDraft()
+  const selectedDeck = React.useMemo(
+    () => (typeof targetDeckId === "number" ? decks.find((deck) => deck.id === targetDeckId) ?? null : null),
+    [decks, targetDeckId]
+  )
+  const deckOptions = React.useMemo(
+    () => [
+      ...decks.map((deck) => ({
+        label: deck.name,
+        value: deck.id
+      })),
+      {
+        label: t("option:flashcards.createNewDeck", {
+          defaultValue: "Create new deck"
+        }),
+        value: NEW_DECK_OPTION_VALUE
+      }
+    ],
+    [decks, t]
+  )
 
   React.useEffect(() => {
     if (targetDeckId != null) return
-    if ((decksQuery.data || []).length > 0) {
-      setTargetDeckId((decksQuery.data || [])[0].id)
+    if (decks.length > 0) {
+      setTargetDeckId(decks[0].id)
+      return
     }
-  }, [decksQuery.data, targetDeckId])
+    setTargetDeckId(NEW_DECK_OPTION_VALUE)
+  }, [decks, targetDeckId])
 
   const updateGeneratedCard = React.useCallback(
     (id: string, patch: Partial<GeneratedCardDraft>) => {
@@ -2013,16 +2124,39 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
   ])
 
   const resolveTargetDeckId = React.useCallback(async (): Promise<number> => {
-    if (targetDeckId != null) return targetDeckId
-    if ((decksQuery.data || []).length > 0) return (decksQuery.data || [])[0].id
-    const createdDeck = await createDeckMutation.mutateAsync({
-      name: t("option:flashcards.generatedDeckName", {
-        defaultValue: "Generated Flashcards"
+    if (typeof targetDeckId === "number") return targetDeckId
+    if (targetDeckId === undefined && decks.length > 0) return decks[0].id
+    if (targetDeckId === NEW_DECK_OPTION_VALUE || (targetDeckId == null && decks.length === 0)) {
+      const name = newDeckName.trim()
+      if (!name) {
+        throw new Error(
+          t("option:flashcards.newDeckNameRequired", {
+            defaultValue: "Enter a deck name."
+          })
+        )
+      }
+      const schedulerSettings = generatedDeckSchedulerDraft.getValidatedSettings()
+      if (!schedulerSettings) {
+        throw new Error(
+          t("option:flashcards.schedulerDraftInvalid", {
+            defaultValue: "Draft has validation errors."
+          })
+        )
+      }
+      const createdDeck = await createDeckMutation.mutateAsync({
+        name,
+        scheduler_settings: schedulerSettings
       })
-    })
-    setTargetDeckId(createdDeck.id)
-    return createdDeck.id
-  }, [createDeckMutation, decksQuery.data, t, targetDeckId])
+      setTargetDeckId(createdDeck.id)
+      return createdDeck.id
+    }
+    if (targetDeckId == null && decks.length > 0) return decks[0].id
+    throw new Error(
+      t("option:flashcards.newDeckNameRequired", {
+        defaultValue: "Enter a deck name."
+      })
+    )
+  }, [createDeckMutation, decks, generatedDeckSchedulerDraft, newDeckName, t, targetDeckId])
 
   const handleSaveGeneratedCards = React.useCallback(async () => {
     if (generatedCards.length === 0) return
@@ -2217,14 +2351,27 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
           <Select
             allowClear
             value={targetDeckId ?? undefined}
-            onChange={setTargetDeckId}
+            onChange={(value) => setTargetDeckId((value as DeckSelectionValue) ?? null)}
             data-testid="flashcards-generate-deck"
-            options={(decksQuery.data || []).map((deck) => ({
-              label: deck.name,
-              value: deck.id
-            }))}
+            options={deckOptions}
           />
         </Form.Item>
+        {targetDeckId === NEW_DECK_OPTION_VALUE ? (
+          <NewDeckConfigurationFields
+            deckName={newDeckName}
+            onDeckNameChange={setNewDeckName}
+            schedulerDraft={generatedDeckSchedulerDraft}
+            nameTestId="flashcards-generate-new-deck-name"
+          />
+        ) : selectedDeck?.scheduler_settings ? (
+          <Text
+            type="secondary"
+            className="block text-xs -mt-2 mb-2"
+            data-testid="flashcards-generate-selected-deck-summary"
+          >
+            {formatSchedulerSummary(selectedDeck.scheduler_settings)}
+          </Text>
+        ) : null}
         <Form.Item
           label={t("option:flashcards.generateProvider", {
             defaultValue: "Provider (optional)"

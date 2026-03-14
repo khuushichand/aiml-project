@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { FlashcardCreateDrawer } from "../FlashcardCreateDrawer"
 import { useCreateDeckMutation, useCreateFlashcardMutation, useDecksQuery } from "../../hooks"
+import type { DeckSchedulerSettings } from "@/services/flashcards"
 
 const uploadFlashcardAsset = vi.hoisted(() => vi.fn())
 
@@ -81,10 +82,33 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 }
 
 describe("FlashcardCreateDrawer image insertion", () => {
+  const createDeckMutateAsync = vi.fn()
+
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(useDecksQuery).mockReturnValue({
-      data: [],
+      data: [
+        {
+          id: 1,
+          name: "Biology",
+          description: null,
+          deleted: false,
+          client_id: "test",
+          version: 1,
+          scheduler_settings_json: null,
+          scheduler_settings: {
+            new_steps_minutes: [1, 10],
+            relearn_steps_minutes: [10],
+            graduating_interval_days: 1,
+            easy_interval_days: 4,
+            easy_bonus: 1.3,
+            interval_modifier: 1,
+            max_interval_days: 36500,
+            leech_threshold: 8,
+            enable_fuzz: false
+          }
+        }
+      ],
       isLoading: false
     } as any)
     vi.mocked(useCreateFlashcardMutation).mockReturnValue({
@@ -92,9 +116,10 @@ describe("FlashcardCreateDrawer image insertion", () => {
       isPending: false
     } as any)
     vi.mocked(useCreateDeckMutation).mockReturnValue({
-      mutateAsync: vi.fn(),
+      mutateAsync: createDeckMutateAsync,
       isPending: false
     } as any)
+    createDeckMutateAsync.mockReset()
   })
 
   it("inserts an uploaded image snippet into the front field at the cursor", async () => {
@@ -124,5 +149,52 @@ describe("FlashcardCreateDrawer image insertion", () => {
         "Alpha ![Slide](flashcard-asset://asset-1)Omega"
       )
     })
+  })
+
+  it("creates an inline deck with scheduler settings and selects it in the form", async () => {
+    const createdDeckSettings: DeckSchedulerSettings = {
+      new_steps_minutes: [1, 5, 15],
+      relearn_steps_minutes: [10],
+      graduating_interval_days: 1,
+      easy_interval_days: 3,
+      easy_bonus: 1.15,
+      interval_modifier: 0.9,
+      max_interval_days: 3650,
+      leech_threshold: 10,
+      enable_fuzz: false
+    }
+    createDeckMutateAsync.mockResolvedValue({
+      id: 7,
+      name: "New deck",
+      description: null,
+      deleted: false,
+      client_id: "test",
+      version: 1,
+      scheduler_settings_json: JSON.stringify(createdDeckSettings),
+      scheduler_settings: createdDeckSettings
+    })
+
+    render(<FlashcardCreateDrawer open onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+    fireEvent.mouseDown(screen.getByLabelText("Deck"))
+    fireEvent.click(await screen.findByText("Create new deck"))
+
+    fireEvent.change(screen.getByPlaceholderText("New deck name"), {
+      target: { value: "New deck" }
+    })
+    fireEvent.click(screen.getByTestId("deck-scheduler-editor-preset-fast_acquisition"))
+    fireEvent.click(screen.getByTestId("flashcards-inline-create-deck-submit"))
+
+    await waitFor(() =>
+      expect(createDeckMutateAsync).toHaveBeenCalledWith({
+        name: "New deck",
+        scheduler_settings: createdDeckSettings
+      })
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText("New deck name")).not.toBeInTheDocument()
+    })
+    expect(screen.getByTitle("7")).toBeInTheDocument()
   })
 })

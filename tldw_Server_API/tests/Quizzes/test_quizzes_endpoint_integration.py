@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 
@@ -12,8 +13,16 @@ os.environ.setdefault("READING_DIGEST_SCHEDULER_ENABLED", "0")
 os.environ.setdefault("TEST_MODE", "1")
 
 from tldw_Server_API.app.main import app as fastapi_app
+from tldw_Server_API.app.api.v1.endpoints.quizzes import (
+    convert_attempt_remediation_conversions,
+    get_attempt_remediation_conversions,
+)
+from tldw_Server_API.app.api.v1.schemas.quizzes import (
+    QuizRemediationConversionListResponse,
+    QuizRemediationConvertResponse,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 from tldw_Server_API.app.services import quiz_generator
 from tldw_Server_API.tests.test_config import TestConfig
 
@@ -107,6 +116,11 @@ def _create_attempt_with_missed_questions(quizzes_db: CharactersRAGDB) -> tuple[
         ],
     )
     return int(attempt["id"]), question_ids
+
+
+def test_remediation_endpoints_declare_return_annotations():
+    assert get_attempt_remediation_conversions.__annotations__["return"] is QuizRemediationConversionListResponse
+    assert convert_attempt_remediation_conversions.__annotations__["return"] is QuizRemediationConvertResponse
 
 
 def test_quiz_source_bundle_roundtrip_via_db_create_and_get(quizzes_db: CharactersRAGDB):
@@ -280,6 +294,233 @@ def test_get_quiz_attempt_question_assistant_returns_thread_messages_and_context
     assert payload["context_snapshot"]["attempt"]["id"] == attempt_id
     assert payload["context_snapshot"]["question"]["id"] == question_id
     assert "follow_up" in payload["available_actions"]
+
+
+def test_get_attempt_remediation_conversions_returns_active_rows(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    conversion_payload = quizzes_db.convert_quiz_remediation_questions(
+        attempt_id=attempt_id,
+        question_ids=[question_ids[0]],
+        create_deck_name="Renal Remediation",
+        replace_active=False,
+    )
+
+    response = client_with_quizzes_db.get(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["attempt_id"] == attempt_id
+    assert payload["count"] == 1
+    assert payload["superseded_count"] == 0
+    assert payload["items"][0]["question_id"] == question_ids[0]
+    assert payload["items"][0]["target_deck_id"] == conversion_payload["target_deck"]["id"]
+    assert payload["items"][0]["orphaned"] is False
+    assert payload["items"][0]["superseded_count"] == 0
+
+
+def test_convert_remediation_questions_creates_new_deck(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": question_ids,
+            "create_deck_name": "Quiz Remediation Deck",
+            "replace_active": False,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["attempt_id"] == attempt_id
+    assert payload["target_deck"]["name"] == "Quiz Remediation Deck"
+    assert {result["status"] for result in payload["results"]} == {"created"}
+    assert len(payload["created_flashcard_uuids"]) == 2
+
+
+def test_convert_remediation_questions_creates_new_deck_with_scheduler_settings(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": question_ids,
+            "create_deck_name": "Quiz Remediation Deck",
+            "create_deck_scheduler_settings": {
+                "new_steps_minutes": [1, 5, 15],
+                "relearn_steps_minutes": [10],
+                "graduating_interval_days": 1,
+                "easy_interval_days": 3,
+                "easy_bonus": 1.15,
+                "interval_modifier": 0.9,
+                "max_interval_days": 3650,
+                "leech_threshold": 10,
+                "enable_fuzz": False,
+            },
+            "replace_active": False,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    created_deck = quizzes_db.get_deck(payload["target_deck"]["id"])
+    assert created_deck is not None
+    scheduler_settings = json.loads(created_deck["scheduler_settings_json"])
+    assert scheduler_settings["new_steps_minutes"] == [1, 5, 15]
+    assert scheduler_settings["easy_interval_days"] == 3
+    assert scheduler_settings["enable_fuzz"] is False
+
+
+def test_convert_remediation_questions_returns_mixed_results_without_replace_active(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    deck_id = quizzes_db.add_deck("Renal Deck")
+    quizzes_db.convert_quiz_remediation_questions(
+        attempt_id=attempt_id,
+        question_ids=[question_ids[0]],
+        target_deck_id=deck_id,
+        replace_active=False,
+    )
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": question_ids,
+            "target_deck_id": deck_id,
+            "replace_active": False,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    statuses = {result["question_id"]: result["status"] for result in payload["results"]}
+    assert statuses[question_ids[0]] == "already_exists"
+    assert statuses[question_ids[1]] == "created"
+    assert len(payload["created_flashcard_uuids"]) == 1
+
+
+def test_convert_remediation_questions_replace_active_returns_superseded_and_created(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    deck_id = quizzes_db.add_deck("Renal Deck")
+    quizzes_db.convert_quiz_remediation_questions(
+        attempt_id=attempt_id,
+        question_ids=[question_ids[0]],
+        target_deck_id=deck_id,
+        replace_active=False,
+    )
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": [question_ids[0]],
+            "target_deck_id": deck_id,
+            "replace_active": True,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["results"][0]["status"] == "superseded_and_created"
+
+    read_response = client_with_quizzes_db.get(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions",
+        headers=AUTH_HEADERS,
+    )
+    assert read_response.status_code == 200
+    read_payload = read_response.json()
+    assert read_payload["count"] == 1
+    assert read_payload["superseded_count"] == 1
+    assert read_payload["items"][0]["superseded_count"] == 1
+
+
+def test_convert_remediation_questions_returns_409_for_conflict(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+    monkeypatch,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    deck_id = quizzes_db.add_deck("Renal Deck")
+
+    def raise_conflict(**_kwargs):
+        raise ConflictError("Active remediation conversion already exists.")
+
+    monkeypatch.setattr(quizzes_db, "convert_quiz_remediation_questions", raise_conflict)
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions/convert",
+        json={
+            "question_ids": [question_ids[0]],
+            "target_deck_id": deck_id,
+            "replace_active": False,
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert "already exists" in response.json()["detail"].lower()
+
+
+def test_get_attempt_remediation_conversions_marks_orphaned_linked_flashcards(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+    monkeypatch,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    conversion_payload = quizzes_db.convert_quiz_remediation_questions(
+        attempt_id=attempt_id,
+        question_ids=[question_ids[0]],
+        create_deck_name="Renal Remediation",
+        replace_active=False,
+    )
+    flashcard_uuid = conversion_payload["created_flashcard_uuids"][0]
+    flashcard = quizzes_db.get_flashcard(flashcard_uuid)
+    assert flashcard is not None
+    quizzes_db.soft_delete_flashcard(flashcard_uuid, expected_version=int(flashcard["version"]))
+
+    batch_lookup_calls: list[list[str]] = []
+    original_batch_lookup = quizzes_db.get_flashcards_by_uuids
+
+    def track_batch_lookup(uuids: list[str]):
+        batch_lookup_calls.append(list(uuids))
+        return original_batch_lookup(uuids)
+
+    def fail_single_lookup(_uuid: str):
+        raise AssertionError("Expected remediation orphan detection to use batch flashcard lookup.")
+
+    monkeypatch.setattr(quizzes_db, "get_flashcards_by_uuids", track_batch_lookup)
+    monkeypatch.setattr(quizzes_db, "get_flashcard", fail_single_lookup)
+
+    response = client_with_quizzes_db.get(
+        f"/api/v1/quizzes/attempts/{attempt_id}/remediation-conversions",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["question_id"] == question_ids[0]
+    assert payload["items"][0]["orphaned"] is True
+    assert batch_lookup_calls == [[flashcard_uuid]]
 
 
 def test_quiz_attempt_question_assistant_respond_persists_user_and_assistant_messages(

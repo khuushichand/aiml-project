@@ -13,6 +13,8 @@ import {
   submitAttempt,
   listAttempts,
   getAttempt,
+  listAttemptRemediationConversions,
+  convertAttemptRemediationQuestions,
   getQuizAttemptQuestionAssistant,
   generateQuiz,
   generateRemediationQuiz,
@@ -27,6 +29,9 @@ import {
   type QuestionType,
   type QuizGenerateRequest,
   type QuizRemediationGenerateRequest,
+  type QuizRemediationConvertRequest,
+  type QuizRemediationConvertResponse,
+  type QuizRemediationConversionListResponse,
   type QuizAnswerInput,
   type QuizListParams,
   type AttemptListParams,
@@ -454,6 +459,21 @@ export function useAttemptQuery(
   })
 }
 
+export function useAttemptRemediationConversionsQuery(
+  attemptId: number | null | undefined,
+  options?: UseQuizQueriesOptions
+) {
+  const { quizzesEnabled } = useQuizzesEnabled()
+
+  return useQuery({
+    queryKey: ["quizzes:attempt:remediation-conversions", attemptId ?? null],
+    queryFn: ({ signal }) => listAttemptRemediationConversions(attemptId!, { signal }),
+    enabled: (options?.enabled ?? quizzesEnabled) && attemptId != null,
+    staleTime: ATTEMPT_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false
+  })
+}
+
 export function useQuizAttemptQuestionAssistantQuery(
   attemptId: number | null | undefined,
   questionId: number | null | undefined,
@@ -517,6 +537,60 @@ export function useQuizAttemptQuestionAssistantRespondMutation() {
     },
     onError: (error) => {
       console.error("Failed to respond with quiz question assistant:", error)
+    }
+  })
+}
+
+export function useConvertAttemptRemediationQuestionsMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["quizzes:attempt:remediation-convert"],
+    mutationFn: (params: {
+      attemptId: number
+      request: QuizRemediationConvertRequest
+      signal?: AbortSignal
+    }) => (
+      convertAttemptRemediationQuestions(
+        params.attemptId,
+        params.request,
+        params.signal ? { signal: params.signal } : undefined
+      )
+    ),
+    onSuccess: (response: QuizRemediationConvertResponse, variables) => {
+      qc.invalidateQueries({ queryKey: ["flashcards:decks"], refetchType: "active" })
+      qc.setQueryData<QuizRemediationConversionListResponse | undefined>(
+        ["quizzes:attempt:remediation-conversions", variables.attemptId],
+        (current) => {
+          if (!current) return current
+
+          const nextItems = current.items
+            .filter((item) => {
+              const incomingQuestionIds = new Set(response.results.map((result) => result.question_id))
+              if (!incomingQuestionIds.has(item.question_id)) return true
+              return item.status !== "active"
+            })
+
+          response.results.forEach((result) => {
+            if (result.conversion) {
+              nextItems.push(result.conversion)
+            }
+          })
+
+          const supersededCount = current.superseded_count
+            + response.results.filter((result) => result.status === "superseded_and_created").length
+          return {
+            attempt_id: current.attempt_id,
+            items: nextItems,
+            count: nextItems.length,
+            superseded_count: supersededCount
+          }
+        }
+      )
+      qc.invalidateQueries({
+        queryKey: ["quizzes:attempt:remediation-conversions", variables.attemptId],
+        refetchType: "active"
+      })
     }
   })
 }

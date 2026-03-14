@@ -18,6 +18,9 @@ import {
   useCreateFlashcardsBulkMutation,
   useDecksQuery
 } from "../hooks"
+import { useDeckSchedulerDraft } from "../hooks/useDeckSchedulerDraft"
+import { NewDeckConfigurationFields } from "../components/NewDeckConfigurationFields"
+import { formatSchedulerSummary } from "../utils/scheduler-settings"
 import { generateImageOcclusionAssets } from "../utils/image-occlusion-canvas"
 import { ImageOcclusionPanel, type ImageOcclusionRegion } from "./ImageOcclusionPanel"
 
@@ -27,6 +30,8 @@ const OCCLUSION_UNDO_SECONDS = 30
 const OCCLUSION_UNDO_CHUNK_SIZE = 50
 const IMAGE_OCCLUSION_SYSTEM_TAG = "image-occlusion"
 const MAX_OCCLUSION_REGIONS = 25
+const NEW_DECK_OPTION_VALUE = "__new__" as const
+type DeckSelectionValue = number | typeof NEW_DECK_OPTION_VALUE | null | undefined
 
 type TransferActionStatus = "success" | "warning" | "error"
 
@@ -125,6 +130,7 @@ export const ImageOcclusionTransferPanel: React.FC<ImageOcclusionTransferPanelPr
   const decksQuery = useDecksQuery()
   const createDeckMutation = useCreateDeckMutation()
   const createBulkMutation = useCreateFlashcardsBulkMutation()
+  const decks = decksQuery.data || []
 
   const [panelState, setPanelState] = React.useState<ImageOcclusionPanelState>({
     sourceFile: null,
@@ -132,31 +138,81 @@ export const ImageOcclusionTransferPanel: React.FC<ImageOcclusionTransferPanelPr
     regions: [],
     selectedRegionId: null
   })
-  const [targetDeckId, setTargetDeckId] = React.useState<number | null | undefined>(undefined)
+  const [targetDeckId, setTargetDeckId] = React.useState<DeckSelectionValue>(undefined)
+  const [newDeckName, setNewDeckName] = React.useState(() =>
+    t("option:flashcards.occlusionDeckName", {
+      defaultValue: "Image Occlusion"
+    })
+  )
   const [tagsInput, setTagsInput] = React.useState("")
   const [drafts, setDrafts] = React.useState<ImageOcclusionDraft[]>([])
   const [error, setError] = React.useState<string | null>(null)
   const [isGenerating, setIsGenerating] = React.useState(false)
   const [isSaving, setIsSaving] = React.useState(false)
+  const schedulerDraft = useDeckSchedulerDraft()
+  const selectedDeck = React.useMemo(
+    () => (typeof targetDeckId === "number" ? decks.find((deck) => deck.id === targetDeckId) ?? null : null),
+    [decks, targetDeckId]
+  )
+  const deckOptions = React.useMemo(
+    () => [
+      ...decks.map((deck: Deck) => ({
+        label: deck.name,
+        value: deck.id
+      })),
+      {
+        label: t("option:flashcards.createNewDeck", {
+          defaultValue: "Create new deck"
+        }),
+        value: NEW_DECK_OPTION_VALUE
+      }
+    ],
+    [decks, t]
+  )
 
   React.useEffect(() => {
     if (targetDeckId != null) return
-    if ((decksQuery.data || []).length > 0) {
-      setTargetDeckId((decksQuery.data || [])[0].id)
+    if (decks.length > 0) {
+      setTargetDeckId(decks[0].id)
+      return
     }
-  }, [decksQuery.data, targetDeckId])
+    setTargetDeckId(NEW_DECK_OPTION_VALUE)
+  }, [decks, targetDeckId])
 
   const resolveTargetDeckId = React.useCallback(async (): Promise<number> => {
-    if (targetDeckId != null) return targetDeckId
-    if ((decksQuery.data || []).length > 0) return (decksQuery.data || [])[0].id
-    const createdDeck = await createDeckMutation.mutateAsync({
-      name: t("option:flashcards.occlusionDeckName", {
-        defaultValue: "Image Occlusion"
+    if (typeof targetDeckId === "number") return targetDeckId
+    if (targetDeckId === undefined && decks.length > 0) return decks[0].id
+    if (targetDeckId === NEW_DECK_OPTION_VALUE || (targetDeckId == null && decks.length === 0)) {
+      const name = newDeckName.trim()
+      if (!name) {
+        throw new Error(
+          t("option:flashcards.newDeckNameRequired", {
+            defaultValue: "Enter a deck name."
+          })
+        )
+      }
+      const schedulerSettings = schedulerDraft.getValidatedSettings()
+      if (!schedulerSettings) {
+        throw new Error(
+          t("option:flashcards.schedulerDraftInvalid", {
+            defaultValue: "Draft has validation errors."
+          })
+        )
+      }
+      const createdDeck = await createDeckMutation.mutateAsync({
+        name,
+        scheduler_settings: schedulerSettings
       })
-    })
-    setTargetDeckId(createdDeck.id)
-    return createdDeck.id
-  }, [createDeckMutation, decksQuery.data, t, targetDeckId])
+      setTargetDeckId(createdDeck.id)
+      return createdDeck.id
+    }
+    if (targetDeckId == null && decks.length > 0) return decks[0].id
+    throw new Error(
+      t("option:flashcards.newDeckNameRequired", {
+        defaultValue: "Enter a deck name."
+      })
+    )
+  }, [createDeckMutation, decks, newDeckName, schedulerDraft, t, targetDeckId])
 
   const updateDraft = React.useCallback((id: string, patch: Partial<ImageOcclusionDraft>) => {
     setDrafts((current) =>
@@ -398,14 +454,27 @@ export const ImageOcclusionTransferPanel: React.FC<ImageOcclusionTransferPanelPr
           <Select
             allowClear
             value={targetDeckId ?? undefined}
-            onChange={setTargetDeckId}
+            onChange={(value) => setTargetDeckId((value as DeckSelectionValue) ?? null)}
             data-testid="flashcards-occlusion-deck"
-            options={(decksQuery.data || []).map((deck: Deck) => ({
-              label: deck.name,
-              value: deck.id
-            }))}
+            options={deckOptions}
           />
         </Form.Item>
+        {targetDeckId === NEW_DECK_OPTION_VALUE ? (
+          <NewDeckConfigurationFields
+            deckName={newDeckName}
+            onDeckNameChange={setNewDeckName}
+            schedulerDraft={schedulerDraft}
+            nameTestId="flashcards-occlusion-new-deck-name"
+          />
+        ) : selectedDeck?.scheduler_settings ? (
+          <Text
+            type="secondary"
+            className="block text-xs -mt-2 mb-2"
+            data-testid="flashcards-occlusion-selected-deck-summary"
+          >
+            {formatSchedulerSummary(selectedDeck.scheduler_settings)}
+          </Text>
+        ) : null}
         <Form.Item
           label={t("option:flashcards.tags", { defaultValue: "Tags" })}
           className="!mb-2"
