@@ -40,6 +40,8 @@ type ConnectionsPanelProps = {
   selectedPersonaId: string
   selectedPersonaName: string
   isActive?: boolean
+  onConnectionSaved?: () => void
+  onConnectionTestSucceeded?: () => void
 }
 
 const DEFAULT_FORM_STATE: ConnectionFormState = {
@@ -112,7 +114,9 @@ const summarizeTestBodyPreview = (value: unknown): string | null => {
 export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
   selectedPersonaId,
   selectedPersonaName,
-  isActive = false
+  isActive = false,
+  onConnectionSaved,
+  onConnectionTestSucceeded
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const [connections, setConnections] = React.useState<PersonaConnection[]>([])
@@ -281,6 +285,7 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
       const saved = (await response.json()) as PersonaConnection
       setConnections((current) => [saved, ...current.filter((item) => item.id !== saved.id)])
       handleReset()
+      onConnectionSaved?.()
     } catch (saveError) {
       setError(
         saveError instanceof Error
@@ -292,7 +297,7 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
     } finally {
       setSaving(false)
     }
-  }, [editingConnectionId, formState, handleReset, selectedPersonaId])
+  }, [editingConnectionId, formState, handleReset, onConnectionSaved, selectedPersonaId])
 
   const handleDelete = React.useCallback(async (connectionId: string) => {
     if (!selectedPersonaId) return
@@ -358,6 +363,9 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
         ...current,
         [connectionId]: result
       }))
+      if (result.ok) {
+        onConnectionTestSucceeded?.()
+      }
     } catch (testError) {
       setTestResults((current) => ({
         ...current,
@@ -372,7 +380,7 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
     } finally {
       setTestingConnectionId(null)
     }
-  }, [selectedPersonaId])
+  }, [onConnectionTestSucceeded, selectedPersonaId])
 
   return (
     <div className="rounded-lg border border-border bg-surface p-3">

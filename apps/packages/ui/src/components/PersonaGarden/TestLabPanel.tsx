@@ -35,6 +35,10 @@ type PersonaCommandDryRunResult = {
   failure_phase?: string | null
 }
 
+export type TestLabDryRunCompletedResult = {
+  matched: boolean
+}
+
 type TestLabPanelProps = {
   selectedPersonaId: string
   selectedPersonaName: string
@@ -42,6 +46,7 @@ type TestLabPanelProps = {
   analytics?: PersonaVoiceAnalytics | null
   onOpenCommand?: (commandId: string, heardText: string) => void
   onCreateCommandDraft?: (heardText: string) => void
+  onDryRunCompleted?: (result: TestLabDryRunCompletedResult) => void
   initialHeardText?: string
   rerunRequestToken?: number
 }
@@ -56,6 +61,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
   analytics = null,
   onOpenCommand,
   onCreateCommandDraft,
+  onDryRunCompleted,
   initialHeardText = "",
   rerunRequestToken = 0
 }) => {
@@ -136,6 +142,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
       }
       const payload = (await response.json()) as PersonaCommandDryRunResult
       setResult(payload)
+      onDryRunCompleted?.({ matched: Boolean(payload.matched) })
       if (
         source === "rerun" &&
         payload.matched &&
@@ -158,7 +165,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
       setRerunNoticeVisible(false)
       setLoading(false)
     }
-  }, [selectedPersonaId])
+  }, [onDryRunCompleted, selectedPersonaId])
 
   React.useEffect(() => {
     if (!isActive || !selectedPersonaId || rerunRequestToken <= 0) return

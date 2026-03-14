@@ -5044,6 +5044,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+        if "voice_defaults_json" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN voice_defaults_json TEXT")
+        if "setup_json" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN setup_json TEXT")
         if "origin_character_id" not in profile_cols:
             conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_id INTEGER")
         if "origin_character_name" not in profile_cols:
@@ -5228,6 +5232,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not hasattr(self.backend, "execute"):
             return
         statements = [
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS voice_defaults_json TEXT",
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS setup_json TEXT",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_id INTEGER",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_name TEXT",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_snapshot_at TEXT",
@@ -8176,6 +8182,416 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         ).fetchone()
         return dict(row) if row else None
 
+    def _ensure_persona_setup_events_table(self) -> None:
+        """Ensure append-only persona setup analytics events exist."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS persona_setup_events(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  event_id TEXT NOT NULL UNIQUE,
+                  user_id INTEGER NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  run_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL,
+                  event_key TEXT,
+                  step TEXT,
+                  completion_type TEXT,
+                  detour_source TEXT,
+                  action_target TEXT,
+                  metadata_json TEXT,
+                  created_at TEXT NOT NULL
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            self.execute_query(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_persona_setup_events_event_key
+                ON persona_setup_events(user_id, persona_id, run_id, event_key)
+                WHERE event_key IS NOT NULL
+                """,
+                script=False,
+                commit=True,
+            )
+            self.execute_query(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_setup_events_persona_created
+                ON persona_setup_events(user_id, persona_id, created_at, id)
+                """,
+                script=False,
+                commit=True,
+            )
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS persona_setup_events(
+                  id BIGSERIAL PRIMARY KEY,
+                  event_id TEXT NOT NULL UNIQUE,
+                  user_id BIGINT NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  run_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL,
+                  event_key TEXT,
+                  step TEXT,
+                  completion_type TEXT,
+                  detour_source TEXT,
+                  action_target TEXT,
+                  metadata_json TEXT,
+                  created_at TEXT NOT NULL
+                )
+                """
+            )
+            self.backend.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_persona_setup_events_event_key
+                ON persona_setup_events(user_id, persona_id, run_id, event_key)
+                WHERE event_key IS NOT NULL
+                """
+            )
+            self.backend.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_setup_events_persona_created
+                ON persona_setup_events(user_id, persona_id, created_at, id)
+                """
+            )
+            return
+
+        raise NotImplementedError(
+            "persona_setup_events table creation not supported "
+            f"for backend {self.backend_type.value}"
+        )
+
+    def _persona_setup_event_row_to_dict(self, row: Any) -> dict[str, Any]:
+        item = dict(row)
+        event_label = str(item.get("event_id") or item.get("id") or "unknown")
+        item["metadata"] = self._decode_persona_json_object(
+            item.get("metadata_json"),
+            field_name="metadata_json",
+            context_label=f"persona setup event {event_label}",
+        )
+        return item
+
+    def _decode_persona_json_object(
+        self,
+        raw_value: Any,
+        *,
+        field_name: str,
+        context_label: str,
+    ) -> dict[str, Any]:
+        """Decode one persona JSON column into a dictionary with warning logs on invalid data."""
+        if isinstance(raw_value, dict):
+            return raw_value
+        if not isinstance(raw_value, str):
+            return {}
+
+        try:
+            decoded_value = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "Invalid JSON in {} for {}: {}",
+                field_name,
+                context_label,
+                exc,
+            )
+            return {}
+
+        if isinstance(decoded_value, dict):
+            return decoded_value
+
+        logger.warning(
+            "Expected JSON object in {} for {}, got {}.",
+            field_name,
+            context_label,
+            type(decoded_value).__name__,
+        )
+        return {}
+
+    def record_persona_setup_event(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        event_id: str,
+        run_id: str,
+        event_type: str,
+        event_key: str | None = None,
+        step: str | None = None,
+        completion_type: str | None = None,
+        detour_source: str | None = None,
+        action_target: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Insert one persona setup analytics event with optional once-only dedupe."""
+        self._ensure_persona_setup_events_table()
+        now = self._get_current_utc_timestamp_iso()
+        metadata_json = self._ensure_json_string(metadata if isinstance(metadata, dict) else {})
+
+        with self.transaction():
+            row = self.execute_query(
+                """
+                SELECT *
+                FROM persona_setup_events
+                WHERE user_id = ? AND persona_id = ? AND event_id = ?
+                """,
+                (user_id, persona_id, event_id),
+            ).fetchone()
+            if row:
+                item = self._persona_setup_event_row_to_dict(row)
+                item["deduped"] = True
+                return item
+
+            if event_key:
+                row = self.execute_query(
+                    """
+                    SELECT *
+                    FROM persona_setup_events
+                    WHERE user_id = ? AND persona_id = ? AND run_id = ? AND event_key = ?
+                    """,
+                    (user_id, persona_id, run_id, event_key),
+                ).fetchone()
+                if row:
+                    item = self._persona_setup_event_row_to_dict(row)
+                    item["deduped"] = True
+                    return item
+
+            self.execute_query(
+                """
+                INSERT INTO persona_setup_events(
+                    event_id, user_id, persona_id, run_id, event_type, event_key,
+                    step, completion_type, detour_source, action_target,
+                    metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    user_id,
+                    persona_id,
+                    run_id,
+                    event_type,
+                    event_key,
+                    step,
+                    completion_type,
+                    detour_source,
+                    action_target,
+                    metadata_json,
+                    now,
+                ),
+            )
+            row = self.execute_query(
+                """
+                SELECT *
+                FROM persona_setup_events
+                WHERE user_id = ? AND persona_id = ? AND event_id = ?
+                """,
+                (user_id, persona_id, event_id),
+            ).fetchone()
+            if not row:
+                error_message = "Failed to load inserted persona setup event."
+                raise CharactersRAGDBError(error_message)
+            item = self._persona_setup_event_row_to_dict(row)
+            item["deduped"] = False
+            return item
+
+    def list_persona_setup_events(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        days: int = 30,
+        run_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """List recent persona setup events for one persona."""
+        self._ensure_persona_setup_events_table()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
+        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+        params: list[Any] = [user_id, persona_id, cutoff]
+        query = """
+            SELECT *
+            FROM persona_setup_events
+            WHERE user_id = ? AND persona_id = ? AND created_at >= ?
+        """
+        if run_id:
+            query += " AND run_id = ?"
+            params.append(run_id)
+        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+
+        cursor = self.execute_query(query, tuple(params))
+        return [
+            self._persona_setup_event_row_to_dict(row)
+            for row in cursor.fetchall()
+            if row
+        ]
+
+    def get_persona_setup_analytics_summary(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        days: int = 30,
+        recent_run_limit: int = 10,
+    ) -> dict[str, Any]:
+        """Aggregate recent persona setup analytics runs and summary rates."""
+        events = self.list_persona_setup_events(
+            user_id=user_id,
+            persona_id=persona_id,
+            days=days,
+            limit=5000,
+        )
+        runs: dict[str, dict[str, Any]] = {}
+        detour_started_counts: dict[str, int] = {}
+        detour_returned_counts: dict[str, int] = {}
+
+        for event in events:
+            run_id = str(event.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            run = runs.setdefault(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "started_at": None,
+                    "completed_at": None,
+                    "completion_type": None,
+                    "terminal_step": None,
+                    "handoff_clicked": False,
+                    "handoff_dismissed": False,
+                    "first_post_setup_action": False,
+                    "_latest_id": -1,
+                    "_earliest_created_at": None,
+                    "_latest_step_id": -1,
+                },
+            )
+            event_id_value = int(event.get("id") or 0)
+            created_at = str(event.get("created_at") or "").strip() or None
+            event_type = str(event.get("event_type") or "").strip()
+            step = str(event.get("step") or "").strip() or None
+            detour_source = str(event.get("detour_source") or "").strip() or None
+
+            if event_id_value > int(run["_latest_id"]):
+                run["_latest_id"] = event_id_value
+            if created_at and (
+                run["_earliest_created_at"] is None
+                or created_at < str(run["_earliest_created_at"])
+            ):
+                run["_earliest_created_at"] = created_at
+            if event_type == "setup_started" and created_at and (
+                run["started_at"] is None or created_at < str(run["started_at"])
+            ):
+                run["started_at"] = created_at
+            if event_type == "setup_completed" and created_at and (
+                run["completed_at"] is None or created_at > str(run["completed_at"])
+            ):
+                run["completed_at"] = created_at
+                run["completion_type"] = (
+                    str(event.get("completion_type") or "").strip() or None
+                )
+            if step and event_id_value >= int(run["_latest_step_id"]):
+                run["_latest_step_id"] = event_id_value
+                run["terminal_step"] = step
+            if event_type == "handoff_action_clicked":
+                run["handoff_clicked"] = True
+            elif event_type == "handoff_dismissed":
+                run["handoff_dismissed"] = True
+            elif event_type == "first_post_setup_action":
+                run["first_post_setup_action"] = True
+            elif event_type == "detour_started" and detour_source:
+                detour_started_counts[detour_source] = (
+                    detour_started_counts.get(detour_source, 0) + 1
+                )
+            elif event_type == "detour_returned" and detour_source:
+                detour_returned_counts[detour_source] = (
+                    detour_returned_counts.get(detour_source, 0) + 1
+                )
+
+        recent_runs: list[dict[str, Any]] = []
+        completed_runs = 0
+        dry_run_completion_count = 0
+        live_session_completion_count = 0
+        handoff_clicked_runs = 0
+        first_post_setup_action_runs = 0
+        dropoff_counts: dict[str, int] = {}
+
+        for run in sorted(
+            runs.values(),
+            key=lambda item: int(item["_latest_id"]),
+            reverse=True,
+        ):
+            if run["started_at"] is None:
+                run["started_at"] = run["_earliest_created_at"]
+            completion_type = str(run.get("completion_type") or "").strip() or None
+            if completion_type:
+                completed_runs += 1
+                if completion_type == "dry_run":
+                    dry_run_completion_count += 1
+                elif completion_type == "live_session":
+                    live_session_completion_count += 1
+            else:
+                terminal_step = str(run.get("terminal_step") or "").strip() or None
+                if terminal_step:
+                    dropoff_counts[terminal_step] = dropoff_counts.get(terminal_step, 0) + 1
+
+            if bool(run.get("handoff_clicked")):
+                handoff_clicked_runs += 1
+            if bool(run.get("first_post_setup_action")):
+                first_post_setup_action_runs += 1
+
+            recent_runs.append(
+                {
+                    "run_id": run["run_id"],
+                    "started_at": run["started_at"],
+                    "completed_at": run["completed_at"],
+                    "completion_type": completion_type,
+                    "terminal_step": run["terminal_step"],
+                    "handoff_clicked": bool(run["handoff_clicked"]),
+                    "handoff_dismissed": bool(run["handoff_dismissed"]),
+                    "first_post_setup_action": bool(run["first_post_setup_action"]),
+                }
+            )
+
+        total_runs = len(runs)
+        most_common_dropoff_step = None
+        if dropoff_counts:
+            most_common_dropoff_step = max(
+                dropoff_counts.items(),
+                key=lambda item: (item[1], item[0]),
+            )[0]
+
+        return {
+            "summary": {
+                "total_runs": total_runs,
+                "completed_runs": completed_runs,
+                "completion_rate": (
+                    float(completed_runs) / float(total_runs)
+                    if total_runs
+                    else 0.0
+                ),
+                "dry_run_completion_count": dry_run_completion_count,
+                "live_session_completion_count": live_session_completion_count,
+                "most_common_dropoff_step": most_common_dropoff_step,
+                "handoff_click_rate": (
+                    float(handoff_clicked_runs) / float(total_runs)
+                    if total_runs
+                    else 0.0
+                ),
+                "first_post_setup_action_rate": (
+                    float(first_post_setup_action_runs) / float(total_runs)
+                    if total_runs
+                    else 0.0
+                ),
+                "detour_started_counts": detour_started_counts,
+                "detour_returned_counts": detour_returned_counts,
+            },
+            "recent_runs": recent_runs[: max(1, int(recent_run_limit))],
+        }
+
     def upsert_voice_command(
         self,
         *,
@@ -9560,6 +9976,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not row:
             return None
         item = dict(row)
+        persona_label = str(item.get("id") or item.get("name") or "unknown")
+        item["voice_defaults"] = self._decode_persona_json_object(
+            item.get("voice_defaults_json"),
+            field_name="voice_defaults_json",
+            context_label=f"persona profile {persona_label}",
+        )
+        item["setup"] = self._decode_persona_json_object(
+            item.get("setup_json"),
+            field_name="setup_json",
+            context_label=f"persona profile {persona_label}",
+        )
         item["is_active"] = self._as_bool(item.get("is_active"))
         item["use_persona_state_context_default"] = self._as_bool(
             item.get("use_persona_state_context_default", True)
@@ -10023,6 +10450,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         use_persona_state_context_default = self._as_bool(
             profile_data.get("use_persona_state_context_default", True)
         )
+        voice_defaults_json = self._ensure_json_string(
+            profile_data.get("voice_defaults")
+            if isinstance(profile_data.get("voice_defaults"), dict)
+            else None
+        )
+        setup_json = self._ensure_json_string(
+            profile_data.get("setup") if isinstance(profile_data.get("setup"), dict) else None
+        )
         now = self._get_current_utc_timestamp_iso()
 
         character_card_id = profile_data.get("character_card_id")
@@ -10071,9 +10506,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         query = (
             "INSERT INTO persona_profiles("
             "id, user_id, name, character_card_id, origin_character_id, origin_character_name, "
-            "origin_character_snapshot_at, mode, system_prompt, "
+            "origin_character_snapshot_at, mode, system_prompt, voice_defaults_json, setup_json, "
             "is_active, use_persona_state_context_default, created_at, last_modified, deleted, version"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             persona_id,
@@ -10085,6 +10520,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             origin_character_snapshot_at,
             mode,
             system_prompt,
+            voice_defaults_json,
+            setup_json,
             is_active_db,
             use_persona_state_context_default_db,
             profile_data.get("created_at") or now,
@@ -10178,6 +10615,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "character_card_id",
             "mode",
             "system_prompt",
+            "voice_defaults",
+            "setup",
             "is_active",
             "use_persona_state_context_default",
             "deleted",
@@ -10206,6 +10645,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     except (TypeError, ValueError) as exc:
                         raise InputError("character_card_id must be an integer when provided.") from exc  # noqa: TRY003
                 set_parts.append("character_card_id = ?")
+            elif key == "voice_defaults":
+                params.append(self._ensure_json_string(value if isinstance(value, dict) else {}))
+                set_parts.append("voice_defaults_json = ?")
+            elif key == "setup":
+                params.append(self._ensure_json_string(value if isinstance(value, dict) else {}))
+                set_parts.append("setup_json = ?")
             else:
                 params.append(value)
                 set_parts.append(f"{key} = ?")
