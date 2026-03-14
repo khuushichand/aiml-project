@@ -866,6 +866,13 @@ describe("StudioPane Stage 2 workflows", () => {
     mockListDecks.mockResolvedValue([
       { id: 4, name: "Biology Deck", card_count: 0, created_at: null, updated_at: null }
     ])
+    mockGetChatModels.mockResolvedValue([
+      {
+        id: "gpt-4o-mini",
+        name: "GPT-4o mini",
+        provider: "openai"
+      }
+    ])
     mockGetMediaDetails.mockResolvedValue({
       content: "ATP powers cellular respiration in cells."
     })
@@ -890,7 +897,8 @@ describe("StudioPane Stage 2 workflows", () => {
     expect(mockGenerateFlashcardsService).toHaveBeenCalledWith(
       expect.objectContaining({
         text: expect.stringContaining("DSPy Prompting Talk"),
-        model: "gpt-4o-mini"
+        model: "gpt-4o-mini",
+        provider: "openai"
       })
     )
     expect(mockGenerateFlashcardsService).not.toHaveBeenCalledWith(
@@ -933,7 +941,8 @@ describe("StudioPane Stage 2 workflows", () => {
     await waitFor(() => {
       expect(mockGenerateFlashcardsService).toHaveBeenCalledWith(
         expect.objectContaining({
-          model: "gpt-4o-mini"
+          model: "gpt-4o-mini",
+          provider: "openai"
         })
       )
     })
