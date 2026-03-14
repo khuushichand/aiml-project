@@ -19,6 +19,7 @@ import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCar
 import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
 import {
   PersonaSetupHandoffCard,
+  type SetupHandoffRecommendedAction,
   type SetupReviewSummary
 } from "@/components/PersonaGarden/PersonaSetupHandoffCard"
 import { AssistantSetupWizard } from "@/components/PersonaGarden/AssistantSetupWizard"
@@ -231,6 +232,9 @@ type SetupHandoffState = {
   targetTab: PersonaGardenTabKey
   completionType: "dry_run" | "live_session"
   reviewSummary: SetupReviewSummary
+  recommendedAction: SetupHandoffRecommendedAction
+  consumedAction: null
+  compact: boolean
 }
 
 type SetupCommandDetourState = {
@@ -301,6 +305,25 @@ const summarizeFallbackStarterCommands = (value: unknown): SetupReviewSummary["s
   }
 
   return { mode: "skipped" }
+}
+
+const deriveSetupHandoffRecommendedAction = ({
+  completionType,
+  reviewSummary
+}: {
+  completionType: "dry_run" | "live_session"
+  reviewSummary: SetupReviewSummary
+}): SetupHandoffRecommendedAction => {
+  if (reviewSummary.starterCommands.mode === "skipped") {
+    return "add_command"
+  }
+  if (reviewSummary.connection.mode === "skipped") {
+    return "add_connection"
+  }
+  if (completionType === "dry_run") {
+    return "try_live"
+  }
+  return "review_commands"
 }
 
 type PersonaStateDocsResponse = {
@@ -2909,12 +2932,19 @@ const SidepanelPersona = ({
         const payload = (await response.json()) as PersonaProfileResponse
         applyPersonaProfileResponse(payload, { setup: completedSetup })
         const handoffTargetTab = setupIntentTargetTab || activeTab
+        const recommendedAction = deriveSetupHandoffRecommendedAction({
+          completionType: testType,
+          reviewSummary: resolvedReviewSummary
+        })
         setActiveTab(handoffTargetTab)
         setSetupHandoff({
           runId: resolvedRunId,
           targetTab: handoffTargetTab,
           completionType: testType,
-          reviewSummary: resolvedReviewSummary
+          reviewSummary: resolvedReviewSummary,
+          recommendedAction,
+          consumedAction: null,
+          compact: false
         })
         void emitSetupAnalyticsEvent({
           personaId,
@@ -4269,7 +4299,16 @@ const SidepanelPersona = ({
       })
     }
     setActiveTab(tab)
-    setSetupHandoff(null)
+    setSetupHandoff((current) => {
+      if (!current) return null
+      if (current.targetTab === tab) {
+        return current
+      }
+      return {
+        ...current,
+        targetTab: tab
+      }
+    })
   }, [emitSetupAnalyticsEvent, setupHandoff])
 
   const renderSetupHandoffCard = React.useCallback(
@@ -4280,6 +4319,8 @@ const SidepanelPersona = ({
           targetTab={setupHandoff.targetTab}
           completionType={setupHandoff.completionType}
           reviewSummary={setupHandoff.reviewSummary}
+          recommendedAction={setupHandoff.recommendedAction}
+          compact={setupHandoff.compact}
           onDismiss={dismissSetupHandoff}
           onOpenCommands={() => openSetupHandoffTab("commands")}
           onOpenTestLab={() => openSetupHandoffTab("test-lab")}

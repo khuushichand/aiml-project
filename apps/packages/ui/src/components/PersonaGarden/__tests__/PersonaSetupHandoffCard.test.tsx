@@ -11,6 +11,26 @@ const defaultReviewSummary = {
 }
 
 describe("PersonaSetupHandoffCard", () => {
+  it("prioritizes trying a live turn after dry-run completion", () => {
+    render(
+      <PersonaSetupHandoffCard
+        targetTab="profiles"
+        completionType="dry_run"
+        reviewSummary={defaultReviewSummary}
+        recommendedAction="try_live"
+        onDismiss={vi.fn()}
+        onOpenProfiles={vi.fn()}
+        onOpenTestLab={vi.fn()}
+        onOpenLive={vi.fn()}
+        onOpenCommands={vi.fn()}
+        onOpenConnections={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Recommended next step")).toBeInTheDocument()
+    expect(screen.getByText("Try your first live turn")).toBeInTheDocument()
+  })
+
   it("renders starter pack review details and target-tab-aware actions", () => {
     const onDismiss = vi.fn()
     const onOpenProfiles = vi.fn()
@@ -22,6 +42,7 @@ describe("PersonaSetupHandoffCard", () => {
         targetTab="profiles"
         completionType="dry_run"
         reviewSummary={defaultReviewSummary}
+        recommendedAction="add_connection"
         onDismiss={onDismiss}
         onOpenProfiles={onOpenProfiles}
         onOpenTestLab={vi.fn()}
@@ -37,10 +58,11 @@ describe("PersonaSetupHandoffCard", () => {
     expect(screen.getByText("Added 3 starter commands")).toBeInTheDocument()
     expect(screen.getByText("Ask for destructive actions")).toBeInTheDocument()
     expect(screen.getByText("Connection added: Slack Alerts")).toBeInTheDocument()
+    expect(screen.getByText("Add a connection")).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Review commands" }))
     fireEvent.click(screen.getByRole("button", { name: "Open connections" }))
-    fireEvent.click(screen.getByRole("button", { name: "Adjust assistant defaults" }))
+    fireEvent.click(screen.getByRole("button", { name: "Review safety defaults" }))
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
     expect(onOpenCommands).toHaveBeenCalledTimes(1)
     expect(onOpenConnections).toHaveBeenCalledTimes(1)
@@ -58,6 +80,7 @@ describe("PersonaSetupHandoffCard", () => {
           confirmationMode: "never",
           connection: { mode: "skipped" }
         }}
+        recommendedAction="add_command"
         onDismiss={vi.fn()}
         onOpenProfiles={vi.fn()}
         onOpenTestLab={vi.fn()}
@@ -71,28 +94,33 @@ describe("PersonaSetupHandoffCard", () => {
     expect(screen.getByText("Skipped starter commands")).toBeInTheDocument()
     expect(screen.getByText("Never ask")).toBeInTheDocument()
     expect(screen.getByText("No external connection yet")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Start live session" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Open Commands" })).toBeInTheDocument()
   })
 
-  it("uses a test-lab-aware primary action when setup returns to test lab", () => {
-    const onOpenTestLab = vi.fn()
+  it("renders a compact variant with the recommended next step", () => {
+    const onOpenCommands = vi.fn()
 
     render(
       <PersonaSetupHandoffCard
         targetTab="test-lab"
         completionType="dry_run"
         reviewSummary={defaultReviewSummary}
+        recommendedAction="review_commands"
+        compact
         onDismiss={vi.fn()}
         onOpenProfiles={vi.fn()}
-        onOpenTestLab={onOpenTestLab}
+        onOpenTestLab={vi.fn()}
         onOpenLive={vi.fn()}
-        onOpenCommands={vi.fn()}
+        onOpenCommands={onOpenCommands}
         onOpenConnections={vi.fn()}
       />
     )
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Open Test Lab" })[0])
+    expect(screen.getByText("Setup complete")).toBeInTheDocument()
+    expect(screen.getByText("Review starter commands")).toBeInTheDocument()
 
-    expect(onOpenTestLab).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole("button", { name: "Review Commands" }))
+
+    expect(onOpenCommands).toHaveBeenCalledTimes(1)
   })
 })
