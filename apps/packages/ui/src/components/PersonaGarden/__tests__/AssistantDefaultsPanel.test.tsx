@@ -12,7 +12,12 @@ const mocks = vi.hoisted(() => ({
     confirmationMode: "destructive_only" as const,
     voiceChatTriggerPhrases: ["hey helper"],
     autoResume: true,
-    bargeIn: false
+    bargeIn: false,
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
   }
 }))
 
@@ -41,6 +46,13 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 }))
 
 vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
+  PERSONA_TURN_DETECTION_BALANCED_DEFAULTS: {
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
+  },
   useResolvedPersonaVoiceDefaults: () => mocks.resolvedDefaults
 }))
 
@@ -57,7 +69,12 @@ describe("AssistantDefaultsPanel", () => {
       confirmationMode: "destructive_only",
       voiceChatTriggerPhrases: ["hey helper"],
       autoResume: true,
-      bargeIn: false
+      bargeIn: false,
+      autoCommitEnabled: true,
+      vadThreshold: 0.5,
+      minSilenceMs: 250,
+      turnStopSecs: 0.2,
+      minUtteranceSecs: 0.4
     }
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
       if (
@@ -76,7 +93,12 @@ describe("AssistantDefaultsPanel", () => {
               confirmation_mode: "destructive_only",
               voice_chat_trigger_phrases: ["hey helper"],
               auto_resume: true,
-              barge_in: false
+              barge_in: false,
+              auto_commit_enabled: true,
+              vad_threshold: 0.35,
+              min_silence_ms: 150,
+              turn_stop_secs: 0.1,
+              min_utterance_secs: 0.25
             }
           })
         })
@@ -120,6 +142,14 @@ describe("AssistantDefaultsPanel", () => {
       expect(screen.getByLabelText("STT language")).toHaveValue("en-US")
       expect(screen.getByLabelText("STT model")).toHaveValue("whisper-1")
     })
+    expect(screen.getByText("Turn detection defaults")).toBeInTheDocument()
+    expect(screen.getByTestId("assistant-defaults-vad-auto-commit")).toBeChecked()
+
+    fireEvent.click(screen.getByTestId("assistant-defaults-vad-advanced-toggle"))
+    expect(screen.getByTestId("assistant-defaults-vad-threshold")).toHaveValue(0.35)
+    expect(screen.getByTestId("assistant-defaults-vad-min-silence-ms")).toHaveValue(150)
+    expect(screen.getByTestId("assistant-defaults-vad-turn-stop-secs")).toHaveValue(0.1)
+    expect(screen.getByTestId("assistant-defaults-vad-min-utterance-secs")).toHaveValue(0.25)
 
     fireEvent.change(screen.getByLabelText("STT language"), {
       target: { value: "fr-FR" }
@@ -139,6 +169,19 @@ describe("AssistantDefaultsPanel", () => {
     fireEvent.change(screen.getByLabelText("Barge-in"), {
       target: { value: "true" }
     })
+    fireEvent.click(screen.getByTestId("assistant-defaults-vad-auto-commit"))
+    fireEvent.change(screen.getByTestId("assistant-defaults-vad-threshold"), {
+      target: { value: "0.61" }
+    })
+    fireEvent.change(screen.getByTestId("assistant-defaults-vad-min-silence-ms"), {
+      target: { value: "640" }
+    })
+    fireEvent.change(screen.getByTestId("assistant-defaults-vad-turn-stop-secs"), {
+      target: { value: "0.48" }
+    })
+    fireEvent.change(screen.getByTestId("assistant-defaults-vad-min-utterance-secs"), {
+      target: { value: "0.82" }
+    })
     fireEvent.click(screen.getByRole("button", { name: "Save assistant defaults" }))
 
     await waitFor(() => {
@@ -155,7 +198,12 @@ describe("AssistantDefaultsPanel", () => {
               confirmation_mode: "destructive_only",
               voice_chat_trigger_phrases: ["bonjour helper", "salut helper"],
               auto_resume: false,
-              barge_in: true
+              barge_in: true,
+              auto_commit_enabled: false,
+              vad_threshold: 0.61,
+              min_silence_ms: 640,
+              turn_stop_secs: 0.48,
+              min_utterance_secs: 0.82
             }
           }
         }
@@ -165,5 +213,57 @@ describe("AssistantDefaultsPanel", () => {
     expect(screen.getByText("Assistant defaults saved.")).toBeInTheDocument()
     expect(screen.getByText("Effective Preview")).toBeInTheDocument()
     expect(screen.getByText("parakeet")).toBeInTheDocument()
+  })
+
+  it("shows custom as the saved preset when advanced turn detection values diverge", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (
+        path === "/api/v1/persona/profiles/persona-1" &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "persona-1",
+            voice_defaults: {
+              stt_language: "en-US",
+              stt_model: "whisper-1",
+              tts_provider: "tldw",
+              tts_voice: "af_heart",
+              confirmation_mode: "destructive_only",
+              voice_chat_trigger_phrases: ["hey helper"],
+              auto_resume: true,
+              barge_in: false,
+              auto_commit_enabled: false,
+              vad_threshold: 0.61,
+              min_silence_ms: 640,
+              turn_stop_secs: 0.48,
+              min_utterance_secs: 0.82
+            }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          id: "persona-1",
+          voice_defaults: init?.body?.voice_defaults
+        })
+      })
+    })
+
+    render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("assistant-defaults-vad-preset-custom")
+      ).toHaveAttribute("data-active", "true")
+    })
   })
 })

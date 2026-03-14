@@ -2,6 +2,12 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 
 import {
+  PersonaTurnDetectionControls,
+  PERSONA_TURN_DETECTION_PRESETS,
+  derivePersonaTurnDetectionPreset
+} from "@/components/PersonaGarden/PersonaTurnDetectionControls"
+import {
+  PERSONA_TURN_DETECTION_BALANCED_DEFAULTS,
   type PersonaConfirmationMode,
   type PersonaVoiceDefaults,
   useResolvedPersonaVoiceDefaults
@@ -28,6 +34,11 @@ type AssistantDefaultsFormState = {
   triggerPhrasesText: string
   autoResume: boolean | null
   bargeIn: boolean | null
+  autoCommitEnabled: boolean
+  vadThreshold: number
+  minSilenceMs: number
+  turnStopSecs: number
+  minUtteranceSecs: number
 }
 
 const DEFAULT_FORM_STATE: AssistantDefaultsFormState = {
@@ -38,7 +49,12 @@ const DEFAULT_FORM_STATE: AssistantDefaultsFormState = {
   confirmationMode: "destructive_only",
   triggerPhrasesText: "",
   autoResume: null,
-  bargeIn: null
+  bargeIn: null,
+  autoCommitEnabled: PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.autoCommitEnabled,
+  vadThreshold: PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.vadThreshold,
+  minSilenceMs: PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.minSilenceMs,
+  turnStopSecs: PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.turnStopSecs,
+  minUtteranceSecs: PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.minUtteranceSecs
 }
 
 const normalizeText = (value: string | null | undefined): string => String(value || "").trim()
@@ -71,7 +87,27 @@ const buildFormState = (
       ? voiceDefaults.auto_resume
       : null,
   bargeIn:
-    typeof voiceDefaults?.barge_in === "boolean" ? voiceDefaults.barge_in : null
+    typeof voiceDefaults?.barge_in === "boolean" ? voiceDefaults.barge_in : null,
+  autoCommitEnabled:
+    typeof voiceDefaults?.auto_commit_enabled === "boolean"
+      ? voiceDefaults.auto_commit_enabled
+      : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.autoCommitEnabled,
+  vadThreshold:
+    typeof voiceDefaults?.vad_threshold === "number"
+      ? voiceDefaults.vad_threshold
+      : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.vadThreshold,
+  minSilenceMs:
+    typeof voiceDefaults?.min_silence_ms === "number"
+      ? voiceDefaults.min_silence_ms
+      : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.minSilenceMs,
+  turnStopSecs:
+    typeof voiceDefaults?.turn_stop_secs === "number"
+      ? voiceDefaults.turn_stop_secs
+      : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.turnStopSecs,
+  minUtteranceSecs:
+    typeof voiceDefaults?.min_utterance_secs === "number"
+      ? voiceDefaults.min_utterance_secs
+      : PERSONA_TURN_DETECTION_BALANCED_DEFAULTS.minUtteranceSecs
 })
 
 const buildPayload = (
@@ -84,7 +120,12 @@ const buildPayload = (
   confirmation_mode: formState.confirmationMode,
   voice_chat_trigger_phrases: normalizePhrases(formState.triggerPhrasesText),
   auto_resume: formState.autoResume,
-  barge_in: formState.bargeIn
+  barge_in: formState.bargeIn,
+  auto_commit_enabled: formState.autoCommitEnabled,
+  vad_threshold: formState.vadThreshold,
+  min_silence_ms: formState.minSilenceMs,
+  turn_stop_secs: formState.turnStopSecs,
+  min_utterance_secs: formState.minUtteranceSecs
 })
 
 const formatBool = (value: boolean): string => (value ? "On" : "Off")
@@ -169,11 +210,28 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
   }, [isActive, selectedPersonaId])
 
   const resolvedDefaults = useResolvedPersonaVoiceDefaults(buildPayload(formState))
+  const savedVadPreset = React.useMemo(
+    () =>
+      derivePersonaTurnDetectionPreset({
+        autoCommitEnabled: formState.autoCommitEnabled,
+        vadThreshold: formState.vadThreshold,
+        minSilenceMs: formState.minSilenceMs,
+        turnStopSecs: formState.turnStopSecs,
+        minUtteranceSecs: formState.minUtteranceSecs
+      }),
+    [
+      formState.autoCommitEnabled,
+      formState.minSilenceMs,
+      formState.minUtteranceSecs,
+      formState.turnStopSecs,
+      formState.vadThreshold
+    ]
+  )
 
   const updateField = React.useCallback(
     (
       field: keyof AssistantDefaultsFormState,
-      value: string | boolean | null
+      value: string | boolean | number | null
     ) => {
       setSuccess(null)
       setFormState((current) => ({
@@ -435,6 +493,44 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
         />
       </label>
 
+      <PersonaTurnDetectionControls
+        title="Turn detection defaults"
+        helperText="Saved for future live sessions. Existing live sessions keep their current turn-detection settings until reconnect."
+        testIdPrefix="assistant-defaults-vad"
+        autoCommitLabel="Auto-commit (saved default)"
+        currentPreset={savedVadPreset}
+        values={{
+          autoCommitEnabled: formState.autoCommitEnabled,
+          vadThreshold: formState.vadThreshold,
+          minSilenceMs: formState.minSilenceMs,
+          turnStopSecs: formState.turnStopSecs,
+          minUtteranceSecs: formState.minUtteranceSecs
+        }}
+        disabled={!selectedPersonaId || loading || saving}
+        advancedInputsDisabled={
+          !selectedPersonaId || loading || saving || !formState.autoCommitEnabled
+        }
+        className="mt-3 rounded-md border border-border bg-surface2 p-3 text-xs text-text"
+        advancedFooterText="These saved values apply to future live sessions. Reconnect a running session to pick them up."
+        onAutoCommitEnabledChange={(next) => updateField("autoCommitEnabled", next)}
+        onPresetChange={(preset) => {
+          const next = PERSONA_TURN_DETECTION_PRESETS[preset]
+          setSuccess(null)
+          setFormState((current) => ({
+            ...current,
+            autoCommitEnabled: next.autoCommitEnabled,
+            vadThreshold: next.vadThreshold,
+            minSilenceMs: next.minSilenceMs,
+            turnStopSecs: next.turnStopSecs,
+            minUtteranceSecs: next.minUtteranceSecs
+          }))
+        }}
+        onVadThresholdChange={(next) => updateField("vadThreshold", next)}
+        onMinSilenceMsChange={(next) => updateField("minSilenceMs", next)}
+        onTurnStopSecsChange={(next) => updateField("turnStopSecs", next)}
+        onMinUtteranceSecsChange={(next) => updateField("minUtteranceSecs", next)}
+      />
+
       <div className="mt-3 rounded-md border border-border/80 bg-surface2 p-3">
         <div className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
           {t("sidepanel:personaGarden.profile.assistantDefaults.effectivePreview", {
@@ -477,6 +573,26 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
                 ? resolvedDefaults.voiceChatTriggerPhrases.join(", ")
                 : "None"}
             </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-text-muted">Auto-commit</dt>
+            <dd>{formatBool(resolvedDefaults.autoCommitEnabled)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-text-muted">Speech threshold</dt>
+            <dd>{resolvedDefaults.vadThreshold}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-text-muted">Silence before commit</dt>
+            <dd>{resolvedDefaults.minSilenceMs} ms</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-text-muted">Minimum utterance</dt>
+            <dd>{resolvedDefaults.minUtteranceSecs} s</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-text-muted">Turn tail</dt>
+            <dd>{resolvedDefaults.turnStopSecs} s</dd>
           </div>
         </dl>
       </div>
