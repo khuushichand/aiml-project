@@ -56,6 +56,12 @@ import {
   fetchCompanionConversationPrompts,
   isCompanionConsentRequiredResponse
 } from "@/services/companion"
+import {
+  buildSetupEventKey,
+  postPersonaSetupEvent,
+  type PersonaSetupAnalyticsEvent,
+  type PersonaSetupAnalyticsEventType
+} from "@/services/tldw/persona-setup-analytics"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { buildPersonaWebSocketUrl } from "@/services/persona-stream"
 import {
@@ -221,6 +227,7 @@ type SetupStepErrors = {
 }
 
 type SetupHandoffState = {
+  runId: string
   targetTab: PersonaGardenTabKey
   completionType: "dry_run" | "live_session"
   reviewSummary: SetupReviewSummary
@@ -602,6 +609,7 @@ const SidepanelPersona = ({
   const runtimeApprovalRowRefs = React.useRef<Map<string, HTMLDivElement | null>>(
     new Map()
   )
+  const emittedSetupEventKeysRef = React.useRef<Set<string>>(new Set())
   const setupLiveDetourRef = React.useRef<SetupLiveDetourState | null>(null)
   const resolvedApprovalFadeTimerRef = React.useRef<number | null>(null)
   const approvalHighlightPhaseTimerRef = React.useRef<number | null>(null)
@@ -924,14 +932,64 @@ const SidepanelPersona = ({
       savedPersonaSetup
     ]
   )
+  const createSetupRunId = React.useCallback(() => {
+    if (
+      typeof globalThis !== "undefined" &&
+      typeof globalThis.crypto?.randomUUID === "function"
+    ) {
+      return `setup-run-${globalThis.crypto.randomUUID()}`
+    }
+    return `setup-run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  }, [])
+  const currentSetupRunId = React.useMemo(() => {
+    const normalized = String(savedPersonaSetup?.run_id || "").trim()
+    return normalized || null
+  }, [savedPersonaSetup?.run_id])
+  const emitSetupAnalyticsEvent = React.useCallback(
+    (event: Omit<PersonaSetupAnalyticsEvent, "runId"> & { runId?: string; personaId?: string }) => {
+      const personaId = String(event.personaId || selectedPersonaId || "").trim()
+      const runId = String(event.runId || currentSetupRunId || "").trim()
+      if (!personaId || !runId) return
+
+      const eventType = event.eventType as PersonaSetupAnalyticsEventType
+      const eventKey = buildSetupEventKey({
+        eventType,
+        step: event.step,
+        detourSource: event.detourSource || undefined
+      })
+      if (eventKey) {
+        const dedupeKey = `${personaId}:${runId}:${eventKey}`
+        if (emittedSetupEventKeysRef.current.has(dedupeKey)) return
+        emittedSetupEventKeysRef.current.add(dedupeKey)
+      }
+
+      void postPersonaSetupEvent(personaId, {
+        runId,
+        eventType,
+        step: event.step,
+        completionType: event.completionType,
+        detourSource: event.detourSource || undefined,
+        actionTarget: event.actionTarget || undefined,
+        metadata: event.metadata
+      })
+    },
+    [currentSetupRunId, selectedPersonaId]
+  )
   const setSetupStepError = React.useCallback(
     (step: PersonaSetupStep, message: string | null) => {
       setSetupStepErrors((current) => ({
         ...current,
         [step]: message
       }))
+      if (message) {
+        emitSetupAnalyticsEvent({
+          eventType: "step_error",
+          step,
+          metadata: { message }
+        })
+      }
     },
-    []
+    [emitSetupAnalyticsEvent]
   )
   const clearSetupStepError = React.useCallback(
     (step: PersonaSetupStep) => {
@@ -1035,19 +1093,38 @@ const SidepanelPersona = ({
     setupWizardAwaitingLiveResponseRef.current = false
   }, [personaSetupWizard.currentStep, personaSetupWizard.isSetupRequired])
 
+  React.useEffect(() => {
+    if (!personaSetupWizard.isSetupRequired) return
+    if (!currentSetupRunId) return
+    void emitSetupAnalyticsEvent({
+      eventType: "step_viewed",
+      step: personaSetupWizard.currentStep,
+      runId: currentSetupRunId
+    })
+  }, [
+    currentSetupRunId,
+    emitSetupAnalyticsEvent,
+    personaSetupWizard.currentStep,
+    personaSetupWizard.isSetupRequired
+  ])
+
   const buildPersonaSetupInProgress = React.useCallback(
     (
       step: PersonaSetupState["current_step"] = "voice",
-      completedSteps: PersonaSetupStep[] = []
+      completedSteps: PersonaSetupStep[] = [],
+      options?: { runId?: string | null }
     ): PersonaSetupState => ({
       status: "in_progress",
       version: 1,
+      run_id:
+        String(options?.runId || savedPersonaSetup?.run_id || "").trim() ||
+        createSetupRunId(),
       current_step: step || "voice",
       completed_steps: completedSteps,
       completed_at: null,
       last_test_type: null
     }),
-    []
+    [createSetupRunId, savedPersonaSetup?.run_id]
   )
 
   const mergeCompletedSetupSteps = React.useCallback(
@@ -1130,6 +1207,12 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         applyPersonaProfileResponse(payload, { setup: nextSetup })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "step_completed",
+          step: "voice"
+        })
       } catch (setupError: any) {
         setSetupStepError(
           "voice",
@@ -1144,6 +1227,7 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
+      emitSetupAnalyticsEvent,
       mergeCompletedSetupSteps,
       setSetupStepError,
       selectedPersonaId
@@ -1180,6 +1264,14 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         applyPersonaProfileResponse(payload, { setup: nextSetup })
+        if (completedStep) {
+          void emitSetupAnalyticsEvent({
+            personaId,
+            runId: nextSetup.run_id || undefined,
+            eventType: "step_completed",
+            step: completedStep
+          })
+        }
       } catch (setupError: any) {
         setSetupStepError(errorStep, String(setupError?.message || errorMessage))
       } finally {
@@ -1191,6 +1283,7 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
+      emitSetupAnalyticsEvent,
       mergeCompletedSetupSteps,
       setSetupStepError,
       selectedPersonaId
@@ -1289,7 +1382,12 @@ const SidepanelPersona = ({
       returnStep: "test"
     })
     setActiveTab("commands")
-  }, [])
+    void emitSetupAnalyticsEvent({
+      eventType: "detour_started",
+      step: "test",
+      detourSource: "dry_run_no_match"
+    })
+  }, [emitSetupAnalyticsEvent])
 
   const handleRecoverSetupInLiveSession = React.useCallback(
     (context: { source: "live_unavailable" | "live_failure"; text: string }) => {
@@ -1299,18 +1397,31 @@ const SidepanelPersona = ({
       })
       setSetupTestResumeNote(null)
       setActiveTab("live")
+      void emitSetupAnalyticsEvent({
+        eventType: "detour_started",
+        step: "test",
+        detourSource: context.source
+      })
       if (context.source === "live_unavailable" && !connected && !connecting) {
         setPendingRecoveryReconnectToken((current) => current + 1)
       }
     },
-    [connected, connecting]
+    [connected, connecting, emitSetupAnalyticsEvent]
   )
 
   const handleReturnToSetupFromLiveDetour = React.useCallback(() => {
+    const detourSource = setupLiveDetour?.source || null
     setSetupLiveDetour(null)
     setupWizardAwaitingLiveResponseRef.current = false
     setSetupTestResumeNote("Live session is still available if you want to retry.")
-  }, [])
+    if (detourSource) {
+      void emitSetupAnalyticsEvent({
+        eventType: "detour_returned",
+        step: "test",
+        detourSource
+      })
+    }
+  }, [emitSetupAnalyticsEvent, setupLiveDetour?.source])
 
   const handleOpenCommandHandled = React.useCallback((commandId: string) => {
     const normalizedCommandId = String(commandId || "").trim()
@@ -1344,6 +1455,11 @@ const SidepanelPersona = ({
     (_commandId: string, context: { fromDraft: boolean }) => {
       if (!setupCommandDetour || !context.fromDraft) return
       if (setupCommandDetour.returnStep !== "test") return
+      void emitSetupAnalyticsEvent({
+        eventType: "detour_returned",
+        step: "test",
+        detourSource: "dry_run_no_match"
+      })
       setSetupCommandDetour(null)
       setDraftCommandPhrase(null)
       setDraftCommandSource(null)
@@ -1356,7 +1472,7 @@ const SidepanelPersona = ({
       )
       setActiveTab(setupIntentTargetTab || "live")
     },
-    [setupCommandDetour, setupIntentTargetTab]
+    [emitSetupAnalyticsEvent, setupCommandDetour, setupIntentTargetTab]
   )
 
   React.useEffect(() => {
@@ -1690,6 +1806,11 @@ const SidepanelPersona = ({
             })
             setupWizardAwaitingLiveResponseRef.current = false
             if (setupLiveDetourRef.current) {
+              void emitSetupAnalyticsEvent({
+                eventType: "detour_returned",
+                step: "test",
+                detourSource: setupLiveDetourRef.current.source
+              })
               setSetupLiveDetour(null)
               setSetupTestResumeNote(
                 "Live session responded. Finish setup when you're ready."
@@ -2422,13 +2543,16 @@ const SidepanelPersona = ({
       }
       setSetupWizardSaving(true)
       clearSetupStepError("persona")
+      const nextSetup = buildPersonaSetupInProgress("voice", ["persona"], {
+        runId: createSetupRunId()
+      })
       try {
         const response = await tldwClient.fetchWithAuth(
           `/api/v1/persona/profiles/${encodeURIComponent(nextPersonaId)}` as any,
           {
             method: "PATCH",
             body: {
-              setup: buildPersonaSetupInProgress("voice", ["persona"])
+              setup: nextSetup
             }
           }
         )
@@ -2438,8 +2562,19 @@ const SidepanelPersona = ({
         const payload = (await response.json()) as PersonaProfileResponse
         setSelectedPersonaId(nextPersonaId)
         applyPersonaProfileResponse(payload, {
-          setup: buildPersonaSetupInProgress("voice", ["persona"]),
+          setup: nextSetup,
           voiceDefaults: payload?.voice_defaults || null
+        })
+        void emitSetupAnalyticsEvent({
+          personaId: nextPersonaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "setup_started"
+        })
+        void emitSetupAnalyticsEvent({
+          personaId: nextPersonaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "step_completed",
+          step: "persona"
         })
       } catch (setupError: any) {
         setSetupStepError(
@@ -2455,6 +2590,8 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       clearSetupStepError,
       confirmDiscardUnsavedStateDrafts,
+      createSetupRunId,
+      emitSetupAnalyticsEvent,
       setSetupStepError,
       selectedPersonaId
     ]
@@ -2466,6 +2603,9 @@ const SidepanelPersona = ({
       if (!normalizedName) return
       setSetupWizardSaving(true)
       clearSetupStepError("persona")
+      const nextSetup = buildPersonaSetupInProgress("voice", ["persona"], {
+        runId: createSetupRunId()
+      })
       try {
         const response = await tldwClient.fetchWithAuth(
           "/api/v1/persona/profiles" as any,
@@ -2474,7 +2614,7 @@ const SidepanelPersona = ({
             body: {
               name: normalizedName,
               mode: "persistent_scoped",
-              setup: buildPersonaSetupInProgress("voice", ["persona"])
+              setup: nextSetup
             }
           }
         )
@@ -2498,8 +2638,19 @@ const SidepanelPersona = ({
           setSelectedPersonaId(createdPersonaId)
         }
         applyPersonaProfileResponse(payload, {
-          setup: buildPersonaSetupInProgress("voice", ["persona"]),
+          setup: nextSetup,
           voiceDefaults: payload?.voice_defaults || null
+        })
+        void emitSetupAnalyticsEvent({
+          personaId: createdPersonaId || selectedPersonaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "setup_started"
+        })
+        void emitSetupAnalyticsEvent({
+          personaId: createdPersonaId || selectedPersonaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "step_completed",
+          step: "persona"
         })
       } catch (setupError: any) {
         setSetupStepError(
@@ -2514,6 +2665,9 @@ const SidepanelPersona = ({
       applyPersonaProfileResponse,
       buildPersonaSetupInProgress,
       clearSetupStepError,
+      createSetupRunId,
+      emitSetupAnalyticsEvent,
+      selectedPersonaId,
       setSetupStepError
     ]
   )
@@ -2694,6 +2848,11 @@ const SidepanelPersona = ({
           voiceDefaults: mergedVoiceDefaults,
           setup: buildPersonaSetupInProgress("test", mergeCompletedSetupSteps("safety"))
         })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          eventType: "step_completed",
+          step: "safety"
+        })
       } catch (setupError: any) {
         setSetupStepError(
           "safety",
@@ -2708,6 +2867,7 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
+      emitSetupAnalyticsEvent,
       mergeCompletedSetupSteps,
       savedPersonaVoiceDefaults,
       setSetupStepError,
@@ -2723,9 +2883,12 @@ const SidepanelPersona = ({
       clearSetupStepError("test")
       try {
         const resolvedReviewSummary = await resolveSetupReviewSummary(personaId)
+        const resolvedRunId =
+          String(savedPersonaSetup?.run_id || "").trim() || createSetupRunId()
         const completedSetup: PersonaSetupState = {
           status: "completed",
           version: 1,
+          run_id: resolvedRunId,
           current_step: "test",
           completed_steps: ["persona", "voice", "commands", "safety", "test"],
           completed_at: new Date().toISOString(),
@@ -2748,9 +2911,23 @@ const SidepanelPersona = ({
         const handoffTargetTab = setupIntentTargetTab || activeTab
         setActiveTab(handoffTargetTab)
         setSetupHandoff({
+          runId: resolvedRunId,
           targetTab: handoffTargetTab,
           completionType: testType,
           reviewSummary: resolvedReviewSummary
+        })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          runId: resolvedRunId,
+          eventType: "step_completed",
+          step: "test"
+        })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          runId: resolvedRunId,
+          eventType: "setup_completed",
+          step: "test",
+          completionType: testType
         })
         setSetupIntentPersonaId("")
         setSetupIntentTargetTab(null)
@@ -2774,7 +2951,10 @@ const SidepanelPersona = ({
       activeTab,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
+      createSetupRunId,
+      emitSetupAnalyticsEvent,
       resolveSetupReviewSummary,
+      savedPersonaSetup?.run_id,
       selectedPersonaId,
       setupIntentTargetTab,
       setSetupHandoff,
@@ -2786,7 +2966,9 @@ const SidepanelPersona = ({
     async (errorMessage: string) => {
       const personaId = String(selectedPersonaId || "").trim()
       if (!personaId) return
-      const nextSetup = buildPersonaSetupInProgress("persona", [])
+      const nextSetup = buildPersonaSetupInProgress("persona", [], {
+        runId: createSetupRunId()
+      })
       setSetupWizardSaving(true)
       clearAllSetupStepErrors()
       setSetupIntentPersonaId(personaId)
@@ -2815,6 +2997,11 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         applyPersonaProfileResponse(payload, { setup: nextSetup })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "setup_started"
+        })
       } catch (setupError: any) {
         setSetupStepError("persona", String(setupError?.message || errorMessage))
       } finally {
@@ -2827,6 +3014,8 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       buildSetupProfileUpdatePath,
       clearAllSetupStepErrors,
+      createSetupRunId,
+      emitSetupAnalyticsEvent,
       selectedPersonaId,
       setSetupHandoff,
       setSetupStepError
@@ -4062,13 +4251,26 @@ const SidepanelPersona = ({
   )
 
   const dismissSetupHandoff = React.useCallback(() => {
+    if (setupHandoff) {
+      void emitSetupAnalyticsEvent({
+        runId: setupHandoff.runId,
+        eventType: "handoff_dismissed"
+      })
+    }
     setSetupHandoff(null)
-  }, [])
+  }, [emitSetupAnalyticsEvent, setupHandoff])
 
   const openSetupHandoffTab = React.useCallback((tab: PersonaGardenTabKey) => {
+    if (setupHandoff) {
+      void emitSetupAnalyticsEvent({
+        runId: setupHandoff.runId,
+        eventType: "handoff_action_clicked",
+        actionTarget: tab
+      })
+    }
     setActiveTab(tab)
     setSetupHandoff(null)
-  }, [])
+  }, [emitSetupAnalyticsEvent, setupHandoff])
 
   const renderSetupHandoffCard = React.useCallback(
     (tab: PersonaGardenTabKey) => {
