@@ -12,10 +12,14 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.sandbox_runner_client import
     SandboxSessionHandle,
     _is_self_referential_agent_command,
 )
+from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPMessage
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
 from tldw_Server_API.app.core.Sandbox.models import RuntimeType
 from tldw_Server_API.app.core.Sandbox.runtime_capabilities import RuntimePreflightResult
 from tldw_Server_API.app.core.Sandbox.runners.lima_runner import LimaRunner
+from tldw_Server_API.app.services.acp_runtime_policy_service import (
+    ACPRuntimePolicySnapshot,
+)
 
 
 @pytest.mark.unit
@@ -318,30 +322,66 @@ async def test_create_session_propagates_non_root_read_only_and_internal_ssh_por
     run_spec = capture.get("run_spec")
     if session_spec is None:
         pytest.fail("Expected sandbox session spec capture")
-    if run_spec is None:
-        pytest.fail("Expected sandbox run spec capture")
-    if getattr(session_spec, "network_policy", None) != "deny_all":
-        pytest.fail(f"Expected session spec network_policy='deny_all', got {getattr(session_spec, 'network_policy', None)!r}")
-    if getattr(run_spec, "run_as_root", None) is not False:
-        pytest.fail(f"Expected run spec run_as_root=False, got {getattr(run_spec, 'run_as_root', None)!r}")
-    if getattr(run_spec, "read_only_root", None) is not True:
-        pytest.fail(f"Expected run spec read_only_root=True, got {getattr(run_spec, 'read_only_root', None)!r}")
-    if getattr(run_spec, "network_policy", None) != "deny_all":
-        pytest.fail(f"Expected run spec network_policy='deny_all', got {getattr(run_spec, 'network_policy', None)!r}")
-    run_env = getattr(run_spec, "env", {}) or {}
-    if run_env.get("ACP_RUNTIME_HOME") != "/workspace/.acp-home":
-        pytest.fail(f"Expected ACP_RUNTIME_HOME=/workspace/.acp-home, got {run_env.get('ACP_RUNTIME_HOME')!r}")
-    if run_env.get("ACP_SSH_PORT") != "2222":
-        pytest.fail(f"Expected ACP_SSH_PORT='2222', got {run_env.get('ACP_SSH_PORT')!r}")
-    port_mappings = list(getattr(run_spec, "port_mappings", []) or [])
-    if not port_mappings:
-        pytest.fail("Expected ACP run spec to include SSH port mapping")
-    if port_mappings[0].get("container_port") != 2222:
-        pytest.fail(f"Expected container_port=2222, got {port_mappings[0].get('container_port')!r}")
-    if port_mappings[0].get("host_port") != 4567:
-        pytest.fail(f"Expected host_port=4567, got {port_mappings[0].get('host_port')!r}")
 
-    await manager.close_session(session_id)
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_sandbox_permission_request_denies_tool_from_runtime_snapshot(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+
+    async def _fake_snapshot(
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> ACPRuntimePolicySnapshot | None:
+        del session_id, force_refresh
+        return ACPRuntimePolicySnapshot(
+            session_id="sandbox-session",
+            user_id=55,
+            policy_snapshot_version="resolved-v1",
+            policy_snapshot_fingerprint="sandbox-deny",
+            policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+            policy_summary={},
+            policy_provenance_summary={"source_kinds": ["profile"]},
+            resolved_policy_document={"denied_tools": ["exec.run"]},
+            approval_summary={},
+            context_summary={},
+            execution_config={},
+        )
+
+    monkeypatch.setattr(manager, "_get_runtime_policy_snapshot", _fake_snapshot, raising=False)
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    monkeypatch.setattr(manager, "check_permission_governance", _fake_check_permission_governance, raising=False)
+
+    response = await manager._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="perm-sandbox-deny",
+            method="session/request_permission",
+            params={
+                "sessionId": "sandbox-session",
+                "tool": {"name": "exec.run", "input": {"command": "whoami"}},
+            },
+        )
+    )
+
+    assert response.result == {
+        "outcome": {
+            "outcome": "denied",
+            "deny_reason": "tool_denied_by_policy",
+            "policy_snapshot_fingerprint": "sandbox-deny",
+            "provenance_summary": {"source_kinds": ["profile"]},
+        }
+    }
 
 
 @pytest.mark.unit

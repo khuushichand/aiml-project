@@ -32,6 +32,11 @@ const pendingPermissions: ACPPendingPermission[] = [
     tool_name: "fs.writeTextFile",
     tool_arguments: { path: "/tmp/demo.txt" },
     tier: "batch",
+    approval_requirement: "approval_required",
+    governance_reason: "policy_approval_required",
+    provenance_summary: { source_kinds: ["capability_mapping"] },
+    runtime_narrowing_reason: "workspace_trust_required",
+    policy_snapshot_fingerprint: "snapshot-1234567890",
     timeout_seconds: 30,
     requestedAt: new Date(),
   },
@@ -81,5 +86,25 @@ describe("ACPPermissionModal", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Deny" }))
     expect(denyPermission).toHaveBeenCalledWith("req-1")
+  })
+
+  it("shows compact policy metadata and expandable provenance details", () => {
+    render(
+      <ACPPermissionModal
+        pendingPermissions={pendingPermissions}
+        approvePermission={vi.fn()}
+        denyPermission={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Policy Snapshot")).toBeInTheDocument()
+    expect(screen.getByText("approval_required")).toBeInTheDocument()
+    expect(screen.getByText("policy_approval_required")).toBeInTheDocument()
+    expect(screen.getByText("workspace_trust_required")).toBeInTheDocument()
+    expect(screen.getByText("snapshot-123")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Show details" }))
+
+    expect(screen.getByText(/capability_mapping/)).toBeInTheDocument()
   })
 })

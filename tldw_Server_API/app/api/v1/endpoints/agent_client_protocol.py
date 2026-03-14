@@ -1022,6 +1022,32 @@ async def _handle_client_message(
             })
             return
 
+        pending_metadata: dict[str, Any] = {}
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            registry_map = getattr(client, "_ws_registry", None)
+            if isinstance(registry_map, dict):
+                registry = registry_map.get(session_id)
+                pending_map = getattr(registry, "pending_permissions", None)
+                if isinstance(pending_map, dict):
+                    pending = pending_map.get(request_id)
+                    if pending is not None:
+                        pending_metadata = {
+                            "tool_name": getattr(pending, "tool_name", None),
+                            "approval_requirement": getattr(pending, "approval_requirement", None),
+                            "governance_reason": getattr(pending, "governance_reason", None),
+                            "deny_reason": getattr(pending, "deny_reason", None),
+                            "runtime_narrowing_reason": getattr(
+                                pending,
+                                "runtime_narrowing_reason",
+                                None,
+                            ),
+                            "policy_snapshot_fingerprint": getattr(
+                                pending,
+                                "policy_snapshot_fingerprint",
+                                None,
+                            ),
+                        }
+
         success = await client.respond_to_permission(
             session_id,
             request_id,
@@ -1045,6 +1071,19 @@ async def _handle_client_message(
                     if isinstance(sess_pending, dict) and request_id in sess_pending:
                         sess_pending.pop(request_id, None)
                         success = True
+        if success and user_id is not None:
+            audit_metadata = {
+                "approved": bool(approved),
+                "request_id": str(request_id),
+                "batch_approve_tier": batch_approve_tier,
+            }
+            audit_metadata.update({k: v for k, v in pending_metadata.items() if v is not None})
+            _acp_record_audit_event(
+                action="permission_response",
+                user_id=int(user_id),
+                session_id=session_id,
+                metadata=audit_metadata,
+            )
         if not success:
             await stream.send_json({
                 "type": "error",
@@ -1713,9 +1752,10 @@ async def acp_session_new(
         resolved_scope_snapshot_id = resolved_scope_snapshot_id or sandbox_meta.get("scope_snapshot_id")
 
     # Persist session metadata and emit SSE event
+    persisted_record = None
     try:
         store = await get_acp_session_store()
-        await store.register_session(
+        persisted_record = await store.register_session(
             session_id=session_id,
             user_id=int(user.id),
             agent_type=resolved_agent_type or "custom",
@@ -1754,6 +1794,12 @@ async def acp_session_new(
         workspace_id=resolved_workspace_id,
         workspace_group_id=resolved_workspace_group_id,
         scope_snapshot_id=resolved_scope_snapshot_id,
+        policy_snapshot_version=getattr(persisted_record, "policy_snapshot_version", None),
+        policy_snapshot_fingerprint=getattr(persisted_record, "policy_snapshot_fingerprint", None),
+        policy_snapshot_refreshed_at=getattr(persisted_record, "policy_snapshot_refreshed_at", None),
+        policy_summary=getattr(persisted_record, "policy_summary", None),
+        policy_provenance_summary=getattr(persisted_record, "policy_provenance_summary", None),
+        policy_refresh_error=getattr(persisted_record, "policy_refresh_error", None),
     )
 
 

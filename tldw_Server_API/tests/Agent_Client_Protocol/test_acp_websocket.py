@@ -23,6 +23,10 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     PendingPermission,
     SessionWebSocketRegistry,
 )
+from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPMessage
+from tldw_Server_API.app.services.acp_runtime_policy_service import (
+    ACPRuntimePolicySnapshot,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -852,3 +856,74 @@ class TestACPRunnerClientPermissions:
         assert client._determine_permission_tier("fs.write") == "batch"
         assert client._determine_permission_tier("git.commit") == "batch"
         assert client._determine_permission_tier("modify_file") == "batch"
+
+    @pytest.mark.asyncio
+    async def test_permission_request_message_includes_runtime_policy_metadata(self):
+        mock_config = MagicMock()
+        mock_config.command = "echo"
+        mock_config.args = []
+        mock_config.env = {}
+        mock_config.cwd = None
+        mock_config.startup_timeout_sec = 10
+
+        client = ACPRunnerClient(mock_config)
+        session_id = "session-policy-message"
+
+        async def _send(_payload: dict[str, Any]) -> None:
+            return None
+
+        registry = SessionWebSocketRegistry(session_id=session_id)
+        registry.websockets.add(_send)
+        client._ws_registry[session_id] = registry
+
+        async def _fake_snapshot(
+            sid: str,
+            *,
+            force_refresh: bool = False,
+        ) -> ACPRuntimePolicySnapshot | None:
+            del sid, force_refresh
+            return ACPRuntimePolicySnapshot(
+                session_id=session_id,
+                user_id=7,
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_fingerprint="snapshot-message",
+                policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+                policy_summary={"approval_mode": "require_approval"},
+                policy_provenance_summary={"source_kinds": ["profile"]},
+                resolved_policy_document={
+                    "allowed_tools": ["web.search"],
+                    "approval_mode": "require_approval",
+                },
+                approval_summary={"mode": "require_approval"},
+                context_summary={},
+                execution_config={},
+            )
+
+        client._get_runtime_policy_snapshot = _fake_snapshot  # type: ignore[attr-defined]
+
+        prompts: list[dict[str, Any]] = []
+
+        async def _fake_broadcast(sid: str, message: dict[str, Any]) -> None:
+            if message.get("type") == "permission_request":
+                prompts.append(message)
+                await client.respond_to_permission(sid, str(message["request_id"]), True)
+
+        client._broadcast_to_session = _fake_broadcast  # type: ignore[method-assign]
+
+        response = await client._handle_request(
+            ACPMessage(
+                jsonrpc="2.0",
+                id="perm-message-1",
+                method="session/request_permission",
+                params={
+                    "sessionId": session_id,
+                    "tool": {"name": "web.search", "input": {"query": "opa"}},
+                },
+            )
+        )
+
+        assert response.result == {"outcome": {"outcome": "approved"}}
+        assert len(prompts) == 1
+        assert prompts[0]["approval_requirement"] == "approval_required"
+        assert prompts[0]["provenance_summary"] == {"source_kinds": ["profile"]}
+        assert prompts[0]["policy_snapshot_fingerprint"] == "snapshot-message"

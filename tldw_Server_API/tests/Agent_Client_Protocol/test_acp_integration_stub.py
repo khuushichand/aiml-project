@@ -8,12 +8,18 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
+from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import ACPRunnerClient
+from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPMessage
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import (
     ACPStdioClient,
     ACPResponseError,
+)
+from tldw_Server_API.app.services.acp_runtime_policy_service import (
+    ACPRuntimePolicySnapshot,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -119,3 +125,216 @@ async def test_client_is_running(client):
     assert client.is_running
     await client.close()
     assert not client.is_running
+
+
+def _new_runner_client_for_permissions() -> ACPRunnerClient:
+    cfg = SimpleNamespace(
+        command="echo",
+        args=[],
+        env={},
+        cwd=None,
+        startup_timeout_sec=0,
+    )
+    return ACPRunnerClient(cfg)
+
+
+@pytest.mark.unit
+async def test_runtime_policy_refresh_applies_updated_permissions() -> None:
+    client = _new_runner_client_for_permissions()
+    session_id = "session-refresh-policy"
+    policy_state = {"allowed_tools": ["web.search"], "fingerprint": "snap-allow"}
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    client.check_permission_governance = _fake_check_permission_governance  # type: ignore[assignment]
+
+    class _Store:
+        def __init__(self) -> None:
+            self.record = SimpleNamespace(
+                session_id=session_id,
+                user_id=7,
+                policy_snapshot_fingerprint=None,
+                policy_snapshot_version=None,
+                policy_snapshot_refreshed_at=None,
+                policy_summary=None,
+                policy_provenance_summary=None,
+                policy_refresh_error=None,
+            )
+
+        async def get_session(self, _session_id: str):
+            return self.record
+
+        async def update_policy_snapshot_state(self, _session_id: str, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self.record, key, value)
+            return self.record
+
+    class _RuntimePolicyService:
+        async def build_snapshot(self, **kwargs):
+            del kwargs
+            return ACPRuntimePolicySnapshot(
+                session_id=session_id,
+                user_id=7,
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_fingerprint=policy_state["fingerprint"],
+                policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+                policy_summary={"allowed_tool_count": len(policy_state["allowed_tools"])},
+                policy_provenance_summary={"source_kinds": ["capability_mapping"]},
+                resolved_policy_document={"allowed_tools": list(policy_state["allowed_tools"])},
+                approval_summary={"mode": "allow"},
+                context_summary={},
+                execution_config={},
+            )
+
+        async def persist_snapshot(self, *, session_store, snapshot):
+            return await session_store.update_policy_snapshot_state(
+                snapshot.session_id,
+                policy_snapshot_version=snapshot.policy_snapshot_version,
+                policy_snapshot_fingerprint=snapshot.policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at=snapshot.policy_snapshot_refreshed_at,
+                policy_summary=snapshot.policy_summary,
+                policy_provenance_summary=snapshot.policy_provenance_summary,
+                policy_refresh_error=snapshot.refresh_error,
+            )
+
+    store = _Store()
+
+    async def _get_store():
+        return store
+
+    client._runtime_policy_service = _RuntimePolicyService()  # type: ignore[assignment]
+    client._get_acp_session_store = _get_store  # type: ignore[assignment]
+
+    first = await client._get_runtime_policy_snapshot(session_id, force_refresh=True)
+    assert first is not None
+    assert first.policy_snapshot_fingerprint == "snap-allow"
+
+    allowed_response = await client._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="perm-allow",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert allowed_response.result == {"outcome": {"outcome": "approved"}}
+
+    policy_state["allowed_tools"] = ["fs.read"]
+    policy_state["fingerprint"] = "snap-updated"
+
+    refreshed = await client._get_runtime_policy_snapshot(session_id, force_refresh=True)
+    assert refreshed is not None
+    assert refreshed.policy_snapshot_fingerprint == "snap-updated"
+
+    denied_response = await client._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="perm-deny",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert denied_response.result == {
+        "outcome": {
+            "outcome": "denied",
+            "deny_reason": "tool_not_allowed_by_policy",
+            "policy_snapshot_fingerprint": "snap-updated",
+            "provenance_summary": {"source_kinds": ["capability_mapping"]},
+        }
+    }
+
+
+@pytest.mark.unit
+async def test_failed_runtime_policy_refresh_fails_closed() -> None:
+    client = _new_runner_client_for_permissions()
+    session_id = "session-refresh-failure"
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    client.check_permission_governance = _fake_check_permission_governance  # type: ignore[assignment]
+
+    class _Store:
+        def __init__(self) -> None:
+            self.record = SimpleNamespace(
+                session_id=session_id,
+                user_id=7,
+                policy_snapshot_fingerprint="stale-snapshot",
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_refreshed_at="2026-03-14T11:59:00+00:00",
+                policy_summary={"allowed_tool_count": 1},
+                policy_provenance_summary={"source_kinds": ["profile"]},
+                policy_refresh_error=None,
+            )
+
+        async def get_session(self, _session_id: str):
+            return self.record
+
+        async def update_policy_snapshot_state(self, _session_id: str, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self.record, key, value)
+            return self.record
+
+    class _RuntimePolicyService:
+        async def build_snapshot(self, **kwargs):
+            del kwargs
+            raise RuntimeError("policy_refresh_failed")
+
+        async def persist_snapshot(self, *, session_store, snapshot):
+            del session_store, snapshot
+            raise AssertionError("persist_snapshot should not run on refresh failure")
+
+    store = _Store()
+
+    async def _get_store():
+        return store
+
+    client._runtime_policy_service = _RuntimePolicyService()  # type: ignore[assignment]
+    client._get_acp_session_store = _get_store  # type: ignore[assignment]
+    client._runtime_policy_snapshots[session_id] = ACPRuntimePolicySnapshot(
+        session_id=session_id,
+        user_id=7,
+        policy_snapshot_version="resolved-v1",
+        policy_snapshot_fingerprint="stale-snapshot",
+        policy_snapshot_refreshed_at="2026-03-14T11:59:00+00:00",
+        policy_summary={"allowed_tool_count": 1},
+        policy_provenance_summary={"source_kinds": ["profile"]},
+        resolved_policy_document={"allowed_tools": ["exec.run"]},
+        approval_summary={"mode": "allow"},
+        context_summary={},
+        execution_config={},
+    )
+
+    refreshed = await client._get_runtime_policy_snapshot(session_id, force_refresh=True)
+    assert refreshed is None
+    assert store.record.policy_snapshot_fingerprint is None
+    assert store.record.policy_refresh_error == "policy_refresh_failed"
+
+    response = await client._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="perm-fail-closed",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "exec.run", "input": {"command": "whoami"}},
+            },
+        )
+    )
+    assert response.result == {
+        "outcome": {
+            "outcome": "denied",
+            "deny_reason": "policy_snapshot_unavailable",
+            "policy_snapshot_fingerprint": None,
+            "provenance_summary": {},
+        }
+    }

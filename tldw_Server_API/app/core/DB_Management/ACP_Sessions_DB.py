@@ -431,30 +431,72 @@ class ACPSessionsDB:
     ) -> tuple[list[dict[str, Any]], int]:
         """List sessions with optional filters. Returns (rows, total_count)."""
         conn = self._get_conn()
-        conditions: list[str] = []
         params: list[Any] = []
 
-        if user_id is not None:
-            conditions.append("user_id = ?")
-            params.append(user_id)
-        if status is not None:
-            conditions.append("status = ?")
-            params.append(status)
-        if agent_type is not None:
-            conditions.append("agent_type = ?")
-            params.append(agent_type)
+        query_key = (user_id is not None, status is not None, agent_type is not None)
+        match query_key:
+            case (False, False, False):
+                count_query = "SELECT COUNT(*) FROM sessions"
+                rows_query = "SELECT * FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            case (True, False, False):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE user_id = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE user_id = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.append(user_id)
+            case (False, True, False):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE status = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE status = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.append(status)
+            case (False, False, True):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE agent_type = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE agent_type = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.append(agent_type)
+            case (True, True, False):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE user_id = ? AND status = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE user_id = ? AND status = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.extend([user_id, status])
+            case (True, False, True):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE user_id = ? AND agent_type = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE user_id = ? AND agent_type = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.extend([user_id, agent_type])
+            case (False, True, True):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE status = ? AND agent_type = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE status = ? AND agent_type = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.extend([status, agent_type])
+            case _:
+                count_query = (
+                    "SELECT COUNT(*) FROM sessions "
+                    "WHERE user_id = ? AND status = ? AND agent_type = ?"
+                )
+                rows_query = (
+                    "SELECT * FROM sessions "
+                    "WHERE user_id = ? AND status = ? AND agent_type = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.extend([user_id, status, agent_type])
 
-        where = " AND ".join(conditions) if conditions else "1=1"
-
-        # Total count
-        count_row = conn.execute(
-            f"SELECT COUNT(*) FROM sessions WHERE {where}", params
-        ).fetchone()
+        count_row = conn.execute(count_query, params).fetchone()
         total = count_row[0] if count_row else 0
 
-        # Paginated results
         rows = conn.execute(
-            f"SELECT * FROM sessions WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            rows_query,
             params + [limit, offset],
         ).fetchall()
 

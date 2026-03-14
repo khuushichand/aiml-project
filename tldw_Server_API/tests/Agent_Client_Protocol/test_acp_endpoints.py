@@ -141,6 +141,11 @@ def test_acp_session_new_success(client_user_only, stub_runner_client, tmp_path)
     payload = resp.json()
     assert payload["session_id"] == "session-123"
     assert payload["agent_capabilities"] == {"promptCapabilities": {"image": False}}
+    assert payload["policy_snapshot_version"] is None
+    assert payload["policy_snapshot_fingerprint"] is None
+    assert payload["policy_snapshot_refreshed_at"] is None
+    assert payload["policy_summary"] is None
+    assert payload["policy_provenance_summary"] is None
     assert stub_runner_client.create_session_calls
     assert isinstance(stub_runner_client.create_session_calls[0]["user_id"], int)
 

@@ -73,11 +73,14 @@ class ACPRuntimePolicyService:
         policy_resolver: Any | None = None,
         mcp_hub_service: Any | None = None,
     ) -> None:
-        if policy_resolver is None:
-            repo = McpHubRepo(get_db_pool())
-            policy_resolver = McpHubPolicyResolver(repo)
         self.policy_resolver = policy_resolver
         self.mcp_hub_service = mcp_hub_service
+
+    async def _get_policy_resolver(self) -> Any:
+        if self.policy_resolver is None:
+            repo = McpHubRepo(await get_db_pool())
+            self.policy_resolver = McpHubPolicyResolver(repo)
+        return self.policy_resolver
 
     @staticmethod
     def _parse_acp_profile(acp_profile: Any) -> tuple[int | None, dict[str, Any], dict[str, Any]]:
@@ -188,7 +191,8 @@ class ACPRuntimePolicyService:
             acp_profile=acp_profile,
             extra_metadata=extra_metadata,
         )
-        effective_policy = await self.policy_resolver.resolve_for_context(
+        policy_resolver = await self._get_policy_resolver()
+        effective_policy = await policy_resolver.resolve_for_context(
             user_id=user_id,
             metadata=metadata,
         )

@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     PERMISSION_TIMEOUT_SECONDS,
     PendingPermission,
     SessionWebSocketRegistry,
+    _resolve_runtime_permission_outcome,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.permission_tiers import determine_permission_tier
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPMessage, ACPResponseError
@@ -34,6 +35,10 @@ from tldw_Server_API.app.core.Sandbox.runtime_capabilities import RuntimePreflig
 from tldw_Server_API.app.core.Sandbox.runners.lima_runner import LimaRunner
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.testing import is_truthy
+from tldw_Server_API.app.services.acp_runtime_policy_service import (
+    ACPRuntimePolicyService,
+    ACPRuntimePolicySnapshot,
+)
 
 _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS = (
     ACPResponseError,
@@ -95,6 +100,10 @@ class ACPSandboxRunnerManager:
         self._ssh_ports_in_use: set[int] = set()
         self._ssh_ports_lock = asyncio.Lock()
         self._governance = ACPGovernanceCoordinator()
+        self._runtime_policy_service = ACPRuntimePolicyService()
+        self._runtime_policy_snapshots: dict[str, ACPRuntimePolicySnapshot] = {}
+        self._runtime_policy_refresh_tasks: dict[str, asyncio.Task[ACPRuntimePolicySnapshot | None]] = {}
+        self._runtime_policy_refresh_lock = asyncio.Lock()
 
     def _control_record_from_handle(self, sess: SandboxSessionHandle) -> dict[str, Any]:
         return {
@@ -360,6 +369,94 @@ class ACPSandboxRunnerManager:
             rollout_mode=rollout_mode,
         )
         return payload
+
+    async def _get_acp_session_store(self) -> Any:
+        from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
+
+        return await get_acp_session_store()
+
+    async def _refresh_runtime_policy_snapshot(
+        self,
+        session_id: str,
+        *,
+        session_store: Any | None = None,
+        session_record: Any | None = None,
+    ) -> ACPRuntimePolicySnapshot | None:
+        async def _build() -> ACPRuntimePolicySnapshot | None:
+            store = session_store or await self._get_acp_session_store()
+            record = session_record or await store.get_session(session_id)
+            if record is None:
+                return None
+            try:
+                snapshot = await self._runtime_policy_service.build_snapshot(
+                    session_record=record,
+                    user_id=int(getattr(record, "user_id")),
+                )
+                await self._runtime_policy_service.persist_snapshot(
+                    session_store=store,
+                    snapshot=snapshot,
+                )
+                self._runtime_policy_snapshots[str(session_id)] = snapshot
+                return snapshot
+            except Exception as exc:
+                logger.warning("ACP sandbox runtime policy refresh failed for session {}: {}", session_id, exc)
+                self._runtime_policy_snapshots.pop(str(session_id), None)
+                try:
+                    await store.update_policy_snapshot_state(
+                        session_id,
+                        policy_snapshot_version=None,
+                        policy_snapshot_fingerprint=None,
+                        policy_snapshot_refreshed_at=None,
+                        policy_summary=None,
+                        policy_provenance_summary=None,
+                        policy_refresh_error=str(exc),
+                    )
+                except Exception as persist_exc:
+                    logger.warning(
+                        "Failed to persist ACP sandbox runtime policy refresh error for session {}: {}",
+                        session_id,
+                        persist_exc,
+                    )
+                return None
+
+        async with self._runtime_policy_refresh_lock:
+            refresh_task = self._runtime_policy_refresh_tasks.get(str(session_id))
+            if refresh_task is None or refresh_task.done():
+                refresh_task = asyncio.create_task(_build())
+                self._runtime_policy_refresh_tasks[str(session_id)] = refresh_task
+        try:
+            return await refresh_task
+        finally:
+            async with self._runtime_policy_refresh_lock:
+                current = self._runtime_policy_refresh_tasks.get(str(session_id))
+                if current is refresh_task and refresh_task.done():
+                    self._runtime_policy_refresh_tasks.pop(str(session_id), None)
+
+    async def _get_runtime_policy_snapshot(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> ACPRuntimePolicySnapshot | None:
+        store = await self._get_acp_session_store()
+        record = await store.get_session(session_id)
+        if record is None:
+            return None
+
+        cached = self._runtime_policy_snapshots.get(str(session_id))
+        persisted_fingerprint = getattr(record, "policy_snapshot_fingerprint", None)
+        if (
+            not force_refresh
+            and cached is not None
+            and (not persisted_fingerprint or persisted_fingerprint == cached.policy_snapshot_fingerprint)
+        ):
+            return cached
+
+        return await self._refresh_runtime_policy_snapshot(
+            session_id,
+            session_store=store,
+            session_record=record,
+        )
 
     async def start(self) -> None:
         return
@@ -904,23 +1001,22 @@ class ACPSandboxRunnerManager:
         tool_arguments = params.get("tool", {}).get("input", {})
 
         tier = self._determine_permission_tier(tool_name)
-
-        registry = self._ws_registry.get(session_id)
-        batch_tier_approved = bool(registry and tier in registry.batch_approved_tiers)
+        runtime_snapshot = await self._get_runtime_policy_snapshot(session_id)
+        runtime_outcome = _resolve_runtime_permission_outcome(runtime_snapshot, tool_name)
         governance = await self.check_permission_governance(
             session_id,
             tool_name,
             tool_arguments,
             tier=tier,
         )
-        approval_outcome = self._governance.resolve_permission_outcome(
-            tier=tier,
-            batch_tier_approved=batch_tier_approved,
-            governance=governance,
-        )
 
-        if approval_outcome == "deny":
-            outcome_payload: dict[str, Any] = {"outcome": "denied"}
+        if runtime_outcome["action"] == "deny":
+            outcome_payload: dict[str, Any] = {
+                "outcome": "denied",
+                "deny_reason": runtime_outcome.get("deny_reason"),
+                "policy_snapshot_fingerprint": runtime_outcome.get("policy_snapshot_fingerprint"),
+                "provenance_summary": runtime_outcome.get("provenance_summary"),
+            }
             if isinstance(governance, dict) and governance:
                 outcome_payload["governance"] = governance
             return ACPMessage(
@@ -929,11 +1025,8 @@ class ACPSandboxRunnerManager:
                 result={"outcome": outcome_payload},
             )
 
-        if approval_outcome == "approve":
-            if batch_tier_approved:
-                logger.info("Auto-approving {} (tier {} is batch-approved)", tool_name, tier)
-            else:
-                logger.debug("Auto-approving {} (auto tier)", tool_name)
+        if runtime_outcome["action"] == "approve":
+            logger.debug("Auto-approving {} (runtime policy)", tool_name)
             return ACPMessage(
                 jsonrpc="2.0",
                 id=msg.id,
@@ -955,6 +1048,12 @@ class ACPSandboxRunnerManager:
             tool_name=tool_name,
             tool_arguments=tool_arguments,
             acp_message_id=msg.id,
+            approval_requirement=runtime_outcome.get("approval_requirement"),
+            governance_reason=runtime_outcome.get("governance_reason"),
+            deny_reason=runtime_outcome.get("deny_reason"),
+            provenance_summary=dict(runtime_outcome.get("provenance_summary") or {}),
+            runtime_narrowing_reason=runtime_outcome.get("runtime_narrowing_reason"),
+            policy_snapshot_fingerprint=runtime_outcome.get("policy_snapshot_fingerprint"),
             future=asyncio.get_running_loop().create_future(),
         )
 
@@ -970,6 +1069,11 @@ class ACPSandboxRunnerManager:
             "tool_name": tool_name,
             "tool_arguments": tool_arguments,
             "tier": tier,
+            "approval_requirement": runtime_outcome.get("approval_requirement"),
+            "governance_reason": runtime_outcome.get("governance_reason"),
+            "provenance_summary": runtime_outcome.get("provenance_summary"),
+            "runtime_narrowing_reason": runtime_outcome.get("runtime_narrowing_reason"),
+            "policy_snapshot_fingerprint": runtime_outcome.get("policy_snapshot_fingerprint"),
             "timeout_seconds": PERMISSION_TIMEOUT_SECONDS,
         }
         if isinstance(governance, dict) and governance:
