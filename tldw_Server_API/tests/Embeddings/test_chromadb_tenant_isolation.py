@@ -53,6 +53,13 @@ def _random_embeddings(n: int, dim: int = 8) -> list[list[float]]:
     return (vecs / norms).tolist()
 
 
+@pytest.fixture(autouse=True)
+def _clear_stub_clients():
+    yield
+    from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
+    cdl._TEST_STUB_CLIENTS.clear()
+
+
 @pytest.fixture()
 def isolated_base_dir(tmp_path):
     """Provide a temporary base directory for ChromaDB tenant tests."""
@@ -318,6 +325,12 @@ class TestUserIdValidation:
             "/etc/passwd",
             "user/../other",
             "user\x00evil",
+            "..\\escape",
+            "user/slash",
+            "user\\back",
+            "user\nevil",
+            "user\revil",
+            "",
         ],
     )
     def test_chromadb_manager_rejects_dangerous_user_id(self, bad_id, isolated_base_dir):
