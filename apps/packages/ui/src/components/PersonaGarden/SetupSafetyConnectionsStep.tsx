@@ -126,6 +126,12 @@ export const SetupSafetyConnectionsStep: React.FC<
     }
     return null
   }, [connectionAuthType, connectionMode, connectionSecret])
+  const connectionRetryHint =
+    error &&
+    connectionMode === "create" &&
+    /connection/i.test(error)
+      ? "Fix the connection details below and try again, or skip external connections for now."
+      : null
 
   const canContinue =
     confirmationMode !== null &&
@@ -183,7 +189,10 @@ export const SetupSafetyConnectionsStep: React.FC<
       </div>
       {error ? (
         <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-          {error}
+          <div>{error}</div>
+          {connectionRetryHint ? (
+            <div className="mt-1 text-xs text-red-100">{connectionRetryHint}</div>
+          ) : null}
         </div>
       ) : null}
 

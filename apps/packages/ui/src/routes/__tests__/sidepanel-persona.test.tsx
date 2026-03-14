@@ -631,6 +631,199 @@ describe("SidepanelPersona", () => {
     )
   })
 
+  it("keeps the safety step in place with retry guidance when setup connection creation fails", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+
+    let profileVersion = 2
+    let currentSetup = {
+      status: "in_progress",
+      current_step: "safety",
+      completed_steps: ["persona", "voice", "commands"]
+    }
+    let currentVoiceDefaults = {
+      confirmation_mode: "destructive_only"
+    }
+
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = init?.method || "GET"
+      if (
+        path.includes("/persona/profiles/garden-helper/connections") &&
+        method === "POST"
+      ) {
+        return Promise.resolve({
+          ok: false,
+          error: "Failed to create setup connection",
+          json: async () => ({})
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        if (method === "PATCH") {
+          profileVersion += 1
+          currentVoiceDefaults = {
+            ...currentVoiceDefaults,
+            ...(init?.body?.voice_defaults || {})
+          }
+          currentSetup = {
+            ...currentSetup,
+            ...(init?.body?.setup || {})
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: "garden-helper",
+              version: profileVersion,
+              voice_defaults: currentVoiceDefaults,
+              setup: currentSetup,
+              use_persona_state_context_default: true
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: profileVersion,
+            voice_defaults: currentVoiceDefaults,
+            setup: currentSetup,
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("safety")
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask for destructive actions" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add one connection now" }))
+    fireEvent.change(screen.getByLabelText("Connection name"), {
+      target: { value: "Slack Alerts" }
+    })
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://hooks.example.com/incoming" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save safety and connection" }))
+
+    expect(await screen.findByText("Failed to create setup connection")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Fix the connection details below and try again, or skip external connections for now."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("safety")
+
+    fireEvent.click(screen.getByRole("button", { name: "No external connections for now" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save safety choices" }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("test")
+    })
+  })
+
+  it("renders a local live-send failure outcome during the setup test step", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=live"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = init?.method || "GET"
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/sessions?")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path === "/api/v1/persona/session") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-setup-live",
+            persona: { id: "garden-helper" }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions/sess-setup-live")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ preferences: {} })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: 2,
+            voice_defaults: {
+              confirmation_mode: "destructive_only"
+            },
+            setup: {
+              status: "in_progress",
+              current_step: "test",
+              completed_steps: ["persona", "voice", "commands", "safety"]
+            },
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("test")
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect live session" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    await screen.findByPlaceholderText("Try a live message")
+
+    ws.send.mockImplementation((payload: string) => {
+      const parsed = JSON.parse(String(payload))
+      if (parsed.type === "user_message") {
+        throw new Error("Socket send failed")
+      }
+    })
+
+    fireEvent.change(screen.getByPlaceholderText("Try a live message"), {
+      target: { value: "summarize my assistant setup" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Send live test" }))
+
+    expect(await screen.findByText("Socket send failed")).toBeInTheDocument()
+    expect(
+      screen.getByText("Try sending the live test again or reconnect the live session.")
+    ).toBeInTheDocument()
+  })
+
   it("renders a dedicated companion conversation mode", () => {
     render(<SidepanelPersona mode="companion" />)
 

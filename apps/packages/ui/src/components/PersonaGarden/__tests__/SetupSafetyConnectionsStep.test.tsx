@@ -221,4 +221,25 @@ describe("SetupSafetyConnectionsStep", () => {
       connectionMode: "none"
     })
   })
+
+  it("shows connection-specific retry guidance after a connection creation failure", () => {
+    render(
+      <SetupSafetyConnectionsStep
+        saving={false}
+        error="Failed to create setup connection"
+        currentConfirmationMode="destructive_only"
+        onContinue={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask for destructive actions" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add one connection now" }))
+
+    expect(screen.getByText("Failed to create setup connection")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Fix the connection details below and try again, or skip external connections for now."
+      )
+    ).toBeInTheDocument()
+  })
 })

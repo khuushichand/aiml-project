@@ -27,11 +27,17 @@ export type SetupTestOutcome =
       text: string
       responseText: string
     }
+  | {
+      kind: "live_failure"
+      text: string
+      message: string
+    }
 
 type SetupTestAndFinishStepProps = {
   saving: boolean
   dryRunLoading: boolean
   liveConnected: boolean
+  error?: string | null
   outcome: SetupTestOutcome | null
   onRunDryRun: (heardText: string) => void
   onConnectLive: () => void
@@ -44,6 +50,7 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
   saving,
   dryRunLoading,
   liveConnected,
+  error = null,
   outcome,
   onRunDryRun,
   onConnectLive,
@@ -73,6 +80,11 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
           finish with a dry-run or from a live session response.
         </div>
       </div>
+      {error ? (
+        <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+          {error}
+        </div>
+      ) : null}
 
       <div className="space-y-2 rounded-lg border border-border bg-surface2 p-3">
         <div className="text-sm font-medium text-text">Dry-run test</div>
@@ -84,7 +96,10 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
         />
         {dryRunOutcome?.kind === "dry_run_failure" ? (
           <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-            {dryRunOutcome.message}
+            <div>{dryRunOutcome.message}</div>
+            <div className="mt-1 text-red-100/90">
+              Retry the dry-run test or continue with a live session instead.
+            </div>
           </div>
         ) : null}
         {dryRunOutcome?.kind === "dry_run_match" ? (
@@ -126,7 +141,8 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
           <>
             {liveOutcome?.kind === "live_unavailable" ? (
               <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-                Live session unavailable until you connect.
+                Live session unavailable until you connect. Connect or reconnect the
+                live session to keep going.
               </div>
             ) : null}
             <button
@@ -135,7 +151,9 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
               disabled={saving}
               onClick={onConnectLive}
             >
-              Connect live session
+              {liveOutcome?.kind === "live_unavailable"
+                ? "Retry live connection"
+                : "Connect live session"}
             </button>
           </>
         ) : (
@@ -154,6 +172,14 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
             >
               Send live test
             </button>
+            {liveOutcome?.kind === "live_failure" ? (
+              <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                <div>{liveOutcome.message}</div>
+                <div className="mt-1 text-red-100/90">
+                  Try sending the live test again or reconnect the live session.
+                </div>
+              </div>
+            ) : null}
             {liveOutcome?.kind === "live_sent" ? (
               <div className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
                 Live test sent: {liveOutcome.text}

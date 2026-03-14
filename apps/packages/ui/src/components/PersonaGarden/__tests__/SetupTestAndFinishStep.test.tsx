@@ -165,4 +165,49 @@ describe("SetupTestAndFinishStep", () => {
     expect(screen.getByText(/Live session responded/i)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Finish with live session" })).toBeInTheDocument()
   })
+
+  it("renders a live-send failure outcome with retry guidance", () => {
+    render(
+      <SetupTestAndFinishStep
+        saving={false}
+        dryRunLoading={false}
+        liveConnected
+        outcome={{
+          kind: "live_failure",
+          text: "summarize my assistant setup",
+          message: "Socket send failed"
+        }}
+        onRunDryRun={vi.fn()}
+        onConnectLive={vi.fn()}
+        onSendLive={vi.fn()}
+        onFinishWithDryRun={vi.fn()}
+        onFinishWithLiveSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Socket send failed")).toBeInTheDocument()
+    expect(
+      screen.getByText("Try sending the live test again or reconnect the live session.")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Send live test" })).toBeInTheDocument()
+  })
+
+  it("renders a local test-step error banner separately from structured outcomes", () => {
+    render(
+      <SetupTestAndFinishStep
+        saving={false}
+        dryRunLoading={false}
+        liveConnected={false}
+        error="Failed to finish assistant setup"
+        outcome={null}
+        onRunDryRun={vi.fn()}
+        onConnectLive={vi.fn()}
+        onSendLive={vi.fn()}
+        onFinishWithDryRun={vi.fn()}
+        onFinishWithLiveSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Failed to finish assistant setup")).toBeInTheDocument()
+  })
 })

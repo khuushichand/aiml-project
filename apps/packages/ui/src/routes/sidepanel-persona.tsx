@@ -866,7 +866,9 @@ const SidepanelPersona = ({
     setSetupStepErrors({})
   }, [])
   const currentSetupWizardError =
-    personaSetupWizard.currentStep === "commands" || personaSetupWizard.currentStep === "safety"
+    personaSetupWizard.currentStep === "commands" ||
+    personaSetupWizard.currentStep === "safety" ||
+    personaSetupWizard.currentStep === "test"
       ? null
       : setupStepErrors[personaSetupWizard.currentStep] || null
 
@@ -2637,6 +2639,7 @@ const SidepanelPersona = ({
       const normalizedHeardText = String(heardText || "").trim()
       if (!personaId || !normalizedHeardText) return
       setSetupWizardDryRunLoading(true)
+      clearSetupStepError("test")
       setSetupTestOutcome(null)
       try {
         const response = await tldwClient.fetchWithAuth(
@@ -2680,7 +2683,7 @@ const SidepanelPersona = ({
         setSetupWizardDryRunLoading(false)
       }
     },
-    [selectedPersonaId]
+    [clearSetupStepError, selectedPersonaId]
   )
 
   const handleResumeSessionSelectionChange = React.useCallback(
@@ -2728,6 +2731,7 @@ const SidepanelPersona = ({
     (text: string) => {
       const trimmed = String(text || "").trim()
       if (!trimmed) return
+      clearSetupStepError("test")
       if (!connected || !sessionId || !wsRef.current) {
         setSetupTestOutcome({ kind: "live_unavailable" })
         return
@@ -2752,18 +2756,22 @@ const SidepanelPersona = ({
         })
         appendLog("user", trimmed)
       } catch (err: any) {
-        setSetupStepError("test", String(err?.message || "Failed to send setup live test"))
+        setSetupTestOutcome({
+          kind: "live_failure",
+          text: trimmed,
+          message: String(err?.message || "Failed to send setup live test")
+        })
       }
     },
     [
       appendLog,
+      clearSetupStepError,
       companionContextEnabled,
       connected,
       memoryEnabled,
       memoryTopK,
       personaStateContextEnabled,
       setSetupTestOutcome,
-      setSetupStepError,
       sessionId
     ]
   )
@@ -4202,6 +4210,7 @@ const SidepanelPersona = ({
                     saving={setupWizardSaving}
                     dryRunLoading={setupWizardDryRunLoading}
                     liveConnected={connected}
+                    error={setupStepErrors.test || null}
                     outcome={setupTestOutcome}
                     onRunDryRun={(heardText) => {
                       void handleRunSetupDryRun(heardText)
