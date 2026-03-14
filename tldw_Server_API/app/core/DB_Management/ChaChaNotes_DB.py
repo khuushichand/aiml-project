@@ -5091,6 +5091,138 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "ALTER TABLE persona_sessions ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
             )
 
+    def _ensure_recent_voice_command_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Backfill voice command schema columns after version-number collisions."""
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'voice_commands'"
+        ).fetchone()
+        if not table_exists:
+            return
+
+        voice_cols = {row[1] for row in conn.execute("PRAGMA table_info('voice_commands')").fetchall()}
+        if "persona_id" not in voice_cols:
+            conn.execute("ALTER TABLE voice_commands ADD COLUMN persona_id TEXT")
+        if "connection_id" not in voice_cols:
+            conn.execute("ALTER TABLE voice_commands ADD COLUMN connection_id TEXT")
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voice_commands_user_persona_enabled "
+            "ON voice_commands(user_id, persona_id, enabled, deleted)"
+        )
+
+        analytics_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'voice_command_events'"
+        ).fetchone()
+        if analytics_table_exists:
+            analytics_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info('voice_command_events')").fetchall()
+            }
+            if "persona_id" not in analytics_cols:
+                conn.execute("ALTER TABLE voice_command_events ADD COLUMN persona_id TEXT")
+            if "resolution_type" not in analytics_cols:
+                conn.execute(
+                    "ALTER TABLE voice_command_events ADD COLUMN resolution_type TEXT NOT NULL DEFAULT 'direct_command'"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time "
+                "ON voice_command_events(persona_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time "
+                "ON voice_command_events(persona_id, resolution_type, created_at)"
+            )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS persona_live_voice_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                persona_id TEXT,
+                session_id TEXT,
+                event_type TEXT NOT NULL,
+                commit_source TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time "
+            "ON persona_live_voice_events(persona_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time "
+            "ON persona_live_voice_events(persona_id, event_type, created_at)"
+        )
+
+        conn.executescript(
+            """
+            DROP TRIGGER IF EXISTS voice_commands_insert_sync;
+            DROP TRIGGER IF EXISTS voice_commands_update_sync;
+
+            CREATE TRIGGER IF NOT EXISTS voice_commands_insert_sync
+            AFTER INSERT ON voice_commands
+            BEGIN
+                INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                VALUES(
+                    'voice_commands',
+                    NEW.id,
+                    'create',
+                    NEW.created_at,
+                    'system',
+                    1,
+                    json_object(
+                        'id',NEW.id,
+                        'user_id',NEW.user_id,
+                        'persona_id',NEW.persona_id,
+                        'connection_id',NEW.connection_id,
+                        'name',NEW.name,
+                        'phrases',NEW.phrases,
+                        'action_type',NEW.action_type,
+                        'action_config',NEW.action_config,
+                        'priority',NEW.priority,
+                        'enabled',NEW.enabled,
+                        'requires_confirmation',NEW.requires_confirmation,
+                        'description',NEW.description,
+                        'created_at',NEW.created_at,
+                        'updated_at',NEW.updated_at,
+                        'deleted',NEW.deleted
+                    )
+                );
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS voice_commands_update_sync
+            AFTER UPDATE ON voice_commands
+            BEGIN
+                INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                VALUES(
+                    'voice_commands',
+                    NEW.id,
+                    'update',
+                    NEW.updated_at,
+                    'system',
+                    1,
+                    json_object(
+                        'id',NEW.id,
+                        'user_id',NEW.user_id,
+                        'persona_id',NEW.persona_id,
+                        'connection_id',NEW.connection_id,
+                        'name',NEW.name,
+                        'phrases',NEW.phrases,
+                        'action_type',NEW.action_type,
+                        'action_config',NEW.action_config,
+                        'priority',NEW.priority,
+                        'enabled',NEW.enabled,
+                        'requires_confirmation',NEW.requires_confirmation,
+                        'description',NEW.description,
+                        'created_at',NEW.created_at,
+                        'updated_at',NEW.updated_at,
+                        'deleted',NEW.deleted
+                    )
+                );
+            END;
+            """
+        )
+
     def _ensure_recent_persona_schema_postgres(self, conn: Any) -> None:
         """Backfill recent persona schema columns for PostgreSQL deployments."""
         if not hasattr(self.backend, "execute"):
@@ -5116,6 +5248,53 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             """,
             "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS activity_surface TEXT NOT NULL DEFAULT 'api.persona'",
             "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS preferences_json TEXT NOT NULL DEFAULT '{}'",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
+    def _ensure_recent_voice_command_schema_postgres(self, conn: Any) -> None:
+        """Backfill voice command schema columns for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+
+        statements = [
+            "ALTER TABLE IF EXISTS voice_commands ADD COLUMN IF NOT EXISTS persona_id TEXT",
+            "ALTER TABLE IF EXISTS voice_commands ADD COLUMN IF NOT EXISTS connection_id TEXT",
+            "ALTER TABLE IF EXISTS voice_command_events ADD COLUMN IF NOT EXISTS persona_id TEXT",
+            (
+                "ALTER TABLE IF EXISTS voice_command_events "
+                "ADD COLUMN IF NOT EXISTS resolution_type TEXT NOT NULL DEFAULT 'direct_command'"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_voice_commands_user_persona_enabled "
+                "ON voice_commands(user_id, persona_id, enabled, deleted)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time "
+                "ON voice_command_events(persona_id, created_at)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time "
+                "ON voice_command_events(persona_id, resolution_type, created_at)"
+            ),
+            (
+                "CREATE TABLE IF NOT EXISTS persona_live_voice_events ("
+                "id BIGSERIAL PRIMARY KEY, "
+                "user_id BIGINT NOT NULL, "
+                "persona_id TEXT, "
+                "session_id TEXT, "
+                "event_type TEXT NOT NULL, "
+                "commit_source TEXT, "
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time "
+                "ON persona_live_voice_events(persona_id, created_at)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time "
+                "ON persona_live_voice_events(persona_id, event_type, created_at)"
+            ),
         ]
         for statement in statements:
             self.backend.execute(statement, connection=conn)
@@ -5434,6 +5613,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 f"Schema initialization not implemented for backend {self.backend_type}"
             )
         self._ensure_message_metadata_table()
+        self._ensure_persona_live_voice_session_summaries_table()
         self._ensure_conversation_settings_table()
 
     def ensure_character_tables_ready(self) -> None:
@@ -5582,6 +5762,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
                     self._ensure_notes_fts_triggers_sqlite(conn)
                     self._ensure_recent_persona_schema_sqlite(conn)
+                    self._ensure_recent_voice_command_schema_sqlite(conn)
                     self._ensure_note_folder_schema_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
@@ -6119,6 +6300,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
+                self._ensure_recent_voice_command_schema_sqlite(conn)
                 self._ensure_note_folder_schema_sqlite(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -7358,6 +7540,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self._ensure_quiz_remediation_conversion_schema_postgres(conn)
             self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
+            self._ensure_recent_voice_command_schema_postgres(conn)
             self._ensure_note_folder_schema_postgres(conn)
             self._ensure_workspace_subresource_schema_postgres(conn)
 
@@ -7681,6 +7864,392 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             }
         except _CHACHA_NONCRITICAL_EXCEPTIONS:
             return None
+
+    def _ensure_persona_live_voice_session_summaries_table(self) -> None:
+        """Ensure persona live-voice session summaries exist for analytics feedback."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS persona_live_voice_session_summaries(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  session_id TEXT NOT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  started_at TEXT,
+                  ended_at TEXT,
+                  auto_commit_enabled INTEGER,
+                  vad_threshold REAL,
+                  min_silence_ms INTEGER,
+                  turn_stop_secs REAL,
+                  min_utterance_secs REAL,
+                  turn_detection_changed_during_session INTEGER NOT NULL DEFAULT 0,
+                  total_committed_turns INTEGER NOT NULL DEFAULT 0,
+                  vad_auto_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_mode_required_count INTEGER NOT NULL DEFAULT 0,
+                  text_only_tts_count INTEGER NOT NULL DEFAULT 0,
+                  listening_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  thinking_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  UNIQUE(user_id, persona_id, session_id)
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            self.execute_query(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_live_voice_session_summaries_persona_time
+                ON persona_live_voice_session_summaries(persona_id, started_at, updated_at)
+                """,
+                script=False,
+                commit=True,
+            )
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS persona_live_voice_session_summaries(
+                  id BIGSERIAL PRIMARY KEY,
+                  user_id BIGINT NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  session_id TEXT NOT NULL,
+                  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                  started_at TEXT,
+                  ended_at TEXT,
+                  auto_commit_enabled BOOLEAN,
+                  vad_threshold DOUBLE PRECISION,
+                  min_silence_ms INTEGER,
+                  turn_stop_secs DOUBLE PRECISION,
+                  min_utterance_secs DOUBLE PRECISION,
+                  turn_detection_changed_during_session BOOLEAN NOT NULL DEFAULT FALSE,
+                  total_committed_turns INTEGER NOT NULL DEFAULT 0,
+                  vad_auto_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_mode_required_count INTEGER NOT NULL DEFAULT 0,
+                  text_only_tts_count INTEGER NOT NULL DEFAULT 0,
+                  listening_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  thinking_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  UNIQUE(user_id, persona_id, session_id)
+                )
+                """
+            )
+            self.backend.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_live_voice_session_summaries_persona_time
+                ON persona_live_voice_session_summaries(persona_id, started_at, updated_at)
+                """
+            )
+            return
+
+        raise NotImplementedError(
+            "persona_live_voice_session_summaries table creation not supported "
+            f"for backend {self.backend_type.value}"
+        )
+
+    def upsert_persona_live_voice_session_summary(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        session_id: str,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        auto_commit_enabled: bool | None = None,
+        vad_threshold: float | None = None,
+        min_silence_ms: int | None = None,
+        turn_stop_secs: float | None = None,
+        min_utterance_secs: float | None = None,
+        commit_source: str | None = None,
+        manual_mode_required_increment: int = 0,
+        text_only_tts_increment: int = 0,
+        listening_recovery_count: int | None = None,
+        thinking_recovery_count: int | None = None,
+        finalize: bool = False,
+    ) -> bool:
+        """Create or update one persona live-voice session summary row."""
+        self._ensure_persona_live_voice_session_summaries_table()
+
+        now = self._get_current_utc_timestamp_iso()
+
+        def _bool_for_db(value: bool | None) -> bool | int | None:
+            if value is None:
+                return None
+            if self.backend_type == BackendType.POSTGRESQL:
+                return bool(value)
+            return int(bool(value))
+
+        snapshot_values = {
+            "auto_commit_enabled": _bool_for_db(auto_commit_enabled),
+            "vad_threshold": float(vad_threshold) if vad_threshold is not None else None,
+            "min_silence_ms": int(min_silence_ms) if min_silence_ms is not None else None,
+            "turn_stop_secs": float(turn_stop_secs) if turn_stop_secs is not None else None,
+            "min_utterance_secs": (
+                float(min_utterance_secs) if min_utterance_secs is not None else None
+            ),
+        }
+        snapshot_provided = any(value is not None for value in snapshot_values.values())
+
+        with self.transaction():
+            row = self.execute_query(
+                """
+                SELECT *
+                FROM persona_live_voice_session_summaries
+                WHERE user_id = ? AND persona_id = ? AND session_id = ?
+                """,
+                (user_id, persona_id, session_id),
+            ).fetchone()
+
+            if row is None:
+                total_committed_turns = 1 if commit_source in {"vad_auto", "manual"} else 0
+                vad_auto_commit_count = 1 if commit_source == "vad_auto" else 0
+                manual_commit_count = 1 if commit_source == "manual" else 0
+                normalized_started_at = started_at or now
+                normalized_ended_at = ended_at or (now if finalize else None)
+                self.execute_query(
+                    """
+                    INSERT INTO persona_live_voice_session_summaries(
+                        user_id, persona_id, session_id, created_at, updated_at,
+                        started_at, ended_at, auto_commit_enabled, vad_threshold,
+                        min_silence_ms, turn_stop_secs, min_utterance_secs,
+                        turn_detection_changed_during_session, total_committed_turns,
+                        vad_auto_commit_count, manual_commit_count,
+                        manual_mode_required_count, text_only_tts_count,
+                        listening_recovery_count, thinking_recovery_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        persona_id,
+                        session_id,
+                        now,
+                        now,
+                        normalized_started_at,
+                        normalized_ended_at,
+                        snapshot_values["auto_commit_enabled"],
+                        snapshot_values["vad_threshold"],
+                        snapshot_values["min_silence_ms"],
+                        snapshot_values["turn_stop_secs"],
+                        snapshot_values["min_utterance_secs"],
+                        _bool_for_db(False),
+                        total_committed_turns,
+                        vad_auto_commit_count,
+                        manual_commit_count,
+                        max(0, int(manual_mode_required_increment or 0)),
+                        max(0, int(text_only_tts_increment or 0)),
+                        max(0, int(listening_recovery_count or 0)),
+                        max(0, int(thinking_recovery_count or 0)),
+                    ),
+                )
+                return True
+
+            existing = dict(row)
+            updates: list[str] = ["updated_at = ?"]
+            params: list[Any] = [now]
+
+            existing_snapshot_values = {
+                "auto_commit_enabled": existing.get("auto_commit_enabled"),
+                "vad_threshold": existing.get("vad_threshold"),
+                "min_silence_ms": existing.get("min_silence_ms"),
+                "turn_stop_secs": existing.get("turn_stop_secs"),
+                "min_utterance_secs": existing.get("min_utterance_secs"),
+            }
+            existing_snapshot_missing = all(
+                value is None for value in existing_snapshot_values.values()
+            )
+            if snapshot_provided and existing_snapshot_missing:
+                for field_name, value in snapshot_values.items():
+                    updates.append(f"{field_name} = ?")
+                    params.append(value)
+            elif snapshot_provided:
+                snapshot_changed = any(
+                    snapshot_values[field_name] is not None
+                    and snapshot_values[field_name] != existing_snapshot_values[field_name]
+                    for field_name in snapshot_values
+                )
+                if snapshot_changed and not bool(
+                    existing.get("turn_detection_changed_during_session")
+                ):
+                    updates.append("turn_detection_changed_during_session = ?")
+                    params.append(_bool_for_db(True))
+
+            if started_at and not existing.get("started_at"):
+                updates.append("started_at = ?")
+                params.append(started_at)
+
+            if commit_source == "vad_auto":
+                updates.extend(
+                    [
+                        "total_committed_turns = total_committed_turns + 1",
+                        "vad_auto_commit_count = vad_auto_commit_count + 1",
+                    ]
+                )
+            elif commit_source == "manual":
+                updates.extend(
+                    [
+                        "total_committed_turns = total_committed_turns + 1",
+                        "manual_commit_count = manual_commit_count + 1",
+                    ]
+                )
+
+            if manual_mode_required_increment:
+                updates.append(
+                    "manual_mode_required_count = manual_mode_required_count + ?"
+                )
+                params.append(max(0, int(manual_mode_required_increment)))
+
+            if text_only_tts_increment:
+                updates.append("text_only_tts_count = text_only_tts_count + ?")
+                params.append(max(0, int(text_only_tts_increment)))
+
+            if listening_recovery_count is not None:
+                updates.append("listening_recovery_count = ?")
+                params.append(max(0, int(listening_recovery_count)))
+
+            if thinking_recovery_count is not None:
+                updates.append("thinking_recovery_count = ?")
+                params.append(max(0, int(thinking_recovery_count)))
+
+            if ended_at:
+                updates.append("ended_at = ?")
+                params.append(ended_at)
+            elif finalize:
+                updates.append("ended_at = ?")
+                params.append(now)
+
+            params.extend([user_id, persona_id, session_id])
+            self.execute_query(
+                f"""
+                UPDATE persona_live_voice_session_summaries
+                SET {", ".join(updates)}
+                WHERE user_id = ? AND persona_id = ? AND session_id = ?
+                """,  # nosec B608
+                tuple(params),
+            )
+            return True
+
+    def list_persona_live_voice_session_summaries(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        days: int = 7,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """List recent persona live-voice session summaries for analytics feedback."""
+        self._ensure_persona_live_voice_session_summaries_table()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
+        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        cursor = self.execute_query(
+            """
+            SELECT *
+            FROM persona_live_voice_session_summaries
+            WHERE user_id = ? AND persona_id = ?
+              AND COALESCE(started_at, created_at) >= ?
+            ORDER BY COALESCE(started_at, created_at) DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (user_id, persona_id, cutoff, max(1, int(limit))),
+        )
+        return [dict(row) for row in cursor.fetchall() if row]
+
+    def get_persona_live_voice_session_summary(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        """Fetch one persona live-voice session summary by session id."""
+        self._ensure_persona_live_voice_session_summaries_table()
+        row = self.execute_query(
+            """
+            SELECT *
+            FROM persona_live_voice_session_summaries
+            WHERE user_id = ? AND persona_id = ? AND session_id = ?
+            """,
+            (user_id, persona_id, session_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_voice_command(
+        self,
+        *,
+        command_id: str,
+        user_id: int,
+        persona_id: str | None,
+        connection_id: str | None,
+        name: str,
+        phrases: list[str],
+        action_type: str,
+        action_config: dict[str, Any],
+        priority: int,
+        enabled: bool,
+        requires_confirmation: bool,
+        description: str | None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
+    ) -> str:
+        """Insert or update a voice command record in the DB layer."""
+        final_command_id = str(command_id).strip()
+        if not final_command_id:
+            raise InputError("Voice command ID cannot be empty.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        created_timestamp = str(created_at or now)
+        updated_timestamp = str(updated_at or now)
+        phrases_json = self._serialize_json_payload(list(phrases), "Voice command phrases")
+        action_config_json = self._serialize_json_payload(
+            dict(action_config or {}),
+            "Voice command action config",
+        )
+        query = """
+            INSERT INTO voice_commands (
+                id, user_id, persona_id, connection_id, name, phrases, action_type, action_config,
+                priority, enabled, requires_confirmation, description,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                persona_id = excluded.persona_id,
+                connection_id = excluded.connection_id,
+                name = excluded.name,
+                phrases = excluded.phrases,
+                action_type = excluded.action_type,
+                action_config = excluded.action_config,
+                priority = excluded.priority,
+                enabled = excluded.enabled,
+                requires_confirmation = excluded.requires_confirmation,
+                description = excluded.description,
+                updated_at = excluded.updated_at
+        """
+        params = (
+            final_command_id,
+            int(user_id),
+            str(persona_id) if persona_id is not None else None,
+            str(connection_id) if connection_id is not None else None,
+            str(name),
+            phrases_json,
+            str(action_type),
+            action_config_json,
+            int(priority),
+            1 if enabled else 0,
+            1 if requires_confirmation else 0,
+            description,
+            created_timestamp,
+            updated_timestamp,
+        )
+        try:
+            with self.transaction():
+                self.execute_query(query, params)
+            return final_command_id
+        except CharactersRAGDBError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise CharactersRAGDBError(f"Failed to save voice command: {exc}") from exc  # noqa: TRY003
 
     # ----------------------
     # Conversation settings
@@ -10198,6 +10767,73 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         update_params = [bool_cast(archived), now, *params]
         cursor = self.execute_query(query, tuple(update_params), commit=True)
         return bool(cursor.rowcount and cursor.rowcount > 0)
+
+    def update_persona_memory_entry(
+        self,
+        *,
+        entry_id: str,
+        user_id: str,
+        persona_id: str,
+        update_data: dict[str, Any],
+    ) -> bool:
+        """Update mutable persona memory entry fields."""
+        if not update_data:
+            raise InputError("No persona memory fields provided for update.")  # noqa: TRY003
+
+        allowed_fields = {
+            "content",
+            "salience",
+            "source_conversation_id",
+            "scope_snapshot_id",
+            "session_id",
+            "archived",
+            "deleted",
+        }
+        set_parts: list[str] = []
+        params: list[Any] = []
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "content":
+                content = str(value or "").strip()
+                if not content:
+                    raise InputError("content cannot be empty.")  # noqa: TRY003
+                params.append(content)
+                set_parts.append("content = ?")
+            elif key == "salience":
+                try:
+                    params.append(float(value))
+                except (TypeError, ValueError) as exc:
+                    raise InputError("salience must be a numeric value.") from exc  # noqa: TRY003
+                set_parts.append("salience = ?")
+            elif key in {"archived", "deleted"}:
+                params.append(bool_cast(self._as_bool(value)))
+                set_parts.append(f"{key} = ?")
+            else:
+                normalized = None if value is None else str(value).strip() or None
+                params.append(normalized)
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError("No valid persona memory fields provided for update.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1"])
+        params.append(now)
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "UPDATE persona_memory_entries "
+                f"SET {', '.join(set_parts)} "
+                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"  # nosec B608
+            )
+            params.extend([entry_id, persona_id, user_id])
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
 
     def backfill_persona_memory_scope_namespace(
         self,

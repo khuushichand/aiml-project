@@ -161,6 +161,14 @@ vi.mock("@/components/PersonaGarden/LiveSessionPanel", () => ({
   LiveSessionPanel: () => <div data-testid="live-session-panel" />
 }))
 
+vi.mock("@/components/PersonaGarden/CommandsPanel", () => ({
+  CommandsPanel: () => <div data-testid="commands-panel" />
+}))
+
+vi.mock("@/components/PersonaGarden/ConnectionsPanel", () => ({
+  ConnectionsPanel: () => <div data-testid="connections-panel" />
+}))
+
 vi.mock("@/components/PersonaGarden/PersonaGardenTabs", () => ({
   PersonaGardenTabs: () => <div data-testid="persona-garden-tabs" />
 }))
@@ -181,6 +189,10 @@ vi.mock("@/components/PersonaGarden/StateDocsPanel", () => ({
   StateDocsPanel: ({ children }: { children?: React.ReactNode }) => (
     <div data-testid="state-docs-panel">{children}</div>
   )
+}))
+
+vi.mock("@/components/PersonaGarden/TestLabPanel", () => ({
+  TestLabPanel: () => <div data-testid="test-lab-panel" />
 }))
 
 vi.mock("@/components/PersonaGarden/VoiceExamplesPanel", () => ({
