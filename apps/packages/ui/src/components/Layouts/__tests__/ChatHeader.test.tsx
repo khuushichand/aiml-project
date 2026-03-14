@@ -149,6 +149,24 @@ describe("ChatHeader shortcut toggle", () => {
     expect(props.onStartCharacterChat).toHaveBeenCalledTimes(1)
   })
 
+  it("hides temporary and character quick actions below the small breakpoint", () => {
+    const props = createProps()
+    render(<ChatHeader {...props} />)
+
+    expect(
+      screen.getByRole("button", { name: "Temporary chat (not saved)" }).className
+    ).toContain("hidden")
+    expect(
+      screen.getByRole("button", { name: "Temporary chat (not saved)" }).className
+    ).toContain("sm:inline-flex")
+    expect(screen.getByRole("button", { name: "Character chat" }).className).toContain(
+      "hidden"
+    )
+    expect(screen.getByRole("button", { name: "Character chat" }).className).toContain(
+      "sm:inline-flex"
+    )
+  })
+
   it("shows mode badges for temporary and active character", () => {
     const props = createProps({
       temporaryChat: true,

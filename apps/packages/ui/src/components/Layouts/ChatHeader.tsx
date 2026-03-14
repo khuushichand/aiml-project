@@ -272,7 +272,7 @@ export function ChatHeader({
               type="button"
               onClick={startTemporaryChat}
               aria-label={t("playground:header.newTemporaryChat", "Temporary chat (not saved)") as string}
-              className={`inline-flex items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
+              className={`hidden items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text sm:inline-flex ${focusRingClasses}`}
               title={t("playground:header.newTemporaryChat", "Temporary chat (not saved)")}
             >
               {t("playground:header.temporaryShort", "Temp")}
@@ -283,7 +283,7 @@ export function ChatHeader({
               type="button"
               onClick={startCharacterChat}
               aria-label={t("playground:header.newCharacterChat", "Character chat") as string}
-              className={`inline-flex items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
+              className={`hidden items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text sm:inline-flex ${focusRingClasses}`}
               title={t("playground:header.newCharacterChat", "Character chat")}
             >
               {t("playground:header.characterShort", "Character")}
