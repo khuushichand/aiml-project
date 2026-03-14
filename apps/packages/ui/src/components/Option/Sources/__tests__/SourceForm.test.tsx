@@ -88,6 +88,7 @@ describe("SourceForm", () => {
     })
     expect(screen.getByLabelText("GitHub repository URL")).toBeInTheDocument()
     expect(screen.getByLabelText("Linked account ID")).toBeInTheDocument()
+    expect(screen.queryByText("Media")).not.toBeInTheDocument()
   })
 
   it("renders inline validation errors from a failed create request", async () => {
@@ -169,6 +170,31 @@ describe("SourceForm", () => {
         }
       })
     })
+  })
+
+  it("blocks invalid linked account ids for remote git repositories", async () => {
+    const mutateAsync = vi.fn(async () => ({ id: "42" }))
+    hookMocks.useCreateIngestionSourceMutation.mockReturnValue({
+      mutateAsync,
+      isPending: false
+    })
+
+    render(<SourceForm mode="create" />)
+
+    fireEvent.click(screen.getByRole("radio", { name: "Git repository" }))
+    fireEvent.click(screen.getByRole("radio", { name: "Remote GitHub repository" }))
+    fireEvent.change(screen.getByLabelText("GitHub repository URL"), {
+      target: { value: "https://github.com/example/repo" }
+    })
+    fireEvent.change(screen.getByLabelText("Linked account ID"), {
+      target: { value: "abc" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create source" }))
+
+    await waitFor(() => {
+      expect(mutateAsync).not.toHaveBeenCalled()
+    })
+    expect(await screen.findByText("Linked account ID must be a positive integer")).toBeInTheDocument()
   })
 
   it("renders immutable source identity fields as summaries after first successful sync", () => {

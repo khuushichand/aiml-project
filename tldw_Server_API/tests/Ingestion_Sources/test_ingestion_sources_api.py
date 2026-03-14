@@ -206,6 +206,40 @@ def test_create_source_endpoint_returns_400_for_invalid_git_repository_payload(
 
 
 @pytest.mark.integration
+def test_create_source_endpoint_rejects_git_repository_media_sink(
+    ingestion_sources_client,
+    monkeypatch,
+):
+    client, auth_headers = ingestion_sources_client
+
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+
+    async def _unexpected_get_db_pool():
+        raise AssertionError(
+            "create endpoint should reject unsupported git_repository sink combinations before opening the DB"
+        )
+
+    monkeypatch.setattr(ep, "get_db_pool", _unexpected_get_db_pool)
+
+    response = client.post(
+        "/api/v1/ingestion-sources/",
+        headers=auth_headers,
+        json={
+            "source_type": "git_repository",
+            "sink_type": "media",
+            "policy": "canonical",
+            "config": {
+                "mode": "remote_github_repo",
+                "repo_url": "https://github.com/example/repo",
+            },
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "Git repository sources currently support the notes sink only"
+
+
+@pytest.mark.integration
 def test_archive_upload_endpoint_stages_snapshot_and_enqueues_job(tmp_path, ingestion_sources_client, monkeypatch):
     client, auth_headers = ingestion_sources_client
     os.environ["USER_DB_BASE_DIR"] = str(tmp_path / "user_dbs")

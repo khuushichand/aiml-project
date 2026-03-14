@@ -170,3 +170,35 @@ def test_git_repository_snapshot_loads_remote_github_tree(monkeypatch):
     assert items["alpha.md"]["raw_metadata"]["repo_ref"] == "main"
     assert items["alpha.md"]["raw_metadata"]["repo_blob_sha"] == "sha-alpha"
     assert seen_calls[0] == ("https://api.github.com/repos/example/project", "token-123")
+
+
+@pytest.mark.unit
+def test_git_repository_snapshot_rejects_truncated_remote_tree(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Sources.git_repository as git_repository
+
+    def _fake_github_api_get_json(
+        url: str,
+        *,
+        access_token: str | None,
+        accept: str = "application/vnd.github+json",
+    ):
+        if url == "https://api.github.com/repos/example/project":
+            return {"default_branch": "main"}
+        if "/git/trees/main?recursive=1" in url:
+            return {
+                "truncated": True,
+                "tree": [],
+            }
+        raise AssertionError(f"Unexpected GitHub API request: {url}")
+
+    monkeypatch.setattr(git_repository, "_github_api_get_json", _fake_github_api_get_json)
+
+    with pytest.raises(ValueError, match="truncated"):
+        git_repository.build_git_repository_snapshot_with_failures(
+            {
+                "mode": "remote_github_repo",
+                "repo_url": "https://github.com/example/project",
+            },
+            sink_type="notes",
+            access_token="token-123",
+        )

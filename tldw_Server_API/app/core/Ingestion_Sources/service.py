@@ -45,6 +45,13 @@ def _normalize_choice(value: Any, *, field_name: str, allowed: frozenset[str], d
     return raw
 
 
+def validate_source_sink_pair(*, source_type: str, sink_type: str) -> None:
+    if source_type == "git_repository" and sink_type != "notes":
+        raise IngestionSourceValidationError(
+            "Git repository sources currently support the notes sink only"
+        )
+
+
 def normalize_source_payload(data: dict[str, Any]) -> dict[str, Any]:
     source_type = _normalize_choice(
         data.get("source_type"),
@@ -62,6 +69,7 @@ def normalize_source_payload(data: dict[str, Any]) -> dict[str, Any]:
         allowed=SOURCE_POLICIES,
         default="canonical",
     )
+    validate_source_sink_pair(source_type=source_type, sink_type=sink_type)
     enabled_raw = data.get("enabled")
     enabled = True if enabled_raw is None else bool(enabled_raw)
     schedule_config = data.get("schedule") or data.get("schedule_config") or {}
@@ -402,6 +410,10 @@ async def update_source(
             field_name="sink_type",
             allowed=SINK_TYPES,
         )
+    validate_source_sink_pair(
+        source_type=str(source_type_value),
+        sink_type=str(sink_type_value),
+    )
     config_value = existing.get("config") or {}
     if "config" in patch and patch.get("config") is not None:
         config_value = patch.get("config") if isinstance(patch.get("config"), dict) else {}

@@ -124,6 +124,25 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
     source?.sink_type
   ])
 
+  React.useEffect(() => {
+    if (identityLocked) {
+      return
+    }
+    if (sourceType === "git_repository" && form.getFieldValue("sink_type") !== "notes") {
+      form.setFieldValue("sink_type", "notes")
+    }
+  }, [form, identityLocked, sourceType])
+
+  const destinationOptions = React.useMemo(() => {
+    if ((identityLocked && source ? source.source_type : sourceType) === "git_repository") {
+      return [{ value: "notes", label: "Notes" }]
+    }
+    return [
+      { value: "notes", label: "Notes" },
+      { value: "media", label: "Media" }
+    ]
+  }, [identityLocked, source, sourceType])
+
   const handleFinish = async (values: SourceFormValues) => {
     setSubmitError(null)
 
@@ -162,7 +181,7 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
                 identityLocked && typeof source?.config?.repo_url === "string"
                   ? source.config.repo_url
                   : (values.repo_url || "").trim(),
-              ...(accountId ? { account_id: Number(accountId) } : {}),
+              ...(accountId ? { account_id: accountId } : {}),
               ...(ref ? { ref } : {}),
               ...(rootSubpath ? { root_subpath: rootSubpath } : {})
             }
@@ -296,12 +315,7 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
             </Form.Item>
 
             <Form.Item name="sink_type" label="Destination">
-              <Select
-                options={[
-                  { value: "notes", label: "Notes" },
-                  { value: "media", label: "Media" }
-                ]}
-              />
+              <Select options={destinationOptions} />
             </Form.Item>
           </>
         )}
@@ -398,7 +412,21 @@ export const SourceForm: React.FC<SourceFormProps> = ({ mode, source }) => {
                 </Form.Item>
                 <Form.Item
                   name="account_id"
-                  label={t("sources:form.accountId", "Linked account ID")}>
+                  label={t("sources:form.accountId", "Linked account ID")}
+                  rules={[
+                    {
+                      validator: async (_, value) => {
+                        const text = String(value || "").trim()
+                        if (!text) {
+                          return
+                        }
+                        if (/^[1-9]\d*$/.test(text)) {
+                          return
+                        }
+                        throw new Error("Linked account ID must be a positive integer")
+                      }
+                    }
+                  ]}>
                   <Input />
                 </Form.Item>
               </>

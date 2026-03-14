@@ -45,6 +45,7 @@ from tldw_Server_API.app.core.Ingestion_Sources.service import (
     update_source,
     update_source_item_state,
     update_source_snapshot,
+    validate_source_sink_pair,
 )
 from tldw_Server_API.app.core.exceptions import IngestionSourceValidationError
 
@@ -116,6 +117,10 @@ async def _stream_archive_upload_to_temp_file(
 def _prepare_create_payload(payload: IngestionSourceCreateRequest) -> dict[str, Any]:
     """Normalize create payloads and validate local directory sources eagerly."""
     result = payload.model_dump()
+    validate_source_sink_pair(
+        source_type=str(payload.source_type),
+        sink_type=str(payload.sink_type),
+    )
     config = dict(result.get("config") or {})
     try:
         config = _prepare_source_config(payload.source_type, config)
@@ -146,6 +151,16 @@ def _prepare_patch_payload(
         if patch.get("source_type") is not None
         else existing.get("source_type") or ""
     ).strip()
+    effective_sink_type = str(
+        patch.get("sink_type")
+        if patch.get("sink_type") is not None
+        else existing.get("sink_type") or ""
+    ).strip()
+    if effective_source_type and effective_sink_type:
+        validate_source_sink_pair(
+            source_type=effective_source_type,
+            sink_type=effective_sink_type,
+        )
     if any(key in patch for key in ("source_type", "config")):
         effective_config = (
             dict(patch.get("config") or {})

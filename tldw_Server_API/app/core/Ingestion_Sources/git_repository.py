@@ -481,6 +481,10 @@ def build_git_repository_snapshot_with_failures(
         ),
         access_token=access_token,
     )
+    if bool(tree_payload.get("truncated")):
+        raise ValueError(
+            f"GitHub repository tree response for {owner}/{repo_name}@{resolved_ref} was truncated"
+        )
     for entry in list(tree_payload.get("tree") or []):
         if str(entry.get("type") or "").strip().lower() != "blob":
             continue
