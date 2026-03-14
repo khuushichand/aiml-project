@@ -9606,6 +9606,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not row:
             return None
         item = dict(row)
+        row_id = item.get("id") or item.get("session_id") or item.get("uuid") or "N/A"
         item["reuse_allowed"] = self._as_bool(item.get("reuse_allowed"))
         item["deleted"] = self._as_bool(item.get("deleted"))
         item["activity_surface"] = self._normalize_persona_session_activity_surface(item.get("activity_surface"))
@@ -9614,6 +9615,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             try:
                 decoded_preferences = json.loads(raw_preferences)
             except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to decode JSON for field '{}' in persona session row {}. Falling back to empty object. Value preview: {}",
+                    "preferences_json",
+                    row_id,
+                    raw_preferences[:100] + ("..." if len(raw_preferences) > 100 else ""),
+                )
                 decoded_preferences = {}
             item["preferences"] = decoded_preferences if isinstance(decoded_preferences, dict) else {}
         elif isinstance(raw_preferences, dict):
@@ -9625,6 +9632,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             try:
                 item["scope_snapshot"] = json.loads(raw_snapshot)
             except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to decode JSON for field '{}' in persona session row {}. Falling back to empty object. Value preview: {}",
+                    "scope_snapshot_json",
+                    row_id,
+                    raw_snapshot[:100] + ("..." if len(raw_snapshot) > 100 else ""),
+                )
                 item["scope_snapshot"] = {}
         elif isinstance(raw_snapshot, dict):
             item["scope_snapshot"] = raw_snapshot

@@ -3,6 +3,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.tests.Characters.test_character_functionality_db import sample_card_data
@@ -336,6 +337,107 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     assert db_instance.get_persona_session(session_id, user_id="user-2") is None
     assert db_instance.list_persona_sessions(user_id="user-2") == []
     assert not db_instance.set_persona_memory_archived(entry_id=memory_id, user_id="user-2", archived=False)
+
+
+def test_get_persona_session_logs_warning_for_malformed_preferences_json(db_instance: CharactersRAGDB):
+    persona_id = db_instance.create_persona_profile(
+        {
+            "id": "persona_invalid_prefs",
+            "user_id": "user-1",
+            "name": "Persona Invalid Prefs",
+            "mode": "session_scoped",
+            "system_prompt": "Test",
+            "is_active": True,
+        }
+    )
+    session_id = db_instance.create_persona_session(
+        {
+            "id": "sess_invalid_prefs",
+            "persona_id": persona_id,
+            "user_id": "user-1",
+            "mode": "session_scoped",
+            "reuse_allowed": True,
+            "status": "active",
+            "preferences_json": {"use_memory_context": True},
+            "scope_snapshot_json": {"conversation_ids": ["conv-1"]},
+        }
+    )
+
+    with db_instance.transaction():
+        db_instance.execute_query(
+            "UPDATE persona_sessions SET preferences_json = ? WHERE id = ?",
+            ('{"use_memory_context": true', session_id),
+        )
+
+    messages: list[str] = []
+    sink_id = logger.add(
+        lambda msg: messages.append(str(msg.record.get("message") or "")),
+        level="WARNING",
+        format="{message}",
+    )
+    try:
+        session = db_instance.get_persona_session(session_id, user_id="user-1")
+    finally:
+        logger.remove(sink_id)
+
+    assert session is not None
+    assert session["preferences"] == {}
+    assert session["scope_snapshot"] == {"conversation_ids": ["conv-1"]}
+    assert any(
+        "preferences_json" in message and session_id in message
+        for message in messages
+    )
+
+
+def test_list_persona_sessions_logs_warning_for_malformed_scope_snapshot_json(db_instance: CharactersRAGDB):
+    persona_id = db_instance.create_persona_profile(
+        {
+            "id": "persona_invalid_scope",
+            "user_id": "user-1",
+            "name": "Persona Invalid Scope",
+            "mode": "session_scoped",
+            "system_prompt": "Test",
+            "is_active": True,
+        }
+    )
+    session_id = db_instance.create_persona_session(
+        {
+            "id": "sess_invalid_scope",
+            "persona_id": persona_id,
+            "user_id": "user-1",
+            "mode": "session_scoped",
+            "reuse_allowed": True,
+            "status": "active",
+            "preferences_json": {"use_memory_context": True},
+            "scope_snapshot_json": {"workspace_ids": ["ws-1"]},
+        }
+    )
+
+    with db_instance.transaction():
+        db_instance.execute_query(
+            "UPDATE persona_sessions SET scope_snapshot_json = ? WHERE id = ?",
+            ('{"workspace_ids": ["ws-1"]', session_id),
+        )
+
+    messages: list[str] = []
+    sink_id = logger.add(
+        lambda msg: messages.append(str(msg.record.get("message") or "")),
+        level="WARNING",
+        format="{message}",
+    )
+    try:
+        sessions = db_instance.list_persona_sessions(user_id="user-1")
+    finally:
+        logger.remove(sink_id)
+
+    assert len(sessions) == 1
+    assert sessions[0]["id"] == session_id
+    assert sessions[0]["scope_snapshot"] == {}
+    assert sessions[0]["preferences"] == {"use_memory_context": True}
+    assert any(
+        "scope_snapshot_json" in message and session_id in message
+        for message in messages
+    )
 
 
 def test_backfill_persona_memory_scope_namespace_updates_only_missing_scope(db_instance: CharactersRAGDB):
