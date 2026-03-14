@@ -19459,7 +19459,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if normalized_context == "flashcard":
             if not flashcard_uuid:
                 raise InputError("flashcard_uuid is required for flashcard study assistant threads.")  # noqa: TRY003
-            where_clause = "context_type = ? AND flashcard_uuid = ? AND deleted = 0"
+            select_sql = (
+                "SELECT id, context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
+                "created_at, last_modified, deleted, client_id, version "
+                "FROM study_assistant_threads WHERE context_type = ? AND flashcard_uuid = ? AND deleted = 0"
+            )
             where_params: tuple[Any, ...] = (normalized_context, flashcard_uuid)
             insert_params: tuple[Any, ...] = (
                 normalized_context,
@@ -19472,7 +19476,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 raise InputError(  # noqa: TRY003
                     "quiz_attempt_id and question_id are required for quiz attempt study assistant threads."
                 )
-            where_clause = "context_type = ? AND quiz_attempt_id = ? AND question_id = ? AND deleted = 0"
+            select_sql = (
+                "SELECT id, context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
+                "created_at, last_modified, deleted, client_id, version "
+                "FROM study_assistant_threads WHERE context_type = ? AND quiz_attempt_id = ? AND question_id = ? AND deleted = 0"
+            )
             where_params = (normalized_context, int(quiz_attempt_id), int(question_id))
             insert_params = (
                 normalized_context,
@@ -19483,12 +19491,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             raise InputError("context_type must be 'flashcard' or 'quiz_attempt_question'.")  # noqa: TRY003
 
-        query = (
-            "SELECT id, context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
-            "created_at, last_modified, deleted, client_id, version "
-            f"FROM study_assistant_threads WHERE {where_clause}"
-        )
-        existing = self.execute_query(query, where_params).fetchone()
+        existing = self.execute_query(select_sql, where_params).fetchone()
         if existing:
             item = dict(existing)
             item["deleted"] = bool(item.get("deleted"))
@@ -19531,7 +19534,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as exc:
             raise CharactersRAGDBError(f"Failed to create study assistant thread: {exc}") from exc  # noqa: TRY003
 
-        created = self.execute_query(query, where_params).fetchone()
+        created = self.execute_query(select_sql, where_params).fetchone()
         if not created:
             raise CharactersRAGDBError("Study assistant thread was not readable after create")  # noqa: TRY003
         item = dict(created)
