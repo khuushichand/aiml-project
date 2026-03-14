@@ -44,6 +44,8 @@ class PresentationRenderJobError(RuntimeError):
 
 
 def _jobs_manager() -> JobManager:
+    """Create a Jobs manager using the configured backend for render jobs."""
+
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
     if not db_url:
         return JobManager()
@@ -52,6 +54,8 @@ def _jobs_manager() -> JobManager:
 
 
 def _coerce_int(value: Any, default: int) -> int:
+    """Best-effort integer coercion for worker configuration environment values."""
+
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -59,6 +63,8 @@ def _coerce_int(value: Any, default: int) -> int:
 
 
 def _build_worker_config(*, worker_id: str, queue: str) -> WorkerConfig:
+    """Build the worker SDK configuration for presentation render jobs."""
+
     return WorkerConfig(
         domain=_DOMAIN,
         queue=queue,
@@ -74,6 +80,8 @@ def _build_worker_config(*, worker_id: str, queue: str) -> WorkerConfig:
 
 
 def _resolve_queue_name() -> str:
+    """Normalize the configured render queue name to a supported Jobs queue."""
+
     configured_queue = (os.getenv("PRESENTATION_RENDER_JOBS_QUEUE") or "").strip().lower()
     if configured_queue in {"default", "high", "low"}:
         return configured_queue
@@ -87,6 +95,8 @@ def _resolve_queue_name() -> str:
 
 
 def _normalize_payload(value: Any) -> dict[str, Any]:
+    """Normalize stored job payloads into a dictionary for worker processing."""
+
     if isinstance(value, dict):
         return dict(value)
     if isinstance(value, str):
@@ -99,6 +109,8 @@ def _normalize_payload(value: Any) -> dict[str, Any]:
 
 
 def _resolve_user_id(job: dict[str, Any], payload: dict[str, Any]) -> int:
+    """Resolve the owning user ID from the job payload or owner metadata."""
+
     owner = payload.get("user_id") or job.get("owner_user_id")
     try:
         return int(owner)
@@ -107,6 +119,8 @@ def _resolve_user_id(job: dict[str, Any], payload: dict[str, Any]) -> int:
 
 
 def _create_slides_db(user_id: int) -> SlidesDatabase:
+    """Open the Slides database for the job owner."""
+
     return SlidesDatabase(
         db_path=str(DatabasePaths.get_slides_db_path(user_id)),
         client_id=str(user_id),

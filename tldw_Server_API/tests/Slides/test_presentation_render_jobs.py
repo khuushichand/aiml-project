@@ -284,6 +284,22 @@ def test_collections_output_listing_filters_by_presentation_id_metadata(tmp_path
     assert [row.id for row in rows] == [match.id]
 
 
+def test_render_worker_helpers_have_docstrings():
+    helpers = [
+        presentation_render_jobs_worker._jobs_manager,
+        presentation_render_jobs_worker._coerce_int,
+        presentation_render_jobs_worker._build_worker_config,
+        presentation_render_jobs_worker._resolve_queue_name,
+        presentation_render_jobs_worker._normalize_payload,
+        presentation_render_jobs_worker._resolve_user_id,
+        presentation_render_jobs_worker._create_slides_db,
+    ]
+
+    for helper in helpers:
+        assert helper.__doc__ is not None
+        assert helper.__doc__.strip()
+
+
 @pytest.mark.asyncio
 async def test_render_worker_persists_output_artifact(monkeypatch, tmp_path):
     user_db_base = tmp_path / "user_dbs"
