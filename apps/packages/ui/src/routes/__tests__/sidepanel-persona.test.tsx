@@ -2257,6 +2257,153 @@ describe("SidepanelPersona", () => {
     expect(screen.getByTestId("persona-setup-handoff-card")).toBeInTheDocument()
   })
 
+  it("does not collapse the setup handoff when a post-setup dry-run does not match", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=test-lab"
+
+    let profileVersion = 2
+    let currentSetup = {
+      status: "in_progress",
+      version: 1,
+      run_id: "setup-run-1",
+      current_step: "test",
+      completed_steps: ["persona", "voice", "commands", "safety"],
+      completed_at: null,
+      last_test_type: null
+    }
+    const currentVoiceDefaults = {
+      confirmation_mode: "destructive_only"
+    }
+    const setupEventBodies: Array<Record<string, unknown>> = []
+
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/setup-events") && method === "POST") {
+        setupEventBodies.push(init?.body || {})
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            event_id: init?.body?.event_id || "evt-1",
+            run_id: init?.body?.run_id || "setup-run-1",
+            event_type: init?.body?.event_type || "step_viewed",
+            deduped: false,
+            created_at: "2026-03-14T10:00:00.000Z"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_runs: 0, matched_runs: 0, fallback_runs: 0 }
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper/voice-commands/test") &&
+        method === "POST"
+      ) {
+        const heardText = String(init?.body?.heard_text || "")
+        if (heardText === "start a focused research sprint") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              heard_text: heardText,
+              matched: false,
+              failure_phase: "planner_fallback"
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            heard_text: heardText,
+            matched: true,
+            command_name: "Search Notes"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        if (method === "PATCH") {
+          profileVersion += 1
+          currentSetup = {
+            ...currentSetup,
+            ...(init?.body?.setup || {})
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: "garden-helper",
+              version: profileVersion,
+              voice_defaults: currentVoiceDefaults,
+              setup: currentSetup,
+              use_persona_state_context_default: true
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: profileVersion,
+            voice_defaults: currentVoiceDefaults,
+            setup: currentSetup,
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("test")
+    })
+
+    fireEvent.change(screen.getByPlaceholderText("Try a spoken phrase"), {
+      target: { value: "search notes for project alpha" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Run dry-run test" }))
+
+    await screen.findByText(/Matched Search Notes/i)
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish with dry-run test" }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("persona-setup-handoff-card")).toHaveTextContent(
+        "Assistant setup complete"
+      )
+    })
+
+    fireEvent.change(screen.getByTestId("persona-test-lab-heard-input"), {
+      target: { value: "start a focused research sprint" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Run dry-run" }))
+
+    await screen.findByText("persona fallback")
+    expect(screen.getByTestId("persona-setup-handoff-card")).toHaveTextContent(
+      "Assistant setup complete"
+    )
+    expect(
+      setupEventBodies.some(
+        (body) =>
+          body.event_type === "first_post_setup_action" &&
+          body.action_target === "test-lab"
+      )
+    ).toBe(false)
+  })
+
   it("collapses the setup handoff after the first successful post-setup action", async () => {
     mocks.location.search = "?persona_id=garden-helper&tab=connections"
 

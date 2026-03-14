@@ -3262,6 +3262,7 @@ async def get_persona_setup_analytics(
     _current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> PersonaSetupAnalyticsResponse:
+    """Return aggregated setup analytics and recent setup runs for one persona."""
     if not is_persona_enabled():
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
@@ -3308,6 +3309,7 @@ async def create_persona_setup_event(
     _current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> PersonaSetupEventWriteResponse:
+    """Append one persona setup analytics event and return its dedupe status."""
     if not is_persona_enabled():
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)

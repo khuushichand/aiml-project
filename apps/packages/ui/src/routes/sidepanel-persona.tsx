@@ -43,7 +43,10 @@ import {
   type SetupTestOutcome
 } from "@/components/PersonaGarden/SetupTestAndFinishStep"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
-import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
+import {
+  TestLabPanel,
+  type TestLabDryRunCompletedResult,
+} from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import {
   getPersonaStarterCommandTemplate,
@@ -4400,8 +4403,8 @@ const SidepanelPersona = ({
     consumeSetupHandoffAction("connection_test_succeeded")
   }, [consumeSetupHandoffAction])
 
-  const handleTestLabDryRunCompleted = React.useCallback((matched: boolean) => {
-    if (!matched) return
+  const handleTestLabDryRunCompleted = React.useCallback((result: TestLabDryRunCompletedResult) => {
+    if (!result.matched) return
     consumeSetupHandoffAction("dry_run_match")
   }, [consumeSetupHandoffAction])
 

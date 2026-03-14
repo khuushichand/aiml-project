@@ -35,6 +35,10 @@ type PersonaCommandDryRunResult = {
   failure_phase?: string | null
 }
 
+export type TestLabDryRunCompletedResult = {
+  matched: boolean
+}
+
 type TestLabPanelProps = {
   selectedPersonaId: string
   selectedPersonaName: string
@@ -42,7 +46,7 @@ type TestLabPanelProps = {
   analytics?: PersonaVoiceAnalytics | null
   onOpenCommand?: (commandId: string, heardText: string) => void
   onCreateCommandDraft?: (heardText: string) => void
-  onDryRunCompleted?: (result: { matched: boolean }) => void
+  onDryRunCompleted?: (result: TestLabDryRunCompletedResult) => void
   initialHeardText?: string
   rerunRequestToken?: number
 }

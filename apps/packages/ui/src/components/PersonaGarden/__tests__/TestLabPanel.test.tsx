@@ -284,6 +284,28 @@ describe("TestLabPanel", () => {
     )
   })
 
+  it("reports unmatched dry-runs through the completion callback without treating them as success", async () => {
+    const onDryRunCompleted = vi.fn()
+
+    render(
+      <TestLabPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        onDryRunCompleted={onDryRunCompleted}
+      />
+    )
+
+    fireEvent.change(screen.getByTestId("persona-test-lab-heard-input"), {
+      target: { value: "start a focused research sprint" }
+    })
+    fireEvent.click(screen.getByTestId("persona-test-lab-run"))
+
+    await screen.findByTestId("persona-test-lab-match-status")
+
+    expect(onDryRunCompleted).toHaveBeenCalledWith({ matched: false })
+  })
+
   it("shows recent health for the matched command from live analytics", async () => {
     render(
       <TestLabPanel

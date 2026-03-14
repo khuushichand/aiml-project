@@ -8143,18 +8143,48 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def _persona_setup_event_row_to_dict(self, row: Any) -> dict[str, Any]:
         item = dict(row)
-        raw_metadata = item.get("metadata_json")
-        if isinstance(raw_metadata, str):
-            try:
-                decoded_metadata = json.loads(raw_metadata)
-            except json.JSONDecodeError:
-                decoded_metadata = {}
-            item["metadata"] = decoded_metadata if isinstance(decoded_metadata, dict) else {}
-        elif isinstance(raw_metadata, dict):
-            item["metadata"] = raw_metadata
-        else:
-            item["metadata"] = {}
+        event_label = str(item.get("event_id") or item.get("id") or "unknown")
+        item["metadata"] = self._decode_persona_json_object(
+            item.get("metadata_json"),
+            field_name="metadata_json",
+            context_label=f"persona setup event {event_label}",
+        )
         return item
+
+    def _decode_persona_json_object(
+        self,
+        raw_value: Any,
+        *,
+        field_name: str,
+        context_label: str,
+    ) -> dict[str, Any]:
+        """Decode one persona JSON column into a dictionary with warning logs on invalid data."""
+        if isinstance(raw_value, dict):
+            return raw_value
+        if not isinstance(raw_value, str):
+            return {}
+
+        try:
+            decoded_value = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "Invalid JSON in {} for {}: {}",
+                field_name,
+                context_label,
+                exc,
+            )
+            return {}
+
+        if isinstance(decoded_value, dict):
+            return decoded_value
+
+        logger.warning(
+            "Expected JSON object in {} for {}, got {}.",
+            field_name,
+            context_label,
+            type(decoded_value).__name__,
+        )
+        return {}
 
     def record_persona_setup_event(
         self,
@@ -8236,7 +8266,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 (user_id, persona_id, event_id),
             ).fetchone()
             if not row:
-                raise CharactersRAGDBError("Failed to load inserted persona setup event.")  # noqa: TRY003
+                error_message = "Failed to load inserted persona setup event."
+                raise CharactersRAGDBError(error_message)
             item = self._persona_setup_event_row_to_dict(row)
             item["deduped"] = False
             return item
@@ -9821,29 +9852,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not row:
             return None
         item = dict(row)
-        raw_voice_defaults = item.get("voice_defaults_json")
-        if isinstance(raw_voice_defaults, str):
-            try:
-                decoded_voice_defaults = json.loads(raw_voice_defaults)
-            except json.JSONDecodeError:
-                decoded_voice_defaults = {}
-            item["voice_defaults"] = decoded_voice_defaults if isinstance(decoded_voice_defaults, dict) else {}
-        elif isinstance(raw_voice_defaults, dict):
-            item["voice_defaults"] = raw_voice_defaults
-        else:
-            item["voice_defaults"] = {}
-
-        raw_setup = item.get("setup_json")
-        if isinstance(raw_setup, str):
-            try:
-                decoded_setup = json.loads(raw_setup)
-            except json.JSONDecodeError:
-                decoded_setup = {}
-            item["setup"] = decoded_setup if isinstance(decoded_setup, dict) else {}
-        elif isinstance(raw_setup, dict):
-            item["setup"] = raw_setup
-        else:
-            item["setup"] = {}
+        persona_label = str(item.get("id") or item.get("name") or "unknown")
+        item["voice_defaults"] = self._decode_persona_json_object(
+            item.get("voice_defaults_json"),
+            field_name="voice_defaults_json",
+            context_label=f"persona profile {persona_label}",
+        )
+        item["setup"] = self._decode_persona_json_object(
+            item.get("setup_json"),
+            field_name="setup_json",
+            context_label=f"persona profile {persona_label}",
+        )
         item["is_active"] = self._as_bool(item.get("is_active"))
         item["use_persona_state_context_default"] = self._as_bool(
             item.get("use_persona_state_context_default", True)

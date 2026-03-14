@@ -158,6 +158,8 @@ class PersonaVoiceDefaults(BaseModel):
 
 
 class PersonaSetupState(BaseModel):
+    """Persisted wizard progress for one persona setup run."""
+
     status: PersonaSetupStatus = "not_started"
     version: int = Field(default=1, ge=1)
     run_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -168,6 +170,8 @@ class PersonaSetupState(BaseModel):
 
 
 class PersonaSetupEventCreate(BaseModel):
+    """Append-only setup analytics event payload sent by the UI."""
+
     event_id: str = Field(..., min_length=1, max_length=200)
     event_key: str | None = Field(default=None, min_length=1, max_length=200)
     run_id: str = Field(..., min_length=1, max_length=200)
@@ -180,6 +184,8 @@ class PersonaSetupEventCreate(BaseModel):
 
 
 class PersonaSetupEventWriteResponse(BaseModel):
+    """Write result for one setup analytics event, including dedupe outcome."""
+
     event_id: str
     run_id: str
     event_type: PersonaSetupEventType
@@ -188,6 +194,8 @@ class PersonaSetupEventWriteResponse(BaseModel):
 
 
 class PersonaSetupAnalyticsRunSummary(BaseModel):
+    """Aggregated setup outcomes for one recorded setup run."""
+
     run_id: str
     started_at: str | None = None
     completed_at: str | None = None
@@ -199,6 +207,8 @@ class PersonaSetupAnalyticsRunSummary(BaseModel):
 
 
 class PersonaSetupAnalyticsSummary(BaseModel):
+    """High-level setup funnel and handoff metrics for one persona."""
+
     total_runs: int = 0
     completed_runs: int = 0
     completion_rate: float = 0.0
@@ -212,6 +222,8 @@ class PersonaSetupAnalyticsSummary(BaseModel):
 
 
 class PersonaSetupAnalyticsResponse(BaseModel):
+    """Persona setup analytics API response with summary and recent runs."""
+
     persona_id: str
     summary: PersonaSetupAnalyticsSummary = Field(default_factory=PersonaSetupAnalyticsSummary)
     recent_runs: list[PersonaSetupAnalyticsRunSummary] = Field(default_factory=list)

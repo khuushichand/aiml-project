@@ -17,8 +17,8 @@ fastapi_app = FastAPI()
 fastapi_app.include_router(persona_ep.router, prefix="/api/v1/persona")
 
 
-def _client_for_user(user_id: int, db: CharactersRAGDB):
-    async def override_user():
+def _client_for_user(user_id: int, db: CharactersRAGDB) -> TestClient:
+    async def override_user() -> User:
         return User(
             id=user_id,
             username=f"persona-user-{user_id}",
