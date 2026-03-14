@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
+from loguru import logger
+
 from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (
     format_interval_label,
     parse_iso_datetime,
@@ -32,7 +34,10 @@ def normalize_fsrs_settings(raw: Mapping[str, Any] | str | None) -> dict[str, An
         if not raw.strip():
             source = {}
         else:
-            parsed = json.loads(raw)
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise FsrsSettingsError("fsrs settings must be valid JSON") from exc
             if not isinstance(parsed, dict):
                 raise FsrsSettingsError("fsrs settings must be a JSON object")
             source = parsed
@@ -105,6 +110,10 @@ def _load_fsrs_state(card: Mapping[str, Any], now: datetime) -> dict[str, Any]:
         try:
             loaded = json.loads(raw)
         except json.JSONDecodeError:
+            logger.warning(
+                "Invalid FSRS scheduler_state_json for flashcard {}. Rebootstrapping state.",
+                card.get("uuid") or "<unknown>",
+            )
             loaded = {}
         parsed = dict(loaded) if isinstance(loaded, dict) else {}
     else:

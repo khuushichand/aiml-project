@@ -3,6 +3,10 @@ import json
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (
+    SchedulerSettingsError,
+    scheduler_settings_to_json,
+)
 
 
 @pytest.fixture
@@ -65,3 +69,11 @@ def test_new_deck_persists_default_scheduler_settings(chacha_db: CharactersRAGDB
     assert fsrs_settings["target_retention"] == pytest.approx(0.9)
     assert fsrs_settings["maximum_interval_days"] == 36500
     assert fsrs_settings["enable_fuzz"] is False
+
+
+def test_scheduler_settings_to_json_validates_fsrs_envelope():
+    with pytest.raises(SchedulerSettingsError):
+        scheduler_settings_to_json({"fsrs": {"target_retention": 1.2}})
+
+    with pytest.raises(SchedulerSettingsError):
+        scheduler_settings_to_json({"fsrs": "{not-valid-json"})

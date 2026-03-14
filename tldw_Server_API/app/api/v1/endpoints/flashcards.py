@@ -58,7 +58,10 @@ from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (
     build_next_interval_previews,
     get_default_scheduler_settings_envelope,
 )
-from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import build_fsrs_next_interval_previews
+from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (
+    FsrsSettingsError,
+    build_fsrs_next_interval_previews,
+)
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 from tldw_Server_API.app.core.Flashcards.apkg_importer import (
     APKGImportError,
@@ -1438,6 +1441,8 @@ def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depe
     try:
         updated = db.review_flashcard(payload.card_uuid, payload.rating, payload.answer_time_ms)
         return updated
+    except (SchedulerSettingsError, FsrsSettingsError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except ConflictError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except CharactersRAGDBError as e:
@@ -1457,6 +1462,8 @@ def get_next_review_card(
         deck = db.get_deck(int(card["deck_id"])) if card.get("deck_id") is not None else None
         card = _attach_scheduler_preview(card, deck)
         return {"card": card, "selection_reason": selection_reason}
+    except (SchedulerSettingsError, FsrsSettingsError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to fetch next review card: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch next review card") from e

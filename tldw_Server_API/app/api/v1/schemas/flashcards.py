@@ -21,8 +21,8 @@ class DeckSchedulerSettings(BaseModel):
 
 
 class FsrsSchedulerSettings(BaseModel):
-    target_retention: float = 0.9
-    maximum_interval_days: int = 36500
+    target_retention: float = Field(0.9, gt=0, lt=1)
+    maximum_interval_days: int = Field(36500, ge=1)
     enable_fuzz: bool = False
 
 
@@ -46,7 +46,7 @@ class DeckCreate(BaseModel):
     scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
 
     @model_validator(mode="before")
-    def _normalize_scheduler_settings(cls, data):
+    def _normalize_scheduler_settings(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
         if "scheduler_settings" in data:
@@ -62,7 +62,7 @@ class DeckUpdate(BaseModel):
     expected_version: Optional[int] = Field(None, ge=1)
 
     @model_validator(mode="before")
-    def _normalize_scheduler_settings(cls, data):
+    def _normalize_scheduler_settings(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
         if "scheduler_settings" in data:
@@ -84,7 +84,7 @@ class Deck(BaseModel):
     scheduler_settings: DeckSchedulerSettingsEnvelope = Field(default_factory=DeckSchedulerSettingsEnvelope)
 
     @model_validator(mode="before")
-    def _populate_scheduler_settings(cls, data):
+    def _populate_scheduler_settings(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
         if data.get("scheduler_settings") is not None:

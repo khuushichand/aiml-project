@@ -92,6 +92,7 @@ from tldw_Server_API.app.core.Flashcards.asset_refs import (  # noqa: E402
 )
 from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (  # noqa: E402
     MATURE_INTERVAL_DAYS,
+    SchedulerSettingsError,
     build_next_interval_previews,
     coerce_queue_state,
     get_default_scheduler_settings,
@@ -102,6 +103,7 @@ from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (  # noqa: E402
     to_iso_z,
 )
 from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # noqa: E402
+    FsrsSettingsError,
     build_fsrs_next_interval_previews,
     normalize_fsrs_settings,
     simulate_fsrs_review_transition,
@@ -127,7 +129,10 @@ def _normalize_scheduler_settings_envelope(raw: Mapping[str, Any] | str | None) 
         if not raw.strip():
             source = {}
         else:
-            parsed = json.loads(raw)
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise SchedulerSettingsError("scheduler_settings must be valid JSON") from exc
             if not isinstance(parsed, dict):
                 raise SchedulerSettingsError("scheduler_settings must be a JSON object")
             source = parsed
@@ -143,10 +148,13 @@ def _normalize_scheduler_settings_envelope(raw: Mapping[str, Any] | str | None) 
         sm2_source = source
         fsrs_source = None
 
-    return {
-        "sm2_plus": normalize_scheduler_settings(sm2_source),
-        "fsrs": normalize_fsrs_settings(fsrs_source),
-    }
+    try:
+        return {
+            "sm2_plus": normalize_scheduler_settings(sm2_source),
+            "fsrs": normalize_fsrs_settings(fsrs_source),
+        }
+    except FsrsSettingsError as exc:
+        raise SchedulerSettingsError(str(exc)) from exc
 
 
 def _simulate_scheduler_review_transition(
@@ -20225,6 +20233,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                            queue_state = 'new',
                            step_index = NULL,
                            suspended_reason = NULL,
+                           scheduler_state_json = '{}',
                            due_at = ?,
                            last_reviewed_at = NULL,
                            last_modified = ?,

@@ -78,7 +78,10 @@ def normalize_scheduler_settings(raw: Mapping[str, Any] | str | None) -> dict[st
         if not raw.strip():
             source = {}
         else:
-            parsed = json.loads(raw)
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise SchedulerSettingsError("scheduler_settings must be valid JSON") from exc
             if not isinstance(parsed, dict):
                 raise SchedulerSettingsError("scheduler_settings must be a JSON object")
             source = parsed
@@ -157,7 +160,10 @@ def scheduler_settings_to_json(raw: Mapping[str, Any] | str | None) -> str:
     if isinstance(raw, str):
         if not raw.strip():
             return json.dumps(envelope, sort_keys=True)
-        parsed = json.loads(raw)
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise SchedulerSettingsError("scheduler_settings must be valid JSON") from exc
         if not isinstance(parsed, dict):
             raise SchedulerSettingsError("scheduler_settings must be a JSON object")
         raw = parsed
@@ -169,13 +175,16 @@ def scheduler_settings_to_json(raw: Mapping[str, Any] | str | None) -> str:
     if "sm2_plus" in raw_dict or "fsrs" in raw_dict:
         if isinstance(raw_dict.get("sm2_plus"), Mapping):
             envelope["sm2_plus"] = normalize_scheduler_settings(raw_dict["sm2_plus"])
-        if isinstance(raw_dict.get("fsrs"), Mapping):
-            fsrs_source = dict(raw_dict["fsrs"])
-            fsrs_defaults = get_default_fsrs_settings()
-            for key in fsrs_defaults:
-                if key in fsrs_source and fsrs_source[key] is not None:
-                    fsrs_defaults[key] = fsrs_source[key]
-            envelope["fsrs"] = fsrs_defaults
+        if "fsrs" in raw_dict:
+            from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # local import avoids module cycle
+                FsrsSettingsError,
+                normalize_fsrs_settings,
+            )
+
+            try:
+                envelope["fsrs"] = normalize_fsrs_settings(raw_dict.get("fsrs"))
+            except FsrsSettingsError as exc:
+                raise SchedulerSettingsError(str(exc)) from exc
         return json.dumps(envelope, sort_keys=True)
 
     envelope["sm2_plus"] = normalize_scheduler_settings(raw_dict)
