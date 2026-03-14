@@ -13,10 +13,8 @@ describe("SetupTestAndFinishStep", () => {
       <SetupTestAndFinishStep
         saving={false}
         dryRunLoading={false}
-        dryRunError={null}
-        dryRunResult={null}
         liveConnected={false}
-        liveSuccessText={null}
+        outcome={null}
         onRunDryRun={onRunDryRun}
         onConnectLive={vi.fn()}
         onSendLive={vi.fn()}
@@ -36,14 +34,12 @@ describe("SetupTestAndFinishStep", () => {
       <SetupTestAndFinishStep
         saving={false}
         dryRunLoading={false}
-        dryRunError={null}
-        dryRunResult={{
+        liveConnected={false}
+        outcome={{
+          kind: "dry_run_match",
           heardText: "search notes for embeddings",
-          matched: true,
           commandName: "Search Notes"
         }}
-        liveConnected={false}
-        liveSuccessText={null}
         onRunDryRun={onRunDryRun}
         onConnectLive={vi.fn()}
         onSendLive={vi.fn()}
@@ -65,10 +61,8 @@ describe("SetupTestAndFinishStep", () => {
       <SetupTestAndFinishStep
         saving={false}
         dryRunLoading={false}
-        dryRunError={null}
-        dryRunResult={null}
         liveConnected={false}
-        liveSuccessText={null}
+        outcome={null}
         onRunDryRun={vi.fn()}
         onConnectLive={onConnectLive}
         onSendLive={onSendLive}
@@ -84,10 +78,12 @@ describe("SetupTestAndFinishStep", () => {
       <SetupTestAndFinishStep
         saving={false}
         dryRunLoading={false}
-        dryRunError={null}
-        dryRunResult={null}
         liveConnected
-        liveSuccessText="Here is the answer from the live session."
+        outcome={{
+          kind: "live_success",
+          text: "summarize my assistant setup",
+          responseText: "Here is the answer from the live session."
+        }}
         onRunDryRun={vi.fn()}
         onConnectLive={onConnectLive}
         onSendLive={onSendLive}
@@ -104,5 +100,69 @@ describe("SetupTestAndFinishStep", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Finish with live session" }))
     expect(onFinishWithLiveSession).toHaveBeenCalled()
+  })
+
+  it("renders a dry-run no-match outcome with a forward action", () => {
+    render(
+      <SetupTestAndFinishStep
+        saving={false}
+        dryRunLoading={false}
+        liveConnected={false}
+        outcome={{
+          kind: "dry_run_no_match",
+          heardText: "open the pod bay doors"
+        }}
+        onRunDryRun={vi.fn()}
+        onConnectLive={vi.fn()}
+        onSendLive={vi.fn()}
+        onFinishWithDryRun={vi.fn()}
+        onFinishWithLiveSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText(/No direct command matched/i)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Connect live session" })).toBeInTheDocument()
+  })
+
+  it("renders a live-unavailable outcome separately from live-success", () => {
+    const { rerender } = render(
+      <SetupTestAndFinishStep
+        saving={false}
+        dryRunLoading={false}
+        liveConnected={false}
+        outcome={{ kind: "live_unavailable" }}
+        onRunDryRun={vi.fn()}
+        onConnectLive={vi.fn()}
+        onSendLive={vi.fn()}
+        onFinishWithDryRun={vi.fn()}
+        onFinishWithLiveSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText(/Live session unavailable until you connect/i)).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Finish with live session" })
+    ).not.toBeInTheDocument()
+
+    rerender(
+      <SetupTestAndFinishStep
+        saving={false}
+        dryRunLoading={false}
+        liveConnected
+        outcome={{
+          kind: "live_success",
+          text: "summarize my assistant setup",
+          responseText: "Here is the answer from the live session."
+        }}
+        onRunDryRun={vi.fn()}
+        onConnectLive={vi.fn()}
+        onSendLive={vi.fn()}
+        onFinishWithDryRun={vi.fn()}
+        onFinishWithLiveSession={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText(/Live session responded/i)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Finish with live session" })).toBeInTheDocument()
   })
 })

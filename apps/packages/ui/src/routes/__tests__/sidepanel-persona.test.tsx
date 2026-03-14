@@ -332,7 +332,7 @@ const buildMockPersonaVoiceAnalytics = (personaId = "research_assistant") => ({
       turn_stop_secs: 0.2,
       min_utterance_secs: 0.4,
       turn_detection_changed_during_session: false,
-      committed_turn_count: 3,
+      total_committed_turns: 3,
       vad_auto_commit_count: 2,
       manual_commit_count: 1,
       manual_mode_required_count: 0,
@@ -1577,6 +1577,8 @@ describe("SidepanelPersona", () => {
       expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
     )
     expect(screen.getByLabelText("STT language")).toHaveValue("en-US")
+    expect(screen.getByText("Assistant setup complete")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Adjust assistant defaults" })).toBeInTheDocument()
 
     const completionPatchCall = mocks.fetchWithAuth.mock.calls.find(
       ([calledPath, init]) =>
@@ -1676,6 +1678,9 @@ describe("SidepanelPersona", () => {
     await waitFor(() =>
       expect(screen.getByText("Test and finish")).toBeInTheDocument()
     )
+    expect(
+      screen.queryByText("Finish assistant setup from a live session")
+    ).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Connect live session" }))
     const ws = await waitFor(() => {
@@ -1718,6 +1723,9 @@ describe("SidepanelPersona", () => {
       "aria-selected",
       "true"
     )
+    expect(
+      screen.queryByText("Finish assistant setup from a live session")
+    ).not.toBeInTheDocument()
 
     const completionPatchCall = mocks.fetchWithAuth.mock.calls.find(
       ([calledPath, init]) =>

@@ -17,6 +17,7 @@ import {
 import type { PersonaTurnDetectionValues } from "@/components/PersonaGarden/PersonaTurnDetectionControls"
 import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCard"
 import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
+import { PersonaSetupHandoffCard } from "@/components/PersonaGarden/PersonaSetupHandoffCard"
 import { AssistantSetupWizard } from "@/components/PersonaGarden/AssistantSetupWizard"
 import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
 import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
@@ -30,7 +31,10 @@ import {
   type SetupSafetyConnectionDraft
 } from "@/components/PersonaGarden/SetupSafetyConnectionsStep"
 import { SetupStarterCommandsStep } from "@/components/PersonaGarden/SetupStarterCommandsStep"
-import { SetupTestAndFinishStep } from "@/components/PersonaGarden/SetupTestAndFinishStep"
+import {
+  SetupTestAndFinishStep,
+  type SetupTestOutcome
+} from "@/components/PersonaGarden/SetupTestAndFinishStep"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
@@ -187,11 +191,9 @@ type SetupStepErrors = {
   test?: string | null
 }
 
-type SetupWizardDryRunResult = {
-  heardText: string
-  matched: boolean
-  commandName?: string | null
-  failurePhase?: string | null
+type SetupHandoffState = {
+  targetTab: PersonaGardenTabKey
+  completionType: "dry_run" | "live_session"
 }
 
 type PersonaStateDocsResponse = {
@@ -433,13 +435,12 @@ const SidepanelPersona = ({
   const [setupWizardSaving, setSetupWizardSaving] = React.useState(false)
   const [setupStepErrors, setSetupStepErrors] = React.useState<SetupStepErrors>({})
   const [setupWizardDryRunLoading, setSetupWizardDryRunLoading] = React.useState(false)
-  const [setupWizardDryRunError, setSetupWizardDryRunError] =
-    React.useState<string | null>(null)
-  const [setupWizardDryRunResult, setSetupWizardDryRunResult] =
-    React.useState<SetupWizardDryRunResult | null>(null)
-  const [setupWizardLiveSuccessText, setSetupWizardLiveSuccessText] =
-    React.useState<string | null>(null)
+  const [setupTestOutcome, setSetupTestOutcome] = React.useState<SetupTestOutcome | null>(
+    null
+  )
   const setupWizardAwaitingLiveResponseRef = React.useRef(false)
+  const setupWizardLastLiveTextRef = React.useRef("")
+  const [setupHandoff, setSetupHandoff] = React.useState<SetupHandoffState | null>(null)
   const [liveSessionVoiceDefaultsBaseline, setLiveSessionVoiceDefaultsBaseline] =
     React.useState<PersonaVoiceDefaults | null>(null)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
@@ -754,9 +755,8 @@ const SidepanelPersona = ({
       return
     }
     setSetupWizardDryRunLoading(false)
-    setSetupWizardDryRunError(null)
-    setSetupWizardDryRunResult(null)
-    setSetupWizardLiveSuccessText(null)
+    setSetupTestOutcome(null)
+    setupWizardLastLiveTextRef.current = ""
     setupWizardAwaitingLiveResponseRef.current = false
   }, [personaSetupWizard.currentStep, personaSetupWizard.isSetupRequired])
 
@@ -1349,7 +1349,11 @@ const SidepanelPersona = ({
         ) {
           const textDelta = String(payload?.text_delta || "").trim()
           if (textDelta) {
-            setSetupWizardLiveSuccessText(textDelta)
+            setSetupTestOutcome({
+              kind: "live_success",
+              text: setupWizardLastLiveTextRef.current,
+              responseText: textDelta
+            })
             setupWizardAwaitingLiveResponseRef.current = false
           }
         }
@@ -2353,7 +2357,16 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         applyPersonaProfileResponse(payload, { setup: completedSetup })
-        setSetupWizardDryRunError(null)
+        const handoffTargetTab = setupIntentTargetTab || activeTab
+        setActiveTab(handoffTargetTab)
+        setSetupHandoff({
+          targetTab: handoffTargetTab,
+          completionType: testType
+        })
+        setSetupIntentPersonaId("")
+        setSetupIntentTargetTab(null)
+        setSetupTestOutcome(null)
+        setupWizardLastLiveTextRef.current = ""
       } catch (setupError: any) {
         setSetupStepError(
           "test",
@@ -2365,9 +2378,12 @@ const SidepanelPersona = ({
     },
     [
       applyPersonaProfileResponse,
+      activeTab,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
       selectedPersonaId,
+      setupIntentTargetTab,
+      setSetupHandoff,
       setSetupStepError
     ]
   )
@@ -2381,9 +2397,9 @@ const SidepanelPersona = ({
       clearAllSetupStepErrors()
       setSetupIntentPersonaId(personaId)
       setSetupIntentTargetTab(activeTab)
-      setSetupWizardDryRunError(null)
-      setSetupWizardDryRunResult(null)
-      setSetupWizardLiveSuccessText(null)
+      setSetupTestOutcome(null)
+      setupWizardLastLiveTextRef.current = ""
+      setSetupHandoff(null)
       setupWizardAwaitingLiveResponseRef.current = false
       try {
         const response = await tldwClient.fetchWithAuth(
@@ -2413,6 +2429,7 @@ const SidepanelPersona = ({
       buildSetupProfileUpdatePath,
       clearAllSetupStepErrors,
       selectedPersonaId,
+      setSetupHandoff,
       setSetupStepError
     ]
   )
@@ -2443,7 +2460,7 @@ const SidepanelPersona = ({
       const normalizedHeardText = String(heardText || "").trim()
       if (!personaId || !normalizedHeardText) return
       setSetupWizardDryRunLoading(true)
-      setSetupWizardDryRunError(null)
+      setSetupTestOutcome(null)
       try {
         const response = await tldwClient.fetchWithAuth(
           `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/voice-commands/test` as any,
@@ -2463,15 +2480,25 @@ const SidepanelPersona = ({
           command_name?: string | null
           failure_phase?: string | null
         }
-        setSetupWizardDryRunResult({
-          heardText: String(payload?.heard_text || normalizedHeardText),
-          matched: payload?.matched !== false,
-          commandName: payload?.command_name || null,
-          failurePhase: payload?.failure_phase || null
-        })
+        const resolvedHeardText = String(payload?.heard_text || normalizedHeardText)
+        if (payload?.matched === false) {
+          setSetupTestOutcome({
+            kind: "dry_run_no_match",
+            heardText: resolvedHeardText,
+            failurePhase: payload?.failure_phase || null
+          })
+        } else {
+          setSetupTestOutcome({
+            kind: "dry_run_match",
+            heardText: resolvedHeardText,
+            commandName: payload?.command_name || null
+          })
+        }
       } catch (setupError: any) {
-        setSetupWizardDryRunResult(null)
-        setSetupWizardDryRunError(String(setupError?.message || "Failed to run setup dry-run"))
+        setSetupTestOutcome({
+          kind: "dry_run_failure",
+          message: String(setupError?.message || "Failed to run setup dry-run")
+        })
       } finally {
         setSetupWizardDryRunLoading(false)
       }
@@ -2523,7 +2550,11 @@ const SidepanelPersona = ({
   const sendSetupLiveTestMessage = React.useCallback(
     (text: string) => {
       const trimmed = String(text || "").trim()
-      if (!trimmed || !connected || !sessionId || !wsRef.current) return
+      if (!trimmed) return
+      if (!connected || !sessionId || !wsRef.current) {
+        setSetupTestOutcome({ kind: "live_unavailable" })
+        return
+      }
       try {
         wsRef.current.send(
           JSON.stringify({
@@ -2537,7 +2568,11 @@ const SidepanelPersona = ({
           })
         )
         setupWizardAwaitingLiveResponseRef.current = true
-        setSetupWizardLiveSuccessText(null)
+        setupWizardLastLiveTextRef.current = trimmed
+        setSetupTestOutcome({
+          kind: "live_sent",
+          text: trimmed
+        })
         appendLog("user", trimmed)
       } catch (err: any) {
         setSetupStepError("test", String(err?.message || "Failed to send setup live test"))
@@ -2550,6 +2585,7 @@ const SidepanelPersona = ({
       memoryEnabled,
       memoryTopK,
       personaStateContextEnabled,
+      setSetupTestOutcome,
       setSetupStepError,
       sessionId
     ]
@@ -3486,37 +3522,8 @@ const SidepanelPersona = ({
     </div>
   )
 
-  const setupLiveCompletionCard =
-    connected &&
-    personaSetupWizard.isSetupRequired &&
-    personaSetupWizard.currentStep === "test" ? (
-      <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-3 text-sm text-sky-100">
-        <div className="font-medium">Finish assistant setup from a live session</div>
-        <div className="mt-1 text-xs text-sky-100/80">
-          Send one live message with the normal composer. When the assistant responds,
-          finish setup from here.
-        </div>
-        {setupWizardLiveSuccessText ? (
-          <div className="mt-2 rounded-md border border-sky-500/30 bg-black/10 px-3 py-2 text-xs text-sky-50">
-            Live session responded: {setupWizardLiveSuccessText}
-          </div>
-        ) : null}
-        {setupWizardLiveSuccessText ? (
-          <Button
-            className="mt-3"
-            onClick={() => {
-              void completePersonaSetup("live_session")
-            }}
-          >
-            Finish setup from live session
-          </Button>
-        ) : null}
-      </div>
-    ) : null
-
   const composerPanel = (
     <div className="flex flex-col gap-2">
-      {setupLiveCompletionCard}
       {isCompanionMode && companionPrompts.length ? (
         <div
           className="flex flex-wrap gap-2"
@@ -3576,11 +3583,49 @@ const SidepanelPersona = ({
     </div>
   )
 
+  const dismissSetupHandoff = React.useCallback(() => {
+    setSetupHandoff(null)
+  }, [])
+
+  const openSetupHandoffTab = React.useCallback((tab: PersonaGardenTabKey) => {
+    setActiveTab(tab)
+    setSetupHandoff(null)
+  }, [])
+
+  const renderSetupHandoffCard = React.useCallback(
+    (tab: PersonaGardenTabKey) => {
+      if (!setupHandoff || setupHandoff.targetTab !== tab) return null
+      return (
+        <PersonaSetupHandoffCard
+          targetTab={setupHandoff.targetTab}
+          completionType={setupHandoff.completionType}
+          onDismiss={dismissSetupHandoff}
+          onOpenCommands={() => openSetupHandoffTab("commands")}
+          onOpenTestLab={() => openSetupHandoffTab("test-lab")}
+          onOpenLive={() => openSetupHandoffTab("live")}
+          onOpenProfiles={() => openSetupHandoffTab("profiles")}
+        />
+      )
+    },
+    [dismissSetupHandoff, openSetupHandoffTab, setupHandoff]
+  )
+
+  const withSetupHandoff = React.useCallback(
+    (tab: PersonaGardenTabKey, content: React.ReactNode) => (
+      <div className="space-y-3">
+        {renderSetupHandoffCard(tab)}
+        {content}
+      </div>
+    ),
+    [renderSetupHandoffCard]
+  )
+
   const tabItems = [
     {
       key: "commands",
       label: t("sidepanel:persona.tabCommands", "Commands"),
-      content: (
+      content: withSetupHandoff(
+        "commands",
         <CommandsPanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
@@ -3599,7 +3644,8 @@ const SidepanelPersona = ({
     {
       key: "test-lab",
       label: t("sidepanel:persona.tabTestLab", "Test Lab"),
-      content: (
+      content: withSetupHandoff(
+        "test-lab",
         <TestLabPanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
@@ -3615,7 +3661,8 @@ const SidepanelPersona = ({
     {
       key: "live",
       label: t("sidepanel:persona.tabLive", "Live Session"),
-      content: (
+      content: withSetupHandoff(
+        "live",
         <LiveSessionPanel
           controls={liveSessionControls}
           assistantVoice={assistantVoiceCard}
@@ -3629,7 +3676,8 @@ const SidepanelPersona = ({
     {
       key: "profiles",
       label: t("sidepanel:persona.tabProfiles", "Profiles"),
-      content: (
+      content: withSetupHandoff(
+        "profiles",
         <ProfilePanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
@@ -3827,10 +3875,8 @@ const SidepanelPersona = ({
                   <SetupTestAndFinishStep
                     saving={setupWizardSaving}
                     dryRunLoading={setupWizardDryRunLoading}
-                    dryRunError={setupWizardDryRunError}
-                    dryRunResult={setupWizardDryRunResult}
                     liveConnected={connected}
-                    liveSuccessText={setupWizardLiveSuccessText}
+                    outcome={setupTestOutcome}
                     onRunDryRun={(heardText) => {
                       void handleRunSetupDryRun(heardText)
                     }}

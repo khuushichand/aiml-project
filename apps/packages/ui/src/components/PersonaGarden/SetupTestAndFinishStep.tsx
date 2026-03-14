@@ -1,19 +1,38 @@
 import React from "react"
 
-type SetupDryRunResult = {
-  heardText: string
-  matched: boolean
-  commandName?: string | null
-  failurePhase?: string | null
-}
+export type SetupTestOutcome =
+  | {
+      kind: "dry_run_match"
+      heardText: string
+      commandName?: string | null
+    }
+  | {
+      kind: "dry_run_no_match"
+      heardText: string
+      failurePhase?: string | null
+    }
+  | {
+      kind: "dry_run_failure"
+      message: string
+    }
+  | {
+      kind: "live_unavailable"
+    }
+  | {
+      kind: "live_sent"
+      text: string
+    }
+  | {
+      kind: "live_success"
+      text: string
+      responseText: string
+    }
 
 type SetupTestAndFinishStepProps = {
   saving: boolean
   dryRunLoading: boolean
-  dryRunError: string | null
-  dryRunResult: SetupDryRunResult | null
   liveConnected: boolean
-  liveSuccessText: string | null
+  outcome: SetupTestOutcome | null
   onRunDryRun: (heardText: string) => void
   onConnectLive: () => void
   onSendLive: (text: string) => void
@@ -24,10 +43,8 @@ type SetupTestAndFinishStepProps = {
 export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
   saving,
   dryRunLoading,
-  dryRunError,
-  dryRunResult,
   liveConnected,
-  liveSuccessText,
+  outcome,
   onRunDryRun,
   onConnectLive,
   onSendLive,
@@ -36,6 +53,16 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
 }) => {
   const [dryRunHeardText, setDryRunHeardText] = React.useState("")
   const [liveText, setLiveText] = React.useState("")
+
+  const dryRunOutcome = React.useMemo(() => {
+    if (!outcome || !outcome.kind.startsWith("dry_run_")) return null
+    return outcome
+  }, [outcome])
+
+  const liveOutcome = React.useMemo(() => {
+    if (!outcome || !outcome.kind.startsWith("live_")) return null
+    return outcome
+  }, [outcome])
 
   return (
     <div className="space-y-4">
@@ -55,16 +82,20 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
           className="min-h-[88px] w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text"
           onChange={(event) => setDryRunHeardText(event.target.value)}
         />
-        {dryRunError ? (
+        {dryRunOutcome?.kind === "dry_run_failure" ? (
           <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-            {dryRunError}
+            {dryRunOutcome.message}
           </div>
         ) : null}
-        {dryRunResult ? (
+        {dryRunOutcome?.kind === "dry_run_match" ? (
           <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-            {dryRunResult.matched
-              ? `Matched ${dryRunResult.commandName || "a command"} for "${dryRunResult.heardText}".`
-              : `Dry-run completed for "${dryRunResult.heardText}".`}
+            Matched {dryRunOutcome.commandName || "a command"} for "{dryRunOutcome.heardText}".
+          </div>
+        ) : null}
+        {dryRunOutcome?.kind === "dry_run_no_match" ? (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+            No direct command matched for "{dryRunOutcome.heardText}". You can
+            continue by trying live voice or refining starter commands first.
           </div>
         ) : null}
         <div className="flex flex-wrap gap-2">
@@ -76,7 +107,7 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
           >
             {dryRunLoading ? "Running..." : "Run dry-run test"}
           </button>
-          {dryRunResult ? (
+          {dryRunOutcome?.kind === "dry_run_match" ? (
             <button
               type="button"
               className="rounded-md border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
@@ -92,14 +123,21 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
       <div className="space-y-2 rounded-lg border border-border bg-surface2 p-3">
         <div className="text-sm font-medium text-text">Live session test</div>
         {!liveConnected ? (
-          <button
-            type="button"
-            className="rounded-md border border-border px-3 py-2 text-sm font-medium text-text disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={saving}
-            onClick={onConnectLive}
-          >
-            Connect live session
-          </button>
+          <>
+            {liveOutcome?.kind === "live_unavailable" ? (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                Live session unavailable until you connect.
+              </div>
+            ) : null}
+            <button
+              type="button"
+              className="rounded-md border border-border px-3 py-2 text-sm font-medium text-text disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={saving}
+              onClick={onConnectLive}
+            >
+              Connect live session
+            </button>
+          </>
         ) : (
           <>
             <textarea
@@ -116,23 +154,28 @@ export const SetupTestAndFinishStep: React.FC<SetupTestAndFinishStepProps> = ({
             >
               Send live test
             </button>
+            {liveOutcome?.kind === "live_sent" ? (
+              <div className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+                Live test sent: {liveOutcome.text}
+              </div>
+            ) : null}
+            {liveOutcome?.kind === "live_success" ? (
+              <div className="space-y-2">
+                <div className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+                  Live session responded: {liveOutcome.responseText}
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={saving}
+                  onClick={onFinishWithLiveSession}
+                >
+                  Finish with live session
+                </button>
+              </div>
+            ) : null}
           </>
         )}
-        {liveSuccessText ? (
-          <div className="space-y-2">
-            <div className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
-              Live session responded: {liveSuccessText}
-            </div>
-            <button
-              type="button"
-              className="rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={saving}
-              onClick={onFinishWithLiveSession}
-            >
-              Finish with live session
-            </button>
-          </div>
-        ) : null}
       </div>
     </div>
   )

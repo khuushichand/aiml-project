@@ -355,7 +355,7 @@ git commit -m "feat: add setup reset and step-scoped error handling"
 
 ### Task 5: Add Structured Test Outcomes And Unified Post-Setup Handoff
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Create: `apps/packages/ui/src/components/PersonaGarden/PersonaSetupHandoffCard.tsx`
@@ -443,6 +443,8 @@ git commit -m "feat: add setup test outcomes and post-setup handoff"
 ```
 
 ### Task 6: Add Browser-Level Coverage For Happy Path And Retry Flow
+
+**Status:** Not Started
 
 **Files:**
 - Create: `apps/extension/tests/e2e/persona-assistant-setup.spec.ts`
