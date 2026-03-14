@@ -66,7 +66,8 @@ test.describe("Quiz Playground", () => {
       const badgeVisible = await quiz.betaBadge.isVisible().catch(() => false)
       if (!badgeVisible) return
 
-      await quiz.betaBadge.click()
+      // The tooltip opens on mouseEnter; use hover to trigger it
+      await quiz.hoverBetaBadge()
       await expect(quiz.betaTooltip).toBeVisible({ timeout: 5_000 })
 
       await assertNoCriticalErrors(diagnostics)

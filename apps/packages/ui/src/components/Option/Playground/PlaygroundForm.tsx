@@ -112,6 +112,10 @@ import {
   parseMediaIdAsNumber
 } from "@/services/tldw/media-chat-handoff"
 import {
+  normalizeWatchlistChatHandoffPayload,
+  buildWatchlistChatHint
+} from "@/services/tldw/watchlist-chat-handoff"
+import {
   getImageBackendConfigs,
   normalizeImageBackendConfig,
   resolveImageBackendConfig
@@ -136,7 +140,7 @@ import { VoiceChatIndicator } from "./VoiceChatIndicator"
 import { VoiceModeSelector } from "./VoiceModeSelector"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { clearSetting, getSetting } from "@/services/settings/registry"
-import { DISCUSS_MEDIA_PROMPT_SETTING } from "@/services/settings/ui-settings"
+import { DISCUSS_MEDIA_PROMPT_SETTING, DISCUSS_WATCHLIST_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import { Button as TldwButton } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
@@ -2360,6 +2364,55 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       window.removeEventListener("tldw:discuss-media", handler as any)
     }
   }, [applyDiscussMediaPayload])
+
+  const applyDiscussWatchlistPayload = React.useCallback(
+    (
+      rawPayload: unknown,
+      options?: { clearAfterUse?: boolean }
+    ) => {
+      const payload = normalizeWatchlistChatHandoffPayload(rawPayload)
+      if (!payload) {
+        if (options?.clearAfterUse) {
+          void clearSetting(DISCUSS_WATCHLIST_PROMPT_SETTING)
+        }
+        return
+      }
+      if (options?.clearAfterUse) {
+        void clearSetting(DISCUSS_WATCHLIST_PROMPT_SETTING)
+      }
+      setChatMode("normal")
+      setRagMediaIds(null)
+      const hint = buildWatchlistChatHint(payload)
+      if (!hint) return
+      setMessageValue(hint, { collapseLarge: true, forceCollapse: true })
+      textAreaFocus()
+    },
+    [setChatMode, setMessageValue, setRagMediaIds, textAreaFocus]
+  )
+
+  // Seed composer when a watchlist item requests discussion
+  React.useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const payload = await getSetting(DISCUSS_WATCHLIST_PROMPT_SETTING)
+      if (cancelled || !payload) return
+      applyDiscussWatchlistPayload(payload, { clearAfterUse: true })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [applyDiscussWatchlistPayload])
+
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail
+      applyDiscussWatchlistPayload(detail)
+    }
+    window.addEventListener("tldw:discuss-watchlist", handler as any)
+    return () => {
+      window.removeEventListener("tldw:discuss-watchlist", handler as any)
+    }
+  }, [applyDiscussWatchlistPayload])
 
   React.useEffect(() => {
     textAreaFocus()

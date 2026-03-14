@@ -113,3 +113,28 @@ describe("buildWatchlistChatHint", () => {
     expect(buildWatchlistChatHint({ articles: [] })).toBe("")
   })
 })
+
+describe("getWatchlistChatTotalChars", () => {
+  it("sums content lengths across articles", () => {
+    const payload: WatchlistChatHandoffPayload = {
+      articles: [
+        { title: "A", content: "12345" },
+        { title: "B", content: "67890ab" }
+      ]
+    }
+    expect(getWatchlistChatTotalChars(payload)).toBe(12)
+  })
+
+  it("returns 0 when articles have no content", () => {
+    const payload: WatchlistChatHandoffPayload = {
+      articles: [{ title: "No body" }]
+    }
+    expect(getWatchlistChatTotalChars(payload)).toBe(0)
+  })
+})
+
+describe("WATCHLIST_CHAT_CONTENT_WARN_THRESHOLD", () => {
+  it("equals 80000", () => {
+    expect(WATCHLIST_CHAT_CONTENT_WARN_THRESHOLD).toBe(80_000)
+  })
+})

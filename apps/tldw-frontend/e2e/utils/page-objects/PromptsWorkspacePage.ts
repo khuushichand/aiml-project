@@ -198,14 +198,23 @@ export class PromptsWorkspacePage extends BasePage {
     // Close the full-page editor if it is still open (e.g. after createPrompt)
     const editorOpen = await this.fullPageEditor.isVisible().catch(() => false)
     if (editorOpen) {
-      // Press Escape or click the close/back button to exit the editor
-      const closeBtn = this.fullPageEditor.getByRole("button", { name: /close|back|cancel/i }).first()
-      if (await closeBtn.isVisible().catch(() => false)) {
-        await closeBtn.click()
+      // Try the Back/Cancel buttons by their data-testid
+      const backBtn = this.page.locator('[data-testid="full-editor-back"]')
+      const cancelBtn = this.page.locator('[data-testid="full-editor-cancel"]')
+      if (await backBtn.isVisible().catch(() => false)) {
+        await backBtn.click()
+      } else if (await cancelBtn.isVisible().catch(() => false)) {
+        await cancelBtn.click()
       } else {
         await this.page.keyboard.press("Escape")
       }
       await this.fullPageEditor.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {})
+      // Handle any unsaved-changes confirmation dialog
+      const discardBtn = this.page.getByRole("button", { name: /discard|ok|yes|confirm/i })
+      if (await discardBtn.first().isVisible({ timeout: 2_000 }).catch(() => false)) {
+        await discardBtn.first().click()
+        await this.fullPageEditor.waitFor({ state: "hidden", timeout: 3_000 }).catch(() => {})
+      }
     }
 
     // Find the prompt text in the list to identify its row
