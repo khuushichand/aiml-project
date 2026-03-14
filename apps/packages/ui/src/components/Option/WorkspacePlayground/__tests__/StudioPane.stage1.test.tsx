@@ -13,6 +13,7 @@ const {
   mockMessageSuccess,
   mockMessageError,
   mockMessageInfo,
+  mockGenerateFlashcardsService,
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
@@ -34,6 +35,7 @@ const {
   const messageSuccess = vi.fn()
   const messageError = vi.fn()
   const messageInfo = vi.fn()
+  const generateFlashcardsService = vi.fn()
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
@@ -121,6 +123,7 @@ const {
     mockMessageSuccess: messageSuccess,
     mockMessageError: messageError,
     mockMessageInfo: messageInfo,
+    mockGenerateFlashcardsService: generateFlashcardsService,
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
@@ -181,9 +184,10 @@ vi.mock("@/services/quizzes", () => ({
 }))
 
 vi.mock("@/services/flashcards", () => ({
-  listDecks: vi.fn(),
-  createDeck: vi.fn(),
-  createFlashcard: vi.fn()
+  generateFlashcards: mockGenerateFlashcardsService,
+  listDecks: vi.fn().mockResolvedValue([]),
+  createDeck: vi.fn().mockResolvedValue({ id: 1, name: "Workspace Flashcards" }),
+  createFlashcard: vi.fn().mockResolvedValue({ uuid: "card-1" })
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
@@ -347,6 +351,10 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     )
 
     mockRagSearch.mockResolvedValue({ generation: "Generated summary" })
+    mockGenerateFlashcardsService.mockResolvedValue({
+      flashcards: [{ front: "Term", back: "Definition" }],
+      count: 1
+    })
     mockSynthesizeSpeech.mockResolvedValue(new ArrayBuffer(8))
     mockGenerateSlidesFromMedia.mockResolvedValue({
       id: "presentation-1",
@@ -721,9 +729,9 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     )
   })
 
-  it("passes extended timeout to flashcard generation RAG request", async () => {
-    mockRagSearch.mockResolvedValue({
-      generation: "Front: Term\nBack: Definition"
+  it("uses structured flashcard generation instead of the RAG text path", async () => {
+    mockGetMediaDetails.mockResolvedValue({
+      content: "ATP powers cellular respiration in cells."
     })
 
     renderStudioPane()
@@ -731,15 +739,14 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
 
     await waitFor(() => {
-      expect(mockRagSearch).toHaveBeenCalled()
+      expect(mockGenerateFlashcardsService).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("DSPy Prompting Talk")
+        })
+      )
     })
 
-    expect(mockRagSearch).toHaveBeenLastCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        timeoutMs: 120000
-      })
-    )
+    expect(mockRagSearch).not.toHaveBeenCalled()
   })
 
   it("confirms before deleting a generated artifact", () => {

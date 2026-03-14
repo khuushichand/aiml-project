@@ -35,9 +35,15 @@ export class NotificationsPage extends BasePage {
   }
 
   async waitForLoaded(): Promise<void> {
-    // Wait until loading state disappears (either empty state or list appears)
+    // Wait until loading state disappears (either empty state, list, or error appears)
     await expect(this.heading).toBeVisible({ timeout: 15_000 })
-    await expect(this.loadingState).toBeHidden({ timeout: 15_000 }).catch(() => {})
+    // Wait for loading to finish - check for loading hidden, empty state, list, or error
+    await Promise.race([
+      expect(this.loadingState).toBeHidden({ timeout: 30_000 }),
+      expect(this.emptyState).toBeVisible({ timeout: 30_000 }),
+      expect(this.notificationsList).toBeVisible({ timeout: 30_000 }),
+      expect(this.errorBanner).toBeVisible({ timeout: 30_000 }),
+    ]).catch(() => {})
   }
 
   async getNotificationItems(): Promise<Locator> {

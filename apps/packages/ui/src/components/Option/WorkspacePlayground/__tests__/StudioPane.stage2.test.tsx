@@ -12,6 +12,7 @@ const { mockScheduleWorkspaceUndoAction, mockUndoWorkspaceAction } = vi.hoisted(
 
 const {
   mockGenerateQuiz,
+  mockGenerateFlashcardsService,
   mockListDecks,
   mockCreateDeck,
   mockCreateFlashcard,
@@ -35,6 +36,7 @@ const {
   workspaceStoreState
 } = vi.hoisted(() => {
   const generateQuiz = vi.fn()
+  const generateFlashcardsService = vi.fn()
   const listDecks = vi.fn()
   const createDeck = vi.fn()
   const createFlashcard = vi.fn()
@@ -131,6 +133,7 @@ const {
 
   return {
     mockGenerateQuiz: generateQuiz,
+    mockGenerateFlashcardsService: generateFlashcardsService,
     mockListDecks: listDecks,
     mockCreateDeck: createDeck,
     mockCreateFlashcard: createFlashcard,
@@ -215,6 +218,7 @@ vi.mock("@/services/quizzes", () => ({
 }))
 
 vi.mock("@/services/flashcards", () => ({
+  generateFlashcards: mockGenerateFlashcardsService,
   listDecks: mockListDecks,
   createDeck: mockCreateDeck,
   createFlashcard: mockCreateFlashcard
@@ -402,6 +406,10 @@ describe("StudioPane Stage 2 workflows", () => {
     })
 
     mockListDecks.mockResolvedValue([])
+    mockGenerateFlashcardsService.mockResolvedValue({
+      flashcards: [{ front: "Term", back: "Definition" }],
+      count: 1
+    })
     mockGetChatModels.mockResolvedValue([])
     mockCreateDeck.mockResolvedValue({ id: 1, name: "Workspace Flashcards" })
     mockCreateFlashcard.mockResolvedValue({ uuid: "card-1" })
@@ -854,12 +862,16 @@ describe("StudioPane Stage 2 workflows", () => {
     })
   })
 
-  it("uses selected flashcard deck when generating flashcards", async () => {
+  it("uses structured flashcard generation with selected source content", async () => {
     mockListDecks.mockResolvedValue([
       { id: 4, name: "Biology Deck", card_count: 0, created_at: null, updated_at: null }
     ])
-    mockRagSearch.mockResolvedValue({
-      generation: "Front: ATP\nBack: Cellular energy"
+    mockGetMediaDetails.mockResolvedValue({
+      content: "ATP powers cellular respiration in cells."
+    })
+    mockGenerateFlashcardsService.mockResolvedValue({
+      flashcards: [{ front: "ATP", back: "Cellular energy" }],
+      count: 1
     })
 
     renderStudioPane()
@@ -875,6 +887,18 @@ describe("StudioPane Stage 2 workflows", () => {
       expect(mockCreateFlashcard).toHaveBeenCalled()
     })
 
+    expect(mockGenerateFlashcardsService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("DSPy Prompting Talk"),
+        model: "gpt-4o-mini"
+      })
+    )
+    expect(mockGenerateFlashcardsService).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: ""
+      })
+    )
+    expect(mockRagSearch).not.toHaveBeenCalled()
     expect(mockCreateFlashcard).toHaveBeenCalledWith(
       expect.objectContaining({
         deck_id: 4,
@@ -884,6 +908,35 @@ describe("StudioPane Stage 2 workflows", () => {
       }),
       expect.any(Object)
     )
+  }, 15000)
+
+  it("falls back to the first available chat model for flashcards when no model is selected", async () => {
+    messageOptionStoreState.selectedModel = null
+    mockGetChatModels.mockResolvedValue([
+      {
+        id: "gpt-4o-mini",
+        provider: "openai",
+        name: "GPT-4o mini",
+        context_window: 128000,
+        max_output_tokens: 16000,
+        supports_vision: false
+      }
+    ])
+    mockGetMediaDetails.mockResolvedValue({
+      content: "ATP powers cellular respiration in cells."
+    })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
+
+    await waitFor(() => {
+      expect(mockGenerateFlashcardsService).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "gpt-4o-mini"
+        })
+      )
+    })
   }, 15000)
 
   it("disables compare sources generation when fewer than two sources are selected", () => {
@@ -955,6 +1008,151 @@ describe("StudioPane Stage 2 workflows", () => {
         })
       )
     })
+  })
+
+  it("generates data table output from selected source content via chat completion", async () => {
+    workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
+    workspaceStoreState.getSelectedMediaIds = () => [101, 202]
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "DSPy Prompting Talk",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      },
+      {
+        id: "source-2",
+        mediaId: 202,
+        title: "E2E DB Media",
+        type: "document",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ]
+    mockGetMediaDetails
+      .mockResolvedValueOnce({
+        source: { title: "DSPy Prompting Talk" },
+        content: {
+          text: "DSPy helps optimize prompting workflows and compound AI pipelines."
+        }
+      })
+      .mockResolvedValueOnce({
+        source: { title: "E2E DB Media" },
+        content: {
+          text: "Hello world from E2E document processing."
+        }
+      })
+    mockCreateChatCompletion.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content:
+                  "```mermaid\nmindmap\n  root((Workspace Research))\n    Prompting\n      DSPy\n    Documents\n      E2E DB Media\n```"
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Mind Map" }))
+
+    await waitFor(() => {
+      expect(mockGetMediaDetails).toHaveBeenCalledTimes(2)
+    })
+
+    expect(mockCreateChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-4o-mini",
+        messages: [
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("Mermaid")
+          }),
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining("DSPy Prompting Talk")
+          })
+        ]
+      })
+    )
+    expect(mockRagSearch).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        expect.stringMatching(/^artifact-/),
+        "completed",
+        expect.objectContaining({
+          content: expect.stringContaining("mindmap"),
+          data: expect.objectContaining({
+            mermaid: expect.stringContaining("mindmap")
+          })
+        })
+      )
+    })
+  })
+
+  it("falls back to the first available chat model for mind maps when no model is selected", async () => {
+    messageOptionStoreState.selectedModel = null
+    mockGetChatModels.mockResolvedValue([
+      {
+        id: "gpt-4o-mini",
+        name: "GPT-4o mini",
+        provider: "openai"
+      },
+      {
+        id: "claude-3-5-sonnet",
+        name: "Claude 3.5 Sonnet",
+        provider: "anthropic"
+      }
+    ])
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "DSPy helps optimize prompting workflows and compound AI pipelines."
+      }
+    })
+    mockCreateChatCompletion.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "```mermaid\nmindmap\n  root((Workspace))\n    DSPy\n```"
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Mind Map" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
+
+    expect(mockCreateChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-4o-mini"
+      })
+    )
   })
 
   it("generates data table output from selected source content via chat completion", async () => {

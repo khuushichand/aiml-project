@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
   buildWatchlistChatHint,
+  getWatchlistChatTotalChars,
   normalizeWatchlistChatHandoffPayload,
+  WATCHLIST_CHAT_CONTENT_WARN_THRESHOLD,
   type WatchlistChatArticle,
   type WatchlistChatHandoffPayload
 } from "../watchlist-chat-handoff"
@@ -47,6 +49,15 @@ describe("normalizeWatchlistChatHandoffPayload", () => {
     }
     const result = normalizeWatchlistChatHandoffPayload(input)
     expect(result!.articles).toHaveLength(1)
+  })
+
+  it("preserves sourceType and mediaId fields", () => {
+    const input = {
+      articles: [{ title: "X", sourceType: "item", mediaId: 42 }]
+    }
+    const result = normalizeWatchlistChatHandoffPayload(input)
+    expect(result!.articles[0].sourceType).toBe("item")
+    expect(result!.articles[0].mediaId).toBe(42)
   })
 })
 

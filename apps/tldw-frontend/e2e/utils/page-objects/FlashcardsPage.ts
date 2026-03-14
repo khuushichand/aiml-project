@@ -122,7 +122,7 @@ export class FlashcardsPage extends BasePage {
   }
 
   get manageSearchInput(): Locator {
-    return this.page.locator('[data-testid="flashcards-manage-search"]')
+    return this.page.locator('[data-testid="flashcards-manage-search"] input')
   }
 
   get manageDeckSelect(): Locator {

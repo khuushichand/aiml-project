@@ -84,7 +84,8 @@ test.describe("Admin MLX", () => {
       const cardVisible = await admin.mlxLoadModelCard.isVisible().catch(() => false)
       expect(cardVisible).toBe(true)
 
-      // Model path input (AutoComplete) should be visible
+      // Model path input (AutoComplete) should be visible after scrolling into view
+      await admin.mlxModelPathInput.scrollIntoViewIfNeeded().catch(() => {})
       const inputVisible = await admin.mlxModelPathInput.isVisible().catch(() => false)
       expect(inputVisible).toBe(true)
 
@@ -105,7 +106,10 @@ test.describe("Admin MLX", () => {
         return
       }
 
+      // Scroll buttons into view since they may be below the fold
+      await admin.mlxLoadButton.scrollIntoViewIfNeeded().catch(() => {})
       const loadVisible = await admin.mlxLoadButton.isVisible().catch(() => false)
+      await admin.mlxUnloadButton.scrollIntoViewIfNeeded().catch(() => {})
       const unloadVisible = await admin.mlxUnloadButton.isVisible().catch(() => false)
 
       expect(loadVisible).toBe(true)
@@ -156,7 +160,7 @@ test.describe("Admin MLX", () => {
 
       // Set up API call expectation before navigation
       const apiCall = expectApiCall(authedPage, {
-        url: /\/api\/v1\/(admin\/)?mlx\/(status|providers)/i,
+        url: /\/api\/v1\/llm\/providers\/mlx\/status/i,
         method: "GET",
       })
 

@@ -20,8 +20,8 @@ export class WorkflowEditorPage extends BasePage {
   async assertPageReady(): Promise<void> {
     await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
     // Wait for the toolbar (Save button) or canvas area
-    const saveButton = this.page.getByRole("button", { name: /save/i })
-    const statusBar = this.page.getByText(/nodes/)
+    const saveButton = this.page.getByRole("button", { name: /^Save$/i })
+    const statusBar = this.page.getByText(/\d+ nodes/)
     await Promise.race([
       saveButton.first().waitFor({ state: "visible", timeout: 20_000 }),
       statusBar.first().waitFor({ state: "visible", timeout: 20_000 }),
@@ -32,7 +32,7 @@ export class WorkflowEditorPage extends BasePage {
 
   /** Save button in toolbar */
   get saveButton(): Locator {
-    return this.page.getByRole("button", { name: /save/i })
+    return this.page.getByRole("button", { name: /^Save$/i })
   }
 
   /** Undo button */

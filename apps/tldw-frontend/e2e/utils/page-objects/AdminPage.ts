@@ -52,7 +52,7 @@ export class AdminPage extends BasePage {
 
   /** "Coming Soon" text in placeholder pages */
   get comingSoonText(): Locator {
-    return this.page.getByText("Coming Soon")
+    return this.page.getByText("Coming Soon", { exact: true })
   }
 
   /* ------------------------------------------------------------------ */

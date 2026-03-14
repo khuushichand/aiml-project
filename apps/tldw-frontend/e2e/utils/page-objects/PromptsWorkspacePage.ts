@@ -195,6 +195,19 @@ export class PromptsWorkspacePage extends BasePage {
    * Finds the prompt row/card, opens the "more" menu, and clicks Delete.
    */
   async deletePrompt(name: string): Promise<void> {
+    // Close the full-page editor if it is still open (e.g. after createPrompt)
+    const editorOpen = await this.fullPageEditor.isVisible().catch(() => false)
+    if (editorOpen) {
+      // Press Escape or click the close/back button to exit the editor
+      const closeBtn = this.fullPageEditor.getByRole("button", { name: /close|back|cancel/i }).first()
+      if (await closeBtn.isVisible().catch(() => false)) {
+        await closeBtn.click()
+      } else {
+        await this.page.keyboard.press("Escape")
+      }
+      await this.fullPageEditor.waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {})
+    }
+
     // Find the prompt text in the list to identify its row
     const promptText = this.page.getByText(name, { exact: false }).first()
     await expect(promptText).toBeVisible({ timeout: 10_000 })

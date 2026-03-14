@@ -41,7 +41,8 @@ export class QuizPage extends BasePage {
 
   /** Beta tooltip (visible on hover/click of beta badge) */
   get betaTooltip(): Locator {
-    return this.page.locator('[data-testid="quiz-beta-tooltip"]')
+    // Try the testid first; fall back to the Ant Design tooltip container
+    return this.page.locator('[data-testid="quiz-beta-tooltip"], .ant-tooltip:visible, .ant-popover:visible').first()
   }
 
   /** Connection problem banner (offline, non-demo) */

@@ -15,7 +15,7 @@ test.describe("Profile Page", () => {
     await expect(panel).toBeVisible({ timeout: 15_000 })
 
     // Verify "Coming Soon" label
-    await expect(authedPage.getByText("Coming Soon")).toBeVisible()
+    await expect(authedPage.getByText("Coming Soon", { exact: true })).toBeVisible()
 
     // Verify title
     await expect(
@@ -64,8 +64,8 @@ test.describe("Profile Page", () => {
     const panel = authedPage.getByTestId("route-placeholder-panel")
     await expect(panel).toBeVisible({ timeout: 15_000 })
 
-    // Verify the planned path is displayed
-    await expect(authedPage.getByText("/profile")).toBeVisible()
+    // Verify the planned path is displayed (appears in both Requested and Planned route)
+    await expect(authedPage.getByText("/profile").first()).toBeVisible()
 
     await assertNoCriticalErrors(diagnostics)
   })

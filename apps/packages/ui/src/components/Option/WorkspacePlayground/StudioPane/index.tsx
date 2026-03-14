@@ -51,7 +51,12 @@ import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { tldwModels, type ModelInfo } from "@/services/tldw"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import { generateQuiz } from "@/services/quizzes"
-import { createFlashcard, createDeck, listDecks } from "@/services/flashcards"
+import {
+  createFlashcard,
+  createDeck,
+  generateFlashcards as generateFlashcardDrafts,
+  listDecks
+} from "@/services/flashcards"
 import { fetchTldwVoiceCatalog, type TldwVoice } from "@/services/tldw/audio-voices"
 import { inferTldwProviderFromModel } from "@/services/tts-provider"
 import { OUTPUT_TYPES } from "@/types/workspace"
@@ -469,12 +474,12 @@ type GenerationResult = {
   data?: Record<string, unknown>
 }
 
-type DataTableSourceContext = {
+type StudioSourceContext = {
   title: string
   text: string
 }
 
-type DataTableGenerationOptions = {
+type SourceContentGenerationOptions = {
   mediaIds: number[]
   selectedSources: WorkspaceSource[]
   model?: string
@@ -485,8 +490,13 @@ type DataTableGenerationOptions = {
   abortSignal?: AbortSignal
 }
 
-const DATA_TABLE_SOURCE_CHAR_LIMIT = 6000
-const DATA_TABLE_TOTAL_SOURCE_CHAR_LIMIT = 18000
+type FlashcardsGenerationOptions = SourceContentGenerationOptions & {
+  preferredDeckId?: number
+}
+
+const STUDIO_SOURCE_CHAR_LIMIT = 6000
+const STUDIO_TOTAL_SOURCE_CHAR_LIMIT = 18000
+const FLASHCARD_GENERATION_TEXT_LIMIT = 8000
 
 const extractUsageMetrics = (payload: unknown): UsageMetrics => {
   if (!payload || typeof payload !== "object") {
@@ -601,6 +611,75 @@ const readChatCompletionResponseText = async (response: Response): Promise<strin
   } catch {
     return bodyText
   }
+}
+
+const loadStudioSourceContexts = async (
+  options: SourceContentGenerationOptions
+): Promise<StudioSourceContext[]> => {
+  const sourceByMediaId = new Map(
+    options.selectedSources.map((source) => [source.mediaId, source])
+  )
+  const mediaDetails = await Promise.all(
+    options.mediaIds.map(async (mediaId) => {
+      const detail = await tldwClient.getMediaDetails(mediaId, {
+        include_content: true,
+        include_versions: false,
+        include_version_content: false,
+        signal: options.abortSignal
+      })
+      const source = sourceByMediaId.get(mediaId)
+      const sourceMeta = isRecord(detail) && isRecord(detail.source) ? detail.source : null
+      return {
+        title:
+          source?.title ||
+          (typeof sourceMeta?.title === "string" ? sourceMeta.title : "") ||
+          `Source ${mediaId}`,
+        text: extractMediaDetailText(detail)
+      }
+    })
+  )
+
+  let remainingChars = STUDIO_TOTAL_SOURCE_CHAR_LIMIT
+  const sourceContexts: StudioSourceContext[] = []
+  for (const detail of mediaDetails) {
+    if (!detail.text || remainingChars <= 0) {
+      continue
+    }
+    const clippedText = detail.text
+      .slice(0, Math.min(STUDIO_SOURCE_CHAR_LIMIT, remainingChars))
+      .trim()
+    if (!clippedText) {
+      continue
+    }
+    sourceContexts.push({
+      title: detail.title,
+      text: clippedText
+    })
+    remainingChars -= clippedText.length
+  }
+
+  return sourceContexts
+}
+
+const formatStudioSourceContexts = (
+  sourceContexts: StudioSourceContext[],
+  maxChars?: number
+): string => {
+  const combined = sourceContexts
+    .map(
+      (source, index) =>
+        `Source ${index + 1}: ${source.title}\n${source.text}`
+    )
+    .join("\n\n")
+    .trim()
+
+  if (!combined) {
+    return ""
+  }
+  if (typeof maxChars !== "number" || maxChars <= 0) {
+    return combined
+  }
+  return combined.slice(0, maxChars).trim()
 }
 
 const extractRequiredRagText = (response: unknown, label: string): string => {
@@ -1022,12 +1101,17 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     }
     return options
   }, [filteredChatModels, selectedModel, t])
-  const resolveStudioChatModel = React.useCallback(async () => {
-    if (typeof selectedModel === "string" && selectedModel.trim().length > 0) {
-      return selectedModel.trim()
-    }
+  const resolveStudioChatRuntime = React.useCallback(async () => {
+    const normalizeProviderValue = (value: unknown) =>
+      typeof value === "string" && value.trim().length > 0
+        ? value.trim().toLowerCase()
+        : undefined
 
-    const pickFirstModelId = (models: ModelInfo[]) => {
+    const pickRuntime = (models: ModelInfo[]) => {
+      const selectedModelId =
+        typeof selectedModel === "string" && selectedModel.trim().length > 0
+          ? selectedModel.trim()
+          : undefined
       const providerFiltered =
         normalizedApiProvider === "__auto__"
           ? models
@@ -1036,31 +1120,56 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                 String(model.provider || "").trim().toLowerCase() ===
                 normalizedApiProvider
             )
-      const fallbackModel =
-        providerFiltered.find(
-          (model) => typeof model.id === "string" && model.id.trim().length > 0
-        ) ||
+      if (selectedModelId) {
+        const matchedModel = models.find(
+          (model) =>
+            typeof model.id === "string" && model.id.trim() === selectedModelId
+        )
+        return {
+          model: selectedModelId,
+          provider:
+            normalizedApiProvider !== "__auto__"
+              ? normalizedApiProvider
+              : normalizeProviderValue(matchedModel?.provider)
+        }
+      }
+
+      const fallbackModel = providerFiltered.find(
+        (model) => typeof model.id === "string" && model.id.trim().length > 0
+      ) ||
         models.find(
           (model) => typeof model.id === "string" && model.id.trim().length > 0
         )
 
-      return fallbackModel?.id?.trim() || undefined
+      return {
+        model: fallbackModel?.id?.trim() || undefined,
+        provider:
+          normalizeProviderValue(fallbackModel?.provider) ||
+          (normalizedApiProvider !== "__auto__" ? normalizedApiProvider : undefined)
+      }
     }
 
-    const cachedModel = pickFirstModelId(chatModels)
-    if (cachedModel) {
-      return cachedModel
+    const cachedRuntime = pickRuntime(chatModels)
+    if (
+      cachedRuntime.model &&
+      (normalizedApiProvider !== "__auto__" || cachedRuntime.provider)
+    ) {
+      return cachedRuntime
     }
 
     try {
       const models = await tldwModels.getChatModels()
       const normalizedModels = Array.isArray(models) ? models : []
       setChatModels(normalizedModels)
-      return pickFirstModelId(normalizedModels)
+      return pickRuntime(normalizedModels)
     } catch {
-      return undefined
+      return cachedRuntime
     }
   }, [chatModels, normalizedApiProvider, selectedModel])
+  const resolveStudioChatModel = React.useCallback(async () => {
+    const runtime = await resolveStudioChatRuntime()
+    return runtime.model
+  }, [resolveStudioChatRuntime])
   const patchRagAdvancedOptions = React.useCallback(
     (patch: Record<string, unknown>) => {
       setRagAdvancedOptions({
@@ -1559,15 +1668,32 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           )
           break
         case "flashcards":
-          result = await generateFlashcards(
+          const flashcardRuntime = await resolveStudioChatRuntime()
+          result = await generateFlashcards({
             mediaIds,
-            selectedFlashcardDeck === "auto" ? undefined : selectedFlashcardDeck,
-            workspaceTag,
-            activeAbort.signal
-          )
+            selectedSources,
+            model: flashcardRuntime.model,
+            apiProvider: flashcardRuntime.provider,
+            temperature: resolvedTemperature,
+            topP: resolvedTopP,
+            maxTokens: resolvedNumPredict,
+            preferredDeckId:
+              selectedFlashcardDeck === "auto" ? undefined : selectedFlashcardDeck,
+            abortSignal: activeAbort.signal
+          })
           break
         case "mindmap":
-          result = await generateMindMap(mediaIds, activeAbort.signal)
+          result = await generateMindMap({
+            mediaIds,
+            selectedSources,
+            model: await resolveStudioChatModel(),
+            apiProvider:
+              normalizedApiProvider !== "__auto__" ? normalizedApiProvider : undefined,
+            temperature: resolvedTemperature,
+            topP: resolvedTopP,
+            maxTokens: resolvedNumPredict,
+            abortSignal: activeAbort.signal
+          })
           break
         case "audio_overview":
           result = await generateAudioOverview(
@@ -3706,43 +3832,60 @@ async function generateQuizFromMedia(
 }
 
 async function generateFlashcards(
-  mediaIds: number[],
-  preferredDeckId: number | undefined,
-  workspaceTag?: string,
-  abortSignal?: AbortSignal
+  options: FlashcardsGenerationOptions
 ): Promise<GenerationResult> {
-  const generationPrompt = `Extract key concepts, definitions, and important facts that would make good flashcards.
-Format each as:
-Front: [Question or term]
-Back: [Answer or definition]
+  const sourceContexts = await loadStudioSourceContexts(options)
+  const sourceText = formatStudioSourceContexts(
+    sourceContexts,
+    FLASHCARD_GENERATION_TEXT_LIMIT
+  )
+  if (!sourceText) {
+    throw buildMissingContentError("flashcard")
+  }
 
-Generate 10-15 flashcards.`
-  const ragResponse = await requestStudioRagGeneration({
-    query: "key concepts definitions important facts",
-    generationPrompt,
-    mediaIds,
-    topK: 20,
-    abortSignal
+  const generated = await generateFlashcardDrafts({
+    text: sourceText,
+    num_cards: 12,
+    difficulty: "mixed",
+    provider: options.apiProvider,
+    model:
+      typeof options.model === "string" && options.model.trim().length > 0
+        ? options.model.trim()
+        : undefined
   })
-  const usage = extractUsageMetrics(ragResponse)
-  const content = extractRequiredRagText(ragResponse, "flashcards")
 
-  // Parse and create flashcards
-  const flashcards = parseFlashcards(content)
+  const flashcards = (Array.isArray(generated.flashcards) ? generated.flashcards : [])
+    .map((card) => ({
+      front: typeof card.front === "string" ? card.front.trim() : "",
+      back: typeof card.back === "string" ? card.back.trim() : "",
+      tags: Array.isArray(card.tags)
+        ? card.tags.filter((tag) => typeof tag === "string" && tag.trim().length > 0)
+        : [],
+      notes: typeof card.notes === "string" ? card.notes.trim() : "",
+      extra: typeof card.extra === "string" ? card.extra.trim() : "",
+      modelType:
+        card.model_type === "basic_reverse" || card.model_type === "cloze"
+          ? card.model_type
+          : "basic"
+    }))
+    .filter((card) => card.front && card.back)
   if (!flashcards.length) {
-    throw new Error("Failed to parse generated flashcards from model output")
+    throw new Error("Flashcard generation returned no usable cards")
   }
 
   // Ensure we have a deck
-  const decks = await listDecks({ signal: abortSignal })
+  const decks = await listDecks({ signal: options.abortSignal })
   let deckId: number | undefined
 
-  if (preferredDeckId && decks.some((deck) => deck.id === preferredDeckId)) {
-    deckId = preferredDeckId
+  if (
+    options.preferredDeckId &&
+    decks.some((deck) => deck.id === options.preferredDeckId)
+  ) {
+    deckId = options.preferredDeckId
   } else if (decks.length === 0) {
     const newDeck = await createDeck(
       { name: "Workspace Flashcards" },
-      { signal: abortSignal }
+      { signal: options.abortSignal }
     )
     deckId = newDeck.id
   } else {
@@ -3758,9 +3901,15 @@ Generate 10-15 flashcards.`
         deck_id: deckId,
         front: card.front,
         back: card.back,
+        tags: card.tags.length > 0 ? card.tags : undefined,
+        notes: card.notes || undefined,
+        extra: card.extra || undefined,
+        model_type: card.modelType,
+        reverse: card.modelType === "basic_reverse",
+        is_cloze: card.modelType === "cloze",
         source_ref_type: "media",
-        source_ref_id: mediaIds.join(",")
-      }, { signal: abortSignal })
+        source_ref_id: options.mediaIds.join(",")
+      }, { signal: options.abortSignal })
       createdCount += 1
     } catch (error) {
       if (firstCreateError == null) {
@@ -3781,49 +3930,73 @@ Generate 10-15 flashcards.`
     failedCount > 0
       ? `Created ${createdCount} of ${flashcards.length} flashcards (${failedCount} failed)`
       : `Created ${createdCount} flashcards`
+  const content = formatFlashcardsContent(
+    flashcards.map((card) => ({
+      front: card.front,
+      back: card.back
+    }))
+  )
 
   return {
     content: `${summaryLine}\n\n${content}`,
-    ...usage,
     data: {
-      flashcards,
+      flashcards: flashcards.map((card) => ({
+        front: card.front,
+        back: card.back
+      })),
       deckId,
-      sourceMediaIds: mediaIds
+      sourceMediaIds: options.mediaIds
     }
   }
 }
 
 async function generateMindMap(
-  mediaIds: number[],
-  abortSignal?: AbortSignal
+  options: SourceContentGenerationOptions
 ): Promise<GenerationResult> {
-  const generationPrompt = `Analyze the content and create a mind map in Mermaid format.
-Use the following structure:
-\`\`\`mermaid
-mindmap
-  root((Main Topic))
-    Branch 1
-      Sub-topic 1.1
-      Sub-topic 1.2
-    Branch 2
-      Sub-topic 2.1
-      Sub-topic 2.2
-\`\`\`
+  const model = typeof options.model === "string" ? options.model.trim() : ""
+  if (!model) {
+    throw new Error("Select a chat model before generating a mind map.")
+  }
 
-Identify the central theme and 3-5 main branches with their sub-topics.`
-  const ragResponse = await requestStudioRagGeneration({
-    query: "central theme main branches subtopics",
-    generationPrompt,
-    mediaIds,
-    topK: 20,
-    abortSignal
+  const sourceContexts = await loadStudioSourceContexts(options)
+  if (sourceContexts.length === 0) {
+    throw buildMissingContentError("mind map")
+  }
+
+  const response = await tldwClient.createChatCompletion({
+    model,
+    api_provider: options.apiProvider,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a mind map generator. Return ONLY Mermaid mindmap syntax. You may wrap the result in a ```mermaid code fence, but do not include commentary, explanations, or prose outside the diagram."
+      },
+      {
+        role: "user",
+        content: `Analyze the provided sources and create a Mermaid mindmap that captures the central theme, 3-5 major branches, and the most important subtopics.
+
+Sources:
+${sourceContexts
+  .map(
+    (source, index) =>
+      `Source ${index + 1}: ${source.title}\n${source.text}`
+  )
+  .join("\n\n")}`
+      }
+    ],
+    temperature: options.temperature,
+    top_p: options.topP,
+    max_tokens: options.maxTokens
   })
-  const usage = extractUsageMetrics(ragResponse)
 
-  const content = extractRequiredRagText(ragResponse, "mind map")
+  const content = (await readChatCompletionResponseText(response)).trim()
+  if (!content) {
+    throw buildMissingContentError("mind map")
+  }
+
   return {
     content,
-    ...usage,
     data: {
       mermaid: extractMermaidCode(content)
     }
@@ -3983,54 +4156,13 @@ Include:
 }
 
 async function generateDataTable(
-  options: DataTableGenerationOptions
+  options: SourceContentGenerationOptions
 ): Promise<GenerationResult> {
   const model = typeof options.model === "string" ? options.model.trim() : ""
   if (!model) {
     throw new Error("Select a chat model before generating a data table.")
   }
-  const sourceByMediaId = new Map(
-    options.selectedSources.map((source) => [source.mediaId, source])
-  )
-  const mediaDetails = await Promise.all(
-    options.mediaIds.map(async (mediaId) => {
-      const detail = await tldwClient.getMediaDetails(mediaId, {
-        include_content: true,
-        include_versions: false,
-        include_version_content: false,
-        signal: options.abortSignal
-      })
-      const source = sourceByMediaId.get(mediaId)
-      const sourceMeta = isRecord(detail) && isRecord(detail.source) ? detail.source : null
-      return {
-        title:
-          source?.title ||
-          (typeof sourceMeta?.title === "string" ? sourceMeta.title : "") ||
-          `Source ${mediaId}`,
-        text: extractMediaDetailText(detail)
-      }
-    })
-  )
-
-  let remainingChars = DATA_TABLE_TOTAL_SOURCE_CHAR_LIMIT
-  const sourceContexts: DataTableSourceContext[] = []
-  for (const detail of mediaDetails) {
-    if (!detail.text || remainingChars <= 0) {
-      continue
-    }
-    const clippedText = detail.text
-      .slice(0, Math.min(DATA_TABLE_SOURCE_CHAR_LIMIT, remainingChars))
-      .trim()
-    if (!clippedText) {
-      continue
-    }
-    sourceContexts.push({
-      title: detail.title,
-      text: clippedText
-    })
-    remainingChars -= clippedText.length
-  }
-
+  const sourceContexts = await loadStudioSourceContexts(options)
   if (sourceContexts.length === 0) {
     throw buildMissingContentError("data table")
   }

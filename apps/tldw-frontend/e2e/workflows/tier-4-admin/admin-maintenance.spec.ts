@@ -23,7 +23,7 @@ test.describe("Admin Maintenance", () => {
     await admin.assertPlaceholderVisible()
 
     // Verify "Coming Soon" label is present
-    await expect(authedPage.getByText("Coming Soon")).toBeVisible()
+    await expect(authedPage.getByText("Coming Soon", { exact: true })).toBeVisible()
 
     // Verify the title text
     await expect(
@@ -42,8 +42,8 @@ test.describe("Admin Maintenance", () => {
     await gotoMaintenance(authedPage)
     await admin.assertPlaceholderVisible()
 
-    // Verify the planned path is displayed
-    await expect(authedPage.getByText("/admin/maintenance")).toBeVisible()
+    // Verify the planned path is displayed (appears in both Requested and Planned route)
+    await expect(authedPage.getByText("/admin/maintenance").first()).toBeVisible()
 
     await assertNoCriticalErrors(diagnostics)
   })

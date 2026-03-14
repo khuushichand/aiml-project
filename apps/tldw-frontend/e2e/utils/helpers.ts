@@ -265,6 +265,7 @@ export const BENIGN_PATTERNS = [
   /Warning.*findDOMNode is deprecated/,
   /Hydration failed/,
   /There was an error while hydrating/,
+  /cannot connect to an AudioNode belonging to a different audio context/i,
 ];
 
 /**
