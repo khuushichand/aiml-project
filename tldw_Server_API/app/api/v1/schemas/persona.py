@@ -147,6 +147,7 @@ class PersonaVoiceDefaults(BaseModel):
 class PersonaSetupState(BaseModel):
     status: PersonaSetupStatus = "not_started"
     version: int = Field(default=1, ge=1)
+    run_id: str | None = Field(default=None, min_length=1, max_length=200)
     current_step: PersonaSetupStep = "persona"
     completed_steps: list[PersonaSetupStep] = Field(default_factory=list)
     completed_at: str | None = None
