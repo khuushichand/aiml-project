@@ -15,8 +15,10 @@ PolicyProvenanceSourceKind = Literal[
     "assignment_path_scope_object",
     "assignment_inline",
     "assignment_override",
+    "capability_mapping",
+    "runtime_constraint",
 ]
-PolicyProvenanceEffect = Literal["merged", "replaced"]
+PolicyProvenanceEffect = Literal["merged", "replaced", "narrowed", "blocked"]
 ApprovalMode = Literal[
     "allow_silently",
     "ask_every_time",
@@ -478,10 +480,25 @@ class EffectivePolicyProvenanceResponse(BaseModel):
     field: str
     value: Any
     source_kind: PolicyProvenanceSourceKind
-    assignment_id: int
+    assignment_id: int | None = None
     profile_id: int | None = None
     override_id: int | None = None
+    capability_name: str | None = None
+    mapping_id: str | None = None
+    mapping_scope_type: CapabilityAdapterScopeType | None = None
+    mapping_scope_id: int | None = None
+    resolved_effects: dict[str, Any] = Field(default_factory=dict)
     effect: PolicyProvenanceEffect
+
+
+class EffectivePolicyCapabilityMappingResponse(BaseModel):
+    capability_name: str
+    mapping_id: str | None = None
+    mapping_scope_type: CapabilityAdapterScopeType | None = None
+    mapping_scope_id: int | None = None
+    resolved_effects: dict[str, Any] = Field(default_factory=dict)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    unsupported_environment_requirements: list[str] = Field(default_factory=list)
 
 
 class EffectivePolicyResponse(BaseModel):
@@ -492,6 +509,14 @@ class EffectivePolicyResponse(BaseModel):
     approval_policy_id: int | None = None
     approval_mode: ApprovalMode | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
+    authored_policy_document: dict[str, Any] = Field(default_factory=dict)
+    resolved_policy_document: dict[str, Any] = Field(default_factory=dict)
+    resolved_capabilities: list[str] = Field(default_factory=list)
+    unresolved_capabilities: list[str] = Field(default_factory=list)
+    capability_mapping_summary: list[EffectivePolicyCapabilityMappingResponse] = Field(default_factory=list)
+    capability_warnings: list[str] = Field(default_factory=list)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    unsupported_environment_requirements: list[str] = Field(default_factory=list)
     selected_assignment_id: int | None = None
     selected_workspace_source_mode: WorkspaceSourceMode | None = None
     selected_workspace_set_object_id: int | None = None
