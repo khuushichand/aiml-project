@@ -533,6 +533,33 @@ const extractRequiredRagText = (response: unknown, label: string): string => {
   return text
 }
 
+type StudioRagGenerationRequest = {
+  query: string
+  generationPrompt: string
+  mediaIds: number[]
+  topK: number
+  abortSignal?: AbortSignal
+  enableCitations?: boolean
+}
+
+const requestStudioRagGeneration = async ({
+  query,
+  generationPrompt,
+  mediaIds,
+  topK,
+  abortSignal,
+  enableCitations = false
+}: StudioRagGenerationRequest): Promise<any> =>
+  tldwClient.ragSearch(query, {
+    include_media_ids: mediaIds,
+    top_k: topK,
+    enable_generation: true,
+    enable_citations: enableCitations,
+    generation_prompt: generationPrompt,
+    timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
+    signal: abortSignal
+  })
+
 const requireUsableTextResult = (
   type: ArtifactType,
   result: GenerationResult,
@@ -3341,18 +3368,15 @@ async function generateSummary(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  // Use RAG to get content and generate summary via chat
-  const ragResponse = await tldwClient.ragSearch(
-    "Provide a comprehensive summary of the key points and main ideas.",
-    {
-      media_ids: mediaIds,
-      top_k: 20,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+  const ragResponse = await requestStudioRagGeneration({
+    query: "key points main ideas summary",
+    generationPrompt:
+      "Provide a comprehensive summary of the key points and main ideas.",
+    mediaIds,
+    topK: 20,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
@@ -3366,24 +3390,22 @@ async function generateReport(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Generate a detailed report with the following sections:
+  const generationPrompt = `Generate a detailed report with the following sections:
 1. Executive Summary
 2. Key Findings
 3. Detailed Analysis
 4. Conclusions
 5. Recommendations
 
-Use the provided sources to create a comprehensive report.`,
-    {
-      media_ids: mediaIds,
-      top_k: 30,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Use the provided sources to create a comprehensive report.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "key findings detailed analysis conclusions recommendations",
+    generationPrompt,
+    mediaIds,
+    topK: 30,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
@@ -3397,21 +3419,19 @@ async function generateTimeline(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Extract and organize all events, dates, and chronological information into a timeline format.
+  const generationPrompt = `Extract and organize all events, dates, and chronological information into a timeline format.
 Present the timeline as:
 - [Date/Period] - Event description
 
-List events in chronological order.`,
-    {
-      media_ids: mediaIds,
-      top_k: 30,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+List events in chronological order.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "events dates chronology timeline",
+    generationPrompt,
+    mediaIds,
+    topK: 30,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
@@ -3425,23 +3445,21 @@ async function generateCompareSources(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Compare the selected sources and produce:
+  const generationPrompt = `Compare the selected sources and produce:
 1. A short synthesis of where they agree.
 2. A list of key disagreements or conflicting claims.
 3. Evidence strength notes for each disagreement.
 4. Open questions that need additional verification.
 
-Use markdown headings and bullet lists. Cite source-specific evidence when possible.`,
-    {
-      media_ids: mediaIds,
-      top_k: 30,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Use markdown headings and bullet lists. Cite source-specific evidence when possible.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "agreements disagreements claims evidence",
+    generationPrompt,
+    mediaIds,
+    topK: 30,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
   const content = extractRequiredRagText(ragResponse, "comparison")
 
@@ -3541,25 +3559,21 @@ async function generateFlashcards(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  // First, get content via RAG
-  const ragResponse = await tldwClient.ragSearch(
-    `Extract key concepts, definitions, and important facts that would make good flashcards.
+  const generationPrompt = `Extract key concepts, definitions, and important facts that would make good flashcards.
 Format each as:
 Front: [Question or term]
 Back: [Answer or definition]
 
-Generate 10-15 flashcards.`,
-    {
-      media_ids: mediaIds,
-      top_k: 20,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Generate 10-15 flashcards.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "key concepts definitions important facts",
+    generationPrompt,
+    mediaIds,
+    topK: 20,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
-
-  const content = ragResponse?.generation || ragResponse?.answer || ""
+  const content = extractRequiredRagText(ragResponse, "flashcards")
 
   // Parse and create flashcards
   const flashcards = parseFlashcards(content)
@@ -3631,8 +3645,7 @@ async function generateMindMap(
   mediaIds: number[],
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Analyze the content and create a mind map in Mermaid format.
+  const generationPrompt = `Analyze the content and create a mind map in Mermaid format.
 Use the following structure:
 \`\`\`mermaid
 mindmap
@@ -3645,15 +3658,14 @@ mindmap
       Sub-topic 2.2
 \`\`\`
 
-Identify the central theme and 3-5 main branches with their sub-topics.`,
-    {
-      media_ids: mediaIds,
-      top_k: 20,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Identify the central theme and 3-5 main branches with their sub-topics.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "central theme main branches subtopics",
+    generationPrompt,
+    mediaIds,
+    topK: 20,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   const content = extractRequiredRagText(ragResponse, "mind map")
@@ -3671,25 +3683,21 @@ async function generateAudioOverview(
   audioSettings: import("@/types/workspace").AudioGenerationSettings,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  // First generate a spoken overview script
-  const ragResponse = await tldwClient.ragSearch(
-    `Create a spoken overview script (2-3 minutes when read aloud) that:
+  const generationPrompt = `Create a spoken overview script (2-3 minutes when read aloud) that:
 1. Introduces the topic
 2. Covers the main points
 3. Concludes with key takeaways
 
-Write in a conversational, easy-to-listen style. Do not include any stage directions, speaker labels, or formatting - just the spoken text.`,
-    {
-      media_ids: mediaIds,
-      top_k: 15,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Write in a conversational, easy-to-listen style. Do not include any stage directions, speaker labels, or formatting - just the spoken text.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "topic main points key takeaways overview",
+    generationPrompt,
+    mediaIds,
+    topK: 15,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
-
-  const script = ragResponse?.generation || ragResponse?.answer || ""
+  const script = extractRequiredRagText(ragResponse, "audio")
 
   if (!script.trim()) {
     throw new Error("Failed to generate audio script")
@@ -3793,8 +3801,7 @@ async function generateSlidesFallback(
   mediaIds: number[],
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Create a presentation outline with 8-12 slides:
+  const generationPrompt = `Create a presentation outline with 8-12 slides:
 
 For each slide provide:
 # Slide [Number]: [Title]
@@ -3807,15 +3814,14 @@ Include:
 2. Introduction/Overview
 3-10. Main content slides
 11. Summary/Key Takeaways
-12. Conclusion/Q&A`,
-    {
-      media_ids: mediaIds,
-      top_k: 25,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+12. Conclusion/Q&A`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "presentation outline overview key takeaways",
+    generationPrompt,
+    mediaIds,
+    topK: 25,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
@@ -3829,8 +3835,7 @@ async function generateDataTable(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Extract structured data from the content and format it as a markdown table.
+  const generationPrompt = `Extract structured data from the content and format it as a markdown table.
 Identify:
 - Key entities (people, organizations, places, products)
 - Attributes and values
@@ -3839,15 +3844,14 @@ Identify:
 Format as:
 | Column 1 | Column 2 | Column 3 |
 |----------|----------|----------|
-| Data 1   | Data 2   | Data 3   |`,
-    {
-      media_ids: mediaIds,
-      top_k: 25,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+| Data 1   | Data 2   | Data 3   |`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "entities attributes values relationships",
+    generationPrompt,
+    mediaIds,
+    topK: 25,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   const content = extractRequiredRagText(ragResponse, "data table")

@@ -646,6 +646,25 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     )
   })
 
+  it("routes summary authoring instructions through generation_prompt", async () => {
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockRagSearch).toHaveBeenCalled()
+    })
+
+    expect(mockRagSearch).toHaveBeenLastCalledWith(
+      "key points main ideas summary",
+      expect.objectContaining({
+        include_media_ids: [101],
+        generation_prompt:
+          "Provide a comprehensive summary of the key points and main ideas."
+      })
+    )
+  })
+
   it("passes extended timeout to report generation RAG request", async () => {
     renderStudioPane()
 

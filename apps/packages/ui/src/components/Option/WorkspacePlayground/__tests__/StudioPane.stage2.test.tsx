@@ -851,9 +851,12 @@ describe("StudioPane Stage 2 workflows", () => {
 
     await waitFor(() => {
       expect(mockRagSearch).toHaveBeenCalledWith(
-        expect.stringContaining("Compare the selected sources"),
+        "agreements disagreements claims evidence",
         expect.objectContaining({
-          media_ids: [101, 202],
+          include_media_ids: [101, 202],
+          generation_prompt: expect.stringContaining(
+            "Compare the selected sources"
+          ),
           top_k: 30,
           enable_generation: true,
           enable_citations: true
