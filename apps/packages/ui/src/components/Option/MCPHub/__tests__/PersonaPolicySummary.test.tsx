@@ -24,6 +24,32 @@ describe("PersonaPolicySummary", () => {
       allowed_tools: ["Bash(git *)"],
       denied_tools: ["Bash(rm *)"],
       capabilities: ["process.execute"],
+      authored_policy_document: {
+        capabilities: ["tool.invoke.research", "network.external.search"]
+      },
+      resolved_policy_document: {
+        capabilities: ["tool.invoke.research", "network.external.search"],
+        allowed_tools: ["Bash(git *)"],
+        path_scope_mode: "workspace_root",
+        path_scope_enforcement: "approval_required_when_unenforceable",
+        path_allowlist_prefixes: ["src", "docs/api"]
+      },
+      resolved_capabilities: ["tool.invoke.research"],
+      unresolved_capabilities: ["network.external.search"],
+      capability_mapping_summary: [
+        {
+          capability_name: "tool.invoke.research",
+          mapping_id: "research.global",
+          mapping_scope_type: "global",
+          mapping_scope_id: null,
+          resolved_effects: { allowed_tools: ["web.search"] },
+          supported_environment_requirements: ["workspace_bounded_read"],
+          unsupported_environment_requirements: []
+        }
+      ],
+      capability_warnings: [
+        "profile:researcher: No active capability adapter mapping found for 'network.external.search'"
+      ],
       approval_policy_id: 17,
       approval_mode: "ask_outside_profile",
       policy_document: {
@@ -134,6 +160,11 @@ describe("PersonaPolicySummary", () => {
     expect(screen.getAllByText(/disabled by assignment/i).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/missing secret/i).length).toBeGreaterThan(0)
     expect(screen.getByText("Pack researcher-pack@1.0.0")).toBeTruthy()
+    expect(screen.getByText("Mapped tool.invoke.research via research.global")).toBeTruthy()
+    expect(screen.getByText("Unresolved capability: network.external.search")).toBeTruthy()
+    expect(
+      screen.getByText("profile:researcher: No active capability adapter mapping found for 'network.external.search'")
+    ).toBeTruthy()
     expect(screen.getByRole("link", { name: /open mcp hub/i })).toBeTruthy()
   })
 
@@ -143,6 +174,12 @@ describe("PersonaPolicySummary", () => {
       allowed_tools: ["Bash(git *)"],
       denied_tools: [],
       capabilities: ["process.execute"],
+      authored_policy_document: {},
+      resolved_policy_document: {},
+      resolved_capabilities: [],
+      unresolved_capabilities: [],
+      capability_mapping_summary: [],
+      capability_warnings: [],
       approval_policy_id: 17,
       approval_mode: "ask_outside_profile",
       policy_document: {},

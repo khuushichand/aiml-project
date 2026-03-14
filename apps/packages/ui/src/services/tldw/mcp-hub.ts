@@ -2,6 +2,7 @@ import { bgRequestClient } from "@/services/background-proxy"
 import type { ClientPathOrUrlWithQuery } from "@/services/tldw/openapi-guard"
 
 export type McpHubScopeType = "global" | "org" | "team" | "user"
+export type McpHubCapabilityAdapterScopeType = "global" | "org" | "team"
 export type McpHubProfileMode = "preset" | "custom"
 export type McpHubAssignmentTargetType = "default" | "group" | "persona"
 export type McpHubApprovalMode =
@@ -40,6 +41,7 @@ export type McpHubGovernanceAuditTabKey =
   | "profiles"
   | "assignments"
   | "path-scopes"
+  | "capability-mappings"
   | "workspace-sets"
   | "shared-workspaces"
   | "audit"
@@ -407,10 +409,27 @@ export type McpHubEffectivePolicyProvenance = {
     | "assignment_path_scope_object"
     | "assignment_inline"
     | "assignment_override"
-  assignment_id: number
+    | "capability_mapping"
+    | "runtime_constraint"
+  assignment_id?: number | null
   profile_id?: number | null
   override_id?: number | null
-  effect: "merged" | "replaced"
+  capability_name?: string | null
+  mapping_id?: string | null
+  mapping_scope_type?: McpHubCapabilityAdapterScopeType | null
+  mapping_scope_id?: number | null
+  resolved_effects?: Record<string, unknown>
+  effect: "merged" | "replaced" | "narrowed" | "blocked"
+}
+
+export type McpHubEffectivePolicyCapabilityMapping = {
+  capability_name: string
+  mapping_id?: string | null
+  mapping_scope_type?: McpHubCapabilityAdapterScopeType | null
+  mapping_scope_id?: number | null
+  resolved_effects: Record<string, unknown>
+  supported_environment_requirements: string[]
+  unsupported_environment_requirements: string[]
 }
 
 export type McpHubEffectivePolicy = {
@@ -421,6 +440,14 @@ export type McpHubEffectivePolicy = {
   approval_policy_id?: number | null
   approval_mode?: McpHubApprovalMode | null
   policy_document: Record<string, unknown>
+  authored_policy_document: Record<string, unknown>
+  resolved_policy_document: Record<string, unknown>
+  resolved_capabilities: string[]
+  unresolved_capabilities: string[]
+  capability_mapping_summary: McpHubEffectivePolicyCapabilityMapping[]
+  capability_warnings: string[]
+  supported_environment_requirements: string[]
+  unsupported_environment_requirements: string[]
   selected_assignment_id?: number | null
   selected_workspace_source_mode?: McpHubWorkspaceSourceMode | null
   selected_workspace_set_object_id?: number | null
@@ -664,9 +691,81 @@ export type McpHubGovernancePackDryRunReport = {
   digest: string
   resolved_capabilities: string[]
   unresolved_capabilities: string[]
+  capability_mapping_summary: McpHubEffectivePolicyCapabilityMapping[]
+  supported_environment_requirements: string[]
+  unsupported_environment_requirements: string[]
   warnings: string[]
   blocked_objects: string[]
   verdict: "importable" | "blocked"
+}
+
+export type McpHubCapabilityAdapterMapping = {
+  id: number
+  mapping_id: string
+  title: string
+  description?: string | null
+  owner_scope_type: McpHubCapabilityAdapterScopeType
+  owner_scope_id?: number | null
+  capability_name: string
+  adapter_contract_version: number
+  resolved_policy_document: McpHubPermissionPolicyDocument
+  supported_environment_requirements: string[]
+  is_active: boolean
+  created_by?: number | null
+  updated_by?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type McpHubCapabilityAdapterMappingInput = {
+  mapping_id: string
+  title?: string | null
+  description?: string | null
+  owner_scope_type?: McpHubCapabilityAdapterScopeType
+  owner_scope_id?: number | null
+  capability_name: string
+  adapter_contract_version?: number
+  resolved_policy_document?: McpHubPermissionPolicyDocument
+  supported_environment_requirements?: string[]
+  is_active?: boolean
+}
+
+export type McpHubCapabilityAdapterMappingUpdateInput = {
+  mapping_id?: string
+  title?: string | null
+  description?: string | null
+  owner_scope_type?: McpHubCapabilityAdapterScopeType
+  owner_scope_id?: number | null
+  capability_name?: string
+  adapter_contract_version?: number
+  resolved_policy_document?: McpHubPermissionPolicyDocument
+  supported_environment_requirements?: string[]
+  is_active?: boolean
+}
+
+export type McpHubCapabilityAdapterMappingNormalized = {
+  mapping_id: string
+  title: string
+  description?: string | null
+  owner_scope_type: McpHubCapabilityAdapterScopeType
+  owner_scope_id?: number | null
+  capability_name: string
+  adapter_contract_version: number
+  resolved_policy_document: McpHubPermissionPolicyDocument
+  supported_environment_requirements: string[]
+  is_active: boolean
+}
+
+export type McpHubCapabilityAdapterMappingScopeSummary = {
+  owner_scope_type: McpHubCapabilityAdapterScopeType
+  owner_scope_id?: number | null
+  display_scope: string
+}
+
+export type McpHubCapabilityAdapterMappingPreview = {
+  normalized_mapping: McpHubCapabilityAdapterMappingNormalized
+  warnings: string[]
+  affected_scope_summary: McpHubCapabilityAdapterMappingScopeSummary
 }
 
 export type McpHubGovernancePackDryRunResponse = {
@@ -984,6 +1083,50 @@ export const getAssignmentExternalAccess = async (
   return await bgRequestClient<McpHubEffectiveExternalAccess>({
     path: `/api/v1/mcp/hub/policy-assignments/${assignmentId}/external-access`,
     method: "GET"
+  })
+}
+
+export const listCapabilityAdapterMappings = async (params: {
+  owner_scope_type?: McpHubCapabilityAdapterScopeType
+  owner_scope_id?: number | null
+} = {}): Promise<McpHubCapabilityAdapterMapping[]> => {
+  return await bgRequestClient<McpHubCapabilityAdapterMapping[]>({
+    path: withQuery("/api/v1/mcp/hub/capability-mappings", {
+      owner_scope_type: params.owner_scope_type,
+      owner_scope_id: params.owner_scope_id
+    }),
+    method: "GET"
+  })
+}
+
+export const previewCapabilityAdapterMapping = async (
+  payload: McpHubCapabilityAdapterMappingInput
+): Promise<McpHubCapabilityAdapterMappingPreview> => {
+  return await bgRequestClient<McpHubCapabilityAdapterMappingPreview>({
+    path: "/api/v1/mcp/hub/capability-mappings/preview",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const createCapabilityAdapterMapping = async (
+  payload: McpHubCapabilityAdapterMappingInput
+): Promise<McpHubCapabilityAdapterMapping> => {
+  return await bgRequestClient<McpHubCapabilityAdapterMapping>({
+    path: "/api/v1/mcp/hub/capability-mappings",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const updateCapabilityAdapterMapping = async (
+  capabilityAdapterMappingId: number,
+  payload: McpHubCapabilityAdapterMappingUpdateInput
+): Promise<McpHubCapabilityAdapterMapping> => {
+  return await bgRequestClient<McpHubCapabilityAdapterMapping>({
+    path: `/api/v1/mcp/hub/capability-mappings/${capabilityAdapterMappingId}`,
+    method: "PUT",
+    body: payload
   })
 }
 

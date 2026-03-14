@@ -10,7 +10,10 @@ vi.mock("@/services/background-proxy", () => ({
 
 import {
   dryRunGovernancePack,
+  getEffectivePolicy,
   listGovernancePacks,
+  listCapabilityAdapterMappings,
+  previewCapabilityAdapterMapping,
   setExternalServerSecret
 } from "../mcp-hub"
 
@@ -50,6 +53,19 @@ describe("mcp hub service client", () => {
         digest: "a".repeat(64),
         resolved_capabilities: ["tool.invoke.research"],
         unresolved_capabilities: [],
+        capability_mapping_summary: [
+          {
+            capability_name: "tool.invoke.research",
+            mapping_id: "research.global",
+            mapping_scope_type: "global",
+            mapping_scope_id: null,
+            resolved_effects: { allowed_tools: ["web.search"] },
+            supported_environment_requirements: ["workspace_bounded_read"],
+            unsupported_environment_requirements: []
+          }
+        ],
+        supported_environment_requirements: ["workspace_bounded_read"],
+        unsupported_environment_requirements: [],
         warnings: [],
         blocked_objects: [],
         verdict: "importable"
@@ -69,6 +85,7 @@ describe("mcp hub service client", () => {
     const out = await dryRunGovernancePack(payload)
 
     expect(out.report.verdict).toBe("importable")
+    expect(out.report.capability_mapping_summary[0]?.mapping_id).toBe("research.global")
     expect(mocks.bgRequestClient).toHaveBeenCalledWith(
       expect.objectContaining({
         path: "/api/v1/mcp/hub/governance-packs/dry-run",
@@ -99,6 +116,115 @@ describe("mcp hub service client", () => {
       expect.objectContaining({
         path: "/api/v1/mcp/hub/governance-packs?owner_scope_type=user&owner_scope_id=7",
         method: "GET"
+      })
+    )
+  })
+
+  it("maps effective policy responses with authored and resolved documents", async () => {
+    mocks.bgRequestClient.mockResolvedValueOnce({
+      enabled: true,
+      allowed_tools: ["web.search"],
+      denied_tools: [],
+      capabilities: ["tool.invoke.research", "network.external.search"],
+      authored_policy_document: { capabilities: ["tool.invoke.research", "network.external.search"] },
+      resolved_policy_document: {
+        capabilities: ["tool.invoke.research", "network.external.search"],
+        allowed_tools: ["web.search"]
+      },
+      resolved_capabilities: ["tool.invoke.research"],
+      unresolved_capabilities: ["network.external.search"],
+      capability_mapping_summary: [
+        {
+          capability_name: "tool.invoke.research",
+          mapping_id: "research.global",
+          mapping_scope_type: "global",
+          mapping_scope_id: null,
+          resolved_effects: { allowed_tools: ["web.search"] },
+          supported_environment_requirements: ["workspace_bounded_read"],
+          unsupported_environment_requirements: []
+        }
+      ],
+      capability_warnings: [
+        "profile:researcher: No active capability adapter mapping found for 'network.external.search'"
+      ],
+      policy_document: { allowed_tools: ["web.search"] },
+      sources: [],
+      provenance: []
+    })
+
+    const out = await getEffectivePolicy({ persona_id: "researcher" })
+
+    expect(out.authored_policy_document.capabilities).toEqual([
+      "tool.invoke.research",
+      "network.external.search"
+    ])
+    expect(out.capability_mapping_summary[0]?.mapping_id).toBe("research.global")
+    expect(out.unresolved_capabilities).toEqual(["network.external.search"])
+  })
+
+  it("requests capability mapping previews and listing through MCP Hub endpoints", async () => {
+    mocks.bgRequestClient
+      .mockResolvedValueOnce([
+        {
+          id: 9,
+          mapping_id: "research.global",
+          title: "Research Mapping",
+          owner_scope_type: "global",
+          owner_scope_id: null,
+          capability_name: "tool.invoke.research",
+          adapter_contract_version: 1,
+          resolved_policy_document: { allowed_tools: ["web.search"] },
+          supported_environment_requirements: ["workspace_bounded_read"],
+          is_active: true
+        }
+      ])
+      .mockResolvedValueOnce({
+        normalized_mapping: {
+          mapping_id: "research.global",
+          title: "Research Mapping",
+          owner_scope_type: "global",
+          owner_scope_id: null,
+          capability_name: "tool.invoke.research",
+          adapter_contract_version: 1,
+          resolved_policy_document: { allowed_tools: ["web.search"] },
+          supported_environment_requirements: ["workspace_bounded_read"],
+          is_active: true
+        },
+        warnings: [],
+        affected_scope_summary: {
+          owner_scope_type: "global",
+          owner_scope_id: null,
+          display_scope: "Global"
+        }
+      })
+
+    const listOut = await listCapabilityAdapterMappings({ owner_scope_type: "global" })
+    const previewOut = await previewCapabilityAdapterMapping({
+      mapping_id: "research.global",
+      title: "Research Mapping",
+      owner_scope_type: "global",
+      owner_scope_id: null,
+      capability_name: "tool.invoke.research",
+      adapter_contract_version: 1,
+      resolved_policy_document: { allowed_tools: ["web.search"] },
+      supported_environment_requirements: ["workspace_bounded_read"],
+      is_active: true
+    })
+
+    expect(listOut).toHaveLength(1)
+    expect(previewOut.affected_scope_summary.display_scope).toBe("Global")
+    expect(mocks.bgRequestClient).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        path: "/api/v1/mcp/hub/capability-mappings?owner_scope_type=global",
+        method: "GET"
+      })
+    )
+    expect(mocks.bgRequestClient).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: "/api/v1/mcp/hub/capability-mappings/preview",
+        method: "POST"
       })
     )
   })

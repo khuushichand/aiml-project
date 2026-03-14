@@ -2,6 +2,7 @@ import { useRef, useState } from "react"
 import { Tabs, Typography } from "antd"
 
 import { ApprovalPoliciesTab } from "./ApprovalPoliciesTab"
+import { CapabilityMappingsTab } from "./CapabilityMappingsTab"
 import { GovernanceAuditTab } from "./GovernanceAuditTab"
 import { GovernancePacksTab } from "./GovernancePacksTab"
 import { PathScopesTab } from "./PathScopesTab"
@@ -79,6 +80,11 @@ export const McpHubPage = () => {
             key: "path-scopes",
             label: "Path Scopes",
             children: <PathScopesTab />
+          },
+          {
+            key: "capability-mappings",
+            label: "Capability Mappings",
+            children: <CapabilityMappingsTab />
           },
           {
             key: "workspace-sets",

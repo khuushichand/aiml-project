@@ -75,6 +75,19 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
   }, [personaId])
 
   const provenance = Array.isArray(policy?.provenance) ? policy.provenance : []
+  const resolvedPolicyDocument =
+    (policy?.resolved_policy_document as Record<string, unknown> | null | undefined) ??
+    policy?.policy_document ??
+    {}
+  const capabilityMappingSummary = Array.isArray(policy?.capability_mapping_summary)
+    ? policy.capability_mapping_summary
+    : []
+  const unresolvedCapabilities = Array.isArray(policy?.unresolved_capabilities)
+    ? policy.unresolved_capabilities
+    : []
+  const capabilityWarnings = Array.isArray(policy?.capability_warnings)
+    ? policy.capability_warnings
+    : []
   const governancePackLabels = Array.from(
     new Set(
       provenance
@@ -110,12 +123,12 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
         <Space orientation="vertical" size="small" style={{ width: "100%" }}>
           {getPathScopeLabel(policy.policy_document?.path_scope_mode) ? (
             <Typography.Text type="secondary">
-              {`Local file scope: ${getPathScopeLabel(policy.policy_document?.path_scope_mode)}`}
+              {`Local file scope: ${getPathScopeLabel(resolvedPolicyDocument?.path_scope_mode)}`}
             </Typography.Text>
           ) : null}
-          {getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes) ? (
+          {getPathAllowlistSummary(resolvedPolicyDocument?.path_allowlist_prefixes) ? (
             <Typography.Text type="secondary">
-              {`Allowed paths: ${getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes)}`}
+              {`Allowed paths: ${getPathAllowlistSummary(resolvedPolicyDocument?.path_allowlist_prefixes)}`}
             </Typography.Text>
           ) : null}
           {policy.selected_assignment_workspace_ids?.length ? (
@@ -137,19 +150,46 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
               }`}
             </Typography.Text>
           ) : null}
+          {capabilityMappingSummary.length ? (
+            <Space orientation="vertical" size={4}>
+              {capabilityMappingSummary.map((summary) => (
+                <Typography.Text key={`${summary.capability_name}:${summary.mapping_id ?? "unmapped"}`}>
+                  {`Mapped ${summary.capability_name} via ${summary.mapping_id ?? "local mapping"}`}
+                </Typography.Text>
+              ))}
+            </Space>
+          ) : null}
+          {unresolvedCapabilities.length ? (
+            <Space orientation="vertical" size={4}>
+              {unresolvedCapabilities.map((capability) => (
+                <Typography.Text key={capability} type="warning">
+                  {`Unresolved capability: ${capability}`}
+                </Typography.Text>
+              ))}
+            </Space>
+          ) : null}
+          {capabilityWarnings.length ? (
+            <Space orientation="vertical" size={4}>
+              {capabilityWarnings.map((warning) => (
+                <Typography.Text key={warning} type="warning">
+                  {warning}
+                </Typography.Text>
+              ))}
+            </Space>
+          ) : null}
           <Space wrap>
             {policy.capabilities.map((capability) => (
               <Tag key={capability}>{capability}</Tag>
             ))}
             {policy.approval_mode ? <Tag color="gold">{policy.approval_mode}</Tag> : null}
-            {getPathScopeLabel(policy.policy_document?.path_scope_mode) ? (
-              <Tag color="cyan">{getPathScopeLabel(policy.policy_document?.path_scope_mode)}</Tag>
+            {getPathScopeLabel(resolvedPolicyDocument?.path_scope_mode) ? (
+              <Tag color="cyan">{getPathScopeLabel(resolvedPolicyDocument?.path_scope_mode)}</Tag>
             ) : null}
-            {policy.policy_document?.path_scope_enforcement ? (
+            {resolvedPolicyDocument?.path_scope_enforcement ? (
               <Tag color="orange">Path approval fallback</Tag>
             ) : null}
-            {getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes) ? (
-              <Tag color="blue">{`paths ${getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes)}`}</Tag>
+            {getPathAllowlistSummary(resolvedPolicyDocument?.path_allowlist_prefixes) ? (
+              <Tag color="blue">{`paths ${getPathAllowlistSummary(resolvedPolicyDocument?.path_allowlist_prefixes)}`}</Tag>
             ) : null}
             {provenance.some((entry) => entry.source_kind === "assignment_override") ? (
               <Tag color="cyan">Override active</Tag>
@@ -172,6 +212,11 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
                   : "user-local"}
               </Tag>
             ) : null}
+            {unresolvedCapabilities.map((capability) => (
+              <Tag key={`unresolved:${capability}`} color="red">
+                {`unresolved ${capability}`}
+              </Tag>
+            ))}
           </Space>
           <Space wrap>
             {policy.allowed_tools.map((tool) => (

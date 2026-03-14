@@ -17,7 +17,7 @@
 - Task 3: Complete
 - Task 4: Complete
 - Task 5: Complete
-- Task 6: In Progress
+- Task 6: Complete
 
 ### Task 1: Add capability-mapping storage and repo coverage
 
