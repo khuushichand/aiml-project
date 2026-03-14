@@ -1,0 +1,66 @@
+{
+  "data": {
+    "approvals": [
+      {
+        "approval_template_id": "researcher.ask",
+        "mode": "ask",
+        "name": "Ask Before Use"
+      }
+    ],
+    "assignments": [
+      {
+        "approval_template_id": "researcher.ask",
+        "assignment_template_id": "researcher.default",
+        "capability_profile_id": "researcher.profile",
+        "persona_template_id": "researcher.persona",
+        "target_type": "default"
+      }
+    ],
+    "personas": [
+      {
+        "approval_template_id": "researcher.ask",
+        "capability_profile_id": "researcher.profile",
+        "description": "Research-oriented persona template.",
+        "name": "Research Companion",
+        "persona_template_id": "researcher.persona",
+        "persona_traits": [
+          "researcher"
+        ]
+      }
+    ],
+    "profiles": [
+      {
+        "approval_intent": "ask",
+        "capabilities": {
+          "allow": [
+            "filesystem.read",
+            "tool.invoke.research"
+          ],
+          "deny": []
+        },
+        "description": "Read-oriented research capability profile.",
+        "environment_requirements": [
+          "workspace_bounded_read"
+        ],
+        "name": "Researcher",
+        "profile_id": "researcher.profile"
+      }
+    ]
+  },
+  "manifest": {
+    "adapter_contract_version": 1,
+    "authors": [
+      "codex"
+    ],
+    "capability_taxonomy_version": 1,
+    "compatible_runtime_targets": [
+      "tldw",
+      "acp"
+    ],
+    "description": "Minimal governance pack fixture for validation tests.",
+    "pack_id": "researcher-pack",
+    "pack_schema_version": 1,
+    "pack_version": "1.0.0",
+    "title": "Researcher Pack"
+  }
+}

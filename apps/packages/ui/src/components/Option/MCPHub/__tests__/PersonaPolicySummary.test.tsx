@@ -41,6 +41,18 @@ describe("PersonaPolicySummary", () => {
           profile_id: 5,
           override_id: 31,
           effect: "merged"
+        },
+        {
+          field: "governance_pack",
+          value: {
+            pack_id: "researcher-pack",
+            pack_version: "1.0.0"
+          },
+          source_kind: "profile",
+          assignment_id: 11,
+          profile_id: 5,
+          override_id: null,
+          effect: "replaced"
         }
       ]
     })
@@ -121,6 +133,26 @@ describe("PersonaPolicySummary", () => {
     expect(screen.getByText("Write token")).toBeTruthy()
     expect(screen.getAllByText(/disabled by assignment/i).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/missing secret/i).length).toBeGreaterThan(0)
+    expect(screen.getByText("Pack researcher-pack@1.0.0")).toBeTruthy()
     expect(screen.getByRole("link", { name: /open mcp hub/i })).toBeTruthy()
+  })
+
+  it("handles missing provenance arrays without crashing", async () => {
+    mocks.getEffectivePolicy.mockResolvedValueOnce({
+      enabled: true,
+      allowed_tools: ["Bash(git *)"],
+      denied_tools: [],
+      capabilities: ["process.execute"],
+      approval_policy_id: 17,
+      approval_mode: "ask_outside_profile",
+      policy_document: {},
+      sources: [],
+      provenance: null
+    })
+
+    render(<PersonaPolicySummary personaId="researcher" />)
+
+    expect(await screen.findByText("process.execute")).toBeTruthy()
+    expect(screen.queryByText("Pack researcher-pack@1.0.0")).toBeNull()
   })
 })

@@ -99,6 +99,7 @@ class PermissionProfileResponse(BaseModel):
     path_scope_object_id: int | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
     is_active: bool
+    is_immutable: bool = False
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None
@@ -178,6 +179,7 @@ class PolicyAssignmentResponse(BaseModel):
     inline_policy_document: dict[str, Any] = Field(default_factory=dict)
     approval_policy_id: int | None = None
     is_active: bool
+    is_immutable: bool = False
     has_override: bool = False
     override_id: int | None = None
     override_active: bool = False
@@ -360,6 +362,7 @@ class ApprovalPolicyResponse(BaseModel):
     mode: ApprovalMode
     rules: dict[str, Any] = Field(default_factory=dict)
     is_active: bool
+    is_immutable: bool = False
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None
@@ -637,3 +640,78 @@ class EffectiveExternalAccessResponse(BaseModel):
 
 class MCPHubDeleteResponse(BaseModel):
     ok: bool
+
+
+class GovernancePackDocumentRequest(BaseModel):
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    profiles: list[dict[str, Any]] = Field(default_factory=list)
+    approvals: list[dict[str, Any]] = Field(default_factory=list)
+    personas: list[dict[str, Any]] = Field(default_factory=list)
+    assignments: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GovernancePackDryRunRequest(BaseModel):
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    pack: GovernancePackDocumentRequest
+
+
+class GovernancePackImportRequest(BaseModel):
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    pack: GovernancePackDocumentRequest
+
+
+class GovernancePackReportManifestResponse(BaseModel):
+    pack_id: str
+    pack_version: str
+    title: str
+    description: str | None = None
+
+
+class GovernancePackDryRunReportResponse(BaseModel):
+    manifest: GovernancePackReportManifestResponse
+    digest: str
+    resolved_capabilities: list[str] = Field(default_factory=list)
+    unresolved_capabilities: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    blocked_objects: list[str] = Field(default_factory=list)
+    verdict: Literal["importable", "blocked"]
+
+
+class GovernancePackDryRunResponse(BaseModel):
+    report: GovernancePackDryRunReportResponse
+
+
+class GovernancePackObjectProvenanceResponse(BaseModel):
+    object_type: str
+    object_id: str
+    source_object_id: str
+
+
+class GovernancePackSummaryResponse(BaseModel):
+    id: int
+    pack_id: str
+    pack_version: str
+    title: str
+    description: str | None = None
+    owner_scope_type: ScopeType
+    owner_scope_id: int | None = None
+    bundle_digest: str
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class GovernancePackDetailResponse(GovernancePackSummaryResponse):
+    normalized_ir: dict[str, Any] = Field(default_factory=dict)
+    imported_objects: list[GovernancePackObjectProvenanceResponse] = Field(default_factory=list)
+
+
+class GovernancePackImportResponse(BaseModel):
+    governance_pack_id: int
+    imported_object_counts: dict[str, int] = Field(default_factory=dict)
+    blocked_objects: list[str] = Field(default_factory=list)
+    report: GovernancePackDryRunReportResponse

@@ -1993,6 +1993,95 @@ def migration_063_add_mcp_shared_workspaces(conn: sqlite3.Connection) -> None:
     logger.info("Migration 063: Added MCP shared workspace registry schema")
 
 
+def migration_069_add_mcp_governance_pack_schema(conn: sqlite3.Connection) -> None:
+    """Add governance-pack provenance tables and immutability flags for MCP Hub."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_packs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pack_id TEXT NOT NULL,
+            pack_version TEXT NOT NULL,
+            pack_schema_version INTEGER NOT NULL,
+            capability_taxonomy_version INTEGER NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            bundle_digest TEXT NOT NULL,
+            manifest_json TEXT NOT NULL DEFAULT '{}',
+            normalized_ir_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_packs_scope "
+        "ON mcp_governance_packs(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_scope_version "
+        "ON mcp_governance_packs(pack_id, pack_version, owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            governance_pack_id INTEGER NOT NULL,
+            object_type TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            source_object_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (governance_pack_id) REFERENCES mcp_governance_packs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_objects_pack "
+        "ON mcp_governance_pack_objects(governance_pack_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_pack_source "
+        "ON mcp_governance_pack_objects(governance_pack_id, object_type, source_object_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_object "
+        "ON mcp_governance_pack_objects(object_type, object_id)"
+    )
+
+    profile_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_permission_profiles)").fetchall()
+    }
+    if "is_immutable" not in profile_columns:
+        conn.execute(
+            "ALTER TABLE mcp_permission_profiles ADD COLUMN is_immutable INTEGER NOT NULL DEFAULT 0"
+        )
+
+    assignment_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_assignments)").fetchall()
+    }
+    if "is_immutable" not in assignment_columns:
+        conn.execute(
+            "ALTER TABLE mcp_policy_assignments ADD COLUMN is_immutable INTEGER NOT NULL DEFAULT 0"
+        )
+
+    approval_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_approval_policies)").fetchall()
+    }
+    if "is_immutable" not in approval_columns:
+        conn.execute(
+            "ALTER TABLE mcp_approval_policies ADD COLUMN is_immutable INTEGER NOT NULL DEFAULT 0"
+        )
+
+    conn.commit()
+    logger.info("Migration 069: Added MCP governance pack schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -3820,6 +3909,11 @@ def get_authnz_migrations() -> list[Migration]:
             "Create BYOK validation runs table",
             migration_068_create_byok_validation_runs_table,
             rollback_068_drop_byok_validation_runs_table,
+        ),
+        Migration(
+            69,
+            "Add MCP governance pack schema",
+            migration_069_add_mcp_governance_pack_schema,
         ),
     ]
 

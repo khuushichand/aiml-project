@@ -74,6 +74,24 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
     }
   }, [personaId])
 
+  const provenance = Array.isArray(policy?.provenance) ? policy.provenance : []
+  const governancePackLabels = Array.from(
+    new Set(
+      provenance
+        .filter((entry) => entry.field === "governance_pack")
+        .map((entry) => {
+          const value = entry.value as { pack_id?: unknown; pack_version?: unknown } | null
+          const packId = typeof value?.pack_id === "string" ? value.pack_id : null
+          const packVersion = typeof value?.pack_version === "string" ? value.pack_version : null
+          if (!packId || !packVersion) {
+            return null
+          }
+          return `Pack ${packId}@${packVersion}`
+        })
+        .filter((label): label is string => Boolean(label))
+    )
+  )
+
   return (
     <Card
       title="Tool Policy Summary"
@@ -133,12 +151,17 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
             {getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes) ? (
               <Tag color="blue">{`paths ${getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes)}`}</Tag>
             ) : null}
-            {policy.provenance.some((entry) => entry.source_kind === "assignment_override") ? (
+            {provenance.some((entry) => entry.source_kind === "assignment_override") ? (
               <Tag color="cyan">Override active</Tag>
             ) : null}
-            {policy.provenance.some((entry) => entry.source_kind === "assignment_path_scope_object") ? (
+            {provenance.some((entry) => entry.source_kind === "assignment_path_scope_object") ? (
               <Tag color="purple">Named path scope</Tag>
             ) : null}
+            {governancePackLabels.map((label) => (
+              <Tag key={label} color="geekblue">
+                {label}
+              </Tag>
+            ))}
             {policy.selected_workspace_source_mode === "named" && policy.selected_workspace_set_object_name ? (
               <Tag color="geekblue">{`workspace set ${policy.selected_workspace_set_object_name}`}</Tag>
             ) : null}

@@ -43,6 +43,9 @@ vi.mock("../GovernanceAuditTab", () => ({
     </button>
   )
 }))
+vi.mock("../GovernancePacksTab", () => ({
+  GovernancePacksTab: () => <div>governance packs tab</div>
+}))
 
 import { McpHubPage } from "../McpHubPage"
 
@@ -53,6 +56,7 @@ describe("McpHubPage", () => {
     expect(screen.getByText("Profiles")).toBeTruthy()
     expect(screen.getByText("Assignments")).toBeTruthy()
     expect(screen.getByText("Audit")).toBeTruthy()
+    expect(screen.getByText("Governance Packs")).toBeTruthy()
   })
 
   it("opens the requested MCP Hub tab from the audit view", async () => {

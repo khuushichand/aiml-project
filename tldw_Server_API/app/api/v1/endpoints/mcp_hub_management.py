@@ -34,6 +34,12 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ExternalServerCreateRequest,
     ExternalServerResponse,
     ExternalServerUpdateRequest,
+    GovernancePackDetailResponse,
+    GovernancePackDryRunRequest,
+    GovernancePackDryRunResponse,
+    GovernancePackImportRequest,
+    GovernancePackImportResponse,
+    GovernancePackSummaryResponse,
     GovernanceAuditFindingListResponse,
     MCPHubDeleteResponse,
     PathScopeObjectCreateRequest,
@@ -69,6 +75,10 @@ from tldw_Server_API.app.core.config import config
 from tldw_Server_API.app.core.exceptions import BadRequestError, ResourceNotFoundError
 from tldw_Server_API.app.services.mcp_hub_external_legacy_inventory import (
     McpHubExternalLegacyInventoryService,
+)
+from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+    GovernancePackAlreadyExistsError,
+    McpHubGovernancePackService,
 )
 from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
 from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
@@ -118,6 +128,14 @@ async def get_mcp_hub_service() -> McpHubService:
         )
     )
     return McpHubService(repo, legacy_inventory_service=inventory_service)
+
+
+async def get_mcp_hub_governance_pack_service() -> McpHubGovernancePackService:
+    """Resolve governance-pack service with MCP Hub storage bootstrap checks."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpHubGovernancePackService(repo=repo)
 
 
 async def get_mcp_hub_policy_resolver_dep() -> McpHubPolicyResolver:
@@ -170,6 +188,15 @@ def _require_mutation_permission(principal: AuthPrincipal) -> None:
     if _is_mutation_allowed(principal):
         return
     raise HTTPException(status_code=403, detail=f"{SYSTEM_CONFIGURE} permission required")
+
+
+def _ensure_mutable_governance_object(row: dict[str, Any] | None, object_label: str) -> None:
+    """Reject direct mutation of imported governance-pack managed base objects."""
+    if row and bool(row.get("is_immutable")):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{object_label} is immutable because it is managed by an imported governance pack",
+        )
 
 
 def _require_grant_authority(principal: AuthPrincipal, policy_document: dict[str, Any]) -> None:
@@ -608,6 +635,97 @@ def _resolve_visible_scope_filters(
         return [("team", int(owner_scope_id))]
 
     raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+
+
+def _assert_principal_can_access_scope(
+    principal: AuthPrincipal,
+    *,
+    owner_scope_type: str,
+    owner_scope_id: int | None,
+) -> None:
+    """Assert that the principal can access a concrete owner scope."""
+    _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+
+
+def _resolve_governance_pack_mutation_scope(
+    *,
+    principal: AuthPrincipal,
+    owner_scope_type: str,
+    owner_scope_id: int | None,
+) -> tuple[str, int | None]:
+    """Resolve governance-pack mutation scope, defaulting user scope to the active principal."""
+    scope_type = str(owner_scope_type or "").strip().lower()
+    if scope_type not in _VALID_SCOPE_TYPES:
+        raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+
+    if scope_type == "global":
+        if owner_scope_id is not None:
+            raise HTTPException(status_code=422, detail="global scope cannot include owner_scope_id")
+        return ("global", None)
+
+    if scope_type == "user":
+        if owner_scope_id is not None:
+            return ("user", int(owner_scope_id))
+        if principal.user_id is None:
+            raise HTTPException(status_code=422, detail="user scope requires owner_scope_id")
+        return ("user", int(principal.user_id))
+
+    if owner_scope_id is None:
+        raise HTTPException(status_code=422, detail=f"{scope_type} scope requires owner_scope_id")
+    return (scope_type, int(owner_scope_id))
+
+
+def _portable_grant_capability(capability: Any) -> str | None:
+    """Map a portable governance-pack capability to the runtime grant-authority root capability."""
+    normalized = str(capability or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in _CAPABILITY_GRANT_PERMISSIONS:
+        return normalized
+    if normalized.startswith("tool.invoke."):
+        return "tool.invoke"
+    if normalized.startswith("network.external."):
+        return "network.external"
+    if normalized.startswith("process.execute."):
+        return "process.execute"
+    if normalized.startswith("mcp.server.connect"):
+        return "mcp.server.connect"
+    if normalized.startswith("filesystem."):
+        return normalized if normalized in _CAPABILITY_GRANT_PERMISSIONS else None
+    return None
+
+
+def _governance_pack_grant_document(pack_document: dict[str, Any]) -> dict[str, Any]:
+    """Build a synthetic policy document for grant-authority evaluation of portable capabilities."""
+    capabilities: list[str] = []
+    raw_profiles = pack_document.get("profiles")
+    if not isinstance(raw_profiles, list):
+        return {"capabilities": capabilities}
+    for raw_profile in raw_profiles:
+        if not isinstance(raw_profile, dict):
+            continue
+        raw_capabilities = raw_profile.get("capabilities")
+        if not isinstance(raw_capabilities, dict):
+            continue
+        for capability in _as_str_list(raw_capabilities.get("allow")):
+            mapped = _portable_grant_capability(capability)
+            if mapped:
+                capabilities.append(mapped)
+    return {"capabilities": _unique(capabilities)}
+
+
+def _governance_pack_manifest_summary(pack_document: dict[str, Any]) -> tuple[str, str]:
+    """Return safe manifest identifiers for audit logging without logging the full pack payload."""
+    manifest = pack_document.get("manifest")
+    if not isinstance(manifest, dict):
+        return ("<unknown>", "<unknown>")
+    pack_id = str(manifest.get("pack_id") or "").strip() or "<unknown>"
+    pack_version = str(manifest.get("pack_version") or "").strip() or "<unknown>"
+    return (pack_id, pack_version)
 
 
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1113,6 +1231,130 @@ async def get_tool_registry_summary(
     )
 
 
+@router.post("/governance-packs/dry-run", response_model=GovernancePackDryRunResponse)
+async def dry_run_governance_pack(
+    payload: GovernancePackDryRunRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackDryRunResponse:
+    """Validate a governance-pack document and report dry-run compatibility details."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        report = await svc.dry_run_pack_document(
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack dry-run rejected for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    report_payload = report.model_dump() if hasattr(report, "model_dump") else dict(report)
+    return GovernancePackDryRunResponse.model_validate({"report": report_payload})
+
+
+@router.post("/governance-packs/import", response_model=GovernancePackImportResponse, status_code=201)
+async def import_governance_pack(
+    payload: GovernancePackImportRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackImportResponse:
+    """Persist an importable governance-pack document into immutable MCP Hub base objects."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        result = await svc.import_pack_document(
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            actor_id=principal.user_id,
+        )
+    except GovernancePackAlreadyExistsError as exc:
+        logger.warning(
+            "Governance pack import conflict for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack import rejected for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackImportResponse.model_validate(result)
+
+
+@router.get("/governance-packs", response_model=list[GovernancePackSummaryResponse])
+async def list_governance_packs(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> list[GovernancePackSummaryResponse]:
+    """List governance packs visible to the current principal with scope-constrained filtering."""
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_governance_packs(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [GovernancePackSummaryResponse.model_validate(row) for row in rows]
+
+
+@router.get("/governance-packs/{governance_pack_id}", response_model=GovernancePackDetailResponse)
+async def get_governance_pack_detail(
+    governance_pack_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackDetailResponse:
+    """Return the persisted governance pack manifest plus imported-object provenance links."""
+    row = await svc.get_governance_pack_detail(governance_pack_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"mcp_governance_pack '{governance_pack_id}' was not found")
+    _assert_principal_can_access_scope(
+        principal,
+        owner_scope_type=str(row.get("owner_scope_type") or "global"),
+        owner_scope_id=row.get("owner_scope_id"),
+    )
+    return GovernancePackDetailResponse.model_validate(row)
+
+
 @router.post("/permission-profiles", response_model=PermissionProfileResponse, status_code=201)
 async def create_permission_profile(
     payload: PermissionProfileCreateRequest,
@@ -1192,6 +1434,10 @@ async def update_permission_profile(
         )
         _require_grant_authority(principal, update_fields.get("policy_document") or {})
     try:
+        existing = await svc.get_permission_profile(profile_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
+        _ensure_mutable_governance_object(existing, "Permission profile")
         if (
             "path_scope_object_id" in update_fields
             or "workspace_source_mode" in update_fields
@@ -1199,9 +1445,6 @@ async def update_permission_profile(
             or "owner_scope_type" in update_fields
             or "owner_scope_id" in update_fields
         ):
-            existing = await svc.get_permission_profile(profile_id)
-            if not existing:
-                raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
             await svc.validate_path_scope_object_reference(
                 path_scope_object_id=update_fields.get(
                     "path_scope_object_id",
@@ -1233,6 +1476,10 @@ async def delete_permission_profile(
     """Delete a permission profile by id."""
     _require_mutation_permission(principal)
     try:
+        existing = await svc.get_permission_profile(profile_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
+        _ensure_mutable_governance_object(existing, "Permission profile")
         deleted = await svc.delete_permission_profile(profile_id, actor_id=principal.user_id)
         if not deleted:
             raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
@@ -1773,14 +2020,15 @@ async def update_policy_assignment(
         )
         _require_grant_authority(principal, update_fields.get("inline_policy_document") or {})
     try:
+        existing = await svc.get_policy_assignment(assignment_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+        _ensure_mutable_governance_object(existing, "Policy assignment")
         if (
             "path_scope_object_id" in update_fields
             or "owner_scope_type" in update_fields
             or "owner_scope_id" in update_fields
         ):
-            existing = await svc.get_policy_assignment(assignment_id)
-            if not existing:
-                raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
             await svc.validate_path_scope_object_reference(
                 path_scope_object_id=update_fields.get(
                     "path_scope_object_id",
@@ -1825,6 +2073,10 @@ async def delete_policy_assignment(
     """Delete a policy assignment by id."""
     _require_mutation_permission(principal)
     try:
+        existing = await svc.get_policy_assignment(assignment_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+        _ensure_mutable_governance_object(existing, "Policy assignment")
         deleted = await svc.delete_policy_assignment(assignment_id, actor_id=principal.user_id)
         if not deleted:
             raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
@@ -2061,6 +2313,10 @@ async def update_approval_policy(
     if "rules" in update_fields:
         update_fields["rules"] = _normalized_approval_rules(update_fields.get("rules"))
     try:
+        existing = await svc.get_approval_policy(approval_policy_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_approval_policy", identifier=str(approval_policy_id))
+        _ensure_mutable_governance_object(existing, "Approval policy")
         row = await svc.update_approval_policy(
             approval_policy_id,
             actor_id=principal.user_id,
@@ -2082,6 +2338,10 @@ async def delete_approval_policy(
     """Delete an approval policy by id."""
     _require_mutation_permission(principal)
     try:
+        existing = await svc.get_approval_policy(approval_policy_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_approval_policy", identifier=str(approval_policy_id))
+        _ensure_mutable_governance_object(existing, "Approval policy")
         deleted = await svc.delete_approval_policy(approval_policy_id, actor_id=principal.user_id)
         if not deleted:
             raise ResourceNotFoundError("mcp_approval_policy", identifier=str(approval_policy_id))

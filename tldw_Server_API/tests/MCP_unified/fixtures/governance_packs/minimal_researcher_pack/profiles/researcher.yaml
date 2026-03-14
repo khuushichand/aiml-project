@@ -1,0 +1,10 @@
+profile_id: researcher.profile
+name: Researcher
+description: Read-oriented research capability profile.
+capabilities:
+  allow:
+    - filesystem.read
+    - tool.invoke.research
+approval_intent: ask
+environment_requirements:
+  - workspace_bounded_read
