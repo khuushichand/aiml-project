@@ -110,7 +110,11 @@ describe("usePersonaLiveVoiceController", () => {
           stt: {
             language: "en-US",
             model: "whisper-1",
-            enable_vad: true
+            enable_vad: true,
+            vad_threshold: 0.5,
+            min_silence_ms: 250,
+            turn_stop_secs: 0.2,
+            min_utterance_secs: 0.4
           },
           tts: {
             provider: "openai",
@@ -220,6 +224,140 @@ describe("usePersonaLiveVoiceController", () => {
     expect((result.current as any).minSilenceMs).toBe(250)
     expect((result.current as any).turnStopSecs).toBe(0.2)
     expect((result.current as any).minUtteranceSecs).toBe(0.4)
+  })
+
+  it("sends updated voice_config when the preset changes while connected", async () => {
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await waitFor(() => {
+      expect(ws.send).toHaveBeenCalled()
+    })
+    ;(ws as WebSocket & { send: ReturnType<typeof vi.fn> }).send.mockClear()
+
+    act(() => {
+      ;(result.current as any).setVadPreset("fast")
+    })
+
+    await waitFor(() => {
+      expect(getSentPayloads(ws as WebSocket & { send: ReturnType<typeof vi.fn> })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-voice",
+            stt: expect.objectContaining({
+              enable_vad: true,
+              vad_threshold: 0.35,
+              min_silence_ms: 150,
+              turn_stop_secs: 0.1,
+              min_utterance_secs: 0.25
+            })
+          })
+        ])
+      )
+    })
+  })
+
+  it("sends enable_vad false when auto-commit is turned off", async () => {
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await waitFor(() => {
+      expect(ws.send).toHaveBeenCalled()
+    })
+    ;(ws as WebSocket & { send: ReturnType<typeof vi.fn> }).send.mockClear()
+
+    act(() => {
+      ;(result.current as any).setAutoCommitEnabled(false)
+    })
+
+    await waitFor(() => {
+      expect(getSentPayloads(ws as WebSocket & { send: ReturnType<typeof vi.fn> })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-voice",
+            stt: expect.objectContaining({
+              enable_vad: false
+            })
+          })
+        ])
+      )
+    })
+  })
+
+  it("sends updated advanced values when turn detection tuning changes", async () => {
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await waitFor(() => {
+      expect(ws.send).toHaveBeenCalled()
+    })
+    ;(ws as WebSocket & { send: ReturnType<typeof vi.fn> }).send.mockClear()
+
+    act(() => {
+      ;(result.current as any).setVadThreshold(0.61)
+      ;(result.current as any).setMinSilenceMs(640)
+      ;(result.current as any).setTurnStopSecs(0.48)
+      ;(result.current as any).setMinUtteranceSecs(0.82)
+    })
+
+    await waitFor(() => {
+      expect(getSentPayloads(ws as WebSocket & { send: ReturnType<typeof vi.fn> })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-voice",
+            stt: expect.objectContaining({
+              enable_vad: true,
+              vad_threshold: 0.61,
+              min_silence_ms: 640,
+              turn_stop_secs: 0.48,
+              min_utterance_secs: 0.82
+            })
+          })
+        ])
+      )
+    })
   })
 
   it("streams persona audio chunks and does not send a routine manual commit when listening stops", async () => {

@@ -607,7 +607,11 @@ export const usePersonaLiveVoiceController = ({
           stt: {
             language: resolvedDefaults.sttLanguage,
             model: resolvedDefaults.sttModel,
-            enable_vad: true
+            enable_vad: autoCommitEnabled,
+            vad_threshold: vadThreshold,
+            min_silence_ms: minSilenceMs,
+            turn_stop_secs: turnStopSecs,
+            min_utterance_secs: minUtteranceSecs
           },
           tts: {
             provider: resolvedDefaults.ttsProvider,
@@ -625,6 +629,11 @@ export const usePersonaLiveVoiceController = ({
     resolvedDefaults.ttsProvider,
     resolvedDefaults.ttsVoice,
     resolvedDefaults.voiceChatTriggerPhrases,
+    autoCommitEnabled,
+    vadThreshold,
+    minSilenceMs,
+    turnStopSecs,
+    minUtteranceSecs,
     sessionAutoResume,
     sessionBargeIn,
     sessionId,
