@@ -60,6 +60,9 @@ vi.mock('@/lib/api-client', () => ({
     refreshOpenAIOAuth: vi.fn(),
     disconnectOpenAIOAuth: vi.fn(),
     switchOpenAICredentialSource: vi.fn(),
+    createByokValidationRun: vi.fn(),
+    getByokValidationRuns: vi.fn(),
+    getByokValidationRun: vi.fn(),
   },
 }));
 
@@ -78,9 +81,31 @@ type ApiMock = {
   refreshOpenAIOAuth: ReturnType<typeof vi.fn>;
   disconnectOpenAIOAuth: ReturnType<typeof vi.fn>;
   switchOpenAICredentialSource: ReturnType<typeof vi.fn>;
+  createByokValidationRun: ReturnType<typeof vi.fn>;
+  getByokValidationRuns: ReturnType<typeof vi.fn>;
+  getByokValidationRun: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
+
+const completedValidationRun = {
+  id: 'run-1',
+  status: 'complete',
+  org_id: null,
+  provider: 'openai',
+  keys_checked: 12,
+  valid_count: 10,
+  invalid_count: 1,
+  error_count: 1,
+  requested_by_user_id: 1,
+  requested_by_label: 'alice',
+  job_id: 'job-1',
+  scope_summary: 'All orgs • provider=openai',
+  error_message: null,
+  created_at: '2026-03-12T12:00:00Z',
+  started_at: '2026-03-12T12:00:05Z',
+  completed_at: '2026-03-12T12:00:15Z',
+} as const;
 
 beforeEach(() => {
   toastSuccessMock.mockClear();
@@ -111,6 +136,14 @@ beforeEach(() => {
     auth_source: 'oauth',
     updated_at: new Date().toISOString(),
   });
+  apiMock.createByokValidationRun.mockResolvedValue(completedValidationRun);
+  apiMock.getByokValidationRuns.mockResolvedValue({
+    items: [completedValidationRun],
+    total: 1,
+    limit: 20,
+    offset: 0,
+  });
+  apiMock.getByokValidationRun.mockResolvedValue(completedValidationRun);
 
   apiMock.getUsersPage.mockResolvedValue({
     items: [
@@ -155,7 +188,7 @@ afterEach(() => {
 });
 
 describe('ByokDashboardPage', () => {
-  it('renders per-user BYOK usage with user+provider aggregation', async () => {
+  it('renders per-user BYOK usage with backend-backed validation history', async () => {
     render(<ByokDashboardPage />);
 
     expect(await screen.findByText('Per-User BYOK Usage')).toBeInTheDocument();
@@ -178,10 +211,14 @@ describe('ByokDashboardPage', () => {
     expect(within(bobRow as HTMLElement).getByText('50')).toBeInTheDocument();
     expect(within(bobRow as HTMLElement).getByText(/\$0\.5/)).toBeInTheDocument();
 
+    expect(await screen.findByRole('button', { name: /run validation sweep/i })).toBeInTheDocument();
+    expect(screen.getByText('All orgs • provider=openai')).toBeInTheDocument();
+    expect(screen.getByText('12 checked • 10 valid • 1 invalid • 1 errors')).toBeInTheDocument();
     expect(
-      screen.getByText('Validation sweep control is hidden until backend batch validation support is available.')
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /validation sweep/i })).not.toBeInTheDocument();
+      screen.queryByText('Validation sweep control is hidden until backend batch validation support is available.')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Placeholder telemetry views/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Key Activity (Placeholder)')).not.toBeInTheDocument();
   });
 
   it('starts OpenAI OAuth connect flow from the BYOK card', async () => {
@@ -201,5 +238,85 @@ describe('ByokDashboardPage', () => {
       );
     });
     openSpy.mockRestore();
+  });
+
+  it('creates a validation sweep and polls until terminal state', async () => {
+    apiMock.getByokValidationRuns.mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    apiMock.createByokValidationRun.mockResolvedValue({
+      ...completedValidationRun,
+      id: 'run-2',
+      status: 'queued',
+      started_at: null,
+      completed_at: null,
+      keys_checked: null,
+      valid_count: null,
+      invalid_count: null,
+      error_count: null,
+      job_id: null,
+    });
+    apiMock.getByokValidationRun
+      .mockResolvedValueOnce({
+        ...completedValidationRun,
+        id: 'run-2',
+        status: 'running',
+        started_at: '2026-03-12T12:00:10Z',
+        completed_at: null,
+        keys_checked: null,
+        valid_count: null,
+        invalid_count: null,
+        error_count: null,
+        job_id: 'job-2',
+      })
+      .mockResolvedValueOnce({
+        ...completedValidationRun,
+        id: 'run-2',
+        job_id: 'job-2',
+      });
+
+    render(<ByokDashboardPage />);
+
+    expect(screen.getByText('BYOK Dashboards')).toBeInTheDocument();
+    const runSweepButton = await screen.findByRole('button', { name: /run validation sweep/i });
+    await waitFor(() => expect(runSweepButton).not.toBeDisabled());
+    fireEvent.click(runSweepButton);
+
+    await waitFor(() => {
+      expect(apiMock.createByokValidationRun).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(() => {
+      expect(apiMock.getByokValidationRun).toHaveBeenCalledWith('run-2');
+      expect(screen.getByText('Complete')).toBeInTheDocument();
+      expect(screen.getByText('12 checked • 10 valid • 1 invalid • 1 errors')).toBeInTheDocument();
+      expect(toastSuccessMock).toHaveBeenCalled();
+    }, { timeout: 5000 });
+  }, 10000);
+
+  it('does not create fake validation history when create fails', async () => {
+    apiMock.getByokValidationRuns.mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 20,
+      offset: 0,
+    });
+    apiMock.createByokValidationRun.mockRejectedValue(new Error('sweep failed'));
+
+    render(<ByokDashboardPage />);
+
+    expect(screen.getByText('BYOK Dashboards')).toBeInTheDocument();
+    const runSweepButton = await screen.findByRole('button', { name: /run validation sweep/i });
+    await waitFor(() => expect(runSweepButton).not.toBeDisabled());
+    fireEvent.click(runSweepButton);
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith('Validation sweep failed', 'sweep failed');
+    });
+    expect(screen.getByText('No validation runs yet.')).toBeInTheDocument();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 });

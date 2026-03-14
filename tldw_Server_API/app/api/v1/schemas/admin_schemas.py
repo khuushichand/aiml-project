@@ -665,6 +665,39 @@ class RetentionPoliciesResponse(BaseModel):
 class RetentionPolicyUpdateRequest(BaseModel):
     """Request to update a retention policy."""
     days: int = Field(..., ge=1, le=3650)
+    preview_signature: str | None = Field(default=None, min_length=1, max_length=2048)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyPreviewRequest(BaseModel):
+    """Request to preview the impact of a retention policy change."""
+
+    current_days: int = Field(..., ge=1, le=3650)
+    days: int = Field(..., ge=1, le=3650)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyPreviewCounts(BaseModel):
+    """Authoritative count summary for a retention policy preview."""
+
+    audit_log_entries: NonNegativeInt = 0
+    job_records: NonNegativeInt = 0
+    backup_files: NonNegativeInt = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyPreviewResponse(BaseModel):
+    """Response for an authoritative retention policy preview."""
+
+    key: str
+    current_days: int = Field(..., ge=1, le=3650)
+    new_days: int = Field(..., ge=1, le=3650)
+    counts: RetentionPolicyPreviewCounts
+    preview_signature: str = Field(..., min_length=1, max_length=2048)
+    notes: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 

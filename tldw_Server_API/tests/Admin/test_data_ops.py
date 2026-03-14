@@ -124,10 +124,19 @@ async def test_admin_retention_policy_update(tmp_path):
             (policy["key"] for policy in policies if policy.get("key") == "audit_logs"),
             policies[0]["key"],
         )
+        current_days = next((policy["days"] for policy in policies if policy.get("key") == target), None)
+        assert isinstance(current_days, int)
+
+        preview_resp = client.post(
+            f"/api/v1/admin/retention-policies/{target}/preview",
+            json={"current_days": current_days, "days": 180},
+        )
+        assert preview_resp.status_code == 200, preview_resp.text
+        preview_signature = preview_resp.json()["preview_signature"]
 
         update_resp = client.put(
             f"/api/v1/admin/retention-policies/{target}",
-            json={"days": 180},
+            json={"days": 180, "preview_signature": preview_signature},
         )
         assert update_resp.status_code == 200, update_resp.text
         payload = update_resp.json()

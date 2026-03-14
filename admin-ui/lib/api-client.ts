@@ -9,6 +9,9 @@ import type {
   BackupScheduleListResponse,
   BackupScheduleMutationResponse,
   BackupsResponse,
+  ByokValidationRunCreateRequest,
+  ByokValidationRunItem,
+  ByokValidationRunListResponse,
   EffectivePermissionsResponse,
   FeatureRegistryEntry,
   IncidentItem,
@@ -26,6 +29,7 @@ import type {
   ProviderSecret,
   RegistrationCode,
   RetentionPoliciesResponse,
+  RetentionPolicyPreviewResponse,
   SecurityAlertStatus,
   SecurityHealthData,
   Subscription,
@@ -496,7 +500,7 @@ export const api = {
     }),
   getRetentionPolicies: () => requestJson<RetentionPoliciesResponse>('/admin/retention-policies'),
   previewRetentionPolicyImpact: (policyKey: string, data: Record<string, unknown>) =>
-    requestJson(`/admin/retention-policies/${encodeURIComponent(policyKey)}/preview`, {
+    requestJson<RetentionPolicyPreviewResponse>(`/admin/retention-policies/${encodeURIComponent(policyKey)}/preview`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -920,6 +924,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  createByokValidationRun: (data: ByokValidationRunCreateRequest) =>
+    requestJson<ByokValidationRunItem>('/admin/byok/validation-runs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getByokValidationRuns: (params?: { limit?: number; offset?: number }) => {
+    const queryString = buildQueryString(params);
+    return requestJson<ByokValidationRunListResponse>(
+      `/admin/byok/validation-runs${queryString ? `?${queryString}` : ''}`
+    );
+  },
+  getByokValidationRun: (runId: string) =>
+    requestJson<ByokValidationRunItem>(`/admin/byok/validation-runs/${encodeURIComponent(runId)}`),
 
   // ============================================
   // Security Health

@@ -1895,6 +1895,50 @@ _CREATE_MAINTENANCE_ROTATION_RUNS_TABLES = [
     ),
 ]
 
+_CREATE_BYOK_VALIDATION_RUNS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS byok_validation_runs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            org_id INTEGER NULL,
+            provider TEXT NULL,
+            keys_checked INTEGER NULL,
+            valid_count INTEGER NULL,
+            invalid_count INTEGER NULL,
+            error_count INTEGER NULL,
+            requested_by_user_id INTEGER NULL,
+            requested_by_label TEXT NULL,
+            job_id TEXT NULL,
+            scope_summary TEXT NOT NULL,
+            error_message TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            started_at TIMESTAMPTZ NULL,
+            completed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_byok_validation_runs_active
+        ON byok_validation_runs((1))
+        WHERE status IN ('queued', 'running')
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_created_at "
+        "ON byok_validation_runs(created_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_status "
+        "ON byok_validation_runs(status)",
+        (),
+    ),
+]
+
 
 async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
@@ -1965,6 +2009,30 @@ async def ensure_maintenance_rotation_runs_table_pg(pool: DatabasePool | None = 
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL maintenance rotation runs table: {exc}")
+        return False
+
+
+async def ensure_byok_validation_runs_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure BYOK validation run tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(
+                f"PG ensure authnz core tables before BYOK validation runs failed: {exc}"
+            )
+        for sql, params in _CREATE_BYOK_VALIDATION_RUNS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure BYOK validation run DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL BYOK validation runs table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL BYOK validation runs table: {exc}")
         return False
 
 

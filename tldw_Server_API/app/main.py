@@ -2694,6 +2694,26 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Admin backup Jobs worker: {e}")
 
+    # Admin BYOK validation Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Admin BYOK validation Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.services.admin_byok_validation_jobs_worker import (
+                start_admin_byok_validation_jobs_worker,
+            )
+
+            admin_byok_validation_jobs_task = await start_admin_byok_validation_jobs_worker()
+            if admin_byok_validation_jobs_task:
+                logger.info("Admin BYOK validation Jobs worker started")
+            else:
+                logger.info(
+                    "Admin BYOK validation Jobs worker disabled "
+                    "(ADMIN_BYOK_VALIDATION_JOBS_WORKER_ENABLED != true)"
+                )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Admin BYOK validation Jobs worker: {e}")
+
     # Admin maintenance rotation Jobs worker
     try:
         if _sidecar_mode:
