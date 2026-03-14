@@ -909,6 +909,104 @@ describe("SidepanelPersona", () => {
     ).toBeInTheDocument()
   })
 
+  it("surfaces live_unavailable on setup connect failure and autoconnects on the detour", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=live"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+
+    let connectAttempts = 0
+
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/sessions?")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path === "/api/v1/persona/session") {
+        connectAttempts += 1
+        if (connectAttempts === 1) {
+          return Promise.resolve({
+            ok: false,
+            error: "Failed to create persona session",
+            json: async () => ({})
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-setup-live",
+            persona: { id: "garden-helper" }
+          })
+        })
+      }
+      if (path.includes("/persona/sessions/sess-setup-live")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ preferences: {} })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            version: 2,
+            voice_defaults: {
+              confirmation_mode: "destructive_only"
+            },
+            setup: {
+              status: "in_progress",
+              current_step: "test",
+              completed_steps: ["persona", "voice", "commands", "safety"]
+            },
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("test")
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect live session" }))
+
+    expect(
+      await screen.findByText(/Live session unavailable until you connect/i)
+    ).toBeInTheDocument()
+    expect(MockWebSocket.instances).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Live Session to fix this" }))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    expect(
+      screen.getByText("Finish this live test, then return to setup.")
+    ).toBeInTheDocument()
+  })
+
   it("detours setup into live for a setup live failure and returns manually", async () => {
     mocks.location.search = "?persona_id=garden-helper&tab=live"
     mocks.getConfig.mockResolvedValue({
@@ -1006,6 +1104,7 @@ describe("SidepanelPersona", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("assistant-setup-overlay")).not.toBeInTheDocument()
     })
+    expect(MockWebSocket.instances).toHaveLength(1)
     expect(
       screen.getByText("Finish this live test, then return to setup.")
     ).toBeInTheDocument()

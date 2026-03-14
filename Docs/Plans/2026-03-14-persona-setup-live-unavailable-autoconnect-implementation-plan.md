@@ -8,9 +8,13 @@
 
 **Tech Stack:** React, TypeScript, Vitest, React Testing Library, Bun.
 
+**Status:** Complete
+
 ---
 
 ### Task 1: Add Red Tests For Live-Unavailable Autoconnect
+
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/routes/__tests__/sidepanel-persona.test.tsx`
@@ -72,6 +76,8 @@ Expected: same FAIL.
 
 ### Task 2: Patch The Route Recovery Handler
 
+**Status:** Complete
+
 **Files:**
 - Modify: `apps/packages/ui/src/routes/sidepanel-persona.tsx`
 
@@ -118,6 +124,8 @@ git commit -m "feat: autoconnect setup live-unavailable detours"
 ```
 
 ### Task 3: Run Focused Regressions And Hygiene
+
+**Status:** Complete
 
 **Files:**
 - Update: `Docs/Plans/2026-03-14-persona-setup-live-unavailable-autoconnect-implementation-plan.md`

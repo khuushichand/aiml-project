@@ -1299,8 +1299,11 @@ const SidepanelPersona = ({
       })
       setSetupTestResumeNote(null)
       setActiveTab("live")
+      if (context.source === "live_unavailable" && !connected && !connecting) {
+        setPendingRecoveryReconnectToken((current) => current + 1)
+      }
     },
-    []
+    [connected, connecting]
   )
 
   const handleReturnToSetupFromLiveDetour = React.useCallback(() => {
@@ -2199,6 +2202,13 @@ const SidepanelPersona = ({
       }
     } catch (err: any) {
       const message = String(err?.message || "Failed to connect persona stream")
+      if (
+        personaSetupWizard.isSetupRequired &&
+        personaSetupWizard.currentStep === "test" &&
+        !connected
+      ) {
+        setSetupTestOutcome({ kind: "live_unavailable" })
+      }
       setError(message)
       appendLog("notice", message)
     } finally {
@@ -2216,6 +2226,8 @@ const SidepanelPersona = ({
     isCompanionMode,
     loadPersonaStateDocs,
     applySessionPreferences,
+    personaSetupWizard.currentStep,
+    personaSetupWizard.isSetupRequired,
     resetApprovalHighlightMotion,
     resumeSessionId,
     routeBootstrap.personaId,
