@@ -117,6 +117,11 @@ async def _handle_unified_websocket(*args, **kwargs):
     handler = _load_audio_streaming_unified_attr("handle_unified_websocket")
     return await handler(*args, **kwargs)
 
+
+async def handle_unified_websocket(*args, **kwargs):
+    """Compatibility shim kept for tests and local monkeypatch seams."""
+    return await _handle_unified_websocket(*args, **kwargs)
+
 _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
     asyncio.TimeoutError,
@@ -1079,7 +1084,7 @@ async def websocket_transcribe(
                 logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
 
         try:
-            await _handle_unified_websocket(
+            await handle_unified_websocket(
                 websocket,
                 config,
                 on_audio_seconds=_on_audio_quota,
