@@ -26,6 +26,20 @@ def test_validate_images_payload_accepts_valid():
     assert normalized[0]["alt"] == "Logo"
 
 
+def test_validate_images_payload_accepts_output_asset_ref():
+    images = [
+        {
+            "asset_ref": "output:123",
+            "alt": "Cover",
+            "width": 320,
+        }
+    ]
+    normalized = validate_images_payload(images)
+    assert normalized[0]["asset_ref"] == "output:123"
+    assert normalized[0]["alt"] == "Cover"
+    assert normalized[0]["width"] == 320
+
+
 def test_validate_images_payload_rejects_invalid_mime():
     with pytest.raises(SlidesImageError) as exc:
         validate_images_payload([{"mime": "text/plain", "data_b64": _SAMPLE_PNG_B64}])

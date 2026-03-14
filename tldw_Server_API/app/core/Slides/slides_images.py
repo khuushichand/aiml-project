@@ -6,6 +6,8 @@ import base64
 import binascii
 from typing import Any
 
+from tldw_Server_API.app.core.Slides.slides_assets import SlidesAssetError, parse_slide_asset_ref
+
 MAX_IMAGES_PER_SLIDE = 10
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
@@ -54,8 +56,40 @@ def validate_images_payload(
     for image in images:
         if not isinstance(image, dict):
             raise SlidesImageError("image_entry_invalid")
-        if image.get("asset_ref"):
-            raise SlidesImageError("image_asset_ref_unsupported")
+        asset_ref = image.get("asset_ref")
+        if asset_ref is not None:
+            try:
+                parse_slide_asset_ref(asset_ref)
+            except SlidesAssetError as exc:
+                raise SlidesImageError("image_asset_ref_invalid") from exc
+            data_b64 = image.get("data_b64")
+            if isinstance(data_b64, str) and data_b64.strip():
+                raise SlidesImageError("image_entry_conflicting_sources")
+            mime = image.get("mime")
+            normalized_mime = normalize_image_mime(str(mime or "")) if mime is not None else None
+            image_id = image.get("id")
+            if image_id is not None and not isinstance(image_id, str):
+                raise SlidesImageError("image_id_invalid")
+            alt = image.get("alt")
+            if alt is not None and not isinstance(alt, str):
+                raise SlidesImageError("image_alt_invalid")
+            width = image.get("width")
+            if width is not None and (not isinstance(width, int) or width <= 0):
+                raise SlidesImageError("image_width_invalid")
+            height = image.get("height")
+            if height is not None and (not isinstance(height, int) or height <= 0):
+                raise SlidesImageError("image_height_invalid")
+            normalized.append(
+                {
+                    "id": image_id,
+                    "asset_ref": str(asset_ref).strip(),
+                    "mime": normalized_mime,
+                    "alt": alt,
+                    "width": width,
+                    "height": height,
+                }
+            )
+            continue
         data_b64 = image.get("data_b64")
         if not isinstance(data_b64, str) or not data_b64.strip():
             raise SlidesImageError("image_data_b64_required")

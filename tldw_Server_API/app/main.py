@@ -2243,6 +2243,7 @@ async def lifespan(app: FastAPI):
     prompt_studio_jobs_task = None
     privilege_snapshot_task = None
     audio_jobs_task = None
+    presentation_render_jobs_task = None
     media_ingest_jobs_task = None
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
@@ -2254,6 +2255,7 @@ async def lifespan(app: FastAPI):
     data_tables_jobs_stop_event = None
     prompt_studio_jobs_stop_event = None
     privilege_snapshot_stop_event = None
+    presentation_render_jobs_stop_event = None
     media_ingest_jobs_stop_event = None
     media_ingest_heavy_jobs_stop_event = None
     reading_digest_jobs_stop_event = None
@@ -2559,6 +2561,28 @@ async def lifespan(app: FastAPI):
             logger.info("Audiobook Jobs worker disabled by flag (AUDIOBOOK_JOBS_WORKER_ENABLED)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Audiobook Jobs worker: {e}")
+
+    # Presentation Render Jobs worker
+    try:
+        import asyncio as _asyncio
+
+        _enabled = _should_start_worker("PRESENTATION_RENDER_JOBS_WORKER_ENABLED", "slides")
+        if _enabled:
+            from tldw_Server_API.app.services.presentation_render_jobs_worker import (
+                run_presentation_render_jobs_worker as _run_presentation_render_jobs,
+            )
+
+            presentation_render_jobs_stop_event = _asyncio.Event()
+            presentation_render_jobs_task = _asyncio.create_task(
+                _run_presentation_render_jobs(presentation_render_jobs_stop_event)
+            )
+            logger.info("Presentation Render Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info(
+                "Presentation Render Jobs worker disabled by flag (PRESENTATION_RENDER_JOBS_WORKER_ENABLED)"
+            )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Presentation Render Jobs worker: {e}")
 
     # Media Ingest Jobs worker
     try:
@@ -3635,6 +3659,24 @@ async def lifespan(app: FastAPI):
                         audio_jobs_task.cancel()
             else:
                 audio_jobs_task.cancel()
+        if "presentation_render_jobs_task" in locals() and presentation_render_jobs_task:
+            if "presentation_render_jobs_stop_event" in locals() and presentation_render_jobs_stop_event:
+                try:
+                    presentation_render_jobs_stop_event.set()
+                    await _asyncio.wait_for(presentation_render_jobs_task, timeout=5.0)
+                    logger.info("Presentation Render Jobs worker stopped via stop_event")
+                except _asyncio.CancelledError:
+                    raise
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    presentation_render_jobs_task.cancel()
+                except Exception as e:
+                    logger.warning(
+                        f"Presentation Render Jobs worker exited with exception before shutdown completion: {e}"
+                    )
+                    with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                        presentation_render_jobs_task.cancel()
+            else:
+                presentation_render_jobs_task.cancel()
         if "media_ingest_jobs_task" in locals() and media_ingest_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "media_ingest_jobs_stop_event" in locals() and media_ingest_jobs_stop_event:

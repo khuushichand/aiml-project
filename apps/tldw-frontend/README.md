@@ -65,6 +65,25 @@ The web app exposes the shared repo2txt options UI at:
 
 This page dynamically renders the shared route from `apps/packages/ui/src/routes/option-repo2txt.tsx`.
 
+### Presentation Studio Routes
+
+The WebUI now exposes the shared Presentation Studio surfaces at:
+
+- `http://localhost:8080/presentation-studio`
+- `http://localhost:8080/presentation-studio/new`
+- `http://localhost:8080/presentation-studio/<projectId>`
+
+Presentation Studio uses the Slides backend and only appears when the server advertises
+`hasPresentationStudio`. Video publishing is separately gated by `hasPresentationRender`.
+
+The browser extension also exposes a quick-start handoff route at:
+
+- `chrome-extension://<extension-id>/options.html#/presentation-studio/start`
+
+That extension route creates a server-backed presentation first, then opens the matching
+WebUI editor route so the full edit/export flow stays in the browser WebUI rather than in
+the extension tab.
+
 Unified streaming (dev)
  - To exercise the unified SSE/WS streaming in the backend, start the API with the dev overlay:
    `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build`
