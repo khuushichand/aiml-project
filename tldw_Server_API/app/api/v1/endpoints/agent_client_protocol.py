@@ -46,6 +46,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     ACPGovernanceDeniedError,
     get_runner_client,
 )
+from tldw_Server_API.app.services.acp_runtime_policy_service import ACPRuntimePolicyService
 from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -117,6 +118,24 @@ _ACP_DIAGNOSTIC_REASON_MAP: dict[str, str] = {
     "runtime_error": "failed_runtime",
     "invariant_violation": "invariant_violation",
 }
+
+
+async def _build_initial_runtime_policy_snapshot(
+    *,
+    session_store: Any,
+    session_record: Any,
+    user_id: int,
+) -> Any:
+    """Build and persist the initial ACP runtime policy snapshot for a new session."""
+    service = ACPRuntimePolicyService()
+    snapshot = await service.build_snapshot(
+        session_record=session_record,
+        user_id=int(user_id),
+    )
+    return await service.persist_snapshot(
+        session_store=session_store,
+        snapshot=snapshot,
+    )
 
 
 def _acp_env_int(name: str, default: int) -> int:
@@ -1768,6 +1787,28 @@ async def acp_session_new(
             workspace_group_id=resolved_workspace_group_id,
             scope_snapshot_id=resolved_scope_snapshot_id,
         )
+        if persisted_record is not None:
+            try:
+                persisted_record = await _build_initial_runtime_policy_snapshot(
+                    session_store=store,
+                    session_record=persisted_record,
+                    user_id=int(user.id),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to build initial ACP runtime policy snapshot for {}: {}",
+                    session_id,
+                    exc,
+                )
+                persisted_record = await store.update_policy_snapshot_state(
+                    session_id,
+                    policy_snapshot_version=None,
+                    policy_snapshot_fingerprint=None,
+                    policy_snapshot_refreshed_at=None,
+                    policy_summary=None,
+                    policy_provenance_summary=None,
+                    policy_refresh_error=str(exc),
+                )
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.warning("Failed to persist ACP session metadata for {}", session_id)
     try:

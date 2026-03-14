@@ -1001,7 +1001,9 @@ class ACPSandboxRunnerManager:
         tool_arguments = params.get("tool", {}).get("input", {})
 
         tier = self._determine_permission_tier(tool_name)
-        runtime_snapshot = await self._get_runtime_policy_snapshot(session_id)
+        # Permission checks are the live authority boundary, so refresh here to
+        # pick up MCP Hub policy changes before deciding allow/ask/deny.
+        runtime_snapshot = await self._get_runtime_policy_snapshot(session_id, force_refresh=True)
         runtime_outcome = _resolve_runtime_permission_outcome(runtime_snapshot, tool_name)
         governance = await self.check_permission_governance(
             session_id,

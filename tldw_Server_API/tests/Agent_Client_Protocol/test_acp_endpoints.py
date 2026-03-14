@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
+from tldw_Server_API.app.services.acp_runtime_policy_service import ACPRuntimePolicySnapshot
 
 pytestmark = pytest.mark.unit
 
@@ -132,7 +133,43 @@ def stub_runner_client(monkeypatch, tmp_path):
     return stub
 
 
-def test_acp_session_new_success(client_user_only, stub_runner_client, tmp_path):
+def test_acp_session_new_success(client_user_only, stub_runner_client, tmp_path, monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+    captured: dict[str, object] = {}
+
+    class _RuntimePolicyService:
+        async def build_snapshot(self, *, session_record, user_id: int, **kwargs):
+            del kwargs
+            captured["session_id"] = session_record.session_id
+            captured["user_id"] = user_id
+            return ACPRuntimePolicySnapshot(
+                session_id=session_record.session_id,
+                user_id=int(user_id),
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_fingerprint="snapshot-created-at-session-start",
+                policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+                policy_summary={"allowed_tool_count": 1, "approval_mode": "allow"},
+                policy_provenance_summary={"source_kinds": ["profile"]},
+                resolved_policy_document={"allowed_tools": ["web.search"]},
+                approval_summary={"mode": "allow"},
+                context_summary={"persona_id": getattr(session_record, "persona_id", None)},
+                execution_config={},
+            )
+
+        async def persist_snapshot(self, *, session_store, snapshot):
+            return await session_store.update_policy_snapshot_state(
+                snapshot.session_id,
+                policy_snapshot_version=snapshot.policy_snapshot_version,
+                policy_snapshot_fingerprint=snapshot.policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at=snapshot.policy_snapshot_refreshed_at,
+                policy_summary=snapshot.policy_summary,
+                policy_provenance_summary=snapshot.policy_provenance_summary,
+                policy_refresh_error=snapshot.refresh_error,
+            )
+
+    monkeypatch.setattr(acp_endpoints, "ACPRuntimePolicyService", _RuntimePolicyService, raising=False)
+
     resp = client_user_only.post(
         "/api/v1/acp/sessions/new",
         json={"cwd": str(tmp_path)},
@@ -141,11 +178,12 @@ def test_acp_session_new_success(client_user_only, stub_runner_client, tmp_path)
     payload = resp.json()
     assert payload["session_id"] == "session-123"
     assert payload["agent_capabilities"] == {"promptCapabilities": {"image": False}}
-    assert payload["policy_snapshot_version"] is None
-    assert payload["policy_snapshot_fingerprint"] is None
-    assert payload["policy_snapshot_refreshed_at"] is None
-    assert payload["policy_summary"] is None
-    assert payload["policy_provenance_summary"] is None
+    assert payload["policy_snapshot_version"] == "resolved-v1"
+    assert payload["policy_snapshot_fingerprint"] == "snapshot-created-at-session-start"
+    assert payload["policy_snapshot_refreshed_at"] == "2026-03-14T12:00:00+00:00"
+    assert payload["policy_summary"] == {"allowed_tool_count": 1, "approval_mode": "allow"}
+    assert payload["policy_provenance_summary"] == {"source_kinds": ["profile"]}
+    assert captured == {"session_id": "session-123", "user_id": 1}
     assert stub_runner_client.create_session_calls
     assert isinstance(stub_runner_client.create_session_calls[0]["user_id"], int)
 

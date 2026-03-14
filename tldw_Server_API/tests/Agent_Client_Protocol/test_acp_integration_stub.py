@@ -143,6 +143,7 @@ async def test_runtime_policy_refresh_applies_updated_permissions() -> None:
     client = _new_runner_client_for_permissions()
     session_id = "session-refresh-policy"
     policy_state = {"allowed_tools": ["web.search"], "fingerprint": "snap-allow"}
+    call_count = {"build_snapshot": 0}
 
     async def _fake_check_permission_governance(*args, **kwargs):
         del args, kwargs
@@ -174,6 +175,7 @@ async def test_runtime_policy_refresh_applies_updated_permissions() -> None:
     class _RuntimePolicyService:
         async def build_snapshot(self, **kwargs):
             del kwargs
+            call_count["build_snapshot"] += 1
             return ACPRuntimePolicySnapshot(
                 session_id=session_id,
                 user_id=7,
@@ -207,10 +209,6 @@ async def test_runtime_policy_refresh_applies_updated_permissions() -> None:
     client._runtime_policy_service = _RuntimePolicyService()  # type: ignore[assignment]
     client._get_acp_session_store = _get_store  # type: ignore[assignment]
 
-    first = await client._get_runtime_policy_snapshot(session_id, force_refresh=True)
-    assert first is not None
-    assert first.policy_snapshot_fingerprint == "snap-allow"
-
     allowed_response = await client._handle_request(
         ACPMessage(
             jsonrpc="2.0",
@@ -223,13 +221,10 @@ async def test_runtime_policy_refresh_applies_updated_permissions() -> None:
         )
     )
     assert allowed_response.result == {"outcome": {"outcome": "approved"}}
+    assert store.record.policy_snapshot_fingerprint == "snap-allow"
 
     policy_state["allowed_tools"] = ["fs.read"]
     policy_state["fingerprint"] = "snap-updated"
-
-    refreshed = await client._get_runtime_policy_snapshot(session_id, force_refresh=True)
-    assert refreshed is not None
-    assert refreshed.policy_snapshot_fingerprint == "snap-updated"
 
     denied_response = await client._handle_request(
         ACPMessage(
@@ -250,6 +245,7 @@ async def test_runtime_policy_refresh_applies_updated_permissions() -> None:
             "provenance_summary": {"source_kinds": ["capability_mapping"]},
         }
     }
+    assert call_count["build_snapshot"] == 2
 
 
 @pytest.mark.unit

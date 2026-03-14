@@ -386,6 +386,125 @@ async def test_sandbox_permission_request_denies_tool_from_runtime_snapshot(monk
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_sandbox_permission_request_refreshes_runtime_snapshot_when_policy_changes(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    session_id = "sandbox-refresh-policy"
+    policy_state = {"allowed_tools": ["web.search"], "fingerprint": "sandbox-allow"}
+    call_count = {"build_snapshot": 0}
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    manager.check_permission_governance = _fake_check_permission_governance  # type: ignore[assignment]
+
+    class _Store:
+        def __init__(self) -> None:
+            self.record = type(
+                "_Record",
+                (),
+                {
+                    "session_id": session_id,
+                    "user_id": 9,
+                    "policy_snapshot_fingerprint": None,
+                    "policy_snapshot_version": None,
+                    "policy_snapshot_refreshed_at": None,
+                    "policy_summary": None,
+                    "policy_provenance_summary": None,
+                    "policy_refresh_error": None,
+                },
+            )()
+
+        async def get_session(self, _session_id: str):
+            return self.record
+
+        async def update_policy_snapshot_state(self, _session_id: str, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self.record, key, value)
+            return self.record
+
+    class _RuntimePolicyService:
+        async def build_snapshot(self, **kwargs):
+            del kwargs
+            call_count["build_snapshot"] += 1
+            return ACPRuntimePolicySnapshot(
+                session_id=session_id,
+                user_id=9,
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_fingerprint=policy_state["fingerprint"],
+                policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+                policy_summary={"allowed_tool_count": len(policy_state["allowed_tools"])},
+                policy_provenance_summary={"source_kinds": ["capability_mapping"]},
+                resolved_policy_document={"allowed_tools": list(policy_state["allowed_tools"])},
+                approval_summary={"mode": "allow"},
+                context_summary={},
+                execution_config={},
+            )
+
+        async def persist_snapshot(self, *, session_store, snapshot):
+            return await session_store.update_policy_snapshot_state(
+                snapshot.session_id,
+                policy_snapshot_version=snapshot.policy_snapshot_version,
+                policy_snapshot_fingerprint=snapshot.policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at=snapshot.policy_snapshot_refreshed_at,
+                policy_summary=snapshot.policy_summary,
+                policy_provenance_summary=snapshot.policy_provenance_summary,
+                policy_refresh_error=snapshot.refresh_error,
+            )
+
+    store = _Store()
+
+    async def _get_store():
+        return store
+
+    manager._runtime_policy_service = _RuntimePolicyService()  # type: ignore[assignment]
+    manager._get_acp_session_store = _get_store  # type: ignore[assignment]
+
+    allowed_response = await manager._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="sandbox-perm-allow",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert allowed_response.result == {"outcome": {"outcome": "approved"}}
+
+    policy_state["allowed_tools"] = ["fs.read"]
+    policy_state["fingerprint"] = "sandbox-updated"
+
+    denied_response = await manager._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="sandbox-perm-deny",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert denied_response.result == {
+        "outcome": {
+            "outcome": "denied",
+            "deny_reason": "tool_not_allowed_by_policy",
+            "policy_snapshot_fingerprint": "sandbox-updated",
+            "provenance_summary": {"source_kinds": ["capability_mapping"]},
+        }
+    }
+    assert call_count["build_snapshot"] == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_create_session_rolls_back_when_control_record_persist_fails(monkeypatch) -> None:
     manager = ACPSandboxRunnerManager(
         ACPSandboxConfig(
