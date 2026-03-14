@@ -46,6 +46,12 @@ def test_sanitize_flashcard_text_for_search_preserves_alt_text_and_strips_refs()
     assert sanitize_flashcard_text_for_search(text) == "Intro Histology slide summary Diagram"
 
 
+def test_sanitize_flashcard_text_for_search_keeps_word_boundaries_around_alt_text():
+    text = f"Alpha![Scan]({FLASHCARD_ASSET_SCHEME}{ASSET_UUID})Omega"
+
+    assert sanitize_flashcard_text_for_search(text) == "Alpha Scan Omega"
+
+
 def test_replace_markdown_asset_refs_for_export_uses_resolver_for_each_ref():
     text = (
         f'Before ![Slide A]({FLASHCARD_ASSET_SCHEME}{ASSET_UUID}) '

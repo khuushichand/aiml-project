@@ -406,8 +406,6 @@ async def respond_quiz_attempt_question_assistant(
     try:
         context = build_quiz_attempt_question_context(db, attempt_id, question_id)
         thread = context["thread"]
-        if payload.expected_thread_version is not None and int(thread["version"]) != int(payload.expected_thread_version):
-            raise HTTPException(status_code=409, detail="Study assistant thread version mismatch")
 
         user_content = str(payload.message or "").strip() or _default_study_assistant_message(payload.action, context)
         reply = await generate_study_assistant_reply(
@@ -428,6 +426,7 @@ async def respond_quiz_attempt_question_assistant(
             context_snapshot=context_snapshot,
             provider=payload.provider,
             model=payload.model,
+            expected_thread_version=payload.expected_thread_version,
         )
         assistant_message = db.append_study_assistant_message(
             thread_id=int(thread["id"]),
@@ -453,7 +452,7 @@ async def respond_quiz_attempt_question_assistant(
     except HTTPException:
         raise
     except ConflictError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail="Study assistant thread version mismatch") from exc
     except CharactersRAGDBError as exc:
         logger.error(f"Failed to respond with quiz question assistant: {exc}")
         raise HTTPException(status_code=500, detail="Failed to generate study assistant response") from exc

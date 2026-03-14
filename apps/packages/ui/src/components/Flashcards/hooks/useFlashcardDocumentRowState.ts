@@ -103,6 +103,8 @@ const applyPatchToDraft = (
   card: Flashcard,
   patch: FlashcardBulkUpdateItem
 ): FlashcardDocumentRowDraft => {
+  const patchHas = <K extends keyof FlashcardBulkUpdateItem>(field: K) =>
+    Object.prototype.hasOwnProperty.call(patch, field)
   const template = normalizeFlashcardTemplateFields({
     model_type: patch.model_type ?? card.model_type,
     reverse: patch.reverse ?? card.reverse,
@@ -112,8 +114,8 @@ const applyPatchToDraft = (
   return {
     front: patch.front ?? card.front,
     back: patch.back ?? card.back,
-    notes: patch.notes ?? card.notes ?? "",
-    deck_id: patch.deck_id ?? card.deck_id ?? null,
+    notes: patchHas("notes") ? (patch.notes ?? "") : card.notes ?? "",
+    deck_id: patchHas("deck_id") ? (patch.deck_id ?? null) : card.deck_id ?? null,
     tags_text: patch.tags ? tagsToText(patch.tags) : tagsToText(card.tags),
     template
   }
@@ -333,7 +335,9 @@ export function useFlashcardDocumentRowState({
   }, [])
 
   const reloadRow = React.useCallback(async () => {
+    const previous = savedCardRef.current
     const latest = await loadLatestCardFn(savedCardRef.current.uuid)
+    const requiresRefetch = shouldRefetchDocumentQueryAfterRowSave(previous, latest, filterContext)
     setSavedCard(latest)
     savedCardRef.current = latest
     const resetDraft = createDraftFromCard(latest)
@@ -344,11 +348,15 @@ export function useFlashcardDocumentRowState({
     setValidationFields([])
     setPendingConflictPatch(null)
     setIsEditing(false)
+    if (requiresRefetch) {
+      await queryClient.invalidateQueries({ queryKey })
+      return
+    }
     queryClient.setQueryData<InfiniteData<FlashcardDocumentPage, number> | undefined>(
       queryKey,
       (current) => patchDocumentQueryRow(current, latest)
     )
-  }, [loadLatestCardFn, queryClient, queryKey])
+  }, [filterContext, loadLatestCardFn, queryClient, queryKey])
 
   const reapplyConflict = React.useCallback(async () => {
     if (!pendingConflictPatch) return

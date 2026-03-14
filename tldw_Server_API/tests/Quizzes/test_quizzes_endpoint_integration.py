@@ -320,6 +320,53 @@ def test_quiz_attempt_question_assistant_respond_persists_user_and_assistant_mes
     assert payload["thread"]["message_count"] == 2
 
 
+def test_quiz_attempt_question_assistant_respond_returns_409_for_stale_thread_version(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+    monkeypatch,
+):
+    attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
+    question_id = question_ids[0]
+
+    context_response = client_with_quizzes_db.get(
+        f"/api/v1/quizzes/attempts/{attempt_id}/questions/{question_id}/assistant",
+        headers=AUTH_HEADERS,
+    )
+    assert context_response.status_code == 200
+    stale_version = int(context_response.json()["thread"]["version"])
+    thread_id = int(context_response.json()["thread"]["id"])
+
+    quizzes_db.append_study_assistant_message(
+        thread_id=thread_id,
+        role="user",
+        action_type="follow_up",
+        input_modality="text",
+        content="Concurrent message",
+    )
+
+    async def fake_generate_reply(*, action, context, message=None, provider=None, model=None):
+        return {
+            "assistant_text": "The glomerulus is where blood filtration begins.",
+            "structured_payload": {},
+            "provider": provider or "openai",
+            "model": model or "gpt-test",
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.quizzes.generate_study_assistant_reply",
+        fake_generate_reply,
+    )
+
+    response = client_with_quizzes_db.post(
+        f"/api/v1/quizzes/attempts/{attempt_id}/questions/{question_id}/assistant/respond",
+        json={"action": "explain", "expected_thread_version": stale_version},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Study assistant thread version mismatch"
+
+
 def test_quiz_multi_select_endpoints_flow(client_with_quizzes_db: TestClient):
     response = client_with_quizzes_db.post(
         "/api/v1/quizzes",

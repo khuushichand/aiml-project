@@ -144,4 +144,139 @@ describe("FlashcardDocumentRow", () => {
       })
     )
   })
+
+  it("reapplies nullable field clears after resolving a row conflict", async () => {
+    const bulkUpdate = vi
+      .fn()
+      .mockResolvedValueOnce({
+        results: [
+          {
+            uuid: "row-1",
+            status: "conflict",
+            error: {
+              code: "conflict",
+              message: "Version changed elsewhere"
+            }
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        results: [
+          {
+            uuid: "row-1",
+            status: "updated",
+            flashcard: makeFlashcard({
+              uuid: "row-1",
+              version: 3,
+              notes: null
+            })
+          }
+        ]
+      })
+    const loadLatestCard = vi.fn().mockResolvedValue(
+      makeFlashcard({
+        uuid: "row-1",
+        version: 2,
+        notes: "Server note"
+      })
+    )
+
+    render(
+      <FlashcardDocumentRow
+        card={makeFlashcard({ uuid: "row-1", version: 1 })}
+        decks={decks}
+        selected={false}
+        selectAllAcross={false}
+        filterContext={{
+          deckId: 1,
+          tags: ["bio"],
+          sortBy: "due",
+          dueStatus: "all"
+        }}
+        queryKey={["flashcards:document", 1]}
+        onToggleSelect={() => {}}
+        bulkUpdate={bulkUpdate}
+        loadLatestCard={loadLatestCard}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId("flashcards-document-row-row-1"))
+    const notesInput = await screen.findByTestId("flashcards-document-row-notes-input-row-1")
+    fireEvent.change(notesInput, { target: { value: "" } })
+    fireEvent.blur(notesInput)
+
+    await screen.findByTestId("flashcards-document-row-conflict-row-1")
+    fireEvent.click(screen.getByRole("button", { name: /reapply my edit/i }))
+
+    await waitFor(() => {
+      expect(bulkUpdate).toHaveBeenCalledTimes(2)
+    })
+
+    expect(loadLatestCard).toHaveBeenCalledWith("row-1")
+    expect(bulkUpdate.mock.calls[1][0][0]).toEqual(
+      expect.objectContaining({
+        uuid: "row-1",
+        notes: null,
+        expected_version: 2
+      })
+    )
+  })
+
+  it("invalidates the document query when reload fetches a row that no longer matches filters", async () => {
+    const bulkUpdate = vi.fn().mockResolvedValueOnce({
+      results: [
+        {
+          uuid: "row-1",
+          status: "conflict",
+          error: {
+            code: "conflict",
+            message: "Version changed elsewhere"
+          }
+        }
+      ]
+    })
+    const loadLatestCard = vi.fn().mockResolvedValue(
+      makeFlashcard({
+        uuid: "row-1",
+        version: 2,
+        deck_id: 7,
+        tags: ["chem"]
+      })
+    )
+
+    render(
+      <FlashcardDocumentRow
+        card={makeFlashcard({ uuid: "row-1", version: 1 })}
+        decks={decks}
+        selected={false}
+        selectAllAcross={false}
+        filterContext={{
+          deckId: 1,
+          tags: ["bio"],
+          sortBy: "due",
+          dueStatus: "all"
+        }}
+        queryKey={["flashcards:document", 1]}
+        onToggleSelect={() => {}}
+        bulkUpdate={bulkUpdate}
+        loadLatestCard={loadLatestCard}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId("flashcards-document-row-front-display-row-1"))
+    const frontInput = await screen.findByTestId("flashcards-document-row-front-input-row-1")
+    fireEvent.change(frontInput, { target: { value: "Edited front" } })
+    fireEvent.blur(frontInput)
+
+    await screen.findByTestId("flashcards-document-row-conflict-row-1")
+    fireEvent.click(screen.getByRole("button", { name: /reload row/i }))
+
+    await waitFor(() => {
+      expect(queryClientSpies.invalidateQueries).toHaveBeenCalledWith({
+        queryKey: ["flashcards:document", 1]
+      })
+    })
+
+    expect(queryClientSpies.setQueryData).not.toHaveBeenCalled()
+  })
 })

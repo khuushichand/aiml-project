@@ -781,6 +781,58 @@ def test_flashcard_assistant_respond_persists_user_and_assistant_messages(
     assert payload["thread"]["message_count"] == 2
 
 
+def test_flashcard_assistant_respond_returns_409_for_stale_thread_version(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+    monkeypatch,
+):
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={"front": "What is the glomerulus?", "back": "It filters blood."},
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    card_uuid = created.json()["uuid"]
+
+    context_response = client_with_flashcards_db.get(
+        f"/api/v1/flashcards/{card_uuid}/assistant",
+        headers=AUTH_HEADERS,
+    )
+    assert context_response.status_code == 200
+    stale_version = int(context_response.json()["thread"]["version"])
+    thread_id = int(context_response.json()["thread"]["id"])
+
+    flashcards_db.append_study_assistant_message(
+        thread_id=thread_id,
+        role="user",
+        action_type="follow_up",
+        input_modality="text",
+        content="Concurrent message",
+    )
+
+    async def fake_generate_reply(*, action, context, message=None, provider=None, model=None):
+        return {
+            "assistant_text": "The glomerulus is the filtration tuft in the nephron.",
+            "structured_payload": {},
+            "provider": provider or "openai",
+            "model": model or "gpt-test",
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.flashcards.generate_study_assistant_reply",
+        fake_generate_reply,
+    )
+
+    response = client_with_flashcards_db.post(
+        f"/api/v1/flashcards/{card_uuid}/assistant/respond",
+        json={"action": "explain", "expected_thread_version": stale_version},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Study assistant thread version mismatch"
+
+
 def test_flashcard_assistant_missing_card_returns_404(client_with_flashcards_db: TestClient):
     response = client_with_flashcards_db.get(
         f"/api/v1/flashcards/{uuid.uuid4()}/assistant",

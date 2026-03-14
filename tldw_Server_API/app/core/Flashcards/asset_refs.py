@@ -48,7 +48,7 @@ def sanitize_flashcard_text_for_search(text: str | None) -> str:
         return ""
 
     sanitized = _MARKDOWN_ASSET_IMAGE_RE.sub(
-        lambda match: f" {match.group('alt').strip()} ".strip(),
+        lambda match: f" {match.group('alt').strip()} ",
         text,
     )
     return re.sub(r"\s+", " ", sanitized).strip()

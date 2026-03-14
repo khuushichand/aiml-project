@@ -19591,6 +19591,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         context_snapshot: dict[str, Any] | None = None,
         provider: str | None = None,
         model: str | None = None,
+        expected_thread_version: int | None = None,
     ) -> dict[str, Any]:
         """Append a study-assistant message and update thread counters/versioning."""
         normalized_role = str(role or "").strip().lower()
@@ -19637,7 +19638,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             with self.transaction() as conn:
                 thread_row = conn.execute(
-                    "SELECT id FROM study_assistant_threads WHERE id = ? AND deleted = 0",
+                    "SELECT id, version FROM study_assistant_threads WHERE id = ? AND deleted = 0",
                     (int(thread_id),),
                 ).fetchone()
                 if not thread_row:
@@ -19658,13 +19659,31 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if message_id is None:
                     raise CharactersRAGDBError("Failed to determine study assistant message ID after insert")  # noqa: TRY003
 
-                conn.execute(
+                thread_update_params: tuple[Any, ...]
+                thread_update_sql = (
                     "UPDATE study_assistant_threads "
                     "SET last_message_at = ?, message_count = message_count + 1, last_modified = ?, "
                     "version = version + 1, client_id = ? "
-                    "WHERE id = ? AND deleted = 0",
-                    (now, now, self.client_id, int(thread_id)),
+                    "WHERE id = ? AND deleted = 0"
                 )
+                thread_update_params = (now, now, self.client_id, int(thread_id))
+                if expected_thread_version is not None:
+                    thread_update_sql += " AND version = ?"
+                    thread_update_params = (
+                        now,
+                        now,
+                        self.client_id,
+                        int(thread_id),
+                        int(expected_thread_version),
+                    )
+
+                thread_update_cursor = conn.execute(thread_update_sql, thread_update_params)
+                if getattr(thread_update_cursor, "rowcount", 0) == 0:
+                    raise ConflictError(
+                        "Version mismatch updating study assistant thread",
+                        entity="study_assistant_threads",
+                        identifier=thread_id,
+                    )
 
                 message_row = conn.execute(
                     "SELECT id, thread_id, role, action_type, input_modality, content, structured_payload_json, "

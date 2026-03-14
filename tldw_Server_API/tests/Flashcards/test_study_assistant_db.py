@@ -5,7 +5,7 @@ from tldw_Server_API.app.api.v1.schemas.flashcards import (
     StudyAssistantMessage,
     StudyAssistantThreadSummary,
 )
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 
 
 @pytest.fixture
@@ -160,6 +160,42 @@ def test_append_study_assistant_message_updates_thread_counts_and_persists_json(
     assert messages[1]["context_snapshot"]["flashcard_uuid"] == flashcard_uuid
     assert reloaded_thread["message_count"] == 2
     assert reloaded_thread["last_message_at"] == second_message["created_at"]
+
+
+def test_append_study_assistant_message_rejects_stale_expected_thread_version(chacha_db: CharactersRAGDB):
+    flashcard_uuid = _create_flashcard(chacha_db)
+    thread = chacha_db.get_or_create_study_assistant_thread(
+        context_type="flashcard",
+        flashcard_uuid=flashcard_uuid,
+    )
+
+    first_message = chacha_db.append_study_assistant_message(
+        thread_id=thread["id"],
+        role="user",
+        action_type="explain",
+        input_modality="text",
+        content="First message",
+        expected_thread_version=int(thread["version"]),
+    )
+
+    assert first_message["content"] == "First message"
+
+    with pytest.raises(ConflictError, match="Version mismatch updating study assistant thread"):
+        chacha_db.append_study_assistant_message(
+            thread_id=thread["id"],
+            role="assistant",
+            action_type="explain",
+            input_modality="text",
+            content="Stale concurrent reply",
+            expected_thread_version=int(thread["version"]),
+        )
+
+    reloaded_thread = chacha_db.get_study_assistant_thread(thread["id"])
+    messages = chacha_db.list_study_assistant_messages(thread["id"])
+
+    assert reloaded_thread is not None
+    assert reloaded_thread["message_count"] == 1
+    assert [message["content"] for message in messages] == ["First message"]
 
 
 def test_study_assistant_schema_models_accept_thread_and_messages():
