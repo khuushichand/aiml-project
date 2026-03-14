@@ -21,6 +21,19 @@ PersonaConfirmationMode = Literal["always", "destructive_only", "never"]
 PersonaSetupStatus = Literal["not_started", "in_progress", "completed"]
 PersonaSetupStep = Literal["persona", "voice", "commands", "safety", "test"]
 PersonaSetupTestType = Literal["dry_run", "live_session"]
+PersonaSetupEventType = Literal[
+    "setup_started",
+    "step_viewed",
+    "step_completed",
+    "step_error",
+    "retry_clicked",
+    "detour_started",
+    "detour_returned",
+    "setup_completed",
+    "handoff_action_clicked",
+    "handoff_dismissed",
+    "first_post_setup_action",
+]
 
 
 class PersonaInfo(BaseModel):
@@ -152,6 +165,56 @@ class PersonaSetupState(BaseModel):
     completed_steps: list[PersonaSetupStep] = Field(default_factory=list)
     completed_at: str | None = None
     last_test_type: PersonaSetupTestType | None = None
+
+
+class PersonaSetupEventCreate(BaseModel):
+    event_id: str = Field(..., min_length=1, max_length=200)
+    event_key: str | None = Field(default=None, min_length=1, max_length=200)
+    run_id: str = Field(..., min_length=1, max_length=200)
+    event_type: PersonaSetupEventType
+    step: PersonaSetupStep | None = None
+    completion_type: PersonaSetupTestType | None = None
+    detour_source: str | None = Field(default=None, min_length=1, max_length=120)
+    action_target: str | None = Field(default=None, min_length=1, max_length=120)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PersonaSetupEventWriteResponse(BaseModel):
+    event_id: str
+    run_id: str
+    event_type: PersonaSetupEventType
+    deduped: bool = False
+    created_at: str | None = None
+
+
+class PersonaSetupAnalyticsRunSummary(BaseModel):
+    run_id: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    completion_type: PersonaSetupTestType | None = None
+    terminal_step: PersonaSetupStep | None = None
+    handoff_clicked: bool = False
+    handoff_dismissed: bool = False
+    first_post_setup_action: bool = False
+
+
+class PersonaSetupAnalyticsSummary(BaseModel):
+    total_runs: int = 0
+    completed_runs: int = 0
+    completion_rate: float = 0.0
+    dry_run_completion_count: int = 0
+    live_session_completion_count: int = 0
+    most_common_dropoff_step: PersonaSetupStep | None = None
+    handoff_click_rate: float = 0.0
+    first_post_setup_action_rate: float = 0.0
+    detour_started_counts: dict[str, int] = Field(default_factory=dict)
+    detour_returned_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class PersonaSetupAnalyticsResponse(BaseModel):
+    persona_id: str
+    summary: PersonaSetupAnalyticsSummary = Field(default_factory=PersonaSetupAnalyticsSummary)
+    recent_runs: list[PersonaSetupAnalyticsRunSummary] = Field(default_factory=list)
 
 
 class PersonaProfileCreate(BaseModel):
