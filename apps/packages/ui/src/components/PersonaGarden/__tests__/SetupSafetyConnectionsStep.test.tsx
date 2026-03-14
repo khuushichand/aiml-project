@@ -83,6 +83,102 @@ describe("SetupSafetyConnectionsStep", () => {
     })
   })
 
+  it("blocks continue when the base url is malformed", () => {
+    render(
+      <SetupSafetyConnectionsStep
+        saving={false}
+        currentConfirmationMode="destructive_only"
+        onContinue={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Never ask" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add one connection now" }))
+    fireEvent.change(screen.getByLabelText("Connection name"), {
+      target: { value: "Slack Alerts" }
+    })
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "not-a-url" }
+    })
+
+    expect(screen.getByText("Enter a valid http or https URL.")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Save safety and connection" })).toBeDisabled()
+  })
+
+  it("shows a non-blocking endpoint note for urls with a path", () => {
+    render(
+      <SetupSafetyConnectionsStep
+        saving={false}
+        currentConfirmationMode="destructive_only"
+        onContinue={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Never ask" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add one connection now" }))
+    fireEvent.change(screen.getByLabelText("Connection name"), {
+      target: { value: "Slack Alerts" }
+    })
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://hooks.example.com/incoming?source=setup" }
+    })
+
+    expect(
+      screen.getByText(
+        "This endpoint includes a path, query, or fragment, which is common for webhook-style integrations."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Save safety and connection" })).toBeEnabled()
+  })
+
+  it("warns when bearer auth has no secret but still allows continue", () => {
+    render(
+      <SetupSafetyConnectionsStep
+        saving={false}
+        currentConfirmationMode="destructive_only"
+        onContinue={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Never ask" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add one connection now" }))
+    fireEvent.change(screen.getByLabelText("Connection name"), {
+      target: { value: "Slack Alerts" }
+    })
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://hooks.example.com/incoming" }
+    })
+    fireEvent.change(screen.getByLabelText("Authentication"), {
+      target: { value: "bearer" }
+    })
+
+    expect(
+      screen.getByText(
+        "This connection will be created without a bearer token. You can add one later in Connections."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Save safety and connection" })).toBeEnabled()
+  })
+
+  it("does not offer custom header auth in setup", () => {
+    render(
+      <SetupSafetyConnectionsStep
+        saving={false}
+        currentConfirmationMode="destructive_only"
+        onContinue={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Never ask" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add one connection now" }))
+
+    expect(screen.getByRole("option", { name: "None" })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: "Bearer token" })).toBeInTheDocument()
+    expect(
+      screen.queryByRole("option", { name: "Custom header" })
+    ).not.toBeInTheDocument()
+  })
+
   it("exposes labeled fields and masks connection secrets", () => {
     render(
       <SetupSafetyConnectionsStep

@@ -9,6 +9,11 @@ export type SetupSafetyConnectionDraft = {
   secret: string
 }
 
+type SetupUrlValidation = {
+  error: string | null
+  note: string | null
+}
+
 type SetupSafetyConnectionsStepSubmit =
   | {
       confirmationMode: PersonaConfirmationMode
@@ -57,6 +62,43 @@ const formatConfirmationMode = (
   return "Ask for destructive actions"
 }
 
+const validateSetupConnectionUrl = (rawValue: string): SetupUrlValidation => {
+  const trimmed = String(rawValue || "").trim()
+  if (!trimmed) {
+    return {
+      error: null,
+      note: null
+    }
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return {
+      error: "Enter a valid http or https URL.",
+      note: null
+    }
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return {
+      error: "Enter a valid http or https URL.",
+      note: null
+    }
+  }
+
+  const hasEndpointDetails =
+    parsed.pathname !== "/" || Boolean(parsed.search) || Boolean(parsed.hash)
+
+  return {
+    error: null,
+    note: hasEndpointDetails
+      ? "This endpoint includes a path, query, or fragment, which is common for webhook-style integrations."
+      : "URL looks valid."
+  }
+}
+
 export const SetupSafetyConnectionsStep: React.FC<
   SetupSafetyConnectionsStepProps
 > = ({ saving, error = null, currentConfirmationMode, onContinue }) => {
@@ -70,12 +112,28 @@ export const SetupSafetyConnectionsStep: React.FC<
   const [connectionAuthType, setConnectionAuthType] = React.useState("none")
   const [connectionSecret, setConnectionSecret] = React.useState("")
 
+  const urlValidation = React.useMemo(
+    () => validateSetupConnectionUrl(connectionBaseUrl),
+    [connectionBaseUrl]
+  )
+  const authHint = React.useMemo(() => {
+    if (connectionMode !== "create") return null
+    if (connectionAuthType === "bearer" && !String(connectionSecret || "").trim()) {
+      return "This connection will be created without a bearer token. You can add one later in Connections."
+    }
+    if (connectionAuthType === "none") {
+      return "No authentication selected. Use this only for public endpoints."
+    }
+    return null
+  }, [connectionAuthType, connectionMode, connectionSecret])
+
   const canContinue =
     confirmationMode !== null &&
     connectionMode !== null &&
     (connectionMode === "none" ||
       (String(connectionName || "").trim().length > 0 &&
-        String(connectionBaseUrl || "").trim().length > 0))
+        String(connectionBaseUrl || "").trim().length > 0 &&
+        urlValidation.error === null))
 
   const handleContinue = React.useCallback(() => {
     if (!confirmationMode || !connectionMode) return
@@ -211,6 +269,11 @@ export const SetupSafetyConnectionsStep: React.FC<
             className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text"
             onChange={(event) => setConnectionBaseUrl(event.target.value)}
           />
+          {urlValidation.error ? (
+            <div className="text-xs text-red-200">{urlValidation.error}</div>
+          ) : urlValidation.note ? (
+            <div className="text-xs text-text-muted">{urlValidation.note}</div>
+          ) : null}
           <label className="block text-xs text-text-muted">
             Authentication
             <select
@@ -221,7 +284,6 @@ export const SetupSafetyConnectionsStep: React.FC<
             >
               <option value="none">None</option>
               <option value="bearer">Bearer token</option>
-              <option value="custom_header">Custom header</option>
             </select>
           </label>
           <input
@@ -232,6 +294,9 @@ export const SetupSafetyConnectionsStep: React.FC<
             className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text"
             onChange={(event) => setConnectionSecret(event.target.value)}
           />
+          {authHint ? (
+            <div className="text-xs text-text-muted">{authHint}</div>
+          ) : null}
         </div>
       ) : null}
 
