@@ -76,6 +76,30 @@ async def test_workspace_root_resolver_prefers_session_root() -> None:
 
 
 @pytest.mark.asyncio
+async def test_workspace_root_resolver_uses_session_root_without_user_context() -> None:
+    from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import (
+        McpHubWorkspaceRootResolver,
+    )
+
+    resolver = McpHubWorkspaceRootResolver(
+        sandbox_service=_FakeSandboxService(
+            session_roots={"sess-1": "/tmp/mcp-hub-workspace/session-root"},
+            session_owners={"sess-1": "7"},
+        )
+    )
+
+    result = await resolver.resolve_for_context(
+        session_id="sess-1",
+        user_id=None,
+        workspace_id=None,
+    )
+
+    assert result["workspace_root"] == str(Path("/tmp/mcp-hub-workspace/session-root").resolve())
+    assert result["source"] == "sandbox_session"
+    assert result["reason"] is None
+
+
+@pytest.mark.asyncio
 async def test_workspace_root_resolver_ignores_session_root_owned_by_other_user() -> None:
     from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import (
         McpHubWorkspaceRootResolver,

@@ -87,6 +87,19 @@ class _FakeGovernancePackService:
             "digest": "a" * 64,
             "resolved_capabilities": ["filesystem.read", "tool.invoke.research"],
             "unresolved_capabilities": [],
+            "capability_mapping_summary": [
+                {
+                    "capability_name": "tool.invoke.research",
+                    "mapping_id": "research.global",
+                    "mapping_scope_type": "global",
+                    "mapping_scope_id": None,
+                    "resolved_effects": {"allowed_tools": ["web.search"]},
+                    "supported_environment_requirements": ["workspace_bounded_read"],
+                    "unsupported_environment_requirements": [],
+                }
+            ],
+            "supported_environment_requirements": ["workspace_bounded_read"],
+            "unsupported_environment_requirements": [],
             "warnings": [],
             "blocked_objects": [],
             "verdict": "importable",
@@ -285,6 +298,7 @@ def test_governance_pack_dry_run_returns_compatibility_report() -> None:
         "tool.invoke.research",
     ]
     assert payload["report"]["unresolved_capabilities"] == []
+    assert payload["report"]["capability_mapping_summary"][0]["mapping_id"] == "research.global"
     assert payload["report"]["verdict"] == "importable"
 
 

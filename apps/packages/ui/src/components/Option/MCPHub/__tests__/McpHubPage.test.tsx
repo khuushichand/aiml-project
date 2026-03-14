@@ -46,6 +46,9 @@ vi.mock("../GovernanceAuditTab", () => ({
 vi.mock("../GovernancePacksTab", () => ({
   GovernancePacksTab: () => <div>governance packs tab</div>
 }))
+vi.mock("../CapabilityMappingsTab", () => ({
+  CapabilityMappingsTab: () => <div>capability mappings tab</div>
+}))
 
 import { McpHubPage } from "../McpHubPage"
 
@@ -56,6 +59,7 @@ describe("McpHubPage", () => {
     expect(screen.getByText("Profiles")).toBeTruthy()
     expect(screen.getByText("Assignments")).toBeTruthy()
     expect(screen.getByText("Audit")).toBeTruthy()
+    expect(screen.getByText("Capability Mappings")).toBeTruthy()
     expect(screen.getByText("Governance Packs")).toBeTruthy()
   })
 

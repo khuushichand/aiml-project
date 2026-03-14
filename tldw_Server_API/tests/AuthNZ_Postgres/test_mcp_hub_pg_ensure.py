@@ -20,6 +20,7 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
             'mcp_acp_profiles',
             'mcp_approval_decisions',
             'mcp_approval_policies',
+            'mcp_capability_adapter_mappings',
             'mcp_credential_bindings',
             'mcp_external_servers',
             'mcp_external_server_credential_slots',
@@ -42,6 +43,7 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     assert "mcp_acp_profiles" in names
     assert "mcp_approval_decisions" in names
     assert "mcp_approval_policies" in names
+    assert "mcp_capability_adapter_mappings" in names
     assert "mcp_credential_bindings" in names
     assert "mcp_external_servers" in names
     assert "mcp_external_server_credential_slots" in names
@@ -107,6 +109,36 @@ async def test_ensure_mcp_hub_tables_pg_creates_required_tables(test_db_pool) ->
     assert "normalized_ir_json" in governance_pack_column_names
     assert "owner_scope_type" in governance_pack_column_names
     assert "owner_scope_id" in governance_pack_column_names
+
+    capability_mapping_column_rows = await test_db_pool.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mcp_capability_adapter_mappings'
+          AND column_name IN (
+            'mapping_id',
+            'owner_scope_type',
+            'owner_scope_id',
+            'capability_name',
+            'adapter_contract_version',
+            'resolved_policy_document_json',
+            'supported_environment_requirements_json',
+            'is_active'
+          )
+        """
+    )
+    capability_mapping_column_names = {
+        str(row["column_name"]) for row in capability_mapping_column_rows
+    }
+    assert "mapping_id" in capability_mapping_column_names
+    assert "owner_scope_type" in capability_mapping_column_names
+    assert "owner_scope_id" in capability_mapping_column_names
+    assert "capability_name" in capability_mapping_column_names
+    assert "adapter_contract_version" in capability_mapping_column_names
+    assert "resolved_policy_document_json" in capability_mapping_column_names
+    assert "supported_environment_requirements_json" in capability_mapping_column_names
+    assert "is_active" in capability_mapping_column_names
 
     governance_object_column_rows = await test_db_pool.fetch(
         """

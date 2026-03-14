@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 ScopeType = Literal["global", "org", "team", "user"]
+CapabilityAdapterScopeType = Literal["global", "org", "team"]
 ProfileMode = Literal["preset", "custom"]
 AssignmentTargetType = Literal["default", "group", "persona"]
 PolicyProvenanceSourceKind = Literal[
@@ -14,8 +15,10 @@ PolicyProvenanceSourceKind = Literal[
     "assignment_path_scope_object",
     "assignment_inline",
     "assignment_override",
+    "capability_mapping",
+    "runtime_constraint",
 ]
-PolicyProvenanceEffect = Literal["merged", "replaced"]
+PolicyProvenanceEffect = Literal["merged", "replaced", "narrowed", "blocked"]
 ApprovalMode = Literal[
     "allow_silently",
     "ask_every_time",
@@ -394,6 +397,75 @@ class ApprovalDecisionResponse(BaseModel):
     created_at: datetime | str | None = None
 
 
+class CapabilityAdapterMappingCreateRequest(BaseModel):
+    mapping_id: str = Field(..., min_length=1, max_length=200)
+    title: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=512)
+    owner_scope_type: CapabilityAdapterScopeType = Field(default="global")
+    owner_scope_id: int | None = None
+    capability_name: str = Field(..., min_length=1, max_length=200)
+    adapter_contract_version: int = Field(default=1, ge=1)
+    resolved_policy_document: dict[str, Any] = Field(default_factory=dict)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class CapabilityAdapterMappingUpdateRequest(BaseModel):
+    mapping_id: str | None = Field(default=None, min_length=1, max_length=200)
+    title: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=512)
+    owner_scope_type: CapabilityAdapterScopeType | None = None
+    owner_scope_id: int | None = None
+    capability_name: str | None = Field(default=None, min_length=1, max_length=200)
+    adapter_contract_version: int | None = Field(default=None, ge=1)
+    resolved_policy_document: dict[str, Any] | None = None
+    supported_environment_requirements: list[str] | None = None
+    is_active: bool | None = None
+
+
+class CapabilityAdapterMappingResponse(BaseModel):
+    id: int
+    mapping_id: str
+    title: str
+    description: str | None = None
+    owner_scope_type: CapabilityAdapterScopeType
+    owner_scope_id: int | None = None
+    capability_name: str
+    adapter_contract_version: int
+    resolved_policy_document: dict[str, Any] = Field(default_factory=dict)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    is_active: bool
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class CapabilityAdapterMappingNormalizedResponse(BaseModel):
+    mapping_id: str
+    title: str
+    description: str | None = None
+    owner_scope_type: CapabilityAdapterScopeType
+    owner_scope_id: int | None = None
+    capability_name: str
+    adapter_contract_version: int
+    resolved_policy_document: dict[str, Any] = Field(default_factory=dict)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    is_active: bool
+
+
+class CapabilityAdapterMappingScopeSummaryResponse(BaseModel):
+    owner_scope_type: CapabilityAdapterScopeType
+    owner_scope_id: int | None = None
+    display_scope: str
+
+
+class CapabilityAdapterMappingPreviewResponse(BaseModel):
+    normalized_mapping: CapabilityAdapterMappingNormalizedResponse
+    warnings: list[str] = Field(default_factory=list)
+    affected_scope_summary: CapabilityAdapterMappingScopeSummaryResponse
+
+
 class EffectivePolicySourceResponse(BaseModel):
     assignment_id: int
     target_type: AssignmentTargetType
@@ -408,10 +480,27 @@ class EffectivePolicyProvenanceResponse(BaseModel):
     field: str
     value: Any
     source_kind: PolicyProvenanceSourceKind
-    assignment_id: int
+    assignment_id: int | None = None
     profile_id: int | None = None
     override_id: int | None = None
+    capability_name: str | None = None
+    mapping_id: str | None = None
+    mapping_scope_type: CapabilityAdapterScopeType | None = None
+    mapping_scope_id: int | None = None
+    resolved_effects: dict[str, Any] = Field(default_factory=dict)
+    resolution_intent: Literal["allow", "deny"] | None = None
     effect: PolicyProvenanceEffect
+
+
+class EffectivePolicyCapabilityMappingResponse(BaseModel):
+    capability_name: str
+    resolution_intent: Literal["allow", "deny"] | None = None
+    mapping_id: str | None = None
+    mapping_scope_type: CapabilityAdapterScopeType | None = None
+    mapping_scope_id: int | None = None
+    resolved_effects: dict[str, Any] = Field(default_factory=dict)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    unsupported_environment_requirements: list[str] = Field(default_factory=list)
 
 
 class EffectivePolicyResponse(BaseModel):
@@ -422,6 +511,14 @@ class EffectivePolicyResponse(BaseModel):
     approval_policy_id: int | None = None
     approval_mode: ApprovalMode | None = None
     policy_document: dict[str, Any] = Field(default_factory=dict)
+    authored_policy_document: dict[str, Any] = Field(default_factory=dict)
+    resolved_policy_document: dict[str, Any] = Field(default_factory=dict)
+    resolved_capabilities: list[str] = Field(default_factory=list)
+    unresolved_capabilities: list[str] = Field(default_factory=list)
+    capability_mapping_summary: list[EffectivePolicyCapabilityMappingResponse] = Field(default_factory=list)
+    capability_warnings: list[str] = Field(default_factory=list)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    unsupported_environment_requirements: list[str] = Field(default_factory=list)
     selected_assignment_id: int | None = None
     selected_workspace_source_mode: WorkspaceSourceMode | None = None
     selected_workspace_set_object_id: int | None = None
@@ -674,6 +771,9 @@ class GovernancePackDryRunReportResponse(BaseModel):
     digest: str
     resolved_capabilities: list[str] = Field(default_factory=list)
     unresolved_capabilities: list[str] = Field(default_factory=list)
+    capability_mapping_summary: list[EffectivePolicyCapabilityMappingResponse] = Field(default_factory=list)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    unsupported_environment_requirements: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     blocked_objects: list[str] = Field(default_factory=list)
     verdict: Literal["importable", "blocked"]
