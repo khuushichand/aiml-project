@@ -12,6 +12,8 @@
 
 ### Task 1: Add `completed_steps` To Persona Setup Metadata
 
+**Status:** Complete
+
 **Files:**
 - Modify: `tldw_Server_API/app/api/v1/schemas/persona.py`
 - Modify: `tldw_Server_API/tests/Persona/test_persona_profiles_api.py`
@@ -85,6 +87,8 @@ git commit -m "feat: add persona setup completed steps metadata"
 ```
 
 ### Task 2: Make Setup Progress And Intent Stable In The Route
+
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/hooks/usePersonaSetupWizard.ts`
@@ -166,6 +170,8 @@ git commit -m "feat: stabilize persona setup intent and step progress"
 ```
 
 ### Task 3: Add The Progress Rail And Profiles Setup Status Card
+
+**Status:** Not Started
 
 **Files:**
 - Create: `apps/packages/ui/src/components/PersonaGarden/PersonaSetupStatusCard.tsx`

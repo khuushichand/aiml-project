@@ -725,9 +725,11 @@ describe("SidepanelPersona", () => {
               status: "in_progress",
               version: 1,
               current_step: "voice",
+              completed_steps: ["persona"],
               completed_at: null,
               last_test_type: null
-            }
+            },
+            version: 7
           })
         })
       }
@@ -737,7 +739,18 @@ describe("SidepanelPersona", () => {
       return Promise.resolve({ ok: true, json: async () => ({}) })
     })
 
-    render(<SidepanelPersona />)
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false
+        }
+      }
+    })
+    const view = rtlRender(
+      <QueryClientProvider client={queryClient}>
+        <SidepanelPersona />
+      </QueryClientProvider>
+    )
 
     await waitFor(() =>
       expect(screen.getByTestId("assistant-setup-overlay")).toBeInTheDocument()
@@ -746,6 +759,14 @@ describe("SidepanelPersona", () => {
     expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("voice")
     expect(screen.getByTestId("assistant-setup-post-target")).toHaveTextContent("profiles")
     expect(screen.queryByText("Persona Profile")).not.toBeInTheDocument()
+
+    mocks.location.search = "?persona_id=garden-helper&tab=live"
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <SidepanelPersona />
+      </QueryClientProvider>
+    )
+    expect(screen.getByTestId("assistant-setup-post-target")).toHaveTextContent("profiles")
   })
 
   it("does not gate completed setup personas and keeps the requested tab active", async () => {
@@ -784,9 +805,11 @@ describe("SidepanelPersona", () => {
               status: "completed",
               version: 1,
               current_step: "test",
+              completed_steps: ["persona", "voice", "commands", "safety", "test"],
               completed_at: "2026-03-13T10:00:00Z",
               last_test_type: "dry_run"
-            }
+            },
+            version: 8
           })
         })
       }
@@ -850,9 +873,11 @@ describe("SidepanelPersona", () => {
               status: "in_progress",
               version: 1,
               current_step: "voice",
+              completed_steps: ["persona"],
               completed_at: null,
               last_test_type: null
-            }
+            },
+            version: 11
           })
         })
       }
@@ -870,6 +895,7 @@ describe("SidepanelPersona", () => {
               status: "in_progress",
               version: 1,
               current_step: "voice",
+              completed_steps: ["persona"],
               completed_at: null,
               last_test_type: null
             }
@@ -925,12 +951,14 @@ describe("SidepanelPersona", () => {
             status: "in_progress",
             version: 1,
             current_step: "commands",
+            completed_steps: ["persona", "voice"],
             completed_at: null,
             last_test_type: null
           }
         }
       })
     )
+    expect(setupPatchCall?.[0]).toContain("expected_version=11")
   })
 
   it("creates a starter command from the setup step and advances to safety", async () => {
@@ -1115,6 +1143,7 @@ describe("SidepanelPersona", () => {
             status: "in_progress",
             version: 1,
             current_step: "test",
+            completed_steps: ["safety"],
             completed_at: null,
             last_test_type: null
           }

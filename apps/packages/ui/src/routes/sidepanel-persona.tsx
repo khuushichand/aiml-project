@@ -57,7 +57,8 @@ import {
 } from "@/hooks/useResolvedPersonaVoiceDefaults"
 import {
   usePersonaSetupWizard,
-  type PersonaSetupState
+  type PersonaSetupState,
+  type PersonaSetupStep
 } from "@/hooks/usePersonaSetupWizard"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
 
@@ -171,6 +172,7 @@ type PersonaSessionDetailResponse = {
 
 type PersonaProfileResponse = {
   id?: string
+  version?: number
   use_persona_state_context_default?: boolean
   voice_defaults?: PersonaVoiceDefaults | null
   setup?: PersonaSetupState | null
@@ -415,6 +417,9 @@ const SidepanelPersona = ({
     React.useState<PersonaVoiceDefaults | null>(null)
   const [savedPersonaSetup, setSavedPersonaSetup] =
     React.useState<PersonaSetupState | null>(null)
+  const [savedPersonaProfileVersion, setSavedPersonaProfileVersion] = React.useState<
+    number | null
+  >(null)
   const [personaProfileLoading, setPersonaProfileLoading] = React.useState(false)
   const [setupWizardSaving, setSetupWizardSaving] = React.useState(false)
   const [setupWizardError, setSetupWizardError] = React.useState<string | null>(null)
@@ -442,6 +447,9 @@ const SidepanelPersona = ({
   )
   const [voiceAnalyticsLoading, setVoiceAnalyticsLoading] = React.useState(false)
   const [savingLiveVoiceDefaults, setSavingLiveVoiceDefaults] = React.useState(false)
+  const [setupIntentTargetTab, setSetupIntentTargetTab] =
+    React.useState<PersonaGardenTabKey | null>(null)
+  const [setupIntentPersonaId, setSetupIntentPersonaId] = React.useState("")
   const [sessionId, setSessionId] = React.useState<string | null>(null)
   const [sessionHistory, setSessionHistory] = React.useState<PersonaSessionSummary[]>([])
   const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
@@ -613,6 +621,7 @@ const SidepanelPersona = ({
     if (!normalizedPersonaId || isCompanionMode) {
       setSavedPersonaVoiceDefaults(null)
       setSavedPersonaSetup(null)
+      setSavedPersonaProfileVersion(null)
       setPersonaProfileLoading(false)
       if (!connected) {
         setLiveSessionVoiceDefaultsBaseline(null)
@@ -635,11 +644,15 @@ const SidepanelPersona = ({
         if (!cancelled) {
           setSavedPersonaVoiceDefaults(payload?.voice_defaults || null)
           setSavedPersonaSetup(payload?.setup || null)
+          setSavedPersonaProfileVersion(
+            typeof payload?.version === "number" ? payload.version : null
+          )
         }
       } catch {
         if (!cancelled) {
           setSavedPersonaVoiceDefaults(null)
           setSavedPersonaSetup(null)
+          setSavedPersonaProfileVersion(null)
         }
       } finally {
         if (!cancelled) {
@@ -655,11 +668,31 @@ const SidepanelPersona = ({
 
   const personaSetupWizard = usePersonaSetupWizard({
     selectedPersonaId,
-    activeTab,
     isCompanionMode,
     loading: personaProfileLoading,
     setup: savedPersonaSetup
   })
+
+  React.useEffect(() => {
+    const normalizedPersonaId = String(selectedPersonaId || "").trim()
+    if (!personaSetupWizard.isSetupRequired || !normalizedPersonaId) {
+      return
+    }
+    if (setupIntentPersonaId !== normalizedPersonaId) {
+      setSetupIntentPersonaId(normalizedPersonaId)
+      setSetupIntentTargetTab(activeTab)
+      return
+    }
+    if (!setupIntentTargetTab) {
+      setSetupIntentTargetTab(activeTab)
+    }
+  }, [
+    activeTab,
+    personaSetupWizard.isSetupRequired,
+    selectedPersonaId,
+    setupIntentPersonaId,
+    setupIntentTargetTab
+  ])
 
   React.useEffect(() => {
     if (!personaSetupWizard.isSetupRequired || personaSetupWizard.currentStep === "test") {
@@ -673,13 +706,72 @@ const SidepanelPersona = ({
   }, [personaSetupWizard.currentStep, personaSetupWizard.isSetupRequired])
 
   const buildPersonaSetupInProgress = React.useCallback(
-    (step: PersonaSetupState["current_step"] = "voice"): PersonaSetupState => ({
+    (
+      step: PersonaSetupState["current_step"] = "voice",
+      completedSteps: PersonaSetupStep[] = []
+    ): PersonaSetupState => ({
       status: "in_progress",
       version: 1,
       current_step: step || "voice",
+      completed_steps: completedSteps,
       completed_at: null,
       last_test_type: null
     }),
+    []
+  )
+
+  const mergeCompletedSetupSteps = React.useCallback(
+    (...steps: Array<PersonaSetupStep | null | undefined>) => {
+      const next = new Set<PersonaSetupStep>(
+        Array.isArray(savedPersonaSetup?.completed_steps)
+          ? savedPersonaSetup.completed_steps
+          : []
+      )
+      for (const step of steps) {
+        if (!step) continue
+        next.add(step)
+      }
+      return Array.from(next)
+    },
+    [savedPersonaSetup?.completed_steps]
+  )
+
+  const buildSetupProfileUpdatePath = React.useCallback(
+    (personaId: string) => {
+      const normalizedPersonaId = String(personaId || "").trim()
+      const basePath = `/api/v1/persona/profiles/${encodeURIComponent(normalizedPersonaId)}`
+      if (!normalizedPersonaId || !savedPersonaProfileVersion) {
+        return basePath
+      }
+      return `${basePath}?expected_version=${encodeURIComponent(
+        String(savedPersonaProfileVersion)
+      )}`
+    },
+    [savedPersonaProfileVersion]
+  )
+
+  const applyPersonaProfileResponse = React.useCallback(
+    (
+      payload: PersonaProfileResponse | null | undefined,
+      fallback?: {
+        voiceDefaults?: PersonaVoiceDefaults | null
+        setup?: PersonaSetupState | null
+      }
+    ) => {
+      if (payload && typeof payload.version === "number") {
+        setSavedPersonaProfileVersion(payload.version)
+      }
+      if (payload?.voice_defaults !== undefined) {
+        setSavedPersonaVoiceDefaults(payload.voice_defaults || null)
+      } else if (fallback?.voiceDefaults !== undefined) {
+        setSavedPersonaVoiceDefaults(fallback.voiceDefaults || null)
+      }
+      if (payload?.setup !== undefined) {
+        setSavedPersonaSetup(payload.setup || null)
+      } else if (fallback?.setup !== undefined) {
+        setSavedPersonaSetup(fallback.setup || null)
+      }
+    },
     []
   )
 
@@ -689,13 +781,17 @@ const SidepanelPersona = ({
       if (!personaId) return
       setSetupWizardSaving(true)
       setSetupWizardError(null)
+      const nextSetup = buildPersonaSetupInProgress(
+        "commands",
+        mergeCompletedSetupSteps("voice")
+      )
       try {
         const response = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+          buildSetupProfileUpdatePath(personaId) as any,
           {
             method: "PATCH",
             body: {
-              setup: buildPersonaSetupInProgress("commands")
+              setup: nextSetup
             }
           }
         )
@@ -703,7 +799,7 @@ const SidepanelPersona = ({
           throw new Error(response.error || "Failed to advance assistant setup")
         }
         const payload = (await response.json()) as PersonaProfileResponse
-        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress("commands"))
+        applyPersonaProfileResponse(payload, { setup: nextSetup })
       } catch (setupError: any) {
         setSetupWizardError(
           String(setupError?.message || "Failed to advance assistant setup")
@@ -712,25 +808,36 @@ const SidepanelPersona = ({
         setSetupWizardSaving(false)
       }
     },
-    [buildPersonaSetupInProgress, selectedPersonaId]
+    [
+      applyPersonaProfileResponse,
+      buildPersonaSetupInProgress,
+      buildSetupProfileUpdatePath,
+      mergeCompletedSetupSteps,
+      selectedPersonaId
+    ]
   )
 
   const advancePersonaSetupStep = React.useCallback(
     async (
       step: PersonaSetupState["current_step"],
-      errorMessage: string
+      errorMessage: string,
+      completedStep?: PersonaSetupStep
     ) => {
       const personaId = String(selectedPersonaId || "").trim()
       if (!personaId) return
       setSetupWizardSaving(true)
       setSetupWizardError(null)
+      const nextSetup = buildPersonaSetupInProgress(
+        step,
+        mergeCompletedSetupSteps(completedStep)
+      )
       try {
         const response = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+          buildSetupProfileUpdatePath(personaId) as any,
           {
             method: "PATCH",
             body: {
-              setup: buildPersonaSetupInProgress(step)
+              setup: nextSetup
             }
           }
         )
@@ -738,14 +845,20 @@ const SidepanelPersona = ({
           throw new Error(response.error || errorMessage)
         }
         const payload = (await response.json()) as PersonaProfileResponse
-        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress(step))
+        applyPersonaProfileResponse(payload, { setup: nextSetup })
       } catch (setupError: any) {
         setSetupWizardError(String(setupError?.message || errorMessage))
       } finally {
         setSetupWizardSaving(false)
       }
     },
-    [buildPersonaSetupInProgress, selectedPersonaId]
+    [
+      applyPersonaProfileResponse,
+      buildPersonaSetupInProgress,
+      buildSetupProfileUpdatePath,
+      mergeCompletedSetupSteps,
+      selectedPersonaId
+    ]
   )
 
   const resolvedLivePersonaVoiceDefaults = useResolvedPersonaVoiceDefaults(
@@ -1551,6 +1664,9 @@ const SidepanelPersona = ({
             setPersonaStateContextProfileDefault(stateContextDefault)
             nextSavedVoiceDefaults = profilePayload?.voice_defaults || null
             setSavedPersonaVoiceDefaults(nextSavedVoiceDefaults)
+            setSavedPersonaProfileVersion(
+              typeof profilePayload?.version === "number" ? profilePayload.version : null
+            )
           }
         } catch {
           // profile fetch is optional for route initialization
@@ -1879,7 +1995,7 @@ const SidepanelPersona = ({
           {
             method: "PATCH",
             body: {
-              setup: buildPersonaSetupInProgress("voice")
+              setup: buildPersonaSetupInProgress("voice", ["persona"])
             }
           }
         )
@@ -1888,8 +2004,10 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         setSelectedPersonaId(nextPersonaId)
-        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress("voice"))
-        setSavedPersonaVoiceDefaults(payload?.voice_defaults || null)
+        applyPersonaProfileResponse(payload, {
+          setup: buildPersonaSetupInProgress("voice", ["persona"]),
+          voiceDefaults: payload?.voice_defaults || null
+        })
       } catch (setupError: any) {
         setSetupWizardError(String(setupError?.message || "Failed to update persona setup"))
       } finally {
@@ -1897,6 +2015,7 @@ const SidepanelPersona = ({
       }
     },
     [
+      applyPersonaProfileResponse,
       buildPersonaSetupInProgress,
       confirmDiscardUnsavedStateDrafts,
       selectedPersonaId
@@ -1917,7 +2036,7 @@ const SidepanelPersona = ({
             body: {
               name: normalizedName,
               mode: "persistent_scoped",
-              setup: buildPersonaSetupInProgress("voice")
+              setup: buildPersonaSetupInProgress("voice", ["persona"])
             }
           }
         )
@@ -1940,15 +2059,17 @@ const SidepanelPersona = ({
           })
           setSelectedPersonaId(createdPersonaId)
         }
-        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress("voice"))
-        setSavedPersonaVoiceDefaults(payload?.voice_defaults || null)
+        applyPersonaProfileResponse(payload, {
+          setup: buildPersonaSetupInProgress("voice", ["persona"]),
+          voiceDefaults: payload?.voice_defaults || null
+        })
       } catch (setupError: any) {
         setSetupWizardError(String(setupError?.message || "Failed to create persona"))
       } finally {
         setSetupWizardSaving(false)
       }
     },
-    [buildPersonaSetupInProgress]
+    [applyPersonaProfileResponse, buildPersonaSetupInProgress]
   )
 
   const handleCreateStarterCommandFromTemplate = React.useCallback(
@@ -1981,7 +2102,11 @@ const SidepanelPersona = ({
         if (!response.ok) {
           throw new Error(response.error || "Failed to create starter command")
         }
-        await advancePersonaSetupStep("safety", "Failed to advance assistant setup")
+        await advancePersonaSetupStep(
+          "safety",
+          "Failed to advance assistant setup",
+          "commands"
+        )
       } catch (setupError: any) {
         setSetupWizardError(
           String(setupError?.message || "Failed to create starter command")
@@ -2022,7 +2147,11 @@ const SidepanelPersona = ({
         if (!response.ok) {
           throw new Error(response.error || "Failed to create starter command")
         }
-        await advancePersonaSetupStep("safety", "Failed to advance assistant setup")
+        await advancePersonaSetupStep(
+          "safety",
+          "Failed to advance assistant setup",
+          "commands"
+        )
       } catch (setupError: any) {
         setSetupWizardError(
           String(setupError?.message || "Failed to create starter command")
@@ -2076,12 +2205,15 @@ const SidepanelPersona = ({
           confirmation_mode: confirmationMode
         }
         const response = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+          buildSetupProfileUpdatePath(personaId) as any,
           {
             method: "PATCH",
             body: {
               voice_defaults: mergedVoiceDefaults,
-              setup: buildPersonaSetupInProgress("test")
+              setup: buildPersonaSetupInProgress(
+                "test",
+                mergeCompletedSetupSteps("safety")
+              )
             }
           }
         )
@@ -2089,8 +2221,10 @@ const SidepanelPersona = ({
           throw new Error(response.error || "Failed to save assistant safety settings")
         }
         const payload = (await response.json()) as PersonaProfileResponse
-        setSavedPersonaVoiceDefaults(payload?.voice_defaults || mergedVoiceDefaults)
-        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress("test"))
+        applyPersonaProfileResponse(payload, {
+          voiceDefaults: mergedVoiceDefaults,
+          setup: buildPersonaSetupInProgress("test", mergeCompletedSetupSteps("safety"))
+        })
       } catch (setupError: any) {
         setSetupWizardError(
           String(setupError?.message || "Failed to save assistant safety settings")
@@ -2099,7 +2233,14 @@ const SidepanelPersona = ({
         setSetupWizardSaving(false)
       }
     },
-    [buildPersonaSetupInProgress, savedPersonaVoiceDefaults, selectedPersonaId]
+    [
+      applyPersonaProfileResponse,
+      buildPersonaSetupInProgress,
+      buildSetupProfileUpdatePath,
+      mergeCompletedSetupSteps,
+      savedPersonaVoiceDefaults,
+      selectedPersonaId
+    ]
   )
 
   const completePersonaSetup = React.useCallback(
@@ -2113,11 +2254,12 @@ const SidepanelPersona = ({
           status: "completed",
           version: 1,
           current_step: "test",
+          completed_steps: ["persona", "voice", "commands", "safety", "test"],
           completed_at: new Date().toISOString(),
           last_test_type: testType
         }
         const response = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+          buildSetupProfileUpdatePath(personaId) as any,
           {
             method: "PATCH",
             body: {
@@ -2129,7 +2271,7 @@ const SidepanelPersona = ({
           throw new Error(response.error || "Failed to complete assistant setup")
         }
         const payload = (await response.json()) as PersonaProfileResponse
-        setSavedPersonaSetup(payload?.setup || completedSetup)
+        applyPersonaProfileResponse(payload, { setup: completedSetup })
         setSetupWizardDryRunError(null)
       } catch (setupError: any) {
         setSetupWizardError(String(setupError?.message || "Failed to complete assistant setup"))
@@ -2137,7 +2279,7 @@ const SidepanelPersona = ({
         setSetupWizardSaving(false)
       }
     },
-    [selectedPersonaId]
+    [applyPersonaProfileResponse, buildSetupProfileUpdatePath, selectedPersonaId]
   )
 
   const handleRunSetupDryRun = React.useCallback(
@@ -3466,7 +3608,7 @@ const SidepanelPersona = ({
               }))}
               selectedPersonaId={selectedPersonaId}
               currentStep={personaSetupWizard.currentStep}
-              postSetupTargetTab={personaSetupWizard.postSetupTargetTab}
+              postSetupTargetTab={setupIntentTargetTab || activeTab}
               voiceStepContent={
                 personaSetupWizard.currentStep === "voice" ? (
                   <AssistantDefaultsPanel

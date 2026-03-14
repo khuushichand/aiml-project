@@ -1,7 +1,5 @@
 import React from "react"
 
-import type { PersonaGardenTabKey } from "@/utils/persona-garden-route"
-
 export type PersonaSetupStep =
   | "persona"
   | "voice"
@@ -13,13 +11,13 @@ export type PersonaSetupState = {
   status?: "not_started" | "in_progress" | "completed" | null
   version?: number | null
   current_step?: PersonaSetupStep | null
+  completed_steps?: PersonaSetupStep[] | null
   completed_at?: string | null
   last_test_type?: "dry_run" | "live_session" | null
 }
 
 type UsePersonaSetupWizardArgs = {
   selectedPersonaId: string
-  activeTab: PersonaGardenTabKey
   isCompanionMode: boolean
   loading: boolean
   setup: PersonaSetupState | null
@@ -35,7 +33,6 @@ const VALID_SETUP_STEPS = new Set<PersonaSetupStep>([
 
 export const usePersonaSetupWizard = ({
   selectedPersonaId,
-  activeTab,
   isCompanionMode,
   loading,
   setup
@@ -58,7 +55,6 @@ export const usePersonaSetupWizard = ({
 
   return {
     isSetupRequired,
-    currentStep,
-    postSetupTargetTab: activeTab
+    currentStep
   }
 }
