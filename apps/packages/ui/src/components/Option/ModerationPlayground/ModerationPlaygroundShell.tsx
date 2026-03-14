@@ -1,7 +1,9 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { message } from "antd"
+import { useNavigate } from "react-router-dom"
 import { useServerOnline } from "@/hooks/useServerOnline"
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { testModeration } from "@/services/moderation"
 import { ModerationContextBar } from "./ModerationContextBar"
 import { useModerationContext } from "./hooks/useModerationContext"
@@ -44,6 +46,8 @@ const HERO_GRID_STYLE: React.CSSProperties = {
 export const ModerationPlaygroundShell: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const online = useServerOnline()
+  const navigate = useNavigate()
+  const { uxState } = useConnectionUxState()
   const [messageApi, contextHolder] = message.useMessage()
   const [activeTab, setActiveTab] = React.useState<TabKey>("policy")
 
@@ -169,6 +173,63 @@ export const ModerationPlaygroundShell: React.FC = () => {
     }
   }
 
+  const offlineWarning =
+    !online && uxState !== "testing"
+      ? uxState === "error_auth" || uxState === "configuring_auth"
+        ? (
+      <div className="mx-4 sm:mx-6 lg:mx-8 p-3 border border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg text-sm text-yellow-800 dark:text-yellow-300">
+        <div>Add your credentials to use moderation controls.</div>
+        <button
+          type="button"
+          onClick={() => navigate("/settings/tldw")}
+          className="mt-2 text-sm font-medium underline underline-offset-2"
+        >
+          Open Settings
+        </button>
+      </div>
+          )
+        : uxState === "unconfigured" || uxState === "configuring_url"
+          ? (
+      <div className="mx-4 sm:mx-6 lg:mx-8 p-3 border border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg text-sm text-yellow-800 dark:text-yellow-300">
+        <div>Finish setup to use moderation controls.</div>
+        <button
+          type="button"
+          onClick={() => navigate("/")}
+          className="mt-2 text-sm font-medium underline underline-offset-2"
+        >
+          Finish Setup
+        </button>
+      </div>
+            )
+          : uxState === "error_unreachable"
+            ? (
+      <div className="mx-4 sm:mx-6 lg:mx-8 p-3 border border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg text-sm text-yellow-800 dark:text-yellow-300">
+        <div>Can&apos;t reach your tldw server right now.</div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => navigate("/settings/health")}
+            className="text-sm font-medium underline underline-offset-2"
+          >
+            Health & diagnostics
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate("/settings/tldw")}
+            className="text-sm font-medium underline underline-offset-2"
+          >
+            Open Settings
+          </button>
+        </div>
+      </div>
+              )
+            : (
+      <div className="mx-4 sm:mx-6 lg:mx-8 p-3 border border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg text-sm text-yellow-800 dark:text-yellow-300">
+        Connect to your tldw server to use moderation controls.
+      </div>
+              )
+      : null
+
   return (
     <div className="space-y-0">
       {contextHolder}
@@ -251,11 +312,7 @@ export const ModerationPlaygroundShell: React.FC = () => {
       />
 
       {/* Offline warning */}
-      {!online && (
-        <div className="mx-4 sm:mx-6 lg:mx-8 p-3 border border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg text-sm text-yellow-800 dark:text-yellow-300">
-          Connect to your tldw server to use moderation controls.
-        </div>
-      )}
+      {offlineWarning}
 
       {/* Tab bar */}
       <div className="border-b border-border mx-4 sm:mx-6 lg:mx-8">

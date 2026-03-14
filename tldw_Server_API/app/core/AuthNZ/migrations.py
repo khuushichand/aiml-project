@@ -3263,6 +3263,109 @@ def rollback_061_drop_backup_schedule_tables(conn: sqlite3.Connection) -> None:
     logger.info("Rollback 061: Dropped backup schedule tables")
 
 
+def migration_067_create_maintenance_rotation_runs_table(conn: sqlite3.Connection) -> None:
+    """Create maintenance rotation run persistence table (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS maintenance_rotation_runs (
+            id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            domain TEXT,
+            queue TEXT,
+            job_type TEXT,
+            fields_json TEXT NOT NULL,
+            "limit" INTEGER,
+            affected_count INTEGER,
+            requested_by_user_id INTEGER,
+            requested_by_label TEXT,
+            confirmation_recorded INTEGER NOT NULL DEFAULT 0,
+            job_id TEXT,
+            scope_summary TEXT NOT NULL,
+            key_source TEXT NOT NULL,
+            error_message TEXT,
+            created_at TIMESTAMP NOT NULL,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_active_execute
+        ON maintenance_rotation_runs(mode)
+        WHERE mode = 'execute' AND status IN ('queued', 'running')
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_created_at "
+        "ON maintenance_rotation_runs(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_status "
+        "ON maintenance_rotation_runs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 067: Created maintenance rotation runs table")
+
+
+def rollback_067_drop_maintenance_rotation_runs_table(conn: sqlite3.Connection) -> None:
+    """Drop maintenance rotation run persistence table (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS maintenance_rotation_runs")
+    conn.commit()
+    logger.info("Rollback 067: Dropped maintenance rotation runs table")
+
+
+def migration_068_create_byok_validation_runs_table(conn: sqlite3.Connection) -> None:
+    """Create BYOK validation run persistence table (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS byok_validation_runs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            org_id INTEGER,
+            provider TEXT,
+            keys_checked INTEGER,
+            valid_count INTEGER,
+            invalid_count INTEGER,
+            error_count INTEGER,
+            requested_by_user_id INTEGER,
+            requested_by_label TEXT,
+            job_id TEXT,
+            scope_summary TEXT NOT NULL,
+            error_message TEXT,
+            created_at TIMESTAMP NOT NULL,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_byok_validation_runs_active
+        ON byok_validation_runs((1))
+        WHERE status IN ('queued', 'running')
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_created_at "
+        "ON byok_validation_runs(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_status "
+        "ON byok_validation_runs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 068: Created BYOK validation runs table")
+
+
+def rollback_068_drop_byok_validation_runs_table(conn: sqlite3.Connection) -> None:
+    """Drop BYOK validation run persistence table (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS byok_validation_runs")
+    conn.commit()
+    logger.info("Rollback 068: Dropped BYOK validation runs table")
+
+
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     """Add llm_provider_overrides table for runtime provider overrides."""
     logger.info("Migration 041: START llm_provider_overrides table")
@@ -3705,6 +3808,18 @@ def get_authnz_migrations() -> list[Migration]:
             66,
             "Add MCP shared workspace registry",
             migration_063_add_mcp_shared_workspaces,
+        ),
+        Migration(
+            67,
+            "Create maintenance rotation runs table",
+            migration_067_create_maintenance_rotation_runs_table,
+            rollback_067_drop_maintenance_rotation_runs_table,
+        ),
+        Migration(
+            68,
+            "Create BYOK validation runs table",
+            migration_068_create_byok_validation_runs_table,
+            rollback_068_drop_byok_validation_runs_table,
         ),
     ]
 

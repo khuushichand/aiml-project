@@ -13,6 +13,9 @@ import pytest
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
+from tldw_Server_API.tests.test_utils import (
+    skip_if_whisper_model_not_cached_locally,
+)
 
 
 # Mock audio data for testing
@@ -28,6 +31,8 @@ def create_test_audio(duration=1.0, sample_rate=16000):
 async def test_transcription_endpoint(bypass_api_limits):
     """Test the /v1/audio/transcriptions endpoint."""
     from tldw_Server_API.app.main import app
+
+    skip_if_whisper_model_not_cached_locally("whisper-1")
 
     # Create test audio
     audio_data, sample_rate = create_test_audio()
@@ -58,13 +63,6 @@ async def test_transcription_endpoint(bypass_api_limits):
                         data=data
                     )
 
-                # In environments without the Whisper model, preflight may
-                # legitimately return a structured 503.
-                if response.status_code == 503:
-                    body = response.json()
-                    detail = body.get("detail") or {}
-                    if detail.get("status") == "model_downloading":
-                        pytest.skip("Whisper model not available locally; skipping transcription smoke test")
                 assert response.status_code == 200
                 result = response.json()
                 assert 'text' in result
@@ -128,6 +126,8 @@ async def test_transcription_formats(bypass_api_limits):
     """Test different response formats."""
     from tldw_Server_API.app.main import app
 
+    skip_if_whisper_model_not_cached_locally("whisper-1")
+
     # Create test audio
     audio_data, sample_rate = create_test_audio()
 
@@ -160,11 +160,6 @@ async def test_transcription_formats(bypass_api_limits):
                             data=data
                         )
 
-                    if response.status_code == 503:
-                        body = response.json()
-                        detail = body.get("detail") or {}
-                        if detail.get("status") == "model_downloading":
-                            pytest.skip("Whisper model not available locally; skipping format tests")
                     assert response.status_code == 200
 
                     if fmt == 'json' or fmt == 'verbose_json':
@@ -193,6 +188,8 @@ async def test_translation_endpoint(bypass_api_limits):
     """Test the /v1/audio/translations endpoint."""
     from tldw_Server_API.app.main import app
 
+    skip_if_whisper_model_not_cached_locally("whisper-1")
+
     # Create test audio
     audio_data, sample_rate = create_test_audio()
 
@@ -220,11 +217,6 @@ async def test_translation_endpoint(bypass_api_limits):
                         files=files,
                         data=data
                     )
-                if response.status_code == 503:
-                    body = response.json()
-                    detail = body.get("detail") or {}
-                    if detail.get("status") == "model_downloading":
-                        pytest.skip("Whisper model not available locally; skipping translation test")
                 assert response.status_code == 200
                 result = response.json()
                 assert 'text' in result
@@ -240,6 +232,8 @@ def test_sync_transcription(bypass_api_limits):
 
     """Test synchronous transcription using TestClient."""
     from tldw_Server_API.app.main import app
+
+    skip_if_whisper_model_not_cached_locally("whisper-1")
 
     with bypass_api_limits(app), TestClient(app) as client:
         # Create test audio

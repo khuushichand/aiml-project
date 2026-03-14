@@ -240,7 +240,7 @@ class TopicMonitoringDB:
     def _migrate_watchlist_rules_schema(self, conn: sqlite3.Connection) -> None:
         logger.info("Migrating monitoring_watchlist_rules schema to composite primary key")
         try:
-            conn.execute("BEGIN")
+            begin_immediate_if_needed(conn)
             conn.execute("DROP INDEX IF EXISTS idx_monitoring_watchlist_rules_watchlist")
             conn.execute("ALTER TABLE monitoring_watchlist_rules RENAME TO monitoring_watchlist_rules_old")
             conn.execute(

@@ -1,7 +1,9 @@
 import React from "react"
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 
+import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import {
@@ -150,8 +152,26 @@ export const CompanionPage = ({
   onCompanionEnabled
 }: CompanionPageProps) => {
   const { t } = useTranslation(["option", "common"])
+  const navigate = useNavigate()
   const isOnline = useServerOnline()
+  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
+  const settingsRoute = surface === "options" ? "/settings/tldw" : "/settings"
+  const diagnosticsRoute =
+    surface === "options" ? "/settings/health" : settingsRoute
+  const settingsLabel = "Settings"
+  const setupActionLabel =
+    surface === "options" && !hasCompletedFirstRun ? "Finish Setup" : settingsLabel
+
+  const openSettings = () => navigate(settingsRoute)
+  const openDiagnostics = () => navigate(diagnosticsRoute)
+  const openSetup = () => {
+    if (surface === "options" && !hasCompletedFirstRun) {
+      navigate("/")
+      return
+    }
+    openSettings()
+  }
 
   const [snapshot, setSnapshot] = React.useState<CompanionWorkspaceSnapshot | null>(
     null
@@ -427,6 +447,66 @@ export const CompanionPage = ({
     } finally {
       setSavingCheckIn(false)
     }
+  }
+
+  if (uxState === "error_auth" || uxState === "configuring_auth") {
+    return (
+      <section
+        className="mx-auto max-w-5xl px-6 py-10"
+        data-testid="companion-auth-required"
+      >
+        <FeatureEmptyState
+          title="Add your credentials to use Companion"
+          description="Companion needs a reachable tldw server plus valid credentials before it can load your activity, knowledge, goals, and reflections."
+          primaryActionLabel={settingsLabel}
+          onPrimaryAction={openSettings}
+        />
+      </section>
+    )
+  }
+
+  if (uxState === "unconfigured" || uxState === "configuring_url") {
+    return (
+      <section
+        className="mx-auto max-w-5xl px-6 py-10"
+        data-testid="companion-setup-required"
+      >
+        <FeatureEmptyState
+          title="Finish setup to use Companion"
+          description="Companion depends on a configured tldw server before this workspace can load."
+          primaryActionLabel={setupActionLabel}
+          onPrimaryAction={openSetup}
+        />
+      </section>
+    )
+  }
+
+  if (uxState === "error_unreachable") {
+    return (
+      <section
+        className="mx-auto max-w-5xl px-6 py-10"
+        data-testid="companion-unreachable"
+      >
+        <FeatureEmptyState
+          title="Can't reach your tldw server right now"
+          description="Companion depends on a reachable tldw server. Review your server status and URL before trying again."
+          primaryActionLabel={
+            surface === "options"
+              ? "Health & diagnostics"
+              : settingsLabel
+          }
+          onPrimaryAction={
+            surface === "options" ? openDiagnostics : openSettings
+          }
+          secondaryActionLabel={
+            surface === "options" ? settingsLabel : undefined
+          }
+          onSecondaryAction={
+            surface === "options" ? openSettings : undefined
+          }
+        />
+      </section>
+    )
   }
 
   if (!isOnline) {

@@ -7,7 +7,9 @@ transcription functions to avoid heavy model calls.
 import io
 import math
 import struct
+import sys
 import wave
+from types import ModuleType
 
 import pytest
 from fastapi.testclient import TestClient
@@ -403,13 +405,13 @@ def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, byp
             app.dependency_overrides.pop(get_request_user, None)
 
 
-def test_transcriptions_whisper_model_unavailable_returns_503(monkeypatch, bypass_api_limits):
+def test_transcriptions_whisper_model_not_cached_allows_first_use_load(monkeypatch, bypass_api_limits):
 
 
     """
-    When the underlying faster-whisper model is not available locally,
-    /audio/transcriptions should surface a structured 503 instead of
-    returning a pseudo-transcript that clients might persist.
+    When the underlying faster-whisper model is not cached locally yet,
+    /audio/transcriptions should still proceed through the adapter so the
+    first-use load/download path can complete.
     """
     ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
@@ -418,29 +420,76 @@ def test_transcriptions_whisper_model_unavailable_returns_503(monkeypatch, bypas
 
         app.dependency_overrides[get_request_user] = _override_user
 
-        # Fail if the heavy Whisper STT path is invoked; the preflight
-        # should short-circuit before speech_to_text is called.
-        def _fail_speech_to_text(*args, **kwargs):
-            raise AssertionError("speech_to_text should not be called when model is unavailable")
+        fake_atlib = ModuleType("Audio_Transcription_Lib")
 
-        monkeypatch.setattr(
-            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
-            _fail_speech_to_text,
-            raising=False,
+        class _FakeConversionError(Exception):
+            pass
+
+        def _fake_parse_transcription_model(model_name: str):
+            return "whisper", (model_name or "").strip(), None
+
+        fake_atlib.ConversionError = _FakeConversionError
+        fake_atlib.convert_to_wav = lambda path, *args, **kwargs: path
+        fake_atlib.is_transcription_error_message = lambda _text: False
+        fake_atlib.validate_whisper_model_identifier = lambda value: value
+        fake_atlib.parse_transcription_model = _fake_parse_transcription_model
+        monkeypatch.setitem(
+            sys.modules,
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib",
+            fake_atlib,
         )
 
-        # Pretend the canonical Whisper model is not yet available locally
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import stt_provider_adapter
 
-        def _fake_check_status(model_name: str):
+        fake_audio_files = ModuleType("Audio_Files")
+        fake_audio_files.check_transcription_model_status = lambda model_name: {
+            "available": False,
+            "usable": False,
+            "on_demand": True,
+            "message": f"Model {model_name} is not available locally and will be downloaded.",
+            "model": model_name,
+            "estimated_size": "10 GB",
+        }
+        monkeypatch.setitem(
+            sys.modules,
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files",
+            fake_audio_files,
+        )
+
+        captured: dict[str, str | bool | None] = {"called": False, "model": None}
+
+        def _fake_whisper_transcribe_batch(
+            self,
+            audio_path,
+            *,
+            model=None,
+            language=None,
+            task="transcribe",
+            word_timestamps=False,
+            prompt=None,
+            hotwords=None,
+            base_dir=None,
+            cancel_check=None,
+        ):
+            captured["called"] = True
+            captured["model"] = model
             return {
-                "available": False,
-                "message": f"Model {model_name} is not available locally and will be downloaded.",
-                "model": model_name,
-                "estimated_size": "10 GB",
+                "text": "first use integration transcript",
+                "language": language or "en",
+                "segments": [
+                    {"start_seconds": 0.0, "end_seconds": 0.1, "Text": "first use integration transcript"}
+                ],
+                "diarization": {"enabled": False, "speakers": None},
+                "usage": {"duration_ms": None, "tokens": None},
+                "metadata": {"provider": "faster-whisper", "model": model or "large-v3"},
             }
 
-        monkeypatch.setattr(audio_files, "check_transcription_model_status", _fake_check_status, raising=True)
+        monkeypatch.setattr(
+            stt_provider_adapter.FasterWhisperAdapter,
+            "transcribe_batch",
+            _fake_whisper_transcribe_batch,
+            raising=True,
+        )
 
         try:
             wav_bytes = _make_wav_bytes()
@@ -452,13 +501,13 @@ def test_transcriptions_whisper_model_unavailable_returns_503(monkeypatch, bypas
                 data=data,
                 headers=_api_key_headers(),
             )
-            assert resp.status_code == 503
+            if resp.status_code == 404:
+                pytest.skip("audio/transcriptions endpoint not mounted in this build")
+            assert resp.status_code == 200, resp.text
             body = resp.json()
             assert isinstance(body, dict)
-            detail = body.get("detail") or {}
-            assert detail.get("status") == "model_downloading"
-            assert "not available locally" in detail.get("message", "")
-            assert detail.get("model") == "large-v3"
-            assert "estimated_size" in detail
+            assert body.get("text") == "first use integration transcript"
+            assert captured["called"] is True
+            assert captured["model"] == "large-v3"
         finally:
             app.dependency_overrides.pop(get_request_user, None)

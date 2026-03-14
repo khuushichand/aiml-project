@@ -13,6 +13,9 @@ import httpx
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
+from tldw_Server_API.tests.test_utils import (
+    skip_if_whisper_model_not_cached_locally,
+)
 
 
 def _create_test_tone(duration: float = 0.25, sample_rate: int = 16000) -> str:
@@ -31,6 +34,8 @@ def _create_test_tone(duration: float = 0.25, sample_rate: int = 16000) -> str:
 async def test_transcription_verbose_json_includes_task_and_duration(bypass_api_limits):
     """Ensure verbose_json responses include task and duration metadata."""
     from tldw_Server_API.app.main import app
+
+    skip_if_whisper_model_not_cached_locally("whisper-1")
 
     path = _create_test_tone()
     try:
@@ -56,12 +61,6 @@ async def test_transcription_verbose_json_includes_task_and_duration(bypass_api_
         # In some minimal test builds the endpoint may not be mounted; skip in that case.
         if resp.status_code == 404:
             pytest.skip("audio/transcriptions endpoint not mounted in this build")
-        if resp.status_code == 503:
-            body = resp.json()
-            detail = body.get("detail") or {}
-            if detail.get("status") == "model_downloading":
-                pytest.skip("Whisper model not available locally; skipping verbose_json task test")
-
         assert resp.status_code == 200
         body = resp.json()
         assert "text" in body
@@ -77,6 +76,8 @@ async def test_transcription_verbose_json_includes_task_and_duration(bypass_api_
 async def test_translation_endpoint_uses_translate_task_and_allows_auto_language(bypass_api_limits):
     """Verify /audio/translations calls the transcription path with task='translate'."""
     from tldw_Server_API.app.main import app
+
+    skip_if_whisper_model_not_cached_locally("whisper-1")
 
     path = _create_test_tone()
     try:
@@ -101,12 +102,6 @@ async def test_translation_endpoint_uses_translate_task_and_allows_auto_language
 
         if resp.status_code == 404:
             pytest.skip("audio/translations endpoint not mounted in this build")
-        if resp.status_code == 503:
-            body = resp.json()
-            detail = body.get("detail") or {}
-            if detail.get("status") == "model_downloading":
-                pytest.skip("Whisper model not available locally; skipping translation task test")
-
         assert resp.status_code == 200
         body = resp.json()
         assert "text" in body

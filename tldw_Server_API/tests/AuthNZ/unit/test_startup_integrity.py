@@ -1,7 +1,9 @@
+import importlib
 import sqlite3
 
 import pytest
 
+from tldw_Server_API.app.core.DB_Management import sqlite_policy
 from tldw_Server_API.app.core.AuthNZ import startup_integrity
 
 
@@ -81,3 +83,37 @@ async def test_startup_integrity_skips_postgres_backend():
         auth_mode="multi_user",
         dispatch_alerts=False,
     )
+
+
+def test_startup_integrity_readonly_check_uses_shared_sqlite_policy_helper(tmp_path):
+    module = importlib.import_module("tldw_Server_API.app.core.AuthNZ.startup_integrity")
+    calls: list[dict[str, object]] = []
+
+    def fake_configure(conn, **kwargs):
+        calls.append(kwargs)
+
+    db_path = tmp_path / "users.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)")
+        conn.execute("INSERT INTO users (username) VALUES ('admin')")
+        conn.commit()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sqlite_policy, "configure_sqlite_connection", fake_configure)
+        module = importlib.reload(module)
+        rows = module._run_sqlite_pragma_check(
+            db_path=db_path,
+            pragma_sql="PRAGMA quick_check;",
+            timeout_seconds=0.25,
+        )
+
+    importlib.reload(module)
+
+    assert rows == ["ok"]
+    assert calls == [{
+        "use_wal": False,
+        "synchronous": None,
+        "busy_timeout_ms": 250,
+        "foreign_keys": False,
+        "temp_store": None,
+    }]

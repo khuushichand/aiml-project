@@ -22,7 +22,9 @@ import {
 } from "antd"
 import { BugOutlined, HistoryOutlined, PlayCircleOutlined, SyncOutlined } from "@ant-design/icons"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import {
   hasPromptStudio,
@@ -116,7 +118,9 @@ const statusColor = (status?: string) => {
 
 export const PromptStudioPlaygroundPage: React.FC = () => {
   const { t } = useTranslation(["option", "settings", "common"])
+  const navigate = useNavigate()
   const online = useServerOnline()
+  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
   const queryClient = useQueryClient()
 
   const [projectPage, setProjectPage] = React.useState(1)
@@ -578,7 +582,61 @@ export const PromptStudioPlaygroundPage: React.FC = () => {
     [defaultsQuery.data, executeForm]
   )
 
-  if (!online) {
+  if (uxState === "error_auth" || uxState === "configuring_auth") {
+    return (
+      <Alert
+        type="warning"
+        title="Add your credentials to use Prompt Studio"
+        description="Prompt Studio needs a reachable tldw server plus valid credentials before projects, prompts, and evaluations can load."
+        action={
+          <Button type="primary" onClick={() => navigate("/settings/tldw")}>
+            Open Settings
+          </Button>
+        }
+      />
+    )
+  }
+
+  if (uxState === "unconfigured" || uxState === "configuring_url") {
+    return (
+      <Alert
+        type="warning"
+        title="Finish setup to use Prompt Studio"
+        description="Prompt Studio depends on a configured tldw server before projects, prompts, and evaluations can load."
+        action={
+          <Button
+            type="primary"
+            onClick={() =>
+              navigate(hasCompletedFirstRun ? "/settings/tldw" : "/")
+            }>
+            {hasCompletedFirstRun ? "Open Settings" : "Finish Setup"}
+          </Button>
+        }
+      />
+    )
+  }
+
+  if (uxState === "error_unreachable") {
+    return (
+      <Alert
+        type="warning"
+        title="Can't reach your tldw server right now"
+        description="Prompt Studio depends on a reachable tldw server. Review your server status and URL before trying again."
+        action={
+          <Space>
+            <Button type="primary" onClick={() => navigate("/settings/health")}>
+              Health & diagnostics
+            </Button>
+            <Button onClick={() => navigate("/settings/tldw")}>
+              Open Settings
+            </Button>
+          </Space>
+        }
+      />
+    )
+  }
+
+  if (!online && uxState !== "testing") {
     return (
       <Alert
         type="warning"

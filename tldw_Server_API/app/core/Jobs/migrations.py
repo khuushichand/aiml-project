@@ -13,6 +13,10 @@ from pathlib import Path
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
+
 _JOBS_PATH_EXCEPTIONS = (ImportError, OSError, RuntimeError, TypeError, ValueError)
 _JOBS_DB_EXCEPTIONS = (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError)
 
@@ -238,9 +242,14 @@ def ensure_jobs_tables(db_path: Path | None = None) -> Path:
         with sqlite3.connect(db_path) as conn:
             # SQLite tuning for better concurrency
             try:
-                conn.execute("PRAGMA journal_mode=WAL;")
-                conn.execute("PRAGMA synchronous=NORMAL;")
-                conn.execute("PRAGMA busy_timeout=5000;")
+                configure_sqlite_connection(
+                    conn,
+                    use_wal=True,
+                    synchronous="NORMAL",
+                    busy_timeout_ms=5000,
+                    foreign_keys=False,
+                    temp_store=None,
+                )
             except _JOBS_DB_EXCEPTIONS:
                 pass
             conn.executescript(JOBS_SQLITE_DDL)

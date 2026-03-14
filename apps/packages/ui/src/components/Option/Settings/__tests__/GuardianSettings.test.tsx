@@ -10,7 +10,8 @@ const {
   useMutationMock,
   useQueryClientMock,
   invalidateQueriesMock,
-  serverCapabilitiesState
+  serverCapabilitiesState,
+  connectionState
 } = vi.hoisted(() => ({
   useQueryMock: vi.fn(),
   useMutationMock: vi.fn(),
@@ -25,6 +26,17 @@ const {
   } as {
     capabilities: { hasGuardian: boolean; hasSelfMonitoring: boolean } | null
     loading: boolean
+  },
+  connectionState: {
+    uxState: "connected_ok" as
+      | "connected_ok"
+      | "testing"
+      | "configuring_url"
+      | "configuring_auth"
+      | "error_auth"
+      | "error_unreachable"
+      | "unconfigured",
+    navigate: vi.fn()
   }
 }))
 
@@ -34,8 +46,25 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: useQueryClientMock
 }))
 
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: () => connectionState.navigate
+  }
+})
+
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
+}))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => ({
+    uxState: connectionState.uxState,
+    hasCompletedFirstRun: true
+  })
 }))
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
@@ -180,6 +209,8 @@ describe("GuardianSettings", () => {
       hasGuardian: true,
       hasSelfMonitoring: true
     }
+    connectionState.uxState = "connected_ok"
+    connectionState.navigate.mockReset()
 
     invalidateQueriesMock.mockReset()
     useQueryClientMock.mockReset()

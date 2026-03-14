@@ -67,6 +67,7 @@ export const EXTENSION_ROUTES: ExtensionRouteEntry[] = [
   { kind: "options", path: "/speech", name: "Speech" },
   { kind: "options", path: "/evaluations", name: "Evaluations" },
   { kind: "options", path: "/audiobook-studio", name: "Audiobook Studio" },
+  { kind: "options", path: "/presentation-studio/start", name: "Presentation Studio Quick Start" },
   { kind: "options", path: "/workflow-editor", name: "Workflow Editor" },
   { kind: "options", path: "/workspace-playground", name: "Workspace Playground" },
   { kind: "options", path: "/moderation-playground", name: "Moderation Playground" },

@@ -206,6 +206,12 @@ const OptionSourcesNew = lazy(() => import("./option-sources-new"))
 const OptionSourcesDetail = lazy(() => import("./option-sources-detail"))
 const OptionAdminSources = lazy(() => import("./option-admin-sources"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
+const OptionPresentationStudio = lazy(() => import("./option-presentation-studio"))
+const OptionPresentationStudioNew = lazy(() => import("./option-presentation-studio-new"))
+const OptionPresentationStudioStart = lazy(() => import("./option-presentation-studio-start"))
+const OptionPresentationStudioDetail = lazy(
+  () => import("./option-presentation-studio-detail")
+)
 const OptionChatWorkflows = lazy(() => import("./option-chat-workflows"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
@@ -684,6 +690,33 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 10,
       beta: true
     }
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio",
+    element: <OptionPresentationStudio />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.presentationStudio",
+      icon: ImageIcon,
+      order: 10.25,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio/new",
+    element: <OptionPresentationStudioNew />
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio/start",
+    element: <OptionPresentationStudioStart />
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio/:projectId",
+    element: <OptionPresentationStudioDetail />
   },
   {
     kind: "options",

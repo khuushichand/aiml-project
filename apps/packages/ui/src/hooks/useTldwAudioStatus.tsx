@@ -36,6 +36,7 @@ type AudioHealthResponse = {
   data?: {
     available?: boolean
     usable?: boolean
+    on_demand?: boolean
     provider?: string
   }
 }
@@ -128,9 +129,10 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
       .trim()
       .toLowerCase()
     const explicitlyUsable = sttPayload?.usable === true
+    const onDemandReady = sttPayload?.on_demand === true
     const failOpenForNonWhisper =
       sttPayload?.available === false && provider.length > 0 && provider !== "whisper"
-    if (sttPayload?.available === false && !explicitlyUsable && !failOpenForNonWhisper) {
+    if (sttPayload?.available === false && !explicitlyUsable && !onDemandReady && !failOpenForNonWhisper) {
       sttHealthState = "unhealthy"
     } else {
       sttHealthState = "healthy"

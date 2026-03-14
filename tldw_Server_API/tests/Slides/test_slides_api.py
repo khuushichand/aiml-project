@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -102,6 +103,14 @@ class FakeMediaDB:
         return self.media.get(media_id)
 
 
+class FakeCollectionsDB:
+    def get_output_artifact(self, output_id: int):
+        return {"id": output_id}
+
+    def resolve_output_storage_path(self, path_value):
+        return str(path_value)
+
+
 @pytest.fixture()
 def slides_client(tmp_path):
     app = FastAPI()
@@ -135,9 +144,13 @@ def slides_client(tmp_path):
         finally:
             db.close_connection()
 
+    async def _override_collections_db():
+        return FakeCollectionsDB()
+
     app.dependency_overrides[get_request_user] = _override_user
     app.dependency_overrides[get_auth_principal] = _override_principal
     app.dependency_overrides[get_slides_db_for_user] = _override_db
+    app.dependency_overrides[get_collections_db_for_user] = _override_collections_db
 
     with TestClient(app) as client:
         yield client
@@ -186,11 +199,15 @@ def slides_client_with_sources(tmp_path):
     async def _override_media_db():
         return fake_media
 
+    async def _override_collections_db():
+        return FakeCollectionsDB()
+
     app.dependency_overrides[get_request_user] = _override_user
     app.dependency_overrides[get_auth_principal] = _override_principal
     app.dependency_overrides[get_slides_db_for_user] = _override_db
     app.dependency_overrides[get_chacha_db_for_user] = _override_notes_db
     app.dependency_overrides[get_media_db_for_user] = _override_media_db
+    app.dependency_overrides[get_collections_db_for_user] = _override_collections_db
 
     with TestClient(app) as client:
         yield client, fake_notes, fake_media
@@ -324,6 +341,10 @@ def test_slides_create_and_export_json(slides_client):
         "description": None,
         "theme": "black",
         "settings": {"controls": True},
+        "studio_data": {
+            "origin": "blank",
+            "default_voice": {"provider": "openai", "voice": "alloy"},
+        },
         "slides": [
             {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
             {"order": 1, "layout": "content", "title": "Slide", "content": "- A\n- B", "speaker_notes": None, "metadata": {}},
@@ -334,11 +355,13 @@ def test_slides_create_and_export_json(slides_client):
     assert resp.status_code == 201
     data = resp.json()
     assert data["title"] == "Deck"
+    assert data["studio_data"] == payload["studio_data"]
     presentation_id = data["id"]
     export_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/export?format=json")
     assert export_resp.status_code == 200
     exported = export_resp.json()
     assert exported["id"] == presentation_id
+    assert exported["studio_data"] == payload["studio_data"]
 
 
 def test_slides_create_rejects_invalid_image(slides_client):
@@ -359,6 +382,95 @@ def test_slides_create_rejects_invalid_image(slides_client):
     resp = slides_client.post("/api/v1/slides/presentations", json=payload)
     assert resp.status_code == 422
     assert resp.json()["detail"] == "image_data_b64_invalid"
+
+
+def test_slides_create_and_export_markdown_with_image_asset_ref(slides_client, monkeypatch):
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.resolve_slide_asset",
+        lambda asset_ref, **kwargs: {
+            "asset_ref": asset_ref,
+            "mime": "image/png",
+            "data_b64": _SAMPLE_PNG_B64,
+            "alt": "Cover",
+        },
+    )
+    payload = {
+        "title": "Deck",
+        "theme": "black",
+        "slides": [
+            {
+                "order": 0,
+                "layout": "content",
+                "title": "Slide",
+                "content": "Hello",
+                "speaker_notes": None,
+                "metadata": {"images": [{"asset_ref": "output:123", "alt": "Cover"}]},
+            }
+        ],
+    }
+
+    resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["slides"][0]["metadata"]["images"][0]["asset_ref"] == "output:123"
+
+    export_resp = slides_client.get(f"/api/v1/slides/presentations/{data['id']}/export?format=markdown")
+    assert export_resp.status_code == 200
+    assert "![Cover](data:image/png;base64," in export_resp.text
+
+
+def test_slides_export_offloads_blocking_markdown_and_reveal_generation(
+    slides_client, monkeypatch, tmp_path
+):
+    assets_dir = _build_assets(tmp_path)
+    monkeypatch.setenv("SLIDES_REVEALJS_ASSETS_DIR", str(assets_dir))
+    offloaded_calls: list[str] = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        offloaded_calls.append(getattr(func, "__name__", repr(func)))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("tldw_Server_API.app.api.v1.endpoints.slides.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.slides.resolve_slide_asset",
+        lambda asset_ref, **kwargs: {
+            "asset_ref": asset_ref,
+            "mime": "image/png",
+            "data_b64": _SAMPLE_PNG_B64,
+            "alt": "Cover",
+        },
+    )
+    payload = {
+        "title": "Deck",
+        "theme": "black",
+        "slides": [
+            {
+                "order": 0,
+                "layout": "content",
+                "title": "Slide",
+                "content": "Hello",
+                "speaker_notes": "Narration",
+                "metadata": {"images": [{"asset_ref": "output:123", "alt": "Cover"}]},
+            }
+        ],
+    }
+
+    create_resp = slides_client.post("/api/v1/slides/presentations", json=payload)
+    assert create_resp.status_code == 201, create_resp.text
+    presentation_id = create_resp.json()["id"]
+
+    markdown_resp = slides_client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/export?format=markdown"
+    )
+    assert markdown_resp.status_code == 200, markdown_resp.text
+
+    reveal_resp = slides_client.get(
+        f"/api/v1/slides/presentations/{presentation_id}/export?format=revealjs"
+    )
+    assert reveal_resp.status_code == 200, reveal_resp.text
+
+    assert "export_presentation_markdown" in offloaded_calls
+    assert "export_presentation_bundle" in offloaded_calls
 
 
 def test_slides_export_reveal(slides_client, tmp_path, monkeypatch):
@@ -586,6 +698,10 @@ def test_slides_versions_and_restore(slides_client):
         "description": None,
         "theme": "black",
         "settings": {"controls": True},
+        "studio_data": {
+            "origin": "blank",
+            "default_voice": {"provider": "openai", "voice": "alloy"},
+        },
         "slides": [
             {"order": 0, "layout": "title", "title": "Deck", "content": "", "speaker_notes": None, "metadata": {}},
         ],
@@ -598,10 +714,17 @@ def test_slides_versions_and_restore(slides_client):
 
     update_resp = slides_client.patch(
         f"/api/v1/slides/presentations/{presentation_id}",
-        json={"title": "Updated"},
+        json={
+            "title": "Updated",
+            "studio_data": {
+                "origin": "extension_capture",
+                "default_voice": {"provider": "openai", "voice": "verse"},
+            },
+        },
         headers={"If-Match": etag},
     )
     assert update_resp.status_code == 200
+    assert update_resp.json()["studio_data"]["origin"] == "extension_capture"
     new_etag = update_resp.headers["ETag"]
 
     versions_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/versions")
@@ -613,6 +736,7 @@ def test_slides_versions_and_restore(slides_client):
     version_resp = slides_client.get(f"/api/v1/slides/presentations/{presentation_id}/versions/1")
     assert version_resp.status_code == 200
     assert version_resp.json()["title"] == "Deck"
+    assert version_resp.json()["studio_data"] == payload["studio_data"]
 
     restore_resp = slides_client.post(
         f"/api/v1/slides/presentations/{presentation_id}/versions/1/restore",
@@ -620,6 +744,7 @@ def test_slides_versions_and_restore(slides_client):
     )
     assert restore_resp.status_code == 200
     assert restore_resp.json()["title"] == "Deck"
+    assert restore_resp.json()["studio_data"] == payload["studio_data"]
 
 def test_slides_generate_from_prompt_uses_stubbed_llm(slides_client, monkeypatch):
     monkeypatch.setattr(

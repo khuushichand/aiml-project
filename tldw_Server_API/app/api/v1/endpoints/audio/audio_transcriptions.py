@@ -719,19 +719,13 @@ async def create_transcription(
                 try:
                     model_status = audio_files.check_transcription_model_status(whisper_model_name)
                     if not model_status.get("available", False):
-                        detail_payload: dict[str, Any] = _dictation_error_detail(
-                            http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail_status="model_downloading",
-                            message=model_status.get("message")
-                            or "Requested transcription model is not available locally yet.",
-                            extra={"model": model_status.get("model", whisper_model_name)},
-                        )
-                        estimated_size = model_status.get("estimated_size")
-                        if estimated_size:
-                            detail_payload["estimated_size"] = estimated_size
-                        raise HTTPException(
-                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail=detail_payload,
+                        # Keep the lightweight status probe for visibility, but
+                        # do not block the lazy faster-whisper first-use
+                        # initialization/download path.
+                        logger.info(
+                            "Whisper model {} not cached locally; proceeding with first-use load/download. status_message={}",
+                            model_status.get("model", whisper_model_name),
+                            model_status.get("message") or "none",
                         )
                 except HTTPException:
                     raise

@@ -7,6 +7,13 @@ vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => false
 }))
 
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => ({
+    uxState: "connected_ok",
+    hasCompletedFirstRun: true
+  })
+}))
+
 vi.mock("@/hooks/useServerCapabilities", () => ({
   useServerCapabilities: () => ({
     capabilities: { hasPersona: true, hasPersonalization: true },

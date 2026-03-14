@@ -12,9 +12,8 @@ import type { TabsProps } from "antd"
 import { BarChart3, Database, History, Play, Webhook } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import { PageShell } from "@/components/Common/PageShell"
-import { useServerOnline } from "@/hooks/useServerOnline"
+import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { useEvaluationsStore, type EvaluationsTab as EvaluationsTabType } from "@/store/evaluations"
 import { DatasetsTab } from "./tabs/DatasetsTab"
 import { EvaluationsTab } from "./tabs/EvaluationsTab"
@@ -26,7 +25,6 @@ export const EvaluationsPage: React.FC = () => {
   const { t } = useTranslation(["evaluations", "common"])
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const isOnline = useServerOnline()
   const tourActive = searchParams.get("tour") === "1"
 
   const activeTab = useEvaluationsStore((s) => s.activeTab)
@@ -154,32 +152,16 @@ export const EvaluationsPage: React.FC = () => {
     }
   ]
 
-  if (!isOnline) {
-    return (
-      <ConnectFeatureBanner
-        title={t("evaluations:emptyConnectTitle", {
-          defaultValue: "Connect to use Evaluations"
-        })}
-        description={t("evaluations:emptyConnectDescription", {
-          defaultValue:
-            "To create and run evaluations, first connect to your tldw server."
-        })}
-        examples={[
-          t("evaluations:emptyConnectExample1", {
-            defaultValue:
-              "Open Settings → tldw server to add your server URL and API key."
-          }),
-          t("evaluations:emptyConnectExample2", {
-            defaultValue:
-              "Once connected, you can define evaluations and inspect metrics here."
-          })
-        ]}
-      />
-    )
-  }
-
   return (
-    <PageShell className="py-6" maxWidthClassName="max-w-6xl">
+    <WorkspaceConnectionGate
+      featureName={t("evaluations:title", "Evaluations")}
+      setupDescription={t(
+        "evaluations:setupRequired",
+        "Evaluations depends on your connected tldw server to create runs, inspect datasets, and review metrics."
+      )}
+      maxWidthClassName="max-w-6xl"
+    >
+      <PageShell className="py-6" maxWidthClassName="max-w-6xl">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-text" data-testid="evaluations-page-title">
           {t("evaluations:title", "Evaluations")}
@@ -235,7 +217,8 @@ export const EvaluationsPage: React.FC = () => {
         className="evaluations-tabs"
         data-testid="evaluations-tabs"
       />
-    </PageShell>
+      </PageShell>
+    </WorkspaceConnectionGate>
   )
 }
 

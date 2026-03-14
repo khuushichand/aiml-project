@@ -29,6 +29,7 @@ import { useNavigate } from "react-router-dom"
 
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import { PageShell } from "@/components/Common/PageShell"
+import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import {
   useCancelChatWorkflowRun,
@@ -43,7 +44,6 @@ import {
   useSubmitChatWorkflowRound,
   useUpdateChatWorkflowTemplate
 } from "@/hooks/useChatWorkflows"
-import { useServerOnline } from "@/hooks/useServerOnline"
 import { CHAT_PATH } from "@/routes/route-paths"
 import type {
   ChatWorkflowDialogueConfig,
@@ -313,7 +313,6 @@ export const ChatWorkflowsPage: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const navigate = useNavigate()
   const notification = useAntdNotification()
-  const isOnline = useServerOnline()
   const [activeTab, setActiveTab] = React.useState<ChatWorkflowTabKey>("library")
   const [editingTemplateId, setEditingTemplateId] = React.useState<number | null>(
     null
@@ -820,16 +819,13 @@ export const ChatWorkflowsPage: React.FC = () => {
 
   const templates = templatesQuery.data || []
 
-  if (!isOnline) {
-    return (
-      <PageShell className="py-6" maxWidthClassName="max-w-6xl">
-        <Empty description="Server is offline. Connect to create or run chat workflows." />
-      </PageShell>
-    )
-  }
-
   return (
-    <PageShell className="py-6" maxWidthClassName="max-w-6xl">
+    <WorkspaceConnectionGate
+      featureName="Chat Workflows"
+      setupDescription="Chat Workflows depends on your connected tldw server to create templates, run structured sessions, and hand off completed conversations."
+      maxWidthClassName="max-w-6xl"
+    >
+      <PageShell className="py-6" maxWidthClassName="max-w-6xl">
       <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs font-medium uppercase tracking-[0.16em] text-text-muted">
@@ -1670,7 +1666,8 @@ export const ChatWorkflowsPage: React.FC = () => {
           }
         ]}
       />
-    </PageShell>
+      </PageShell>
+    </WorkspaceConnectionGate>
   )
 }
 

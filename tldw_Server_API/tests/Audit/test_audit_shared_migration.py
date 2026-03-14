@@ -1,8 +1,10 @@
+import importlib
 from datetime import datetime, timezone
 
 import aiosqlite
 import pytest
 
+from tldw_Server_API.app.core.DB_Management import sqlite_policy
 from tldw_Server_API.app.core.Audit import audit_shared_migration as audit_migration
 from tldw_Server_API.app.core.Audit.audit_shared_migration import (
     discover_audit_sources,
@@ -15,6 +17,71 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventCategory,
     AuditEventType,
 )
+
+
+@pytest.mark.asyncio
+async def test_shared_audit_migration_uses_shared_sqlite_policy_helper(tmp_path):
+    audit_module = importlib.import_module(
+        "tldw_Server_API.app.core.Audit.audit_shared_migration"
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_configure(conn, **kwargs):
+        calls.append(kwargs)
+
+    class _FakeService:
+        def __init__(self, *args, **kwargs) -> None:
+            self._event_columns = ["event_id"]
+            self._event_insert_sql = "INSERT INTO audit_events (event_id) VALUES (?)"
+
+        async def initialize(self, start_background_tasks: bool = False) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    async def fake_ensure_checkpoint_table(shared_db):
+        return None
+
+    async def fake_migrate_source(shared_db, source, **kwargs):
+        return audit_module.AuditMigrationCounts(source=source)
+
+    source_path = tmp_path / "user_dbs" / "101" / "audit" / "unified_audit.db"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.touch()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sqlite_policy, "configure_sqlite_connection_async", fake_configure)
+        audit_module = importlib.reload(audit_module)
+        mp.setattr(audit_module, "UnifiedAuditService", _FakeService)
+        mp.setattr(audit_module, "_ensure_checkpoint_table", fake_ensure_checkpoint_table)
+        mp.setattr(audit_module, "_migrate_source", fake_migrate_source)
+        mp.setattr(
+            audit_module,
+            "discover_audit_sources",
+            lambda **kwargs: [
+                audit_module.AuditMigrationSource(
+                    path=source_path.resolve(),
+                    tenant_id="101",
+                    label="user:101",
+                )
+            ],
+        )
+        await audit_module.migrate_to_shared_audit_db(
+            shared_db_path=tmp_path / "Databases" / "audit_shared.db",
+            user_db_base_dir=tmp_path / "user_dbs",
+            chunk_size=10,
+        )
+
+    importlib.reload(audit_module)
+
+    assert calls == [{
+        "use_wal": True,
+        "synchronous": "NORMAL",
+        "busy_timeout_ms": 5000,
+        "foreign_keys": True,
+        "temp_store": "MEMORY",
+    }]
 
 
 @pytest.mark.asyncio

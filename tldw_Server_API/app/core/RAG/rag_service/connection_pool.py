@@ -15,6 +15,10 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
+
 
 class ConnectionPoolError(RuntimeError):
     """Base error for connection pool failures."""
@@ -148,12 +152,10 @@ class ConnectionPool:
             # Configure connection
             conn.row_factory = sqlite3.Row
 
-            if self.enable_wal:
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.execute("PRAGMA synchronous = NORMAL")
-
-            # Enable foreign keys
-            conn.execute("PRAGMA foreign_keys = ON")
+            pragma_kwargs: dict[str, Any] = {"use_wal": self.enable_wal}
+            if not self.enable_wal:
+                pragma_kwargs["synchronous"] = None
+            configure_sqlite_connection(conn, **pragma_kwargs)
 
             # Track connection
             conn_id = id(conn)

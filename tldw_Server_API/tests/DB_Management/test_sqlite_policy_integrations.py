@@ -438,6 +438,16 @@ def test_topic_monitoring_replace_watchlist_rules_uses_begin_immediate(tmp_path)
 
 
 @pytest.mark.unit
+def test_topic_monitoring_schema_migration_uses_begin_immediate(tmp_path):
+    db = TopicMonitoringDB(str(tmp_path / "monitoring" / "alerts.db"))
+    conn = _RecordingConnection()
+
+    db._migrate_watchlist_rules_schema(conn)
+
+    assert conn.statements[0] == "BEGIN IMMEDIATE"
+
+
+@pytest.mark.unit
 def test_guardian_delete_all_for_user_uses_begin_immediate(tmp_path):
     db = GuardianDB(str(tmp_path / "guardian.db"))
     conn = _RecordingConnection()

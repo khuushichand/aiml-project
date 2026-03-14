@@ -21,12 +21,12 @@ import {
   addIncidentActionItem,
   buildPostmortemTimelineMessage,
   ensureIncidentWorkflowState,
+  incidentAssignmentWorkflowStateFromIncident,
   mergeIncidentWorkflowWithIncidents,
-  readIncidentWorkflowMap,
   removeIncidentActionItem,
+  replaceIncidentWorkflowState,
   updateIncidentActionItem,
   upsertIncidentWorkflowState,
-  writeIncidentWorkflowMap,
   type IncidentWorkflowMap,
 } from '@/lib/incident-workflow';
 import { useUrlPagination } from '@/lib/use-url-state';
@@ -86,7 +86,6 @@ function IncidentsPageContent() {
   const [updatingIncidents, setUpdatingIncidents] = useState<Set<string>>(new Set());
   const [assignableUsers, setAssignableUsers] = useState<IncidentAssignableUser[]>([]);
   const [incidentWorkflow, setIncidentWorkflow] = useState<IncidentWorkflowMap>({});
-  const [workflowHydrated, setWorkflowHydrated] = useState(false);
 
   const params = useMemo(() => {
     const offset = Math.max(0, (page - 1) * pageSize);
@@ -119,16 +118,6 @@ function IncidentsPageContent() {
   }, [deferredTagFilter, resetPagination]);
 
   useEffect(() => {
-    setIncidentWorkflow(readIncidentWorkflowMap());
-    setWorkflowHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!workflowHydrated) return;
-    writeIncidentWorkflowMap(incidentWorkflow);
-  }, [incidentWorkflow, workflowHydrated]);
-
-  useEffect(() => {
     setIncidentWorkflow((prev) => mergeIncidentWorkflowWithIncidents(incidents, prev));
   }, [incidents]);
 
@@ -136,7 +125,7 @@ function IncidentsPageContent() {
     let active = true;
     const loadAssignableUsers = async () => {
       try {
-        const payload = await api.getUsers({ limit: '100' });
+        const payload = await api.getUsers({ limit: '100', admin_capable: 'true' });
         if (!active) return;
         setAssignableUsers(normalizeAssignableUsers(payload));
       } catch (err: unknown) {
@@ -171,9 +160,13 @@ function IncidentsPageContent() {
     setIncidentWorkflow((prev) => upsertIncidentWorkflowState(prev, incidentId, nextState));
   }, []);
 
-  const getAssigneeLabel = useCallback((userId?: string) => {
+  const getAssigneeLabel = useCallback((userId?: string, fallbackLabel?: string) => {
     if (!userId) return 'Unassigned';
-    return assignableUsers.find((user) => user.id === userId)?.label ?? `User ${userId}`;
+    return (
+      assignableUsers.find((user) => user.id === userId)?.label
+      ?? fallbackLabel
+      ?? `User ${userId}`
+    );
   }, [assignableUsers]);
 
   const handleCreateIncident = async () => {
@@ -256,29 +249,43 @@ function IncidentsPageContent() {
   };
 
   const handleAssignmentChange = async (incident: IncidentItem, assignedTo: string) => {
-    updateIncidentWorkflow(incident.id, { assignedTo: assignedTo || undefined });
     const assigneeLabel = getAssigneeLabel(assignedTo || undefined);
     try {
       setIncidentUpdating(incident.id, true);
-      await api.addIncidentEvent(incident.id, {
-        message: assignedTo ? `Assigned to ${assigneeLabel}` : 'Assignment cleared',
+      const updated = await api.updateIncident(incident.id, {
+        assigned_to_user_id: assignedTo ? Number(assignedTo) : null,
+        update_message: assignedTo ? `Assigned to ${assigneeLabel}` : 'Assignment cleared',
       });
+      setIncidentWorkflow((prev) => upsertIncidentWorkflowState(
+        prev,
+        incident.id,
+        incidentAssignmentWorkflowStateFromIncident(updated),
+      ));
       await reload();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to update assignment';
       showError(message);
+      setIncidentWorkflow((prev) => upsertIncidentWorkflowState(
+        prev,
+        incident.id,
+        incidentAssignmentWorkflowStateFromIncident(incident),
+      ));
     } finally {
       setIncidentUpdating(incident.id, false);
     }
   };
 
   const handleSavePostmortem = async (incident: IncidentItem) => {
-    const state = ensureIncidentWorkflowState(incidentWorkflow, incident.id);
+    const state = ensureIncidentWorkflowState(incidentWorkflow, incident);
     try {
       setIncidentUpdating(incident.id, true);
-      await api.addIncidentEvent(incident.id, {
-        message: buildPostmortemTimelineMessage(state),
+      const updated = await api.updateIncident(incident.id, {
+        root_cause: state.rootCause.trim() || null,
+        impact: state.impact.trim() || null,
+        action_items: state.actionItems,
+        update_message: buildPostmortemTimelineMessage(state),
       });
+      setIncidentWorkflow((prev) => replaceIncidentWorkflowState(prev, updated));
       success('Post-mortem saved');
       await reload();
     } catch (err: unknown) {
@@ -494,6 +501,14 @@ function IncidentsPageContent() {
             <div className="grid gap-4">
               {incidents.map((incident) => {
                 const isUpdating = updatingIncidents.has(incident.id);
+                const workflowState = ensureIncidentWorkflowState(incidentWorkflow, incident);
+                const currentAssigneeId = workflowState.assignedTo ?? '';
+                const currentAssigneeInOptions = currentAssigneeId
+                  ? assignableUsers.some((user) => user.id === currentAssigneeId)
+                  : true;
+                const currentAssigneeLabel = currentAssigneeId
+                  ? getAssigneeLabel(currentAssigneeId, workflowState.assignedToLabel)
+                  : 'Unassigned';
                 return (
                   <Card key={incident.id}>
                   <CardHeader className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
@@ -580,7 +595,7 @@ function IncidentsPageContent() {
                         <Label htmlFor={`assigned-${incident.id}`}>Assigned To</Label>
                         <Select
                           id={`assigned-${incident.id}`}
-                          value={ensureIncidentWorkflowState(incidentWorkflow, incident.id).assignedTo ?? ''}
+                          value={currentAssigneeId}
                           onChange={(event) => {
                             void handleAssignmentChange(incident, event.target.value);
                           }}
@@ -588,6 +603,9 @@ function IncidentsPageContent() {
                           data-testid={`incident-assigned-to-${incident.id}`}
                         >
                           <option value="">Unassigned</option>
+                          {!currentAssigneeInOptions && currentAssigneeId ? (
+                            <option value={currentAssigneeId}>{currentAssigneeLabel}</option>
+                          ) : null}
                           {assignableUsers.map((user) => (
                             <option key={user.id} value={user.id}>
                               {user.label}
@@ -609,7 +627,7 @@ function IncidentsPageContent() {
                               id={`root-cause-${incident.id}`}
                               className="flex min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                               placeholder="Describe the primary root cause"
-                              value={ensureIncidentWorkflowState(incidentWorkflow, incident.id).rootCause ?? ''}
+                              value={workflowState.rootCause}
                               onChange={(event) => {
                                 updateIncidentWorkflow(incident.id, { rootCause: event.target.value });
                               }}
@@ -622,7 +640,7 @@ function IncidentsPageContent() {
                               id={`impact-${incident.id}`}
                               className="flex min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                               placeholder="Describe user/business impact"
-                              value={ensureIncidentWorkflowState(incidentWorkflow, incident.id).impact ?? ''}
+                              value={workflowState.impact}
                               onChange={(event) => {
                                 updateIncidentWorkflow(incident.id, { impact: event.target.value });
                               }}
@@ -644,12 +662,12 @@ function IncidentsPageContent() {
                               Add Action Item
                             </Button>
                           </div>
-                          {ensureIncidentWorkflowState(incidentWorkflow, incident.id).actionItems.length === 0 ? (
+                          {workflowState.actionItems.length === 0 ? (
                             <p className="text-xs text-muted-foreground">
                               No action items added yet.
                             </p>
                           ) : (
-                            ensureIncidentWorkflowState(incidentWorkflow, incident.id).actionItems.map((item) => (
+                            workflowState.actionItems.map((item) => (
                               <div key={item.id} className="grid gap-2 md:grid-cols-[auto_1fr_auto] md:items-center">
                                 <Checkbox
                                   checked={item.done}

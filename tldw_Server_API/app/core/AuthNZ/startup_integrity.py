@@ -10,6 +10,9 @@ from tldw_Server_API.app.core.AuthNZ.database import (
     DatabasePool,
     _apply_single_user_fallback,
 )
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
 
 _SQLITE_INTEGRITY_CHECK_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -54,7 +57,14 @@ def _run_sqlite_pragma_check(
     uri = _sqlite_ro_uri(db_path)
 
     with sqlite3.connect(uri, uri=True, timeout=timeout) as conn:
-        conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+        configure_sqlite_connection(
+            conn,
+            use_wal=False,
+            synchronous=None,
+            busy_timeout_ms=busy_timeout_ms,
+            foreign_keys=False,
+            temp_store=None,
+        )
         rows = conn.execute(pragma_sql).fetchall()
 
     results: list[str] = []
@@ -186,4 +196,3 @@ async def verify_authnz_sqlite_startup_integrity(
     logger.warning(
         "AuthNZ startup integrity check failed but fail-on-error is disabled; continuing startup"
     )
-

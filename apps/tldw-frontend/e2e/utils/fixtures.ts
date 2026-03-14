@@ -8,6 +8,7 @@ import {
   isBenign,
   fetchWithApiKey
 } from "./helpers"
+import { startApiCapture, getCapturedApiCalls } from "./api-assertions"
 
 /**
  * Diagnostics data collected during page visits
@@ -78,9 +79,20 @@ export const test = base.extend<WorkflowFixtures>({
   },
 
   // Pre-seeded authenticated page
-  authedPage: async ({ page }, use) => {
+  authedPage: async ({ page }, use, testInfo) => {
     await seedAuth(page)
+    startApiCapture(page)
     await use(page)
+    // Teardown: attach API call log on test failure for debugging
+    if (testInfo.status !== "passed") {
+      const apiLog = getCapturedApiCalls(page)
+      if (apiLog.length > 0) {
+        await testInfo.attach("api-calls.json", {
+          body: JSON.stringify(apiLog, null, 2),
+          contentType: "application/json",
+        })
+      }
+    }
   },
 
   // Server availability check
