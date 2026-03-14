@@ -12,7 +12,10 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDBError
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+)
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB, SemanticMemory
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import PersonaExemplarPromptAssembly
@@ -2118,6 +2121,30 @@ def test_persona_audio_chunk_records_live_voice_commit_telemetry(
                 "persona_id": "research_assistant",
             }
         ]
+        summary_rows = db.execute_query(
+            """
+            SELECT session_id, auto_commit_enabled, vad_threshold, min_silence_ms,
+                   turn_stop_secs, min_utterance_secs, total_committed_turns,
+                   vad_auto_commit_count, manual_commit_count, ended_at
+            FROM persona_live_voice_session_summaries
+            ORDER BY session_id ASC
+            """
+        ).fetchall()
+        assert [dict(row) for row in summary_rows] == [
+            {
+                "session_id": "sess_live_voice_metrics",
+                "auto_commit_enabled": 1,
+                "vad_threshold": 0.5,
+                "min_silence_ms": 250,
+                "turn_stop_secs": 0.2,
+                "min_utterance_secs": 0.4,
+                "total_committed_turns": 1,
+                "vad_auto_commit_count": 1,
+                "manual_commit_count": 0,
+                "ended_at": [dict(row) for row in summary_rows][0]["ended_at"],
+            }
+        ]
+        assert [dict(row) for row in summary_rows][0]["ended_at"]
     finally:
         db.close_connection()
 
@@ -2327,6 +2354,105 @@ def test_persona_audio_chunk_warns_and_keeps_manual_mode_when_vad_unavailable(
                 "commit_source": None,
                 "session_id": "sess_audio_manual_mode",
                 "persona_id": "research_assistant",
+            }
+        ]
+        summary_rows = db.execute_query(
+            """
+            SELECT session_id, manual_mode_required_count
+            FROM persona_live_voice_session_summaries
+            ORDER BY session_id ASC
+            """
+        ).fetchall()
+        assert [dict(row) for row in summary_rows] == [
+            {
+                "session_id": "sess_audio_manual_mode",
+                "manual_mode_required_count": 1,
+            }
+        ]
+    finally:
+        db.close_connection()
+
+
+def test_persona_voice_config_marks_turn_detection_changed_during_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_voice_config_changed",
+        mode="persistent_scoped",
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_voice_config_changed",
+                        "voice": {"trigger_phrases": ["hey helper"]},
+                        "stt": {
+                            "enable_vad": True,
+                            "vad_threshold": 0.35,
+                            "min_silence_ms": 180,
+                            "turn_stop_secs": 0.15,
+                            "min_utterance_secs": 0.3,
+                        },
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "voice_config",
+                        "session_id": "sess_voice_config_changed",
+                        "voice": {"trigger_phrases": ["hey helper"]},
+                        "stt": {
+                            "enable_vad": True,
+                            "vad_threshold": 0.8,
+                            "min_silence_ms": 600,
+                            "turn_stop_secs": 0.6,
+                            "min_utterance_secs": 0.9,
+                        },
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "VOICE_CONFIG_UPDATED",
+            )
+
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-live-voice-config-change-check")
+    try:
+        rows = db.execute_query(
+            """
+            SELECT session_id, auto_commit_enabled, vad_threshold, min_silence_ms,
+                   turn_stop_secs, min_utterance_secs, turn_detection_changed_during_session
+            FROM persona_live_voice_session_summaries
+            ORDER BY session_id ASC
+            """
+        ).fetchall()
+        assert [dict(row) for row in rows] == [
+            {
+                "session_id": "sess_voice_config_changed",
+                "auto_commit_enabled": 1,
+                "vad_threshold": 0.35,
+                "min_silence_ms": 180,
+                "turn_stop_secs": 0.15,
+                "min_utterance_secs": 0.3,
+                "turn_detection_changed_during_session": 1,
             }
         ]
     finally:
@@ -2964,6 +3090,25 @@ def test_persona_voice_confirm_plan_tts_failure_degrades_to_text_only(
 
     preferences = manager.get_preferences(session_id="sess_voice_tts_failure", user_id="1")
     assert preferences["voice_runtime"]["text_only_due_to_tts_failure"] is True
+
+    db_path = DatabasePaths.get_chacha_db_path(1)
+    db = CharactersRAGDB(str(db_path), client_id="persona-live-voice-tts-failure-check")
+    try:
+        rows = db.execute_query(
+            """
+            SELECT session_id, text_only_tts_count
+            FROM persona_live_voice_session_summaries
+            ORDER BY session_id ASC
+            """
+        ).fetchall()
+        assert [dict(row) for row in rows] == [
+            {
+                "session_id": "sess_voice_tts_failure",
+                "text_only_tts_count": 1,
+            }
+        ]
+    finally:
+        db.close_connection()
 
 
 def test_persona_audio_chunk_rejects_unsupported_format(monkeypatch):

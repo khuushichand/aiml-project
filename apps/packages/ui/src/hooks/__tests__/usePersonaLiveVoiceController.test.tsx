@@ -468,6 +468,44 @@ describe("usePersonaLiveVoiceController", () => {
     expect((result.current as any).recoveryMode).toBe("listening_stuck")
   })
 
+  it("increments listeningRecoveryCount when listening recovery triggers", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result, rerender } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    await act(async () => {
+      await result.current.startListening()
+    })
+    rerender()
+
+    act(() => {
+      result.current.handlePayload({
+        event: "partial_transcript",
+        text_delta: "hey helper"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+
+    expect((result.current as any).listeningRecoveryCount).toBe(1)
+  })
+
   it("restarts listening recovery when new transcript deltas arrive", async () => {
     vi.useFakeTimers()
 
@@ -707,6 +745,41 @@ describe("usePersonaLiveVoiceController", () => {
     })
 
     expect((result.current as any).recoveryMode).toBe("thinking_stuck")
+  })
+
+  it("increments thinkingRecoveryCount when thinking recovery triggers", async () => {
+    vi.useFakeTimers()
+
+    const ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn()
+    } as unknown as WebSocket
+
+    const { result } = renderHook(() =>
+      usePersonaLiveVoiceController({
+        ws,
+        connected: true,
+        sessionId: "sess-voice",
+        personaId: "persona-1",
+        resolvedDefaults,
+        canUseServerStt: true
+      })
+    )
+
+    act(() => {
+      result.current.handlePayload({
+        event: "notice",
+        reason_code: "VOICE_TURN_COMMITTED",
+        transcript: "search my notes",
+        commit_source: "vad_auto"
+      })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000)
+    })
+
+    expect((result.current as any).thinkingRecoveryCount).toBe(1)
   })
 
   it("assistant progress clears thinking recovery", async () => {

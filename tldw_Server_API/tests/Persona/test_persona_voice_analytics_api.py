@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     get_request_user,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.api.v1.schemas.persona import PersonaVoiceAnalyticsResponse
 from tldw_Server_API.app.core.VoiceAssistant import (
     IntentParser,
     VoiceCommandRegistry,
@@ -312,3 +313,230 @@ def test_persona_voice_analytics_includes_live_voice_commit_and_degraded_metrics
         }
 
     fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_voice_analytics_returns_recent_live_sessions_from_summary_store(
+    persona_db: CharactersRAGDB,
+):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Recent Session Summary Persona")
+
+        persona_db.execute_query(
+            """
+            INSERT INTO persona_live_voice_session_summaries (
+                user_id, persona_id, session_id, created_at, updated_at, started_at, ended_at,
+                auto_commit_enabled, vad_threshold, min_silence_ms, turn_stop_secs,
+                min_utterance_secs, turn_detection_changed_during_session,
+                total_committed_turns, vad_auto_commit_count, manual_commit_count,
+                manual_mode_required_count, text_only_tts_count,
+                listening_recovery_count, thinking_recovery_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                persona_id,
+                "sess-summary-1",
+                "2026-03-13T12:00:00Z",
+                "2026-03-13T12:05:00Z",
+                "2026-03-13T12:00:00Z",
+                "2026-03-13T12:05:00Z",
+                1,
+                0.5,
+                250,
+                0.2,
+                0.4,
+                0,
+                4,
+                3,
+                1,
+                0,
+                1,
+                0,
+                2,
+            ),
+            commit=True,
+        )
+
+        analytics = client.get(
+            f"/api/v1/persona/profiles/{persona_id}/voice-analytics",
+            params={"days": 7},
+        )
+        assert analytics.status_code == 200, analytics.text
+        payload = analytics.json()
+        assert payload["recent_live_sessions"] == [
+            {
+                "session_id": "sess-summary-1",
+                "started_at": "2026-03-13T12:00:00Z",
+                "ended_at": "2026-03-13T12:05:00Z",
+                "auto_commit_enabled": True,
+                "vad_threshold": 0.5,
+                "min_silence_ms": 250,
+                "turn_stop_secs": 0.2,
+                "min_utterance_secs": 0.4,
+                "turn_detection_changed_during_session": False,
+                "total_committed_turns": 4,
+                "vad_auto_commit_count": 3,
+                "manual_commit_count": 1,
+                "manual_mode_required_count": 0,
+                "text_only_tts_count": 1,
+                "listening_recovery_count": 0,
+                "thinking_recovery_count": 2,
+            }
+        ]
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_voice_analytics_includes_empty_recent_live_sessions_list(
+    persona_db: CharactersRAGDB,
+):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Empty Recent Sessions Persona")
+
+        analytics = client.get(
+            f"/api/v1/persona/profiles/{persona_id}/voice-analytics",
+            params={"days": 7},
+        )
+        assert analytics.status_code == 200, analytics.text
+        payload = analytics.json()
+        assert payload["recent_live_sessions"] == []
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_live_voice_session_update_accepts_recovery_counts(
+    persona_db: CharactersRAGDB,
+):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Recovery Flush Persona")
+
+        update = client.put(
+            f"/api/v1/persona/profiles/{persona_id}/voice-analytics/live-sessions/sess-flush-1",
+            json={
+                "listening_recovery_count": 2,
+                "thinking_recovery_count": 1,
+                "finalize": True,
+            },
+        )
+        assert update.status_code == 200, update.text
+        payload = update.json()
+        assert payload["session_id"] == "sess-flush-1"
+        assert payload["listening_recovery_count"] == 2
+        assert payload["thinking_recovery_count"] == 1
+        assert payload["ended_at"]
+
+        row = persona_db.execute_query(
+            """
+            SELECT session_id, listening_recovery_count, thinking_recovery_count, ended_at
+            FROM persona_live_voice_session_summaries
+            WHERE user_id = ? AND persona_id = ? AND session_id = ?
+            """,
+            (1, persona_id, "sess-flush-1"),
+        ).fetchone()
+        assert dict(row) == {
+            "session_id": "sess-flush-1",
+            "listening_recovery_count": 2,
+            "thinking_recovery_count": 1,
+            "ended_at": dict(row)["ended_at"],
+        }
+        assert dict(row)["ended_at"]
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_live_voice_session_update_is_idempotent(
+    persona_db: CharactersRAGDB,
+):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Recovery Flush Idempotent Persona")
+
+        first = client.put(
+            f"/api/v1/persona/profiles/{persona_id}/voice-analytics/live-sessions/sess-flush-2",
+            json={
+                "listening_recovery_count": 1,
+                "thinking_recovery_count": 0,
+            },
+        )
+        assert first.status_code == 200, first.text
+
+        second = client.put(
+            f"/api/v1/persona/profiles/{persona_id}/voice-analytics/live-sessions/sess-flush-2",
+            json={
+                "listening_recovery_count": 3,
+                "thinking_recovery_count": 4,
+                "finalize": True,
+            },
+        )
+        assert second.status_code == 200, second.text
+
+        rows = persona_db.execute_query(
+            """
+            SELECT session_id, listening_recovery_count, thinking_recovery_count, ended_at
+            FROM persona_live_voice_session_summaries
+            WHERE user_id = ? AND persona_id = ? AND session_id = ?
+            """,
+            (1, persona_id, "sess-flush-2"),
+        ).fetchall()
+        assert len(rows) == 1
+        normalized = dict(rows[0])
+        assert normalized["session_id"] == "sess-flush-2"
+        assert normalized["listening_recovery_count"] == 3
+        assert normalized["thinking_recovery_count"] == 4
+        assert normalized["ended_at"]
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_voice_analytics_response_model_accepts_recent_live_session_snapshot_fields():
+    payload = PersonaVoiceAnalyticsResponse.model_validate(
+        {
+            "persona_id": "persona-feedback",
+            "summary": {
+                "total_events": 0,
+                "direct_command_count": 0,
+                "planner_fallback_count": 0,
+                "success_rate": 0.0,
+                "fallback_rate": 0.0,
+                "avg_response_time_ms": 0.0,
+            },
+            "live_voice": {
+                "total_committed_turns": 2,
+                "vad_auto_commit_count": 1,
+                "manual_commit_count": 1,
+                "vad_auto_rate": 0.5,
+                "manual_commit_rate": 0.5,
+                "degraded_session_count": 1,
+            },
+            "recent_live_sessions": [
+                {
+                    "session_id": "sess-123",
+                    "started_at": "2026-03-13T12:00:00Z",
+                    "ended_at": "2026-03-13T12:05:00Z",
+                    "auto_commit_enabled": True,
+                    "vad_threshold": 0.5,
+                    "min_silence_ms": 250,
+                    "turn_stop_secs": 0.2,
+                    "min_utterance_secs": 0.4,
+                    "turn_detection_changed_during_session": False,
+                    "total_committed_turns": 4,
+                    "vad_auto_commit_count": 3,
+                    "manual_commit_count": 1,
+                    "manual_mode_required_count": 0,
+                    "text_only_tts_count": 1,
+                    "listening_recovery_count": 0,
+                    "thinking_recovery_count": 1,
+                }
+            ],
+            "commands": [],
+            "fallbacks": {
+                "total_invocations": 0,
+                "success_count": 0,
+                "error_count": 0,
+                "avg_response_time_ms": 0.0,
+                "last_used": None,
+            },
+        }
+    )
+    assert payload.recent_live_sessions[0].session_id == "sess-123"
+    assert payload.recent_live_sessions[0].auto_commit_enabled is True
+    assert payload.recent_live_sessions[0].thinking_recovery_count == 1

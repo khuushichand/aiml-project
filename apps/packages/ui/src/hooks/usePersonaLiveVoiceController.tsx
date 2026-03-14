@@ -117,6 +117,8 @@ export const usePersonaLiveVoiceController = ({
   )
   const [recoveryMode, setRecoveryMode] =
     React.useState<PersonaLiveVoiceRecoveryMode>("none")
+  const [listeningRecoveryCount, setListeningRecoveryCount] = React.useState(0)
+  const [thinkingRecoveryCount, setThinkingRecoveryCount] = React.useState(0)
   const [listeningRecoveryRestartKey, setListeningRecoveryRestartKey] = React.useState(0)
   const [thinkingRecoveryArmed, setThinkingRecoveryArmed] = React.useState(false)
   const [thinkingRecoveryRestartKey, setThinkingRecoveryRestartKey] = React.useState(0)
@@ -510,6 +512,8 @@ export const usePersonaLiveVoiceController = ({
     setLastCommittedText("")
     setActiveToolStatus("")
     setRecoveryMode("none")
+    setListeningRecoveryCount(0)
+    setThinkingRecoveryCount(0)
     setListeningRecoveryRestartKey(0)
     setThinkingRecoveryArmed(false)
     setThinkingRecoveryRestartKey(0)
@@ -548,6 +552,8 @@ export const usePersonaLiveVoiceController = ({
       manualModeRequiredRef.current = false
       setManualModeRequired(false)
       setRecoveryMode("none")
+      setListeningRecoveryCount(0)
+      setThinkingRecoveryCount(0)
       setActiveToolStatus("")
       setListeningRecoveryRestartKey(0)
       setThinkingRecoveryArmed(false)
@@ -586,6 +592,7 @@ export const usePersonaLiveVoiceController = ({
     clearListeningRecoveryTimeout()
     if (typeof window === "undefined") return
     listeningRecoveryTimeoutRef.current = window.setTimeout(() => {
+      setListeningRecoveryCount((current) => current + 1)
       setRecoveryMode("listening_stuck")
     }, LISTENING_RECOVERY_TIMEOUT_MS)
     return () => {
@@ -606,6 +613,7 @@ export const usePersonaLiveVoiceController = ({
     clearThinkingRecoveryTimeout()
     if (typeof window === "undefined") return
     thinkingRecoveryTimeoutRef.current = window.setTimeout(() => {
+      setThinkingRecoveryCount((current) => current + 1)
       setRecoveryMode("thinking_stuck")
       setThinkingRecoveryArmed(false)
     }, THINKING_RECOVERY_TIMEOUT_MS)
@@ -891,6 +899,8 @@ export const usePersonaLiveVoiceController = ({
   return {
     state,
     recoveryMode,
+    listeningRecoveryCount,
+    thinkingRecoveryCount,
     heardText,
     lastCommittedText,
     activeToolStatus,

@@ -2,6 +2,7 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 
 import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
+import type { PersonaVoiceAnalytics } from "@/components/PersonaGarden/CommandAnalyticsSummary"
 
 type ProfilePanelProps = {
   selectedPersonaId: string
@@ -10,6 +11,8 @@ type ProfilePanelProps = {
   connected: boolean
   sessionId: string | null
   isActive?: boolean
+  analytics?: PersonaVoiceAnalytics | null
+  analyticsLoading?: boolean
 }
 
 export const ProfilePanel: React.FC<ProfilePanelProps> = ({
@@ -18,7 +21,9 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
   personaCount,
   connected,
   sessionId,
-  isActive = false
+  isActive = false,
+  analytics = null,
+  analyticsLoading = false
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
 
@@ -83,6 +88,8 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
         selectedPersonaId={selectedPersonaId}
         selectedPersonaName={selectedPersonaName}
         isActive={isActive}
+        analytics={analytics}
+        analyticsLoading={analyticsLoading}
       />
     </div>
   )

@@ -368,6 +368,17 @@ const SidepanelPersona = ({
 
   const wsRef = React.useRef<WebSocket | null>(null)
   const manuallyClosingRef = React.useRef(false)
+  const liveVoiceAnalyticsSnapshotRef = React.useRef<{
+    personaId: string
+    sessionId: string
+    listeningRecoveryCount: number
+    thinkingRecoveryCount: number
+  }>({
+    personaId: "",
+    sessionId: "",
+    listeningRecoveryCount: 0,
+    thinkingRecoveryCount: 0
+  })
   const runtimeApprovalCardRef = React.useRef<HTMLDivElement | null>(null)
   const runtimeApprovalRowRefs = React.useRef<Map<string, HTMLDivElement | null>>(
     new Map()
@@ -611,6 +622,45 @@ const SidepanelPersona = ({
     canUseServerStt: Boolean(capabilities?.hasAudio)
   })
 
+  React.useEffect(() => {
+    liveVoiceAnalyticsSnapshotRef.current = {
+      personaId: String(livePersonaId || "").trim(),
+      sessionId: String(sessionId || "").trim(),
+      listeningRecoveryCount: liveVoiceController.listeningRecoveryCount,
+      thinkingRecoveryCount: liveVoiceController.thinkingRecoveryCount
+    }
+  }, [
+    livePersonaId,
+    liveVoiceController.listeningRecoveryCount,
+    liveVoiceController.thinkingRecoveryCount,
+    sessionId
+  ])
+
+  const flushLiveVoiceSessionAnalytics = React.useCallback(
+    (options?: { finalize?: boolean }) => {
+      const snapshot = liveVoiceAnalyticsSnapshotRef.current
+      const personaId = String(snapshot.personaId || "").trim()
+      const activeSessionId = String(snapshot.sessionId || "").trim()
+      if (!personaId || !activeSessionId) return
+      void tldwClient
+        .fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/voice-analytics/live-sessions/${encodeURIComponent(activeSessionId)}` as any,
+          {
+            method: "PUT",
+            body: {
+              listening_recovery_count: snapshot.listeningRecoveryCount,
+              thinking_recovery_count: snapshot.thinkingRecoveryCount,
+              finalize: options?.finalize === true
+            }
+          }
+        )
+        .catch(() => {
+          // Best-effort flush only; live-session teardown should not be blocked by analytics writes.
+        })
+    },
+    []
+  )
+
   const handleOpenCommandFromTestLab = React.useCallback((
     commandId: string,
     heardText: string
@@ -667,7 +717,7 @@ const SidepanelPersona = ({
     const normalizedPersonaId = String(selectedPersonaId || "").trim()
     const shouldLoad =
       normalizedPersonaId.length > 0 &&
-      (activeTab === "commands" || activeTab === "test-lab")
+      (activeTab === "commands" || activeTab === "test-lab" || activeTab === "profiles")
 
     if (!normalizedPersonaId) {
       setVoiceAnalytics(null)
@@ -876,11 +926,18 @@ const SidepanelPersona = ({
     if (!options?.force && !confirmDiscardUnsavedStateDrafts("disconnect")) {
       return false
     }
+    flushLiveVoiceSessionAnalytics({ finalize: true })
     const ws = wsRef.current
     if (!ws) {
       setConnected(false)
       setActiveSessionPersonaId(null)
       setLiveSessionVoiceDefaultsBaseline(null)
+      liveVoiceAnalyticsSnapshotRef.current = {
+        personaId: "",
+        sessionId: "",
+        listeningRecoveryCount: 0,
+        thinkingRecoveryCount: 0
+      }
       return false
     }
     manuallyClosingRef.current = true
@@ -901,10 +958,17 @@ const SidepanelPersona = ({
     setResolvedApprovalSnapshot(null)
     runtimeApprovalRowRefs.current.clear()
     setPendingApprovals([])
+    liveVoiceAnalyticsSnapshotRef.current = {
+      personaId: "",
+      sessionId: "",
+      listeningRecoveryCount: 0,
+      thinkingRecoveryCount: 0
+    }
     return true
   }, [
     clearResolvedApprovalFadeTimer,
     confirmDiscardUnsavedStateDrafts,
+    flushLiveVoiceSessionAnalytics,
     resetApprovalHighlightMotion
   ])
 
@@ -1495,6 +1559,7 @@ const SidepanelPersona = ({
   React.useEffect(() => {
     return () => {
       const ws = wsRef.current
+      flushLiveVoiceSessionAnalytics({ finalize: true })
       if (!ws) return
       manuallyClosingRef.current = true
       try {
@@ -1503,8 +1568,14 @@ const SidepanelPersona = ({
         // ignore close errors
       }
       wsRef.current = null
+      liveVoiceAnalyticsSnapshotRef.current = {
+        personaId: "",
+        sessionId: "",
+        listeningRecoveryCount: 0,
+        thinkingRecoveryCount: 0
+      }
     }
-  }, [])
+  }, [flushLiveVoiceSessionAnalytics])
 
   const canSend = connected && Boolean(sessionId) && Boolean(input.trim())
   const canSaveCompanionCheckIn =
@@ -2737,6 +2808,8 @@ const SidepanelPersona = ({
           connected={connected}
           sessionId={sessionId}
           isActive={activeTab === "profiles"}
+          analytics={voiceAnalytics}
+          analyticsLoading={voiceAnalyticsLoading}
         />
       )
     },

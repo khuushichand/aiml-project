@@ -36,12 +36,32 @@ export type PersonaLiveVoiceAnalyticsSummaryData = {
   degraded_session_count: number
 }
 
+export type PersonaLiveVoiceSessionSummary = {
+  session_id: string
+  started_at?: string | null
+  ended_at?: string | null
+  auto_commit_enabled: boolean
+  vad_threshold: number
+  min_silence_ms: number
+  turn_stop_secs: number
+  min_utterance_secs: number
+  turn_detection_changed_during_session: boolean
+  committed_turn_count: number
+  vad_auto_commit_count: number
+  manual_commit_count: number
+  manual_mode_required_count: number
+  text_only_tts_count: number
+  listening_recovery_count: number
+  thinking_recovery_count: number
+}
+
 export type PersonaVoiceAnalytics = {
   persona_id: string
   summary: PersonaVoiceAnalyticsSummaryData
   live_voice: PersonaLiveVoiceAnalyticsSummaryData
   commands: PersonaVoiceCommandAnalyticsItem[]
   fallbacks: PersonaVoiceFallbackAnalytics
+  recent_live_sessions?: PersonaLiveVoiceSessionSummary[]
 }
 
 type CommandAnalyticsSummaryProps = {

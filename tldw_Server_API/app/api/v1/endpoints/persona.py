@@ -57,6 +57,8 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaSessionResponse,
     PersonaSessionSummary,
     PersonaLiveVoiceAnalyticsSummary,
+    PersonaLiveVoiceSessionSummary,
+    PersonaLiveVoiceSessionUpdateRequest,
     PersonaScopeRulesReplaceRequest,
     PersonaScopeRulesResponse,
     PersonaVoiceAnalyticsResponse,
@@ -3448,9 +3450,57 @@ async def get_persona_voice_analytics(
             days=days,
             persona_id=persona_id,
         )
+        recent_live_sessions = db.list_persona_live_voice_session_summaries(
+            user_id=int(user_id),
+            persona_id=persona_id,
+            days=days,
+            limit=10,
+        )
 
         total_events = int(summary_stats.get("total_commands") or 0)
         planner_fallback_count = int(fallback_stats.get("total_invocations") or 0)
+
+        def _session_summary_from_row(item: dict[str, Any]) -> PersonaLiveVoiceSessionSummary:
+            return PersonaLiveVoiceSessionSummary(
+                session_id=str(item.get("session_id") or ""),
+                started_at=str(item.get("started_at") or "").strip() or None,
+                ended_at=str(item.get("ended_at") or "").strip() or None,
+                auto_commit_enabled=(
+                    None
+                    if item.get("auto_commit_enabled") is None
+                    else bool(item.get("auto_commit_enabled"))
+                ),
+                vad_threshold=(
+                    float(item.get("vad_threshold"))
+                    if item.get("vad_threshold") is not None
+                    else None
+                ),
+                min_silence_ms=(
+                    int(item.get("min_silence_ms"))
+                    if item.get("min_silence_ms") is not None
+                    else None
+                ),
+                turn_stop_secs=(
+                    float(item.get("turn_stop_secs"))
+                    if item.get("turn_stop_secs") is not None
+                    else None
+                ),
+                min_utterance_secs=(
+                    float(item.get("min_utterance_secs"))
+                    if item.get("min_utterance_secs") is not None
+                    else None
+                ),
+                turn_detection_changed_during_session=bool(
+                    item.get("turn_detection_changed_during_session")
+                ),
+                total_committed_turns=int(item.get("total_committed_turns") or 0),
+                vad_auto_commit_count=int(item.get("vad_auto_commit_count") or 0),
+                manual_commit_count=int(item.get("manual_commit_count") or 0),
+                manual_mode_required_count=int(item.get("manual_mode_required_count") or 0),
+                text_only_tts_count=int(item.get("text_only_tts_count") or 0),
+                listening_recovery_count=int(item.get("listening_recovery_count") or 0),
+                thinking_recovery_count=int(item.get("thinking_recovery_count") or 0),
+            )
 
         return PersonaVoiceAnalyticsResponse(
             persona_id=persona_id,
@@ -3476,6 +3526,11 @@ async def get_persona_voice_analytics(
                 manual_commit_rate=float(live_voice_stats.get("manual_commit_rate") or 0.0),
                 degraded_session_count=int(live_voice_stats.get("degraded_session_count") or 0),
             ),
+            recent_live_sessions=[
+                _session_summary_from_row(item)
+                for item in recent_live_sessions
+                if str(item.get("session_id") or "").strip()
+            ],
             commands=[
                 PersonaVoiceCommandAnalyticsItem(
                     command_id=str(item.get("command_id") or ""),
@@ -3507,6 +3562,91 @@ async def get_persona_voice_analytics(
         raise
     except Exception as exc:
         raise _to_http_exception(exc, action="get persona voice analytics") from exc
+
+
+@router.put(
+    "/profiles/{persona_id}/voice-analytics/live-sessions/{session_id}",
+    response_model=PersonaLiveVoiceSessionSummary,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def update_persona_live_voice_session_analytics(
+    persona_id: str,
+    session_id: str,
+    payload: PersonaLiveVoiceSessionUpdateRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaLiveVoiceSessionSummary:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        db.upsert_persona_live_voice_session_summary(
+            user_id=int(user_id),
+            persona_id=persona_id,
+            session_id=session_id,
+            listening_recovery_count=payload.listening_recovery_count,
+            thinking_recovery_count=payload.thinking_recovery_count,
+            finalize=payload.finalize,
+            ended_at=payload.ended_at,
+        )
+        row = db.get_persona_live_voice_session_summary(
+            user_id=int(user_id),
+            persona_id=persona_id,
+            session_id=session_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Live session summary not found")
+        return PersonaLiveVoiceSessionSummary(
+            session_id=str(row.get("session_id") or ""),
+            started_at=str(row.get("started_at") or "").strip() or None,
+            ended_at=str(row.get("ended_at") or "").strip() or None,
+            auto_commit_enabled=(
+                None
+                if row.get("auto_commit_enabled") is None
+                else bool(row.get("auto_commit_enabled"))
+            ),
+            vad_threshold=(
+                float(row.get("vad_threshold"))
+                if row.get("vad_threshold") is not None
+                else None
+            ),
+            min_silence_ms=(
+                int(row.get("min_silence_ms"))
+                if row.get("min_silence_ms") is not None
+                else None
+            ),
+            turn_stop_secs=(
+                float(row.get("turn_stop_secs"))
+                if row.get("turn_stop_secs") is not None
+                else None
+            ),
+            min_utterance_secs=(
+                float(row.get("min_utterance_secs"))
+                if row.get("min_utterance_secs") is not None
+                else None
+            ),
+            turn_detection_changed_during_session=bool(
+                row.get("turn_detection_changed_during_session")
+            ),
+            total_committed_turns=int(row.get("total_committed_turns") or 0),
+            vad_auto_commit_count=int(row.get("vad_auto_commit_count") or 0),
+            manual_commit_count=int(row.get("manual_commit_count") or 0),
+            manual_mode_required_count=int(row.get("manual_mode_required_count") or 0),
+            text_only_tts_count=int(row.get("text_only_tts_count") or 0),
+            listening_recovery_count=int(row.get("listening_recovery_count") or 0),
+            thinking_recovery_count=int(row.get("thinking_recovery_count") or 0),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="update persona live voice session analytics") from exc
 
 
 @router.get(
@@ -4374,6 +4514,7 @@ async def persona_stream(
     auth_watchdog_stop: asyncio.Event | None = None
     auth_revoked_event: asyncio.Event | None = None
     persona_live_stt_state_by_session: dict[str, dict[str, Any]] = {}
+    persona_live_summary_sessions_seen: set[str] = set()
     try:
         user_id, credentials_supplied, auth_ok = await _resolve_authenticated_user_id(ws, token=token, api_key=api_key)
         if not auth_ok:
@@ -4768,6 +4909,11 @@ async def persona_stream(
                     )
                 logger.debug(f"persona live TTS unavailable for session {session_id}: {exc}")
                 _mark_persona_live_processing_progress(session_id)
+                _upsert_persona_live_session_summary_safe(
+                    session_id=session_id,
+                    voice_runtime=updated_voice_runtime,
+                    text_only_tts_increment=1,
+                )
                 await _emit_notice(
                     session_id=session_id,
                     level="warning",
@@ -4948,6 +5094,84 @@ async def persona_stream(
             normalized_persona_id = str(runtime_context.get("persona_id") or "").strip()
             return normalized_persona_id or None
 
+        def _persona_live_session_summary_snapshot(
+            voice_runtime: dict[str, Any] | None,
+        ) -> dict[str, Any]:
+            runtime = dict(voice_runtime or {})
+            return {
+                "auto_commit_enabled": _coerce_bool(runtime.get("enable_vad"), default=True),
+                "vad_threshold": _clamp_persona_live_float(
+                    runtime.get("vad_threshold"),
+                    default=0.5,
+                    min_value=0.0,
+                    max_value=1.0,
+                ),
+                "min_silence_ms": _clamp_persona_live_int(
+                    runtime.get("vad_min_silence_ms"),
+                    default=250,
+                    min_value=50,
+                    max_value=10_000,
+                ),
+                "turn_stop_secs": _clamp_persona_live_float(
+                    runtime.get("vad_turn_stop_secs"),
+                    default=0.2,
+                    min_value=0.05,
+                    max_value=10.0,
+                ),
+                "min_utterance_secs": _clamp_persona_live_float(
+                    runtime.get("vad_min_utterance_secs"),
+                    default=0.4,
+                    min_value=0.0,
+                    max_value=10.0,
+                ),
+            }
+
+        def _upsert_persona_live_session_summary_safe(
+            *,
+            session_id: str,
+            voice_runtime: dict[str, Any] | None = None,
+            commit_source: str | None = None,
+            manual_mode_required_increment: int = 0,
+            text_only_tts_increment: int = 0,
+            finalize: bool = False,
+        ) -> None:
+            if persona_scope_db is None or not authenticated_user_id:
+                return
+            try:
+                user_id_int = int(str(authenticated_user_id))
+            except (TypeError, ValueError):
+                return
+            persona_id_value = _resolve_persona_live_event_persona_id(session_id)
+            if not persona_id_value:
+                return
+            snapshot = (
+                _persona_live_session_summary_snapshot(voice_runtime)
+                if isinstance(voice_runtime, dict)
+                else {}
+            )
+            persona_live_summary_sessions_seen.add(session_id)
+            try:
+                persona_scope_db.upsert_persona_live_voice_session_summary(
+                    user_id=user_id_int,
+                    persona_id=persona_id_value,
+                    session_id=session_id,
+                    auto_commit_enabled=snapshot.get("auto_commit_enabled"),
+                    vad_threshold=snapshot.get("vad_threshold"),
+                    min_silence_ms=snapshot.get("min_silence_ms"),
+                    turn_stop_secs=snapshot.get("turn_stop_secs"),
+                    min_utterance_secs=snapshot.get("min_utterance_secs"),
+                    commit_source=commit_source,
+                    manual_mode_required_increment=manual_mode_required_increment,
+                    text_only_tts_increment=text_only_tts_increment,
+                    finalize=finalize,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "persona live session summary update skipped for session {}: {}",
+                    session_id,
+                    exc,
+                )
+
         def _record_persona_live_voice_event_safe(
             *,
             session_id: str,
@@ -4996,6 +5220,11 @@ async def persona_stream(
             _record_persona_live_voice_event_safe(
                 session_id=session_id,
                 event_type="manual_mode_required",
+            )
+            _upsert_persona_live_session_summary_safe(
+                session_id=session_id,
+                voice_runtime=state.get("voice_runtime") if isinstance(state, dict) else None,
+                manual_mode_required_increment=1,
             )
 
         async def _commit_persona_live_turn(
@@ -5060,6 +5289,11 @@ async def persona_stream(
             _record_persona_live_voice_event_safe(
                 session_id=session_id,
                 event_type="commit",
+                commit_source=commit_source,
+            )
+            _upsert_persona_live_session_summary_safe(
+                session_id=session_id,
+                voice_runtime=voice_runtime if isinstance(voice_runtime, dict) else None,
                 commit_source=commit_source,
             )
             _reset_persona_live_active_turn(session_id)
@@ -6140,6 +6374,10 @@ async def persona_stream(
                     user_id=connection_user_id,
                     preferences={"voice_runtime": voice_runtime},
                 )
+                _upsert_persona_live_session_summary_safe(
+                    session_id=session_id,
+                    voice_runtime=voice_runtime,
+                )
                 _cleanup_persona_live_stt_state(session_id)
                 await _emit_notice(
                     session_id=session_id,
@@ -6808,6 +7046,12 @@ async def persona_stream(
             auth_watchdog_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await auth_watchdog_task
+        for session_id in list(persona_live_summary_sessions_seen):
+            _upsert_persona_live_session_summary_safe(
+                session_id=session_id,
+                voice_runtime=None,
+                finalize=True,
+            )
         for session_id in list(persona_live_stt_state_by_session.keys()):
             _cleanup_persona_live_stt_state(session_id)
         if stream is not None:

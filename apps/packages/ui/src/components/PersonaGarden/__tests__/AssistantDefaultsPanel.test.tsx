@@ -58,6 +58,87 @@ vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
 
 import { AssistantDefaultsPanel } from "../AssistantDefaultsPanel"
 
+type MockRecentLiveSession = {
+  session_id: string
+  started_at: string
+  ended_at: string
+  auto_commit_enabled: boolean
+  vad_threshold: number
+  min_silence_ms: number
+  turn_stop_secs: number
+  min_utterance_secs: number
+  turn_detection_changed_during_session: boolean
+  committed_turn_count: number
+  vad_auto_commit_count: number
+  manual_commit_count: number
+  manual_mode_required_count: number
+  text_only_tts_count: number
+  listening_recovery_count: number
+  thinking_recovery_count: number
+}
+
+const buildRecentLiveSession = (
+  overrides: Partial<MockRecentLiveSession> = {}
+): MockRecentLiveSession => ({
+  session_id: "sess-1",
+  started_at: "2026-03-13T17:00:00Z",
+  ended_at: "2026-03-13T17:05:00Z",
+  auto_commit_enabled: true,
+  vad_threshold: 0.5,
+  min_silence_ms: 250,
+  turn_stop_secs: 0.2,
+  min_utterance_secs: 0.4,
+  turn_detection_changed_during_session: false,
+  committed_turn_count: 4,
+  vad_auto_commit_count: 4,
+  manual_commit_count: 0,
+  manual_mode_required_count: 0,
+  text_only_tts_count: 0,
+  listening_recovery_count: 0,
+  thinking_recovery_count: 0,
+  ...overrides
+})
+
+const buildVoiceAnalytics = (recentSessions: MockRecentLiveSession[]) => ({
+  persona_id: "persona-1",
+  summary: {
+    total_events: 0,
+    direct_command_count: 0,
+    planner_fallback_count: 0,
+    success_rate: 0,
+    fallback_rate: 0,
+    avg_response_time_ms: 0
+  },
+  live_voice: {
+    total_committed_turns: recentSessions.reduce(
+      (total, session) => total + session.committed_turn_count,
+      0
+    ),
+    vad_auto_commit_count: recentSessions.reduce(
+      (total, session) => total + session.vad_auto_commit_count,
+      0
+    ),
+    manual_commit_count: recentSessions.reduce(
+      (total, session) => total + session.manual_commit_count,
+      0
+    ),
+    vad_auto_rate: 0,
+    manual_commit_rate: 0,
+    degraded_session_count: recentSessions.filter(
+      (session) => session.manual_mode_required_count > 0
+    ).length
+  },
+  commands: [],
+  fallbacks: {
+    total_invocations: 0,
+    success_count: 0,
+    error_count: 0,
+    avg_response_time_ms: 0,
+    last_used: null
+  },
+  recent_live_sessions: recentSessions
+})
+
 describe("AssistantDefaultsPanel", () => {
   beforeEach(() => {
     mocks.fetchWithAuth.mockReset()
@@ -265,5 +346,158 @@ describe("AssistantDefaultsPanel", () => {
         screen.getByTestId("assistant-defaults-vad-preset-custom")
       ).toHaveAttribute("data-active", "true")
     })
+  })
+
+  it("shows no tuning suggestion yet when recent eligible data is sparse", async () => {
+    render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+        analytics={buildVoiceAnalytics([
+          buildRecentLiveSession({ session_id: "sess-sparse-1" }),
+          buildRecentLiveSession({ session_id: "sess-sparse-2" })
+        ])}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText("Recent live tuning feedback")).toBeInTheDocument()
+    })
+
+    expect(screen.getByText("Current signal")).toBeInTheDocument()
+    expect(screen.getByText("No tuning suggestion yet")).toBeInTheDocument()
+    expect(
+      screen.getByText("Run a few live sessions to unlock guidance.")
+    ).toBeInTheDocument()
+  })
+
+  it("shows a healthy-state suggestion when recent sessions look stable", async () => {
+    render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+        analytics={buildVoiceAnalytics([
+          buildRecentLiveSession({ session_id: "sess-healthy-1" }),
+          buildRecentLiveSession({ session_id: "sess-healthy-2" }),
+          buildRecentLiveSession({ session_id: "sess-healthy-3" })
+        ])}
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Suggestion: current settings look healthy")
+      ).toBeInTheDocument()
+    })
+  })
+
+  it("suggests trying Fast when manual sends stay high across eligible sessions", async () => {
+    render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+        analytics={buildVoiceAnalytics([
+          buildRecentLiveSession({
+            session_id: "sess-fast-1",
+            committed_turn_count: 4,
+            vad_auto_commit_count: 2,
+            manual_commit_count: 2
+          }),
+          buildRecentLiveSession({
+            session_id: "sess-fast-2",
+            committed_turn_count: 4,
+            vad_auto_commit_count: 2,
+            manual_commit_count: 2
+          }),
+          buildRecentLiveSession({
+            session_id: "sess-fast-3",
+            committed_turn_count: 4,
+            vad_auto_commit_count: 2,
+            manual_commit_count: 2
+          })
+        ])}
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Suggestion: try Fast for quicker commits")
+      ).toBeInTheDocument()
+    })
+  })
+
+  it("suggests checking auto-commit availability before changing thresholds", async () => {
+    render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+        analytics={buildVoiceAnalytics([
+          buildRecentLiveSession({
+            session_id: "sess-manual-mode-1",
+            committed_turn_count: 4,
+            vad_auto_commit_count: 1,
+            manual_commit_count: 3,
+            manual_mode_required_count: 1
+          }),
+          buildRecentLiveSession({
+            session_id: "sess-manual-mode-2",
+            committed_turn_count: 4,
+            vad_auto_commit_count: 2,
+            manual_commit_count: 2,
+            manual_mode_required_count: 1
+          }),
+          buildRecentLiveSession({
+            session_id: "sess-manual-mode-3",
+            committed_turn_count: 4,
+            vad_auto_commit_count: 2,
+            manual_commit_count: 2,
+            manual_mode_required_count: 1
+          })
+        ])}
+      />
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Suggestion: check auto-commit availability first")
+      ).toBeInTheDocument()
+    })
+  })
+
+  it("marks mixed sessions and excludes them from recommendation heuristics", async () => {
+    render(
+      <AssistantDefaultsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Helper"
+        isActive
+        analytics={buildVoiceAnalytics([
+          buildRecentLiveSession({ session_id: "sess-mixed-1" }),
+          buildRecentLiveSession({ session_id: "sess-mixed-2" }),
+          buildRecentLiveSession({
+            session_id: "sess-mixed-3",
+            turn_detection_changed_during_session: true,
+            committed_turn_count: 4,
+            vad_auto_commit_count: 1,
+            manual_commit_count: 3,
+            manual_mode_required_count: 2
+          })
+        ])}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText("Mixed session")).toBeInTheDocument()
+    })
+
+    expect(
+      screen.getByTestId("persona-turn-detection-feedback-mixed-note")
+    ).toHaveTextContent("1 mixed recent session excluded from suggestions")
+    expect(
+      screen.getByText("Suggestion: current settings look healthy")
+    ).toBeInTheDocument()
   })
 })

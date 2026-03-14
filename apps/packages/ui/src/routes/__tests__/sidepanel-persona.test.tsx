@@ -295,6 +295,54 @@ const buildMockPersonaVoiceDefaults = (
   ...overrides
 })
 
+const buildMockPersonaVoiceAnalytics = (personaId = "research_assistant") => ({
+  persona_id: personaId,
+  summary: {
+    total_events: 4,
+    direct_command_count: 3,
+    planner_fallback_count: 1,
+    success_rate: 75,
+    fallback_rate: 25,
+    avg_response_time_ms: 420
+  },
+  live_voice: {
+    total_committed_turns: 3,
+    vad_auto_commit_count: 2,
+    manual_commit_count: 1,
+    vad_auto_rate: 67,
+    manual_commit_rate: 33,
+    degraded_session_count: 0
+  },
+  commands: [],
+  fallbacks: {
+    total_invocations: 1,
+    success_count: 1,
+    error_count: 0,
+    avg_response_time_ms: 350,
+    last_used: "2026-03-13T18:00:00Z"
+  },
+  recent_live_sessions: [
+    {
+      session_id: "sess-analytics-1",
+      started_at: "2026-03-13T17:55:00Z",
+      ended_at: "2026-03-13T18:00:00Z",
+      auto_commit_enabled: true,
+      vad_threshold: 0.5,
+      min_silence_ms: 250,
+      turn_stop_secs: 0.2,
+      min_utterance_secs: 0.4,
+      turn_detection_changed_during_session: false,
+      committed_turn_count: 3,
+      vad_auto_commit_count: 2,
+      manual_commit_count: 1,
+      manual_mode_required_count: 0,
+      text_only_tts_count: 0,
+      listening_recovery_count: 0,
+      thinking_recovery_count: 0
+    }
+  ]
+})
+
 const mockPersonaLiveVoiceFetches = ({
   sessionId,
   voiceDefaults,
@@ -3324,6 +3372,88 @@ describe("SidepanelPersona", () => {
     expect(within(profileTabPanel).getByText("Assistant defaults saved.")).toBeInTheDocument()
   })
 
+  it("loads persona voice analytics from the Profiles tab", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/voice-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => buildMockPersonaVoiceAnalytics()
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: buildMockPersonaVoiceDefaults()
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-profiles-analytics",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path} (${method})`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByRole("tab", { name: "Profiles" }))
+
+    await waitFor(() => {
+      expect(mocks.fetchWithAuth).toHaveBeenCalledWith(
+        "/api/v1/persona/profiles/research_assistant/voice-analytics?days=7",
+        { method: "GET" }
+      )
+    })
+  })
+
   it("sends persona voice_config on connect and when live session overrides change", async () => {
     mocks.capabilitiesState.capabilities = {
       hasPersona: true,
@@ -3782,6 +3912,216 @@ describe("SidepanelPersona", () => {
       "data-active",
       "true"
     )
+  })
+
+  it("flushes live voice recovery counts when disconnecting a connected persona session", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/voice-analytics/live-sessions/")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-live-recovery-flush",
+            listening_recovery_count: init?.body?.listening_recovery_count ?? 0,
+            thinking_recovery_count: init?.body?.thinking_recovery_count ?? 0
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: buildMockPersonaVoiceDefaults()
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-live-recovery-flush",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path} (${method})`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
+
+    await waitFor(() => {
+      const flushCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes(
+            "/persona/profiles/research_assistant/voice-analytics/live-sessions/sess-live-recovery-flush"
+          ) &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PUT"
+      )
+      expect(flushCall).toBeTruthy()
+      expect(
+        (flushCall?.[1] as { body?: Record<string, unknown> } | undefined)?.body
+      ).toEqual(
+        expect.objectContaining({
+          listening_recovery_count: 0,
+          thinking_recovery_count: 0,
+          finalize: true
+        })
+      )
+    })
+  })
+
+  it("flushes live voice recovery counts during unmount cleanup", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      const method = String(init?.method || "GET").toUpperCase()
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/voice-analytics/live-sessions/")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-live-recovery-unmount",
+            listening_recovery_count: init?.body?.listening_recovery_count ?? 0,
+            thinking_recovery_count: init?.body?.thinking_recovery_count ?? 0
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant/state")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "research_assistant",
+            soul_md: "persona soul",
+            identity_md: "persona identity",
+            heartbeat_md: "persona heartbeat"
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/research_assistant")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: buildMockPersonaVoiceDefaults()
+          })
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: "sess-live-recovery-unmount",
+            persona: { id: "research_assistant" }
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path} (${method})`,
+        json: async () => ({})
+      })
+    })
+
+    const view = render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    view.unmount()
+
+    await waitFor(() => {
+      const flushCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes(
+            "/persona/profiles/research_assistant/voice-analytics/live-sessions/sess-live-recovery-unmount"
+          ) &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PUT"
+      )
+      expect(flushCall).toBeTruthy()
+      expect(
+        (flushCall?.[1] as { body?: Record<string, unknown> } | undefined)?.body
+      ).toEqual(
+        expect.objectContaining({
+          listening_recovery_count: 0,
+          thinking_recovery_count: 0,
+          finalize: true
+        })
+      )
+    })
   })
 
   it("initializes live turn detection from saved persona defaults on connect", async () => {

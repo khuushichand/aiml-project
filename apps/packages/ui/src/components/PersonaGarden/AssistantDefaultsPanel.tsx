@@ -1,6 +1,8 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
 
+import type { PersonaVoiceAnalytics } from "@/components/PersonaGarden/CommandAnalyticsSummary"
+import { PersonaTurnDetectionFeedbackCard } from "@/components/PersonaGarden/PersonaTurnDetectionFeedbackCard"
 import {
   PersonaTurnDetectionControls,
   PERSONA_TURN_DETECTION_PRESETS,
@@ -18,6 +20,8 @@ type AssistantDefaultsPanelProps = {
   selectedPersonaId: string
   selectedPersonaName: string
   isActive?: boolean
+  analytics?: PersonaVoiceAnalytics | null
+  analyticsLoading?: boolean
 }
 
 type PersonaProfileResponse = {
@@ -144,7 +148,9 @@ const parseBooleanSelectValue = (value: string): boolean | null => {
 export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
   selectedPersonaId,
   selectedPersonaName,
-  isActive = false
+  isActive = false,
+  analytics = null,
+  analyticsLoading = false
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const [loading, setLoading] = React.useState(false)
@@ -529,6 +535,11 @@ export const AssistantDefaultsPanel: React.FC<AssistantDefaultsPanelProps> = ({
         onMinSilenceMsChange={(next) => updateField("minSilenceMs", next)}
         onTurnStopSecsChange={(next) => updateField("turnStopSecs", next)}
         onMinUtteranceSecsChange={(next) => updateField("minUtteranceSecs", next)}
+      />
+
+      <PersonaTurnDetectionFeedbackCard
+        analytics={analytics}
+        loading={analyticsLoading}
       />
 
       <div className="mt-3 rounded-md border border-border/80 bg-surface2 p-3">

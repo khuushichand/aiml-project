@@ -450,12 +450,39 @@ class PersonaLiveVoiceAnalyticsSummary(BaseModel):
     degraded_session_count: int = 0
 
 
+class PersonaLiveVoiceSessionSummary(BaseModel):
+    session_id: str
+    started_at: str | None = None
+    ended_at: str | None = None
+    auto_commit_enabled: bool | None = None
+    vad_threshold: float | None = None
+    min_silence_ms: int | None = None
+    turn_stop_secs: float | None = None
+    min_utterance_secs: float | None = None
+    turn_detection_changed_during_session: bool = False
+    total_committed_turns: int = 0
+    vad_auto_commit_count: int = 0
+    manual_commit_count: int = 0
+    manual_mode_required_count: int = 0
+    text_only_tts_count: int = 0
+    listening_recovery_count: int = 0
+    thinking_recovery_count: int = 0
+
+
+class PersonaLiveVoiceSessionUpdateRequest(BaseModel):
+    listening_recovery_count: int = Field(default=0, ge=0)
+    thinking_recovery_count: int = Field(default=0, ge=0)
+    finalize: bool = False
+    ended_at: str | None = None
+
+
 class PersonaVoiceAnalyticsResponse(BaseModel):
     persona_id: str
     summary: PersonaVoiceAnalyticsSummary
     live_voice: PersonaLiveVoiceAnalyticsSummary = Field(
         default_factory=PersonaLiveVoiceAnalyticsSummary
     )
+    recent_live_sessions: list[PersonaLiveVoiceSessionSummary] = Field(default_factory=list)
     commands: list[PersonaVoiceCommandAnalyticsItem] = Field(default_factory=list)
     fallbacks: PersonaVoiceFallbackAnalytics = Field(
         default_factory=PersonaVoiceFallbackAnalytics

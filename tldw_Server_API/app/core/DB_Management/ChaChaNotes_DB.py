@@ -5248,6 +5248,7 @@ UPDATE db_schema_version
             )
         self._ensure_message_metadata_table()
         self._ensure_conversation_settings_table()
+        self._ensure_persona_live_voice_session_summaries_table()
 
     def ensure_character_tables_ready(self) -> None:
         """
@@ -6652,6 +6653,317 @@ UPDATE db_schema_version
         raise NotImplementedError(
             f"conversation_settings table creation not supported for backend {self.backend_type.value}"
         )
+
+    def _ensure_persona_live_voice_session_summaries_table(self) -> None:
+        """Ensure persona live-voice session summaries exist for analytics feedback."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS persona_live_voice_session_summaries(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  session_id TEXT NOT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  started_at TEXT,
+                  ended_at TEXT,
+                  auto_commit_enabled INTEGER,
+                  vad_threshold REAL,
+                  min_silence_ms INTEGER,
+                  turn_stop_secs REAL,
+                  min_utterance_secs REAL,
+                  turn_detection_changed_during_session INTEGER NOT NULL DEFAULT 0,
+                  total_committed_turns INTEGER NOT NULL DEFAULT 0,
+                  vad_auto_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_mode_required_count INTEGER NOT NULL DEFAULT 0,
+                  text_only_tts_count INTEGER NOT NULL DEFAULT 0,
+                  listening_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  thinking_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  UNIQUE(user_id, persona_id, session_id)
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            self.execute_query(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_live_voice_session_summaries_persona_time
+                ON persona_live_voice_session_summaries(persona_id, started_at, updated_at)
+                """,
+                script=False,
+                commit=True,
+            )
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS persona_live_voice_session_summaries(
+                  id BIGSERIAL PRIMARY KEY,
+                  user_id BIGINT NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  session_id TEXT NOT NULL,
+                  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                  started_at TEXT,
+                  ended_at TEXT,
+                  auto_commit_enabled BOOLEAN,
+                  vad_threshold DOUBLE PRECISION,
+                  min_silence_ms INTEGER,
+                  turn_stop_secs DOUBLE PRECISION,
+                  min_utterance_secs DOUBLE PRECISION,
+                  turn_detection_changed_during_session BOOLEAN NOT NULL DEFAULT FALSE,
+                  total_committed_turns INTEGER NOT NULL DEFAULT 0,
+                  vad_auto_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_mode_required_count INTEGER NOT NULL DEFAULT 0,
+                  text_only_tts_count INTEGER NOT NULL DEFAULT 0,
+                  listening_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  thinking_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  UNIQUE(user_id, persona_id, session_id)
+                )
+                """
+            )
+            self.backend.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_live_voice_session_summaries_persona_time
+                ON persona_live_voice_session_summaries(persona_id, started_at, updated_at)
+                """
+            )
+            return
+
+        raise NotImplementedError(
+            "persona_live_voice_session_summaries table creation not supported "
+            f"for backend {self.backend_type.value}"
+        )
+
+    def upsert_persona_live_voice_session_summary(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        session_id: str,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        auto_commit_enabled: bool | None = None,
+        vad_threshold: float | None = None,
+        min_silence_ms: int | None = None,
+        turn_stop_secs: float | None = None,
+        min_utterance_secs: float | None = None,
+        commit_source: str | None = None,
+        manual_mode_required_increment: int = 0,
+        text_only_tts_increment: int = 0,
+        listening_recovery_count: int | None = None,
+        thinking_recovery_count: int | None = None,
+        finalize: bool = False,
+    ) -> bool:
+        """Create or update one persona live-voice session summary row."""
+        self._ensure_persona_live_voice_session_summaries_table()
+
+        now = self._get_current_utc_timestamp_iso()
+
+        def _bool_for_db(value: bool | None) -> bool | int | None:
+            if value is None:
+                return None
+            if self.backend_type == BackendType.POSTGRESQL:
+                return bool(value)
+            return int(bool(value))
+
+        snapshot_values = {
+            "auto_commit_enabled": _bool_for_db(auto_commit_enabled),
+            "vad_threshold": float(vad_threshold) if vad_threshold is not None else None,
+            "min_silence_ms": int(min_silence_ms) if min_silence_ms is not None else None,
+            "turn_stop_secs": float(turn_stop_secs) if turn_stop_secs is not None else None,
+            "min_utterance_secs": (
+                float(min_utterance_secs) if min_utterance_secs is not None else None
+            ),
+        }
+        snapshot_provided = any(value is not None for value in snapshot_values.values())
+
+        with self.transaction():
+            row = self.execute_query(
+                """
+                SELECT *
+                FROM persona_live_voice_session_summaries
+                WHERE user_id = ? AND persona_id = ? AND session_id = ?
+                """,
+                (user_id, persona_id, session_id),
+            ).fetchone()
+
+            if row is None:
+                total_committed_turns = 1 if commit_source in {"vad_auto", "manual"} else 0
+                vad_auto_commit_count = 1 if commit_source == "vad_auto" else 0
+                manual_commit_count = 1 if commit_source == "manual" else 0
+                normalized_started_at = started_at or now
+                normalized_ended_at = ended_at or (now if finalize else None)
+                self.execute_query(
+                    """
+                    INSERT INTO persona_live_voice_session_summaries(
+                        user_id, persona_id, session_id, created_at, updated_at,
+                        started_at, ended_at, auto_commit_enabled, vad_threshold,
+                        min_silence_ms, turn_stop_secs, min_utterance_secs,
+                        turn_detection_changed_during_session, total_committed_turns,
+                        vad_auto_commit_count, manual_commit_count,
+                        manual_mode_required_count, text_only_tts_count,
+                        listening_recovery_count, thinking_recovery_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        persona_id,
+                        session_id,
+                        now,
+                        now,
+                        normalized_started_at,
+                        normalized_ended_at,
+                        snapshot_values["auto_commit_enabled"],
+                        snapshot_values["vad_threshold"],
+                        snapshot_values["min_silence_ms"],
+                        snapshot_values["turn_stop_secs"],
+                        snapshot_values["min_utterance_secs"],
+                        _bool_for_db(False),
+                        total_committed_turns,
+                        vad_auto_commit_count,
+                        manual_commit_count,
+                        max(0, int(manual_mode_required_increment or 0)),
+                        max(0, int(text_only_tts_increment or 0)),
+                        max(0, int(listening_recovery_count or 0)),
+                        max(0, int(thinking_recovery_count or 0)),
+                    ),
+                )
+                return True
+
+            existing = dict(row)
+            updates: list[str] = ["updated_at = ?"]
+            params: list[Any] = [now]
+
+            existing_snapshot_values = {
+                "auto_commit_enabled": existing.get("auto_commit_enabled"),
+                "vad_threshold": existing.get("vad_threshold"),
+                "min_silence_ms": existing.get("min_silence_ms"),
+                "turn_stop_secs": existing.get("turn_stop_secs"),
+                "min_utterance_secs": existing.get("min_utterance_secs"),
+            }
+            existing_snapshot_missing = all(
+                value is None for value in existing_snapshot_values.values()
+            )
+            if snapshot_provided and existing_snapshot_missing:
+                for field_name, value in snapshot_values.items():
+                    updates.append(f"{field_name} = ?")
+                    params.append(value)
+            elif snapshot_provided:
+                snapshot_changed = any(
+                    snapshot_values[field_name] is not None
+                    and snapshot_values[field_name] != existing_snapshot_values[field_name]
+                    for field_name in snapshot_values
+                )
+                if snapshot_changed and not bool(
+                    existing.get("turn_detection_changed_during_session")
+                ):
+                    updates.append("turn_detection_changed_during_session = ?")
+                    params.append(_bool_for_db(True))
+
+            if started_at and not existing.get("started_at"):
+                updates.append("started_at = ?")
+                params.append(started_at)
+
+            if commit_source == "vad_auto":
+                updates.extend(
+                    [
+                        "total_committed_turns = total_committed_turns + 1",
+                        "vad_auto_commit_count = vad_auto_commit_count + 1",
+                    ]
+                )
+            elif commit_source == "manual":
+                updates.extend(
+                    [
+                        "total_committed_turns = total_committed_turns + 1",
+                        "manual_commit_count = manual_commit_count + 1",
+                    ]
+                )
+
+            if manual_mode_required_increment:
+                updates.append(
+                    "manual_mode_required_count = manual_mode_required_count + ?"
+                )
+                params.append(max(0, int(manual_mode_required_increment)))
+
+            if text_only_tts_increment:
+                updates.append("text_only_tts_count = text_only_tts_count + ?")
+                params.append(max(0, int(text_only_tts_increment)))
+
+            if listening_recovery_count is not None:
+                updates.append("listening_recovery_count = ?")
+                params.append(max(0, int(listening_recovery_count)))
+
+            if thinking_recovery_count is not None:
+                updates.append("thinking_recovery_count = ?")
+                params.append(max(0, int(thinking_recovery_count)))
+
+            if ended_at:
+                updates.append("ended_at = ?")
+                params.append(ended_at)
+            elif finalize:
+                updates.append("ended_at = ?")
+                params.append(now)
+
+            params.extend([user_id, persona_id, session_id])
+            self.execute_query(
+                f"""
+                UPDATE persona_live_voice_session_summaries
+                SET {", ".join(updates)}
+                WHERE user_id = ? AND persona_id = ? AND session_id = ?
+                """,  # nosec B608
+                tuple(params),
+            )
+            return True
+
+    def list_persona_live_voice_session_summaries(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        days: int = 7,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """List recent persona live-voice session summaries for analytics feedback."""
+        self._ensure_persona_live_voice_session_summaries_table()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
+        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        cursor = self.execute_query(
+            """
+            SELECT *
+            FROM persona_live_voice_session_summaries
+            WHERE user_id = ? AND persona_id = ?
+              AND COALESCE(started_at, created_at) >= ?
+            ORDER BY COALESCE(started_at, created_at) DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (user_id, persona_id, cutoff, max(1, int(limit))),
+        )
+        return [dict(row) for row in cursor.fetchall() if row]
+
+    def get_persona_live_voice_session_summary(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        """Fetch one persona live-voice session summary by session id."""
+        self._ensure_persona_live_voice_session_summaries_table()
+        row = self.execute_query(
+            """
+            SELECT *
+            FROM persona_live_voice_session_summaries
+            WHERE user_id = ? AND persona_id = ? AND session_id = ?
+            """,
+            (user_id, persona_id, session_id),
+        ).fetchone()
+        return dict(row) if row else None
 
     def upsert_conversation_settings(self, conversation_id: str, settings: dict[str, Any]) -> bool:
         """Upsert per-conversation settings JSON.
