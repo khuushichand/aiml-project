@@ -28,6 +28,7 @@ export async function seedAuth(
         JSON.stringify({
           serverUrl: cfg.serverUrl,
           authMode: 'single-user',
+          apiKey: cfg.apiKey,
         })
       );
     } catch {}

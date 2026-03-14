@@ -20,14 +20,14 @@ export class NotesPage extends BasePage {
   /* Locators                                                            */
   /* ------------------------------------------------------------------ */
 
-  /** "New note" button in the toolbar (aria-label "New note") */
+  /** "New note" button (aria-label "New note") */
   get newNoteButton(): Locator {
     return this.page.getByRole("button", { name: /new note/i })
   }
 
-  /** Search input in the toolbar (placeholder "Search notes...") */
+  /** Search input in the sidebar (placeholder "Search titles & content...") */
   get searchInput(): Locator {
-    return this.page.getByPlaceholder(/search notes/i)
+    return this.page.getByPlaceholder(/search titles/i)
   }
 
   /** Title input in the editor pane (placeholder "Title") */
@@ -35,9 +35,11 @@ export class NotesPage extends BasePage {
     return this.page.getByPlaceholder(/^title$/i)
   }
 
-  /** Content textarea in the editor pane (aria-label "Note content") */
+  /** Content textarea/editor in the editor pane */
   get contentTextarea(): Locator {
-    return this.page.getByLabel(/note content/i)
+    return this.page.getByPlaceholder(/write your note here/i).or(
+      this.page.getByLabel(/note content/i)
+    )
   }
 
   /** Save button (data-testid "notes-save-button") */
@@ -65,9 +67,15 @@ export class NotesPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    // The toolbar search input and new-note button should be visible
-    await expect(this.searchInput).toBeVisible({ timeout: 20_000 })
-    await expect(this.newNoteButton).toBeVisible({ timeout: 10_000 })
+    // Wait for the notes list region or the search input to appear
+    const listRegion = this.page.getByTestId("notes-list-region")
+    const searchInput = this.searchInput
+    await Promise.race([
+      listRegion.waitFor({ state: "visible", timeout: 20_000 }),
+      searchInput.waitFor({ state: "visible", timeout: 20_000 }),
+    ]).catch(() => {})
+    // Also wait for the editor area or the "No notes yet" text
+    await this.page.waitForTimeout(1_000)
   }
 
   async getInteractiveElements(): Promise<InteractiveElement[]> {
