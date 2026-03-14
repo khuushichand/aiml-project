@@ -6,7 +6,11 @@ from PIL import Image, ImageChops
 
 from tldw_Server_API.app.core.Slides.presentation_rendering import (
     PresentationRenderError,
+    _TRANSITION_DURATION_SECONDS,
+    _resolve_effective_slide_duration_seconds,
     _resolve_ffmpeg_timeout_seconds,
+    _resolve_slide_audio_duration_seconds,
+    _resolve_slide_transition_filter,
     _render_slide_frame,
     _run_ffmpeg_command,
     render_presentation_video,
@@ -34,6 +38,65 @@ def test_render_slide_frame_draws_slide_text_content(tmp_path):
     background = Image.new("RGB", rendered.size, "#0f172a")
 
     assert ImageChops.difference(rendered, background).getbbox() is not None
+
+
+def test_resolve_slide_audio_duration_prefers_metadata_and_probes_asset_when_needed(monkeypatch, tmp_path):
+    audio_path = tmp_path / "slide.wav"
+    audio_path.write_bytes(b"audio")
+
+    assert (
+        _resolve_slide_audio_duration_seconds(
+            {
+                "metadata": {
+                    "studio": {
+                        "audio": {
+                            "duration_ms": 18_000
+                        }
+                    }
+                }
+            },
+            audio_path=None,
+        )
+        == 18.0
+    )
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._probe_media_duration_seconds",
+        lambda path: 12.5 if path == audio_path else None,
+    )
+
+    assert (
+        _resolve_slide_audio_duration_seconds(
+            {
+                "metadata": {
+                    "studio": {
+                        "audio": {
+                            "asset_ref": "output:1"
+                        }
+                    }
+                }
+            },
+            audio_path=audio_path,
+        )
+        == 12.5
+    )
+
+
+def test_resolve_effective_slide_duration_and_transition_filter():
+    slide = {
+        "speaker_notes": "Short narration",
+        "metadata": {
+            "studio": {
+                "transition": "wipe",
+                "timing_mode": "manual",
+                "manual_duration_ms": 45_000,
+            }
+        },
+    }
+
+    assert _resolve_effective_slide_duration_seconds(slide, audio_duration_seconds=18.0) == 45.0
+    assert _resolve_slide_transition_filter(slide) == "wipeleft"
+    assert _resolve_slide_transition_filter({"metadata": {"studio": {"transition": "unknown"}}}) == "fade"
 
 
 def test_render_presentation_video_builds_slide_segments_from_visuals_and_audio(tmp_path, monkeypatch):
@@ -124,6 +187,157 @@ def test_render_presentation_video_builds_slide_segments_from_visuals_and_audio(
     assert result.storage_path.endswith(".mp4")
     assert result.output_path.exists()
     assert result.byte_size == len(b"video-bytes")
+
+
+def test_render_presentation_video_pads_narrated_cut_only_segments_to_manual_duration(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._resolve_ffmpeg_path",
+        lambda: "/usr/bin/ffmpeg",
+    )
+    captured_commands: list[list[str]] = []
+    audio_path = tmp_path / "slide-0.wav"
+    audio_path.write_bytes(b"audio-bytes")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._render_slide_frame",
+        lambda slide, *, output_path, collections_db, user_id: output_path.write_bytes(b"png"),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._materialize_slide_audio",
+        lambda slide, *, temp_dir, slide_index, collections_db, user_id: audio_path,
+    )
+
+    def _fake_run_ffmpeg(command: list[str], *, output_path: Path, timeout_seconds: int | None = None) -> None:
+        captured_commands.append(command)
+        output_path.write_bytes(b"video-bytes")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._run_ffmpeg_command",
+        _fake_run_ffmpeg,
+    )
+
+    render_presentation_video(
+        presentation_id="pres_cut",
+        presentation_version=1,
+        title="Deck",
+        slides=[
+            {
+                "order": 0,
+                "layout": "content",
+                "title": "Manual timing",
+                "content": "Opening",
+                "speaker_notes": "Narration",
+                "metadata": {
+                    "studio": {
+                        "timing_mode": "manual",
+                        "manual_duration_ms": 45_000,
+                        "audio": {
+                            "duration_ms": 18_000,
+                            "asset_ref": "output:1",
+                        },
+                    }
+                },
+            }
+        ],
+        output_format="mp4",
+        output_dir=tmp_path,
+        collections_db=object(),
+        user_id=7,
+    )
+
+    assert len(captured_commands) == 2
+    segment_command = captured_commands[0]
+    assert str(audio_path) in segment_command
+    assert "-af" in segment_command
+    assert "apad" in segment_command
+    assert "-shortest" not in segment_command
+    duration_index = segment_command.index("-t") + 1
+    assert segment_command[duration_index] == "45.00"
+    assert "concat" in captured_commands[1]
+
+
+def test_render_presentation_video_uses_filtered_transition_assembly_for_transitioned_decks(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._resolve_ffmpeg_path",
+        lambda: "/usr/bin/ffmpeg",
+    )
+    captured_commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._render_slide_frame",
+        lambda slide, *, output_path, collections_db, user_id: output_path.write_bytes(b"png"),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._materialize_slide_audio",
+        lambda slide, *, temp_dir, slide_index, collections_db, user_id: None,
+    )
+
+    def _fake_run_ffmpeg(command: list[str], *, output_path: Path, timeout_seconds: int | None = None) -> None:
+        captured_commands.append(command)
+        output_path.write_bytes(b"video-bytes")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.presentation_rendering._run_ffmpeg_command",
+        _fake_run_ffmpeg,
+    )
+
+    render_presentation_video(
+        presentation_id="pres_transition",
+        presentation_version=1,
+        title="Deck",
+        slides=[
+            {
+                "order": 0,
+                "layout": "content",
+                "title": "Intro",
+                "content": "First",
+                "speaker_notes": "",
+                "metadata": {
+                    "studio": {
+                        "timing_mode": "manual",
+                        "manual_duration_ms": 5_000,
+                        "transition": "cut",
+                    }
+                },
+            },
+            {
+                "order": 1,
+                "layout": "content",
+                "title": "Next",
+                "content": "Second",
+                "speaker_notes": "",
+                "metadata": {
+                    "studio": {
+                        "timing_mode": "manual",
+                        "manual_duration_ms": 4_000,
+                        "transition": "wipe",
+                    }
+                },
+            },
+        ],
+        output_format="mp4",
+        output_dir=tmp_path,
+    )
+
+    assert len(captured_commands) > 4
+    assert not any("concat" in command and "copy" in command for command in captured_commands)
+    transition_commands = [
+        command
+        for command in captured_commands
+        if "-filter_complex" in command and any("xfade=transition=wipeleft" in part for part in command)
+    ]
+    assert transition_commands
+    visual_segment_commands = [
+        command for command in captured_commands if "-loop" in command and "-an" in command
+    ]
+    assert visual_segment_commands
+    first_visual = visual_segment_commands[0]
+    duration_index = first_visual.index("-t") + 1
+    assert first_visual[duration_index] == f"{5.0 + _TRANSITION_DURATION_SECONDS:.2f}"
 
 
 def test_render_presentation_video_rejects_unsupported_format(tmp_path):
