@@ -228,6 +228,58 @@ class MockWebSocket {
 const getSentPayloads = (ws: MockWebSocket) =>
   ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)))
 
+type RuntimeApprovalOptions = {
+  sessionId: string
+  planId: string
+  stepIdx: number
+  tool: string
+  toolName?: string
+  args?: Record<string, unknown>
+  why?: string
+  contextKey?: string
+}
+
+const emitRuntimeApprovalRequired = (
+  ws: MockWebSocket,
+  {
+    sessionId,
+    planId,
+    stepIdx,
+    tool,
+    toolName = tool,
+    args = {},
+    why = "Need runtime approval",
+    contextKey
+  }: RuntimeApprovalOptions
+) => {
+  ws.emitMessage(
+    JSON.stringify({
+      event: "tool_result",
+      session_id: sessionId,
+      plan_id: planId,
+      step_idx: stepIdx,
+      step_type: "mcp_tool",
+      tool,
+      args,
+      why,
+      ok: false,
+      error: "Runtime approval required",
+      reason_code: "APPROVAL_REQUIRED",
+      approval: {
+        approval_policy_id: 17 + stepIdx,
+        mode: "ask_outside_profile",
+        tool_name: toolName,
+        context_key: contextKey || `ctx-${stepIdx}`,
+        conversation_id: sessionId,
+        scope_key: `tool:${toolName}`,
+        reason: "outside_profile",
+        duration_options: ["once"],
+        arguments_summary: args
+      }
+    })
+  )
+}
+
 const render = (ui: React.ReactElement) => {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -1390,6 +1442,214 @@ describe("SidepanelPersona", () => {
     expect(scrollIntoViewMock).toHaveBeenCalled()
     expect(screen.getByTestId("persona-runtime-approval-card")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Approve and retry" })).toHaveFocus()
+  })
+
+  it("highlights the first pending approval row after jump to approval", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-highlight" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-highlight",
+      planId: "plan-approval-highlight",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+
+    const knowledgeRow = screen
+      .getByText("knowledge.search")
+      .closest("[data-approval-key]")
+    expect(knowledgeRow).toHaveAttribute("data-highlighted", "true")
+    expect(within(knowledgeRow as HTMLElement).getByText("Needs your approval")).toBeInTheDocument()
+  })
+
+  it("keeps the current highlighted approval when a new approval arrives", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-highlight-queue" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-highlight-queue",
+      planId: "plan-approval-highlight-queue",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-highlight-queue",
+      planId: "plan-approval-highlight-queue",
+      stepIdx: 1,
+      tool: "notes.export",
+      args: { format: "md" },
+      why: "Need to export notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
+
+    const knowledgeRow = screen
+      .getByText("knowledge.search")
+      .closest("[data-approval-key]")
+    const exportRow = screen
+      .getByText("notes.export")
+      .closest("[data-approval-key]")
+    expect(knowledgeRow).toHaveAttribute("data-highlighted", "true")
+    expect(exportRow).toHaveAttribute("data-highlighted", "false")
+  })
+
+  it("derives the live approval summary from the highlighted approval", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-highlight-summary" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-highlight-summary",
+      planId: "plan-approval-highlight-summary",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-highlight-summary",
+      planId: "plan-approval-highlight-summary",
+      stepIdx: 1,
+      tool: "notes.export",
+      args: { format: "md" },
+      why: "Need to export notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+
+    const highlightedRow = screen
+      .getByText("knowledge.search")
+      .closest("[data-approval-key]")
+    expect(highlightedRow).toHaveAttribute("data-highlighted", "true")
+    expect(screen.getByTestId("live-voice-current-action")).toHaveTextContent(
+      "Waiting for approval: knowledge.search (+1 more)"
+    )
   })
 
   it("records deny as current-request-only and does not retry the tool", async () => {

@@ -396,6 +396,7 @@ const SidepanelPersona = ({
   const [pendingApprovals, setPendingApprovals] = React.useState<
     PersonaRuntimeApprovalRequest[]
   >([])
+  const [activeApprovalKey, setActiveApprovalKey] = React.useState<string | null>(null)
   const [approvedStepMap, setApprovedStepMap] = React.useState<
     Record<number, boolean>
   >({})
@@ -417,6 +418,14 @@ const SidepanelPersona = ({
     setPersonaStateContextEnabled(false)
     setPersonaStateContextProfileDefault(false)
   }, [isCompanionMode])
+
+  React.useEffect(() => {
+    if (!activeApprovalKey) return
+    if (pendingApprovals.some((approval) => approval.key === activeApprovalKey)) return
+    setActiveApprovalKey(
+      pendingApprovals.length ? pendingApprovals[0]?.key || null : null
+    )
+  }, [activeApprovalKey, pendingApprovals])
 
   React.useEffect(() => {
     const normalizedPersonaId = String(selectedPersonaId || "").trim()
@@ -1680,18 +1689,28 @@ const SidepanelPersona = ({
     [appendLog, connected, sessionId]
   )
 
+  const activePendingApproval = React.useMemo(() => {
+    if (!activeApprovalKey) return null
+    return pendingApprovals.find((approval) => approval.key === activeApprovalKey) || null
+  }, [activeApprovalKey, pendingApprovals])
+
   const pendingApprovalSummary = React.useMemo(() => {
     if (!pendingApprovals.length) return null
-    const primaryToolName = String(pendingApprovals[0]?.tool_name || "tool").trim() || "tool"
-    const additionalCount = pendingApprovals.length - 1
+    const primaryApproval = activePendingApproval || pendingApprovals[0] || null
+    if (!primaryApproval) return null
+    const primaryToolName = String(primaryApproval.tool_name || "tool").trim() || "tool"
+    const additionalCount = pendingApprovals.filter(
+      (approval) => approval.key !== primaryApproval.key
+    ).length
     if (additionalCount <= 0) {
       return `Waiting for approval: ${primaryToolName}`
     }
     return `Waiting for approval: ${primaryToolName} (+${additionalCount} more)`
-  }, [pendingApprovals])
+  }, [activePendingApproval, pendingApprovals])
 
   const handleJumpToRuntimeApproval = React.useCallback(() => {
     if (!pendingApprovals.length) return
+    setActiveApprovalKey((current) => current || pendingApprovals[0]?.key || null)
     const card = runtimeApprovalCardRef.current
     if (!card) return
     try {
@@ -1888,13 +1907,23 @@ const SidepanelPersona = ({
       <div className="mt-2 space-y-3">
         {pendingApprovals.map((approval) => {
           const isSubmitting = submittingApprovalKey === approval.key
+          const isHighlighted = approval.key === activeApprovalKey
           return (
             <div
               key={approval.key}
-              className="rounded-md border border-warning/30 bg-surface p-3"
+              data-approval-key={approval.key}
+              data-highlighted={isHighlighted ? "true" : "false"}
+              className={`rounded-md border p-3 ${
+                isHighlighted
+                  ? "border-warning/60 bg-warning/10"
+                  : "border-warning/30 bg-surface"
+              }`}
             >
               <div className="flex flex-wrap items-center gap-2">
                 <Tag color="gold">{approval.tool_name}</Tag>
+                {isHighlighted ? (
+                  <Tag color="orange">Needs your approval</Tag>
+                ) : null}
                 {approval.mode ? <Tag color="blue">{approval.mode}</Tag> : null}
                 {approval.reason ? <Tag color="red">{approval.reason}</Tag> : null}
               </div>
