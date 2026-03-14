@@ -6971,6 +6971,81 @@ UPDATE db_schema_version
         ).fetchone()
         return dict(row) if row else None
 
+    def upsert_voice_command(
+        self,
+        *,
+        command_id: str,
+        user_id: int,
+        persona_id: str | None,
+        connection_id: str | None,
+        name: str,
+        phrases: list[str],
+        action_type: str,
+        action_config: dict[str, Any],
+        priority: int,
+        enabled: bool,
+        requires_confirmation: bool,
+        description: str | None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
+    ) -> str:
+        """Insert or update a voice command record in the DB layer."""
+        final_command_id = str(command_id).strip()
+        if not final_command_id:
+            raise InputError("Voice command ID cannot be empty.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        created_timestamp = str(created_at or now)
+        updated_timestamp = str(updated_at or now)
+        phrases_json = self._serialize_json_payload(list(phrases), "Voice command phrases")
+        action_config_json = self._serialize_json_payload(
+            dict(action_config or {}),
+            "Voice command action config",
+        )
+        query = """
+            INSERT INTO voice_commands (
+                id, user_id, persona_id, connection_id, name, phrases, action_type, action_config,
+                priority, enabled, requires_confirmation, description,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                persona_id = excluded.persona_id,
+                connection_id = excluded.connection_id,
+                name = excluded.name,
+                phrases = excluded.phrases,
+                action_type = excluded.action_type,
+                action_config = excluded.action_config,
+                priority = excluded.priority,
+                enabled = excluded.enabled,
+                requires_confirmation = excluded.requires_confirmation,
+                description = excluded.description,
+                updated_at = excluded.updated_at
+        """
+        params = (
+            final_command_id,
+            int(user_id),
+            str(persona_id) if persona_id is not None else None,
+            str(connection_id) if connection_id is not None else None,
+            str(name),
+            phrases_json,
+            str(action_type),
+            action_config_json,
+            int(priority),
+            1 if enabled else 0,
+            1 if requires_confirmation else 0,
+            description,
+            created_timestamp,
+            updated_timestamp,
+        )
+        try:
+            with self.transaction():
+                self.execute_query(query, params)
+            return final_command_id
+        except CharactersRAGDBError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise CharactersRAGDBError(f"Failed to save voice command: {exc}") from exc  # noqa: TRY003
+
     def upsert_conversation_settings(self, conversation_id: str, settings: dict[str, Any]) -> bool:
         """Upsert per-conversation settings JSON.
 

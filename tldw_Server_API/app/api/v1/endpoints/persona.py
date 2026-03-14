@@ -15,7 +15,7 @@ import re
 import time
 import uuid
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
@@ -85,13 +85,6 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTok
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
-    build_secret_payload,
-    decrypt_byok_payload,
-    encrypt_byok_payload,
-    key_hint_for_api_key,
-    loads_envelope,
-)
 from tldw_Server_API.app.core.feature_flags import (
     is_mcp_hub_policy_enforcement_enabled,
     is_persona_enabled,
@@ -107,6 +100,22 @@ from tldw_Server_API.app.core.MCP_unified import MCPRequest, get_mcp_server
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.MCP_unified.persona_scope import normalize_persona_scope_payload
 from tldw_Server_API.app.core.Metrics import increment_counter
+from tldw_Server_API.app.core.Persona.connections import (
+    PERSONA_CONNECTION_STATUS_FIELD,
+    PersonaConnectionConfigError,
+    PersonaConnectionSecretError,
+    PersonaConnectionTargetError,
+    build_connection_headers,
+    build_connection_memory_content,
+    build_updated_connection_memory_content,
+    connection_content_from_row,
+    get_connection_allowed_hosts,
+    redact_connection_headers,
+    render_nested_templates,
+    render_template_value,
+    safe_template_context,
+    validate_connection_request_target,
+)
 from tldw_Server_API.app.core.Persona.memory_integration import (
     persist_persona_turn,
     persist_tool_outcome,
@@ -134,7 +143,6 @@ from tldw_Server_API.app.core.Persona.policy_evaluator import (
     normalize_policy_rules,
 )
 from tldw_Server_API.app.core.Persona.session_manager import get_session_manager
-from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 from tldw_Server_API.app.core.Skills.context_integration import handle_skill_tool_call
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
@@ -178,7 +186,6 @@ _PERSONA_WS_ALLOWED_STEP_TYPES = {"mcp_tool", "skill", "rag_query", "final_answe
 _PERSONA_LIVE_PROCESSING_NOTICE_DELAY_S = 2.0
 _PERSONA_CONNECTION_MEMORY_TYPE = "persona_connection"
 _PERSONA_CONNECTION_ALLOWED_AUTH_TYPES = {"none", "bearer", "api_key", "basic", "custom_header"}
-_PERSONA_CONNECTION_STATUS_FIELD = "secret_configured"
 _PERSONA_CONNECTION_TEST_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
 _PERSONA_STATE_FIELD_TO_MEMORY_TYPE = {
     "soul_md": "persona_state_soul",
@@ -504,243 +511,72 @@ def _normalize_command_path_persona_id(path_persona_id: str, payload_persona_id:
     return normalized_path_persona_id
 
 
-def _normalize_connection_base_url(base_url: str) -> tuple[str, list[str]]:
-    parsed = urlparse(str(base_url or "").strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise HTTPException(status_code=422, detail="base_url must be an absolute http(s) URL")
-    host = str(parsed.hostname or "").strip().lower()
-    if not host:
-        raise HTTPException(status_code=422, detail="base_url must include a hostname")
-    normalized = parsed.geturl().rstrip("/")
-    return normalized, [host]
-
-
 def _connection_memory_content_from_payload(payload: PersonaConnectionCreate) -> dict[str, Any]:
-    normalized_base_url, allowed_hosts = _normalize_connection_base_url(payload.base_url)
     auth_type = str(payload.auth_type or "none").strip().lower()
     if auth_type not in _PERSONA_CONNECTION_ALLOWED_AUTH_TYPES:
         raise HTTPException(status_code=422, detail="Unsupported auth_type")
-
-    content: dict[str, Any] = {
-        "schema_version": 1,
-        "name": str(payload.name).strip(),
-        "base_url": normalized_base_url,
-        "auth_type": auth_type,
-        "headers_template": {str(k): str(v) for k, v in (payload.headers_template or {}).items()},
-        "timeout_ms": int(payload.timeout_ms),
-        "allowed_hosts": allowed_hosts,
-        _PERSONA_CONNECTION_STATUS_FIELD: False,
-        "key_hint": None,
-    }
-
-    raw_secret = str(payload.secret or "").strip()
-    if raw_secret:
-        try:
-            envelope = encrypt_byok_payload(build_secret_payload(raw_secret))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        content["secret_envelope"] = envelope
-        content[_PERSONA_CONNECTION_STATUS_FIELD] = True
-        content["key_hint"] = key_hint_for_api_key(raw_secret)
-    return content
-
-
-def _connection_content_from_row(row: dict[str, Any]) -> dict[str, Any]:
-    raw_content = row.get("content")
-    if isinstance(raw_content, str):
-        try:
-            content = json.loads(raw_content)
-        except (TypeError, ValueError):
-            content = {}
-    elif isinstance(raw_content, dict):
-        content = dict(raw_content)
-    else:
-        content = {}
-    return content if isinstance(content, dict) else {}
+    try:
+        return build_connection_memory_content(
+            name=payload.name,
+            base_url=payload.base_url,
+            auth_type=auth_type,
+            headers_template=payload.headers_template,
+            timeout_ms=int(payload.timeout_ms),
+            secret=payload.secret,
+        )
+    except PersonaConnectionConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _connection_memory_content_from_update(
     existing_content: dict[str, Any],
     payload: PersonaConnectionUpdate,
 ) -> dict[str, Any]:
-    if payload.clear_secret and payload.secret is not None:
-        raise HTTPException(status_code=422, detail="Provide either secret or clear_secret, not both")
+    auth_type = str(
+        payload.auth_type
+        if payload.auth_type is not None
+        else existing_content.get("auth_type")
+        or "none"
+    ).strip().lower()
+    if auth_type not in _PERSONA_CONNECTION_ALLOWED_AUTH_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported auth_type")
 
-    create_payload = PersonaConnectionCreate(
-        name=str(payload.name if payload.name is not None else existing_content.get("name") or "").strip(),
-        base_url=str(
-            payload.base_url
-            if payload.base_url is not None
-            else existing_content.get("base_url")
-            or ""
-        ).strip(),
-        auth_type=str(
-            payload.auth_type
-            if payload.auth_type is not None
-            else existing_content.get("auth_type")
-            or "none"
-        ).strip(),
-        secret=payload.secret,
-        headers_template=(
-            payload.headers_template
-            if payload.headers_template is not None
-            else {
-                str(key): str(value)
-                for key, value in dict(existing_content.get("headers_template") or {}).items()
-            }
-        ),
-        timeout_ms=int(
-            payload.timeout_ms
-            if payload.timeout_ms is not None
-            else existing_content.get("timeout_ms")
-            or 15000
-        ),
-    )
-    content = _connection_memory_content_from_payload(create_payload)
-
-    if payload.clear_secret:
-        content.pop("secret_envelope", None)
-        content[_PERSONA_CONNECTION_STATUS_FIELD] = False
-        content["key_hint"] = None
-        return content
-
-    if payload.secret is None:
-        existing_envelope = str(existing_content.get("secret_envelope") or "").strip()
-        if existing_envelope:
-            content["secret_envelope"] = existing_envelope
-            content[_PERSONA_CONNECTION_STATUS_FIELD] = bool(
-                existing_content.get(_PERSONA_CONNECTION_STATUS_FIELD, False)
-            )
-            content["key_hint"] = existing_content.get("key_hint")
-    return content
-
-
-def _normalize_hostname(host: str) -> str:
-    return str(host or "").strip().rstrip(".").lower()
-
-
-def _host_matches_allowlist(host: str, allowlist: list[str]) -> bool:
-    normalized_host = _normalize_hostname(host)
-    normalized_allowlist = [_normalize_hostname(item) for item in allowlist if _normalize_hostname(item)]
-    if not normalized_allowlist:
-        return True
-    for allowed in normalized_allowlist:
-        if normalized_host == allowed or normalized_host.endswith(f".{allowed}"):
-            return True
-    return False
-
-
-class _SafeFormatDict(dict[str, str]):
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
-
-
-def _safe_template_context(*payloads: dict[str, Any]) -> dict[str, str]:
-    context: dict[str, str] = {}
-    for payload in payloads:
-        if not isinstance(payload, dict):
-            continue
-        for key, value in payload.items():
-            if value is None:
-                continue
-            context[str(key)] = str(value)
-    return context
-
-
-def _render_template_value(value: str, context: dict[str, str]) -> str:
-    rendered = str(value)
-    for key, replacement in context.items():
-        rendered = rendered.replace(f"{{{{{key}}}}}", replacement)
     try:
-        return rendered.format_map(_SafeFormatDict(context))
-    except Exception:
-        return rendered
-
-
-def _render_nested_templates(value: Any, context: dict[str, str]) -> Any:
-    if isinstance(value, str):
-        return _render_template_value(value, context)
-    if isinstance(value, dict):
-        return {
-            str(key): _render_nested_templates(item, context)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_render_nested_templates(item, context) for item in value]
-    return value
-
-
-def _resolve_persona_connection_secret(connection: dict[str, Any]) -> str | None:
-    encrypted_blob = str(connection.get("secret_envelope") or "").strip()
-    if not encrypted_blob:
-        return None
-    payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
-    secret = str(payload.get("api_key") or "").strip()
-    return secret or None
-
-
-def _build_persona_connection_headers(
-    connection: dict[str, Any],
-    *,
-    payload: dict[str, Any],
-    extra_headers: dict[str, str] | None = None,
-    auth_header_name: str | None = None,
-) -> tuple[dict[str, str], str | None]:
-    secret = _resolve_persona_connection_secret(connection)
-    template_context = _safe_template_context(
-        payload,
-        {
-            "secret": secret or "",
-            "connection_id": str(connection.get("id") or ""),
-            "base_url": str(connection.get("base_url") or ""),
-        },
-    )
-    headers = {
-        str(key): _render_template_value(str(value), template_context)
-        for key, value in dict(connection.get("headers_template") or {}).items()
-    }
-    if extra_headers:
-        headers.update(
-            {
-                str(key): _render_template_value(str(value), template_context)
-                for key, value in extra_headers.items()
-            }
+        return build_updated_connection_memory_content(
+            existing_content,
+            name=str(
+                payload.name
+                if payload.name is not None
+                else existing_content.get("name")
+                or ""
+            ).strip(),
+            base_url=str(
+                payload.base_url
+                if payload.base_url is not None
+                else existing_content.get("base_url")
+                or ""
+            ).strip(),
+            auth_type=auth_type,
+            headers_template=(
+                payload.headers_template
+                if payload.headers_template is not None
+                else dict(existing_content.get("headers_template") or {})
+            ),
+            timeout_ms=int(
+                payload.timeout_ms
+                if payload.timeout_ms is not None
+                else existing_content.get("timeout_ms")
+                or 15000
+            ),
+            secret=payload.secret,
+            clear_secret=bool(payload.clear_secret),
         )
-
-    auth_type = str(connection.get("auth_type") or "none").strip().lower()
-    existing_header_names = {key.lower() for key in headers}
-    if secret:
-        if auth_type == "bearer" and "authorization" not in existing_header_names:
-            headers["Authorization"] = f"Bearer {secret}"
-        elif auth_type == "api_key" and "x-api-key" not in existing_header_names:
-            headers["X-API-Key"] = secret
-        elif auth_type == "basic" and "authorization" not in existing_header_names:
-            encoded = base64.b64encode(secret.encode("utf-8")).decode("ascii")
-            headers["Authorization"] = f"Basic {encoded}"
-        elif auth_type == "custom_header":
-            header_name = str(auth_header_name or "X-API-Key").strip() or "X-API-Key"
-            if header_name.lower() not in existing_header_names:
-                headers[header_name] = secret
-
-    return headers, secret
-
-
-def _redact_persona_connection_headers(headers: dict[str, str], secret: str | None) -> dict[str, str]:
-    redacted: dict[str, str] = {}
-    for key, value in headers.items():
-        normalized_key = str(key).strip().lower()
-        value_text = str(value)
-        if (
-            normalized_key in {"authorization", "proxy-authorization"}
-            or "api-key" in normalized_key
-            or "token" in normalized_key
-            or "secret" in normalized_key
-            or (secret and secret in value_text)
-        ):
-            redacted[str(key)] = "[redacted]"
-        else:
-            redacted[str(key)] = value_text
-    return redacted
+    except PersonaConnectionConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _parse_persona_connection_test_response_body(response: Any) -> Any:
@@ -766,7 +602,7 @@ async def _close_persona_connection_test_response(response: Any) -> None:
 
 
 def _connection_response_from_row(persona_id: str, row: dict[str, Any]) -> PersonaConnectionResponse:
-    content = _connection_content_from_row(row)
+    content = connection_content_from_row(row)
 
     return PersonaConnectionResponse(
         id=str(row.get("id") or ""),
@@ -779,8 +615,8 @@ def _connection_response_from_row(persona_id: str, row: dict[str, Any]) -> Perso
             for k, v in dict(content.get("headers_template") or {}).items()
         },
         timeout_ms=int(content.get("timeout_ms") or 15000),
-        allowed_hosts=[str(item) for item in list(content.get("allowed_hosts") or []) if str(item).strip()],
-        secret_configured=bool(content.get(_PERSONA_CONNECTION_STATUS_FIELD, False)),
+        allowed_hosts=get_connection_allowed_hosts(content),
+        secret_configured=bool(content.get(PERSONA_CONNECTION_STATUS_FIELD, False)),
         key_hint=(str(content.get("key_hint") or "").strip() or None),
         created_at=(str(row.get("created_at") or "").strip() or None),
         last_modified=(str(row.get("last_modified") or "").strip() or None),
@@ -849,26 +685,25 @@ async def _test_persona_connection(
     if method not in _PERSONA_CONNECTION_TEST_METHODS:
         raise HTTPException(status_code=422, detail="Unsupported connection test method")
 
-    request_payload = _render_nested_templates(
+    request_payload = render_nested_templates(
         dict(payload.payload or {}),
-        _safe_template_context(dict(payload.payload or {})),
+        safe_template_context(dict(payload.payload or {})),
     )
     if not isinstance(request_payload, dict):
         request_payload = {}
 
     base_url = str(connection.get("base_url") or "").strip()
     path = str(payload.path or "").strip()
-    rendered_path = _render_template_value(path, _safe_template_context(request_payload)) if path else ""
+    rendered_path = (
+        render_template_value(path, safe_template_context(request_payload))
+        if path
+        else ""
+    )
     url = urljoin(base_url.rstrip("/") + "/", rendered_path.lstrip("/")) if rendered_path else base_url
 
-    parsed_url = urlparse(url)
-    final_host = _normalize_hostname(parsed_url.hostname or "")
-    allowed_hosts = [
-        _normalize_hostname(item)
-        for item in list(connection.get("allowed_hosts") or [])
-        if _normalize_hostname(item)
-    ]
-    if not _host_matches_allowlist(final_host, allowed_hosts):
+    try:
+        validate_connection_request_target(url, connection)
+    except (PersonaConnectionConfigError, PersonaConnectionTargetError) as exc:
         return PersonaConnectionTestResponse(
             ok=False,
             connection_id=connection_id,
@@ -877,12 +712,16 @@ async def _test_persona_connection(
             request_headers={},
             request_payload=request_payload,
             timeout_ms=int(connection.get("timeout_ms") or 15000),
-            error=f"Host '{final_host}' is not allowed for this connection.",
+            error=str(exc),
         )
-
-    policy = evaluate_url_policy(url, allowlist=allowed_hosts or None)
-    if not getattr(policy, "allowed", False):
-        reason = str(getattr(policy, "reason", None) or "egress policy denied")
+    try:
+        headers, secret = build_connection_headers(
+            connection,
+            payload=request_payload,
+            extra_headers=dict(payload.headers or {}),
+            auth_header_name=payload.auth_header_name,
+        )
+    except PersonaConnectionSecretError as exc:
         return PersonaConnectionTestResponse(
             ok=False,
             connection_id=connection_id,
@@ -891,15 +730,8 @@ async def _test_persona_connection(
             request_headers={},
             request_payload=request_payload,
             timeout_ms=int(connection.get("timeout_ms") or 15000),
-            error=f"Egress policy denied connection test: {reason}",
+            error=str(exc),
         )
-
-    headers, secret = _build_persona_connection_headers(
-        connection,
-        payload=request_payload,
-        extra_headers=dict(payload.headers or {}),
-        auth_header_name=payload.auth_header_name,
-    )
     timeout_ms = int(connection.get("timeout_ms") or 15000)
     timeout_seconds = max(0.1, timeout_ms / 1000.0)
     retry_policy = RetryPolicy()
@@ -931,7 +763,7 @@ async def _test_persona_connection(
             connection_id=connection_id,
             method=method,
             url=url,
-            request_headers=_redact_persona_connection_headers(headers, secret),
+            request_headers=redact_connection_headers(headers, secret),
             request_payload=request_payload,
             timeout_ms=timeout_ms,
             latency_ms=max(1, int((time.perf_counter() - started_at) * 1000)),
@@ -944,7 +776,7 @@ async def _test_persona_connection(
         connection_id=connection_id,
         method=method,
         url=url,
-        request_headers=_redact_persona_connection_headers(headers, secret),
+        request_headers=redact_connection_headers(headers, secret),
         request_payload=request_payload,
         timeout_ms=timeout_ms,
         status_code=status_code,
@@ -3410,6 +3242,7 @@ async def replace_persona_policy_rules(
     response_model=PersonaVoiceAnalyticsResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def get_persona_voice_analytics(
     persona_id: str,
@@ -3580,6 +3413,7 @@ async def get_persona_voice_analytics(
     response_model=PersonaLiveVoiceSessionSummary,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def update_persona_live_voice_session_analytics(
     persona_id: str,
@@ -3665,6 +3499,7 @@ async def update_persona_live_voice_session_analytics(
     response_model=VoiceCommandListResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def list_persona_voice_commands(
     persona_id: str,
@@ -3716,6 +3551,7 @@ async def list_persona_voice_commands(
     response_model=VoiceCommandInfo,
     tags=["persona"],
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def create_persona_voice_command(
     persona_id: str,
@@ -3783,6 +3619,7 @@ async def create_persona_voice_command(
     response_model=VoiceCommandInfo,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def update_persona_voice_command(
     persona_id: str,
@@ -3866,6 +3703,7 @@ async def update_persona_voice_command(
     response_model=VoiceCommandInfo,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def toggle_persona_voice_command(
     persona_id: str,
@@ -3935,6 +3773,7 @@ async def toggle_persona_voice_command(
     tags=["persona"],
     status_code=status.HTTP_204_NO_CONTENT,
     response_model=None,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def delete_persona_voice_command(
     persona_id: str,
@@ -3971,6 +3810,7 @@ async def delete_persona_voice_command(
     response_model=PersonaCommandDryRunResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def dry_run_persona_voice_command(
     persona_id: str,
@@ -4072,6 +3912,7 @@ async def dry_run_persona_voice_command(
     response_model=list[PersonaConnectionResponse],
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def list_persona_connections(
     persona_id: str,
@@ -4095,6 +3936,7 @@ async def list_persona_connections(
     response_model=PersonaConnectionResponse,
     tags=["persona"],
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def create_persona_connection(
     persona_id: str,
@@ -4136,6 +3978,7 @@ async def create_persona_connection(
     response_model=PersonaConnectionResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def update_persona_connection(
     persona_id: str,
@@ -4156,7 +3999,7 @@ async def update_persona_connection(
             connection_id=connection_id,
         )
         updated_content = _connection_memory_content_from_update(
-            _connection_content_from_row(row),
+            connection_content_from_row(row),
             payload,
         )
         updated = await _run_persona_db_call(
@@ -4184,6 +4027,7 @@ async def update_persona_connection(
     response_model=PersonaConnectionDeleteResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def delete_persona_connection(
     persona_id: str,
@@ -4220,6 +4064,7 @@ async def delete_persona_connection(
     response_model=PersonaConnectionTestResponse,
     tags=["persona"],
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
 )
 async def test_persona_connection(
     persona_id: str,
@@ -4239,7 +4084,7 @@ async def test_persona_connection(
             persona_id=persona_id,
             connection_id=connection_id,
         )
-        connection = _connection_content_from_row(row)
+        connection = connection_content_from_row(row)
         connection["id"] = connection_id
         return await _test_persona_connection(connection_id, connection, payload)
     except HTTPException:

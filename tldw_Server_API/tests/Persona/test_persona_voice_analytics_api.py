@@ -1,7 +1,9 @@
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
 )
@@ -540,3 +542,27 @@ def test_persona_voice_analytics_response_model_accepts_recent_live_session_snap
     assert payload.recent_live_sessions[0].session_id == "sess-123"
     assert payload.recent_live_sessions[0].auto_commit_enabled is True
     assert payload.recent_live_sessions[0].thinking_recovery_count == 1
+
+
+def test_persona_voice_analytics_routes_include_rate_limit_dependency():
+    expected_routes = {
+        ("/api/v1/persona/profiles/{persona_id}/voice-analytics", "GET"),
+        (
+            "/api/v1/persona/profiles/{persona_id}/voice-analytics/live-sessions/{session_id}",
+            "PUT",
+        ),
+    }
+
+    seen_routes: set[tuple[str, str]] = set()
+    for route in fastapi_app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods:
+            key = (route.path, method)
+            if key not in expected_routes:
+                continue
+            seen_routes.add(key)
+            dependencies = [dependency.call for dependency in route.dependant.dependencies]
+            assert check_rate_limit in dependencies, key
+
+    assert seen_routes == expected_routes

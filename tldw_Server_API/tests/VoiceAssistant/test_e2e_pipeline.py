@@ -432,15 +432,15 @@ class TestPipelineExternalConnections:
                 fake_afetch,
             )
             monkeypatch.setattr(
-                "tldw_Server_API.app.core.VoiceAssistant.router.evaluate_url_policy",
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
                 lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
             )
             monkeypatch.setattr(
-                "tldw_Server_API.app.core.VoiceAssistant.router.loads_envelope",
+                "tldw_Server_API.app.core.Persona.connections.loads_envelope",
                 lambda encrypted_blob: {"encrypted_blob": encrypted_blob},
             )
             monkeypatch.setattr(
-                "tldw_Server_API.app.core.VoiceAssistant.router.decrypt_byok_payload",
+                "tldw_Server_API.app.core.Persona.connections.decrypt_byok_payload",
                 lambda envelope: {"api_key": "secret-token"},
             )
 
@@ -528,7 +528,7 @@ class TestPipelineExternalConnections:
                 fake_afetch,
             )
             monkeypatch.setattr(
-                "tldw_Server_API.app.core.VoiceAssistant.router.evaluate_url_policy",
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
                 lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
             )
 
@@ -587,7 +587,7 @@ class TestPipelineExternalConnections:
                 fail_if_called,
             )
             monkeypatch.setattr(
-                "tldw_Server_API.app.core.VoiceAssistant.router.evaluate_url_policy",
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
                 lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
             )
 
@@ -602,6 +602,172 @@ class TestPipelineExternalConnections:
 
             assert result.success is False
             assert "connection" in (result.error_message or "").lower()
+        finally:
+            db.close_connection()
+
+    @pytest.mark.asyncio
+    async def test_connection_backed_command_derives_allowlist_from_base_url_when_missing(
+        self,
+        command_router,
+        session_manager,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        db = CharactersRAGDB(
+            tmp_path / "voice_external_runtime_derived_allowlist.sqlite",
+            "voice-external-derived-allowlist-tests",
+        )
+        try:
+            persona_id = _create_persona_profile(
+                db,
+                user_id=1,
+                persona_id="persona-runtime-derived-allowlist",
+            )
+            _add_persona_connection(
+                db,
+                user_id=1,
+                persona_id=persona_id,
+                connection_id="conn-derived-host",
+                content={
+                    "name": "Derived Host API",
+                    "base_url": "https://api.example.com/v1",
+                    "auth_type": "none",
+                    "headers_template": {},
+                    "timeout_ms": 9000,
+                    "secret_configured": False,
+                },
+            )
+            save_voice_command(
+                db,
+                VoiceCommand(
+                    id="cmd-derived-host",
+                    user_id=1,
+                    persona_id=persona_id,
+                    connection_id="conn-derived-host",
+                    name="Derived Host Request",
+                    phrases=["derived host {topic}"],
+                    action_type=ActionType.CUSTOM,
+                    action_config={
+                        "action": "derived_host_external",
+                        "method": "POST",
+                        "path": "search",
+                        "slot_to_param_map": {"query": "topic"},
+                    },
+                ),
+            )
+
+            captured_policy: dict[str, Any] = {}
+
+            async def fake_afetch(**kwargs):
+                return _MockHTTPResponse(json_body={"message": "Queued external search"})
+
+            def fake_evaluate_url_policy(url, **kwargs):
+                captured_policy["url"] = url
+                captured_policy["allowlist"] = kwargs.get("allowlist")
+                return SimpleNamespace(allowed=True, reason=None)
+
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.VoiceAssistant.router.afetch",
+                fake_afetch,
+            )
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
+                fake_evaluate_url_policy,
+            )
+
+            session = await session_manager.create_session(user_id=1)
+            result, _ = await command_router.process_command(
+                text="derived host whales",
+                user_id=1,
+                session_id=session.session_id,
+                db=db,
+                persona_id=persona_id,
+            )
+
+            assert result.success is True
+            assert captured_policy == {
+                "url": "https://api.example.com/v1/search",
+                "allowlist": ["api.example.com"],
+            }
+        finally:
+            db.close_connection()
+
+    @pytest.mark.asyncio
+    async def test_connection_backed_command_returns_error_for_invalid_stored_secret(
+        self,
+        command_router,
+        session_manager,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        db = CharactersRAGDB(
+            tmp_path / "voice_external_runtime_invalid_secret.sqlite",
+            "voice-external-invalid-secret-tests",
+        )
+        try:
+            persona_id = _create_persona_profile(
+                db,
+                user_id=1,
+                persona_id="persona-runtime-invalid-secret",
+            )
+            _add_persona_connection(
+                db,
+                user_id=1,
+                persona_id=persona_id,
+                connection_id="conn-invalid-secret",
+                content={
+                    "name": "Broken Secret API",
+                    "base_url": "https://api.example.com/v1",
+                    "auth_type": "bearer",
+                    "headers_template": {},
+                    "timeout_ms": 9000,
+                    "allowed_hosts": ["api.example.com"],
+                    "secret_envelope": "{not-json",
+                    "secret_configured": True,
+                },
+            )
+            save_voice_command(
+                db,
+                VoiceCommand(
+                    id="cmd-invalid-secret",
+                    user_id=1,
+                    persona_id=persona_id,
+                    connection_id="conn-invalid-secret",
+                    name="Invalid Secret Request",
+                    phrases=["invalid secret {topic}"],
+                    action_type=ActionType.CUSTOM,
+                    action_config={
+                        "action": "invalid_secret_external",
+                        "method": "POST",
+                        "path": "search",
+                        "slot_to_param_map": {"query": "topic"},
+                    },
+                ),
+            )
+
+            async def fail_if_called(**kwargs):
+                raise AssertionError("Outbound HTTP should not run when the stored secret is invalid")
+
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.VoiceAssistant.router.afetch",
+                fail_if_called,
+            )
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
+                lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
+            )
+
+            session = await session_manager.create_session(user_id=1)
+            result, _ = await command_router.process_command(
+                text="invalid secret whales",
+                user_id=1,
+                session_id=session.session_id,
+                db=db,
+                persona_id=persona_id,
+            )
+
+            assert result.success is False
+            assert "invalid stored secret" in (result.error_message or "").lower()
         finally:
             db.close_connection()
 

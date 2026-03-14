@@ -3,12 +3,15 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.Persona import connections as persona_connections
 
 
 pytestmark = pytest.mark.unit
@@ -222,19 +225,19 @@ def test_persona_connection_test_executes_request_with_redacted_preview(
 
         monkeypatch.setattr(persona_ep, "afetch", fake_afetch, raising=False)
         monkeypatch.setattr(
-            persona_ep,
+            persona_connections,
             "evaluate_url_policy",
             lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
             raising=False,
         )
         monkeypatch.setattr(
-            persona_ep,
+            persona_connections,
             "loads_envelope",
             lambda encrypted_blob: {"encrypted_blob": encrypted_blob},
             raising=False,
         )
         monkeypatch.setattr(
-            persona_ep,
+            persona_connections,
             "decrypt_byok_payload",
             lambda envelope: {"api_key": "secret-token"},
             raising=False,
@@ -263,3 +266,142 @@ def test_persona_connection_test_executes_request_with_redacted_preview(
         assert captured["json"] == {"query": "whales"}
 
     fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_connection_test_derives_allowlist_from_base_url_when_missing(
+    persona_db: CharactersRAGDB,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Connection Tester Derived Allowlist")
+        _add_connection_memory_entry(
+            persona_db,
+            user_id=1,
+            persona_id=persona_id,
+            connection_id="conn-derived-allowlist",
+            content={
+                "name": "Search API",
+                "base_url": "https://api.example.com/v1",
+                "auth_type": "none",
+                "headers_template": {"X-Client": "voice-builder"},
+                "timeout_ms": 12000,
+            },
+        )
+
+        captured_policy: dict[str, object] = {}
+
+        class _MockHTTPResponse:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+
+            def json(self):
+                return {"message": "Connection OK"}
+
+            text = '{"message":"Connection OK"}'
+
+        async def fake_afetch(**kwargs):
+            return _MockHTTPResponse()
+
+        def fake_evaluate_url_policy(url, **kwargs):
+            captured_policy["url"] = url
+            captured_policy["allowlist"] = kwargs.get("allowlist")
+            return SimpleNamespace(allowed=True, reason=None)
+
+        monkeypatch.setattr(persona_ep, "afetch", fake_afetch, raising=False)
+        monkeypatch.setattr(
+            persona_connections,
+            "evaluate_url_policy",
+            fake_evaluate_url_policy,
+            raising=False,
+        )
+
+        tested = client.post(
+            f"/api/v1/persona/profiles/{persona_id}/connections/conn-derived-allowlist/test",
+            json={
+                "method": "POST",
+                "path": "search",
+                "payload": {"query": "whales"},
+            },
+        )
+        assert tested.status_code == 200, tested.text
+        assert tested.json()["ok"] is True
+        assert captured_policy == {
+            "url": "https://api.example.com/v1/search",
+            "allowlist": ["api.example.com"],
+        }
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_connection_test_returns_error_for_invalid_stored_secret(
+    persona_db: CharactersRAGDB,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with _client_for_user(1, persona_db) as client:
+        persona_id = _create_persona(client, name="Connection Tester Invalid Secret")
+        _add_connection_memory_entry(
+            persona_db,
+            user_id=1,
+            persona_id=persona_id,
+            connection_id="conn-invalid-secret",
+            content={
+                "name": "Search API",
+                "base_url": "https://api.example.com/v1",
+                "auth_type": "bearer",
+                "headers_template": {"X-Client": "voice-builder"},
+                "timeout_ms": 12000,
+                "allowed_hosts": ["api.example.com"],
+                "secret_envelope": "{not-json",
+                "secret_configured": True,
+            },
+        )
+
+        async def fail_if_called(**kwargs):
+            raise AssertionError("Outbound HTTP should not run when the stored secret is invalid")
+
+        monkeypatch.setattr(persona_ep, "afetch", fail_if_called, raising=False)
+        monkeypatch.setattr(
+            persona_connections,
+            "evaluate_url_policy",
+            lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
+            raising=False,
+        )
+
+        tested = client.post(
+            f"/api/v1/persona/profiles/{persona_id}/connections/conn-invalid-secret/test",
+            json={
+                "method": "POST",
+                "path": "search",
+                "payload": {"query": "whales"},
+            },
+        )
+        assert tested.status_code == 200, tested.text
+        tested_payload = tested.json()
+        assert tested_payload["ok"] is False
+        assert "invalid stored secret" in str(tested_payload["error"]).lower()
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_connection_routes_include_rate_limit_dependency():
+    expected_routes = {
+        ("/api/v1/persona/profiles/{persona_id}/connections", "GET"),
+        ("/api/v1/persona/profiles/{persona_id}/connections", "POST"),
+        ("/api/v1/persona/profiles/{persona_id}/connections/{connection_id}", "PUT"),
+        ("/api/v1/persona/profiles/{persona_id}/connections/{connection_id}", "DELETE"),
+        ("/api/v1/persona/profiles/{persona_id}/connections/{connection_id}/test", "POST"),
+    }
+
+    seen_routes: set[tuple[str, str]] = set()
+    for route in fastapi_app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods:
+            key = (route.path, method)
+            if key not in expected_routes:
+                continue
+            seen_routes.add(key)
+            dependencies = [dependency.call for dependency in route.dependant.dependencies]
+            assert check_rate_limit in dependencies, key
+
+    assert seen_routes == expected_routes

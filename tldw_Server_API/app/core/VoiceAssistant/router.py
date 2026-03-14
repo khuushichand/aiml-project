@@ -5,18 +5,23 @@
 #
 #######################################################################################################################
 import time
-from base64 import b64encode
 from typing import Any, Callable, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
-    decrypt_byok_payload,
-    loads_envelope,
-)
 from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
-from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.Persona.connections import (
+    PersonaConnectionConfigError,
+    PersonaConnectionSecretError,
+    PersonaConnectionTargetError,
+    build_connection_headers,
+    connection_content_from_row,
+    render_nested_templates,
+    render_template_value,
+    safe_template_context,
+    validate_connection_request_target,
+)
 
 from .intent_parser import IntentParser, get_intent_parser
 from .registry import VoiceCommandRegistry, get_voice_command_registry
@@ -33,61 +38,6 @@ from .workflow_handler import VoiceWorkflowHandler, get_voice_workflow_handler
 
 _PERSONA_CONNECTION_MEMORY_TYPE = "persona_connection"
 _EXTERNAL_ACTION_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
-
-
-def _normalize_hostname(host: str) -> str:
-    return str(host or "").strip().rstrip(".").lower()
-
-
-def _host_matches_allowlist(host: str, allowlist: list[str]) -> bool:
-    normalized_host = _normalize_hostname(host)
-    normalized_allowlist = [_normalize_hostname(item) for item in allowlist if _normalize_hostname(item)]
-    if not normalized_allowlist:
-        return True
-    for allowed in normalized_allowlist:
-        if normalized_host == allowed or normalized_host.endswith(f".{allowed}"):
-            return True
-    return False
-
-
-def _safe_template_context(*payloads: dict[str, Any]) -> dict[str, str]:
-    context: dict[str, str] = {}
-    for payload in payloads:
-        if not isinstance(payload, dict):
-            continue
-        for key, value in payload.items():
-            if value is None:
-                continue
-            context[str(key)] = str(value)
-    return context
-
-
-class _SafeFormatDict(dict[str, str]):
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
-
-
-def _render_template_value(value: str, context: dict[str, str]) -> str:
-    rendered = str(value)
-    for key, replacement in context.items():
-        rendered = rendered.replace(f"{{{{{key}}}}}", replacement)
-    try:
-        return rendered.format_map(_SafeFormatDict(context))
-    except Exception:
-        return rendered
-
-
-def _render_nested_templates(value: Any, context: dict[str, str]) -> Any:
-    if isinstance(value, str):
-        return _render_template_value(value, context)
-    if isinstance(value, dict):
-        return {
-            str(key): _render_nested_templates(item, context)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_render_nested_templates(item, context) for item in value]
-    return value
 
 
 def _build_external_payload(
@@ -529,75 +479,10 @@ class VoiceCommandRouter:
         for row in rows or []:
             if str(row.get("id") or "").strip() != connection_id:
                 continue
-            raw_content = row.get("content")
-            if isinstance(raw_content, str):
-                try:
-                    import json
-
-                    content = json.loads(raw_content)
-                except Exception:
-                    content = {}
-            elif isinstance(raw_content, dict):
-                content = dict(raw_content)
-            else:
-                content = {}
+            content = connection_content_from_row(row)
             content["id"] = connection_id
             return content
         return None
-
-    def _resolve_connection_secret(self, connection: dict[str, Any]) -> str | None:
-        encrypted_blob = str(connection.get("secret_envelope") or "").strip()
-        if not encrypted_blob:
-            return None
-        payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
-        secret = str(payload.get("api_key") or "").strip()
-        return secret or None
-
-    def _build_connection_headers(
-        self,
-        *,
-        connection: dict[str, Any],
-        action_config: dict[str, Any],
-        entities: dict[str, Any],
-        payload: dict[str, Any],
-    ) -> dict[str, str]:
-        headers_template = connection.get("headers_template")
-        headers = {
-            str(key): str(value)
-            for key, value in (headers_template or {}).items()
-        }
-
-        secret = self._resolve_connection_secret(connection)
-        template_context = _safe_template_context(
-            entities,
-            payload,
-            {
-                "secret": secret or "",
-                "connection_id": str(connection.get("id") or ""),
-                "base_url": str(connection.get("base_url") or ""),
-            },
-        )
-        rendered_headers = {
-            key: _render_template_value(value, template_context)
-            for key, value in headers.items()
-        }
-
-        auth_type = str(connection.get("auth_type") or "none").strip().lower()
-        existing_header_names = {key.lower() for key in rendered_headers}
-        if secret:
-            if auth_type == "bearer" and "authorization" not in existing_header_names:
-                rendered_headers["Authorization"] = f"Bearer {secret}"
-            elif auth_type == "api_key" and "x-api-key" not in existing_header_names:
-                rendered_headers["X-API-Key"] = secret
-            elif auth_type == "basic" and "authorization" not in existing_header_names:
-                encoded = b64encode(secret.encode("utf-8")).decode("ascii")
-                rendered_headers["Authorization"] = f"Basic {encoded}"
-            elif auth_type == "custom_header" and not any(secret == value for value in rendered_headers.values()):
-                header_name = str(action_config.get("auth_header_name") or "X-API-Key").strip() or "X-API-Key"
-                if header_name.lower() not in existing_header_names:
-                    rendered_headers[header_name] = secret
-
-        return rendered_headers
 
     def _format_external_action_result(
         self,
@@ -680,7 +565,7 @@ class VoiceCommandRouter:
             action_config=action_config,
             entities=dict(intent.entities or {}),
         )
-        template_context = _safe_template_context(intent.entities or {}, payload)
+        template_context = safe_template_context(intent.entities or {}, payload)
 
         method = str(action_config.get("method") or action_config.get("http_method") or "POST").strip().upper()
         if method not in _EXTERNAL_ACTION_METHODS:
@@ -689,45 +574,37 @@ class VoiceCommandRouter:
                 action_type=intent.action_type,
                 response_text="I couldn't determine how to call that external action.",
                 error_message=f"Unsupported external action method: {method}",
-            )
+        )
 
         base_url = str(connection.get("base_url") or "").strip()
         path = str(action_config.get("path") or action_config.get("request_path") or "").strip()
-        rendered_path = _render_template_value(path, template_context) if path else ""
+        rendered_path = render_template_value(path, template_context) if path else ""
         url = urljoin(base_url.rstrip("/") + "/", rendered_path.lstrip("/")) if rendered_path else base_url
 
-        parsed_url = urlparse(url)
-        final_host = _normalize_hostname(parsed_url.hostname or "")
-        allowed_hosts = [
-            _normalize_hostname(item)
-            for item in list(connection.get("allowed_hosts") or [])
-            if _normalize_hostname(item)
-        ]
-        if not _host_matches_allowlist(final_host, allowed_hosts):
+        try:
+            validate_connection_request_target(url, connection)
+        except (PersonaConnectionConfigError, PersonaConnectionTargetError) as exc:
             return ActionResult(
                 success=False,
                 action_type=intent.action_type,
                 response_text="I couldn't complete that external action.",
-                error_message=f"Host '{final_host}' is not allowed for connection '{connection_id}'.",
+                error_message=str(exc),
             )
 
-        policy = evaluate_url_policy(url, allowlist=allowed_hosts or None)
-        if not getattr(policy, "allowed", False):
-            reason = str(getattr(policy, "reason", None) or "egress policy denied")
+        rendered_payload = render_nested_templates(payload, template_context)
+        try:
+            headers, _secret = build_connection_headers(
+                connection,
+                payload=rendered_payload if isinstance(rendered_payload, dict) else {},
+                auth_header_name=str(action_config.get("auth_header_name") or "").strip() or None,
+            )
+        except PersonaConnectionSecretError as exc:
             return ActionResult(
                 success=False,
                 action_type=intent.action_type,
                 response_text="I couldn't complete that external action.",
-                error_message=f"Egress policy denied external action: {reason}",
+                error_message=str(exc),
             )
-
-        rendered_payload = _render_nested_templates(payload, template_context)
-        headers = self._build_connection_headers(
-            connection=connection,
-            action_config=action_config,
-            entities=dict(intent.entities or {}),
-            payload=rendered_payload if isinstance(rendered_payload, dict) else {},
-        )
         timeout_ms = int(connection.get("timeout_ms") or 15000)
         timeout_seconds = max(0.1, timeout_ms / 1000.0)
         retry_policy = RetryPolicy()

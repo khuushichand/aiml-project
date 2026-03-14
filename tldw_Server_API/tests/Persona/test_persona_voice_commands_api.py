@@ -1,7 +1,9 @@
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -191,3 +193,31 @@ def test_persona_voice_command_reports_missing_connection_after_connection_delet
         assert payload["commands"][0]["connection_name"] is None
 
     fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_voice_command_routes_include_rate_limit_dependency():
+    expected_routes = {
+        ("/api/v1/persona/profiles/{persona_id}/voice-commands", "GET"),
+        ("/api/v1/persona/profiles/{persona_id}/voice-commands", "POST"),
+        ("/api/v1/persona/profiles/{persona_id}/voice-commands/{command_id}", "PUT"),
+        (
+            "/api/v1/persona/profiles/{persona_id}/voice-commands/{command_id}/toggle",
+            "POST",
+        ),
+        ("/api/v1/persona/profiles/{persona_id}/voice-commands/{command_id}", "DELETE"),
+        ("/api/v1/persona/profiles/{persona_id}/voice-commands/test", "POST"),
+    }
+
+    seen_routes: set[tuple[str, str]] = set()
+    for route in fastapi_app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods:
+            key = (route.path, method)
+            if key not in expected_routes:
+                continue
+            seen_routes.add(key)
+            dependencies = [dependency.call for dependency in route.dependant.dependencies]
+            assert check_rate_limit in dependencies, key
+
+    assert seen_routes == expected_routes

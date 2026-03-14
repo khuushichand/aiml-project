@@ -32,45 +32,26 @@ def save_voice_command(
         The command ID
     """
     command_id = command.id or str(uuid.uuid4())
-
-    with db.transaction():
-        db.execute_query(
-            """
-            INSERT INTO voice_commands (
-                id, user_id, persona_id, connection_id, name, phrases, action_type, action_config,
-                priority, enabled, requires_confirmation, description,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                persona_id = excluded.persona_id,
-                connection_id = excluded.connection_id,
-                name = excluded.name,
-                phrases = excluded.phrases,
-                action_type = excluded.action_type,
-                action_config = excluded.action_config,
-                priority = excluded.priority,
-                enabled = excluded.enabled,
-                requires_confirmation = excluded.requires_confirmation,
-                description = excluded.description,
-                updated_at = excluded.updated_at
-            """,
-            (
-                command_id,
-                command.user_id,
-                command.persona_id,
-                command.connection_id,
-                command.name,
-                json.dumps(command.phrases),
-                command.action_type.value,
-                json.dumps(command.action_config),
-                command.priority,
-                1 if command.enabled else 0,
-                1 if command.requires_confirmation else 0,
-                command.description,
-                datetime.utcnow().isoformat(),
-                datetime.utcnow().isoformat(),
-            ),
-        )
+    db.upsert_voice_command(
+        command_id=command_id,
+        user_id=command.user_id,
+        persona_id=command.persona_id,
+        connection_id=command.connection_id,
+        name=command.name,
+        phrases=command.phrases,
+        action_type=command.action_type.value,
+        action_config=command.action_config,
+        priority=command.priority,
+        enabled=command.enabled,
+        requires_confirmation=command.requires_confirmation,
+        description=command.description,
+        created_at=(
+            command.created_at.isoformat()
+            if command.created_at is not None
+            else datetime.utcnow().isoformat()
+        ),
+        updated_at=datetime.utcnow().isoformat(),
+    )
 
     logger.debug(f"Saved voice command: {command.name} (id={command_id})")
     return command_id
