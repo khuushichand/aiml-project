@@ -408,6 +408,7 @@ def record_persona_live_voice_event(
     event_type: str,
     commit_source: Optional[str] = None,
 ) -> None:
+    """Persist a persona live-voice analytics event for the active session."""
     with db.transaction():
         db.execute_query(
             """
