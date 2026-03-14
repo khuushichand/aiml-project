@@ -18,20 +18,13 @@ from tldw_Server_API.app.core.MCP_unified.governance_packs import (
     normalize_governance_pack,
     validate_governance_pack,
 )
+from tldw_Server_API.app.services.mcp_hub_capability_resolution_service import (
+    McpHubCapabilityResolutionService,
+)
 
 _RUNTIME_APPROVAL_MODE_MAP = {
     "allow": "allow_silently",
     "ask": "ask_every_time",
-}
-_SUPPORTED_PORTABLE_CAPABILITIES = {
-    "filesystem.read",
-    "filesystem.write",
-    "mcp.server.connect",
-    "network.external.fetch",
-    "network.external.search",
-    "process.execute.safe",
-    "tool.invoke.code_edit",
-    "tool.invoke.research",
 }
 _SUPPORTED_ENVIRONMENT_REQUIREMENTS = {
     "local_mapping_required",
@@ -63,6 +56,9 @@ class GovernancePackDryRunReport(BaseModel):
     digest: str
     resolved_capabilities: list[str] = Field(default_factory=list)
     unresolved_capabilities: list[str] = Field(default_factory=list)
+    capability_mapping_summary: list[dict[str, Any]] = Field(default_factory=list)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    unsupported_environment_requirements: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     blocked_objects: list[str] = Field(default_factory=list)
     verdict: str
@@ -104,8 +100,39 @@ def _is_duplicate_governance_pack_error(exc: Exception) -> bool:
 class McpHubGovernancePackService:
     """Materialize schema-first governance packs into immutable MCP Hub base objects."""
 
-    def __init__(self, repo: McpHubRepo):
+    def __init__(
+        self,
+        repo: McpHubRepo,
+        capability_resolution_service: McpHubCapabilityResolutionService | None = None,
+    ):
         self.repo = repo
+        self.capability_resolution_service = capability_resolution_service or McpHubCapabilityResolutionService(
+            repo=repo
+        )
+
+    @staticmethod
+    def _unique(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in items:
+            cleaned = str(item or "").strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            out.append(cleaned)
+        return out
+
+    @staticmethod
+    def _resolution_metadata(
+        *,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> dict[str, Any]:
+        if owner_scope_type == "team" and owner_scope_id is not None:
+            return {"team_id": owner_scope_id}
+        if owner_scope_type == "org" and owner_scope_id is not None:
+            return {"org_id": owner_scope_id}
+        return {}
 
     async def _rollback_import(
         self,
@@ -185,8 +212,6 @@ class McpHubGovernancePackService:
         owner_scope_type: str,
         owner_scope_id: int | None,
     ) -> GovernancePackDryRunReport:
-        del owner_scope_type, owner_scope_id
-
         validation = validate_governance_pack(pack)
         if validation.errors:
             raise ValueError("; ".join(validation.errors))
@@ -194,24 +219,59 @@ class McpHubGovernancePackService:
         bundle = build_opa_bundle(pack)
         resolved_capabilities: list[str] = []
         unresolved_capabilities: list[str] = []
+        capability_mapping_summary: list[dict[str, Any]] = []
+        supported_environment_requirements: list[str] = []
+        unsupported_environment_requirements: list[str] = []
         warnings: list[str] = []
         blocked_objects: list[str] = []
+        seen_mapping_ids: set[str] = set()
+        resolution_metadata = self._resolution_metadata(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
 
         for profile in pack.profiles:
-            for capability in list(profile.capabilities.allow) + list(profile.capabilities.deny):
-                capability_value = str(capability or "").strip()
-                if not capability_value:
+            profile_capabilities = self._unique(
+                list(profile.capabilities.allow) + list(profile.capabilities.deny)
+            )
+            resolution = await self.capability_resolution_service.resolve_capabilities(
+                capability_names=profile_capabilities,
+                metadata=resolution_metadata,
+            )
+            resolved_capabilities = self._unique(
+                resolved_capabilities + resolution.resolved_capabilities
+            )
+            unresolved_capabilities = self._unique(
+                unresolved_capabilities + resolution.unresolved_capabilities
+            )
+            supported_environment_requirements = self._unique(
+                supported_environment_requirements + resolution.supported_environment_requirements
+            )
+            unsupported_environment_requirements = self._unique(
+                unsupported_environment_requirements + resolution.unsupported_environment_requirements
+            )
+            for summary in resolution.mapping_summaries:
+                mapping_key = str(summary.get("mapping_id") or summary.get("capability_name") or "").strip()
+                if mapping_key and mapping_key in seen_mapping_ids:
                     continue
-                if capability_value in _SUPPORTED_PORTABLE_CAPABILITIES:
-                    if capability_value not in resolved_capabilities:
-                        resolved_capabilities.append(capability_value)
-                elif capability_value not in unresolved_capabilities:
-                    unresolved_capabilities.append(capability_value)
+                if mapping_key:
+                    seen_mapping_ids.add(mapping_key)
+                capability_mapping_summary.append(dict(summary))
+            for warning in resolution.warnings:
+                warnings.append(f"profile:{profile.profile_id}: {warning}")
             for requirement in profile.environment_requirements:
                 requirement_value = str(requirement or "").strip()
-                if requirement_value and requirement_value not in _SUPPORTED_ENVIRONMENT_REQUIREMENTS:
+                if not requirement_value:
+                    continue
+                if requirement_value not in _SUPPORTED_ENVIRONMENT_REQUIREMENTS:
                     warnings.append(
                         f"profile:{profile.profile_id} uses unsupported environment requirement '{requirement_value}'"
+                    )
+                    continue
+                if requirement_value not in resolution.supported_environment_requirements:
+                    warnings.append(
+                        f"profile:{profile.profile_id} requires environment requirement "
+                        f"'{requirement_value}' but current capability mappings do not guarantee it"
                     )
 
         for approval in pack.approvals:
@@ -235,7 +295,10 @@ class McpHubGovernancePackService:
             digest=bundle.digest,
             resolved_capabilities=resolved_capabilities,
             unresolved_capabilities=unresolved_capabilities,
-            warnings=warnings,
+            capability_mapping_summary=capability_mapping_summary,
+            supported_environment_requirements=supported_environment_requirements,
+            unsupported_environment_requirements=unsupported_environment_requirements,
+            warnings=self._unique(warnings),
             blocked_objects=blocked_objects,
             verdict=verdict,
         )

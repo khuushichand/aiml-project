@@ -769,6 +769,9 @@ class GovernancePackDryRunReportResponse(BaseModel):
     digest: str
     resolved_capabilities: list[str] = Field(default_factory=list)
     unresolved_capabilities: list[str] = Field(default_factory=list)
+    capability_mapping_summary: list[EffectivePolicyCapabilityMappingResponse] = Field(default_factory=list)
+    supported_environment_requirements: list[str] = Field(default_factory=list)
+    unsupported_environment_requirements: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     blocked_objects: list[str] = Field(default_factory=list)
     verdict: Literal["importable", "blocked"]
