@@ -48,6 +48,7 @@ from tldw_Server_API.app.services.admin_data_ops_service import (
     verify_retention_preview_signature as svc_verify_retention_preview_signature,
 )
 from tldw_Server_API.app.services.admin_data_subject_requests_service import (
+    execute_dsr_erasure as svc_execute_dsr_erasure,
     list_data_subject_requests as svc_list_data_subject_requests,
     preview_data_subject_request as svc_preview_data_subject_request,
     record_data_subject_request as svc_record_data_subject_request,
@@ -695,6 +696,72 @@ async def list_data_subject_requests(
     except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list data subject requests: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list data subject requests") from exc
+
+
+@router.post("/data-subject-requests/{request_id}/execute")
+async def execute_data_subject_request(
+    request_id: int,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Execute a recorded DSR erasure request."""
+    try:
+        _, requests_repo = await _build_dsr_repos()
+        await requests_repo.ensure_schema()
+
+        record = await requests_repo.get_request_by_id(request_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="request_not_found")
+
+        if record.get("request_type") != "erasure":
+            raise HTTPException(
+                status_code=400,
+                detail="only_erasure_requests_can_be_executed",
+            )
+
+        current_status = record.get("status", "")
+        if current_status in {"completed", "executing"}:
+            raise HTTPException(
+                status_code=409,
+                detail=f"request_already_{current_status}",
+            )
+
+        resolved_user_id = record.get("resolved_user_id")
+        if resolved_user_id is None:
+            raise HTTPException(status_code=400, detail="resolved_user_id_missing")
+
+        selected_categories = record.get("selected_categories", [])
+        if not selected_categories:
+            raise HTTPException(status_code=400, detail="no_categories_selected")
+
+        result = await svc_execute_dsr_erasure(
+            request_id=request_id,
+            user_id=int(resolved_user_id),
+            selected_categories=selected_categories,
+            dsr_repo=requests_repo,
+            principal=principal,
+        )
+
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="compliance",
+            resource_type="data_subject_request",
+            resource_id=str(request_id),
+            action="data_subject_request.execute",
+            metadata={
+                "resolved_user_id": resolved_user_id,
+                "selected_categories": selected_categories,
+                "status": result.get("status"),
+            },
+        )
+        return result
+    except HTTPException:
+        raise
+    except _DATA_OPS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Failed to execute data subject request: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to execute data subject request") from exc
 
 
 @router.get("/retention-policies", response_model=RetentionPoliciesResponse)
