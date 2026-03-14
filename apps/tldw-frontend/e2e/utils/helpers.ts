@@ -113,6 +113,15 @@ export async function dismissConnectionModals(page: Page): Promise<void> {
     document.querySelectorAll('.ant-modal-root, .ant-modal-wrap, .ant-modal-mask').forEach(el => {
       el.remove();
     });
+    // Remove nextjs-portal if it has blocking overlays
+    document.querySelectorAll('nextjs-portal').forEach(el => {
+      if (el.children.length > 0) el.remove();
+    });
+    // Remove tldw portal root overlays
+    const portalRoot = document.getElementById('tldw-portal-root');
+    if (portalRoot) {
+      portalRoot.querySelectorAll('.ant-modal-root, .ant-modal-wrap').forEach(el => el.remove());
+    }
   }).catch(() => {});
 }
 

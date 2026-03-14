@@ -11,7 +11,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForConnection, dismissConnectionModals } from "../helpers"
 
 export class FlashcardsPage extends BasePage {
   constructor(page: Page) {
@@ -178,12 +178,14 @@ export class FlashcardsPage extends BasePage {
   // -- Tab Navigation --------------------------------------------------------
 
   async switchToTab(tab: "study" | "manage" | "transfer"): Promise<void> {
+    // Dismiss any overlays that might intercept clicks
+    await dismissConnectionModals(this.page)
     const tabLocator = {
       study: this.studyTab,
       manage: this.manageTab,
       transfer: this.transferTab,
     }[tab]
-    await tabLocator.click()
+    await tabLocator.click({ force: true })
   }
 
   /** Returns true when the main tabs container is visible (server online + feature available) */
