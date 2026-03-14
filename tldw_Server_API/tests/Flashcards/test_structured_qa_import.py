@@ -46,3 +46,22 @@ def test_parse_structured_qa_preview_respects_line_caps():
 
     assert [draft.front for draft in result.drafts] == ["One"]
     assert any("Maximum preview line limit" in error.error for error in result.errors)
+
+
+def test_parse_structured_qa_preview_preserves_multiline_question_spacing():
+    result = parse_structured_qa_preview(
+        """Question: Explain the steps:
+  1. Gather input.
+
+  2. Return output.
+Answer: Carefully.
+"""
+    )
+
+    assert len(result.drafts) == 1
+    assert result.drafts[0].front == (
+        "Explain the steps:\n"
+        "  1. Gather input.\n"
+        "\n"
+        "  2. Return output."
+    )

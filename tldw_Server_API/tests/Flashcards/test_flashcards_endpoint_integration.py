@@ -1808,6 +1808,30 @@ def test_structured_preview_respects_line_caps(
     )
 
 
+def test_bulk_create_rejects_fields_longer_than_import_cap(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    monkeypatch.setenv("FLASHCARDS_IMPORT_MAX_FIELD_LENGTH", "10")
+
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/bulk",
+        json=[
+            {
+                "front": "Front value that is too long",
+                "back": "Short",
+            }
+        ],
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "Flashcard field too long"
+    assert detail["invalid_fields"] == ["front"]
+    assert "10 bytes" in detail["message"]
+
+
 def test_import_json_file_basic(client_with_flashcards_db: TestClient):
     import json as _json
     payload = [

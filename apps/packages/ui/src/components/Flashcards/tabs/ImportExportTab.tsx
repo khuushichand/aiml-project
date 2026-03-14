@@ -258,6 +258,45 @@ const normalizeImportedItems = (value: unknown): ImportedCardReference[] => {
     .filter((item): item is ImportedCardReference => item !== null)
 }
 
+const buildStructuredDraftSaveError = (
+  draft: StructuredImportDraft,
+  maxFieldLength: number | null
+): FlashcardsImportError | null => {
+  const front = draft.front.trim()
+  const back = draft.back.trim()
+
+  if (!front) {
+    return {
+      line: draft.line_start,
+      error: "Missing required field: Front"
+    }
+  }
+  if (!back) {
+    return {
+      line: draft.line_start,
+      error: "Missing required field: Back"
+    }
+  }
+  if (maxFieldLength != null) {
+    const fieldLengths = [
+      ["Front", front],
+      ["Back", back],
+      ["Notes", draft.notes || ""],
+      ["Extra", draft.extra || ""]
+    ] as const
+    const tooLongField = fieldLengths.find(
+      ([, value]) => getUtf8ByteLength(value) > maxFieldLength
+    )
+    if (tooLongField) {
+      return {
+        line: draft.line_start,
+        error: `Field too long: ${tooLongField[0]} (> ${maxFieldLength} bytes)`
+      }
+    }
+  }
+  return null
+}
+
 const countDelimiterOccurrences = (line: string, delimiter: string): number =>
   Math.max(0, line.split(delimiter).length - 1)
 
@@ -379,11 +418,16 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
   }, [delimiter, t])
 
   React.useEffect(() => {
-    if (structuredTargetDeckId != null) return
+    if (structuredTargetDeckId !== undefined) return
     if ((decksQuery.data || []).length > 0) {
       setStructuredTargetDeckId((decksQuery.data || [])[0].id)
     }
   }, [decksQuery.data, structuredTargetDeckId])
+
+  const structuredMaxFieldLength = React.useMemo(() => {
+    const rawValue = limitsQuery.data?.max_field_length
+    return typeof rawValue === "number" && rawValue > 0 ? rawValue : null
+  }, [limitsQuery.data])
 
   const updateStructuredDraft = React.useCallback(
     (id: string, patch: Partial<StructuredImportDraft>) => {
@@ -399,8 +443,10 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
   }, [])
 
   const resolveStructuredTargetDeckId = React.useCallback(async (): Promise<number> => {
-    if (structuredTargetDeckId != null) return structuredTargetDeckId
-    if ((decksQuery.data || []).length > 0) return (decksQuery.data || [])[0].id
+    if (typeof structuredTargetDeckId === "number") return structuredTargetDeckId
+    if (structuredTargetDeckId === undefined && (decksQuery.data || []).length > 0) {
+      return (decksQuery.data || [])[0].id
+    }
     const createdDeck = await createDeckMutation.mutateAsync({
       name: t("option:flashcards.structuredImportDeckName", {
         defaultValue: "Structured Import"
@@ -570,10 +616,19 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
   }, [content, message, onTransferAction, previewStructuredMutation, t])
 
   const handleSaveStructuredDrafts = React.useCallback(async () => {
-    const selectedDrafts = structuredDrafts.filter(
-      (draft) => draft.selected && draft.front.trim() && draft.back.trim()
+    const selectedDrafts = structuredDrafts.filter((draft) => draft.selected)
+    const draftValidationResults = selectedDrafts.map((draft) => ({
+      draft,
+      error: buildStructuredDraftSaveError(draft, structuredMaxFieldLength)
+    }))
+    const savableDrafts = draftValidationResults
+      .filter((entry) => entry.error === null)
+      .map((entry) => entry.draft)
+    const skippedSaveErrors = draftValidationResults.flatMap((entry) =>
+      entry.error ? [entry.error] : []
     )
-    if (selectedDrafts.length === 0) {
+
+    if (savableDrafts.length === 0) {
       message.warning(
         t("option:flashcards.structuredSaveNoneSelected", {
           defaultValue: "Select at least one valid draft to save."
@@ -584,7 +639,7 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
 
     try {
       const deckId = await resolveStructuredTargetDeckId()
-      const payload = selectedDrafts.map((draft) => ({
+      const payload = savableDrafts.map((draft) => ({
         deck_id: deckId,
         front: draft.front.trim(),
         back: draft.back.trim(),
@@ -598,23 +653,39 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
       }))
       const created = await createBulkMutation.mutateAsync(payload)
       const createdItems = normalizeImportedItems(created.items)
+      const submittedDraftIds = new Set(savableDrafts.map((draft) => draft.id))
+      const resultErrors = [...structuredPreviewErrors, ...skippedSaveErrors]
 
-      setStructuredDrafts((prev) => prev.filter((draft) => !draft.selected))
+      setStructuredDrafts((prev) =>
+        prev.filter((draft) => !submittedDraftIds.has(draft.id))
+      )
       setLastResult({
         imported: createdItems.length,
-        skipped: structuredPreviewErrors.length,
-        errors: structuredPreviewErrors
+        skipped: resultErrors.length,
+        errors: resultErrors
       })
 
-      const successCopy = t("option:flashcards.structuredSaveSuccess", {
-        defaultValue: "Saved {{count}} structured cards.",
-        count: createdItems.length
-      })
-      message.success(successCopy)
+      const saveFeedbackCopy =
+        resultErrors.length > 0
+          ? t("option:flashcards.structuredSavePartial", {
+              defaultValue:
+                "Saved {{count}} structured cards, skipped {{skipped}} drafts.",
+              count: createdItems.length,
+              skipped: resultErrors.length
+            })
+          : t("option:flashcards.structuredSaveSuccess", {
+              defaultValue: "Saved {{count}} structured cards.",
+              count: createdItems.length
+            })
+      if (resultErrors.length > 0) {
+        message.warning(saveFeedbackCopy)
+      } else {
+        message.success(saveFeedbackCopy)
+      }
       onTransferAction?.({
         area: "import",
-        status: structuredPreviewErrors.length > 0 ? "warning" : "success",
-        message: successCopy
+        status: resultErrors.length > 0 ? "warning" : "success",
+        message: saveFeedbackCopy
       })
 
       if (createdItems.length > 0) {
@@ -668,6 +739,7 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
     resolveStructuredTargetDeckId,
     showUndoNotification,
     structuredDrafts,
+    structuredMaxFieldLength,
     structuredPreviewErrors,
     t
   ])
@@ -1151,7 +1223,9 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                 <Select
                   allowClear
                   value={structuredTargetDeckId ?? undefined}
-                  onChange={setStructuredTargetDeckId}
+                  onChange={(value) => {
+                    setStructuredTargetDeckId(value ?? null)
+                  }}
                   options={(decksQuery.data || []).map((deck) => ({
                     label: deck.name,
                     value: deck.id

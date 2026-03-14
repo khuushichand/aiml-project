@@ -1,3 +1,5 @@
+"""Deterministic parser for structured Q&A flashcard preview imports."""
+
 import re
 from dataclasses import dataclass, field
 
@@ -42,6 +44,7 @@ def parse_structured_qa_preview(
     max_line_length: int | None = None,
     max_field_length: int | None = None,
 ) -> StructuredQaPreviewResult:
+    """Parse labeled Q&A text into preview drafts and parse errors."""
     result = StructuredQaPreviewResult()
     lines = (content or "").splitlines()
     if max_lines is not None and max_lines < len(lines):
@@ -141,8 +144,13 @@ def parse_structured_qa_preview(
             continue
 
         if not raw_line.strip():
-            if in_answer and answer_lines and answer_lines[-1] != "":
-                answer_lines.append("")
+            if line_start is not None:
+                if in_answer:
+                    if answer_lines and answer_lines[-1] != "":
+                        answer_lines.append("")
+                else:
+                    if question_lines and question_lines[-1] != "":
+                        question_lines.append("")
                 line_end = index
             continue
 
@@ -152,7 +160,7 @@ def parse_structured_qa_preview(
         if in_answer:
             answer_lines.append(raw_line.rstrip())
         else:
-            question_lines.append(raw_line.strip())
+            question_lines.append(raw_line.rstrip())
         line_end = index
 
     finalize_block()

@@ -101,6 +101,28 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _validate_bulk_flashcard_field_lengths(data: dict[str, Any]) -> None:
+    """Reject oversize text fields before bulk flashcard insertion."""
+    max_field_length = _int_env("FLASHCARDS_IMPORT_MAX_FIELD_LENGTH", 8192)
+    field_labels = {
+        "front": "Front",
+        "back": "Back",
+        "notes": "Notes",
+        "extra": "Extra",
+    }
+    for field_name, label in field_labels.items():
+        value = str(data.get(field_name) or "")
+        if len(value.encode("utf-8")) > max_field_length:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Flashcard field too long",
+                    "invalid_fields": [field_name],
+                    "message": f"Field too long: {label} (> {max_field_length} bytes)",
+                },
+            )
+
+
 def _fetch_flashcard_or_404(card_uuid: str, db: CharactersRAGDB) -> dict:
     card = db.get_flashcard(card_uuid)
     if not card:
@@ -552,6 +574,7 @@ def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB =
         deck_ids_to_validate: set[int] = set()
         for item in payload:
             data = item.model_dump()
+            _validate_bulk_flashcard_field_lengths(data)
             refs_by_field = _collect_flashcard_asset_refs_by_field(data)
             _validate_flashcard_asset_refs(refs_by_field, db)
             tags = data.pop("tags", None)
@@ -864,6 +887,7 @@ def preview_structured_qa_import(
     ),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
+    """Preview structured Q&A text without creating flashcards."""
     env_max_lines = _int_env("FLASHCARDS_IMPORT_MAX_LINES", 10000)
     env_max_line_length = _int_env("FLASHCARDS_IMPORT_MAX_LINE_LENGTH", 32768)
     env_max_field_length = _int_env("FLASHCARDS_IMPORT_MAX_FIELD_LENGTH", 8192)

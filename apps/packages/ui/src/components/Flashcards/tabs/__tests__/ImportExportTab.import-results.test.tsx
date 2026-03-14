@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ImportExportTab } from "../ImportExportTab"
 import { FLASHCARDS_HELP_LINKS, FLASHCARDS_LAYOUT_GUARDRAILS } from "../../constants"
@@ -524,6 +524,128 @@ describe("ImportExportTab import result details", () => {
         reverse: false
       })
     ])
+  })
+
+  it("keeps selected invalid structured drafts in the editor when saving", async () => {
+    const previewMutateAsync = vi.fn().mockResolvedValue({
+      detected_format: "qa_labels",
+      skipped_blocks: 0,
+      errors: [],
+      drafts: [
+        {
+          front: "What is ATP?",
+          back: "Primary energy currency.",
+          line_start: 1,
+          line_end: 2,
+          tags: []
+        },
+        {
+          front: "What is glycolysis?",
+          back: "Cytosolic glucose breakdown.",
+          line_start: 4,
+          line_end: 5,
+          tags: []
+        }
+      ]
+    })
+    const createBulkMutateAsync = vi.fn().mockResolvedValue({
+      items: [{ uuid: "card-1", version: 1 }],
+      count: 1,
+      total: 1
+    })
+    vi.mocked(usePreviewStructuredQaImportMutation).mockReturnValue({
+      mutateAsync: previewMutateAsync,
+      isPending: false
+    } as any)
+    vi.mocked(useCreateFlashcardsBulkMutation).mockReturnValue({
+      mutateAsync: createBulkMutateAsync,
+      isPending: false
+    } as any)
+    vi.mocked(useImportLimitsQuery).mockReturnValue({
+      data: {
+        max_field_length: 32
+      }
+    } as any)
+
+    render(<ImportExportTab />)
+
+    const formatSelect = screen.getByTestId("flashcards-import-format")
+    fireEvent.mouseDown(
+      formatSelect.querySelector(".ant-select-selector") ?? formatSelect
+    )
+    fireEvent.click(screen.getByText("Structured Q&A"))
+
+    fireEvent.change(screen.getByTestId("flashcards-import-textarea"), {
+      target: { value: "Q: What is ATP?\nA: Primary energy currency." }
+    })
+    fireEvent.click(screen.getByTestId("flashcards-structured-preview-button"))
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("What is ATP?")).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByDisplayValue("What is glycolysis?"), {
+      target: { value: "What is glycolysis after repeated repetition?" }
+    })
+    fireEvent.click(screen.getByTestId("flashcards-structured-save-button"))
+
+    await waitFor(() => {
+      expect(createBulkMutateAsync).toHaveBeenCalledTimes(1)
+    })
+    expect(createBulkMutateAsync).toHaveBeenCalledWith([
+      expect.objectContaining({
+        front: "What is ATP?",
+        back: "Primary energy currency."
+      })
+    ])
+    expect(
+      screen.getByDisplayValue("What is glycolysis after repeated repetition?")
+    ).toBeInTheDocument()
+    expect(messageSpies.warning).toHaveBeenCalled()
+    expect(screen.getByTestId("flashcards-import-last-result")).toHaveTextContent(
+      "Last import: 1 imported, 1 skipped"
+    )
+  })
+
+  it("allows clearing the structured target deck without auto-restoring the first deck", async () => {
+    vi.mocked(useDecksQuery).mockReturnValue({
+      data: [
+        {
+          id: 7,
+          name: "Biology",
+          description: null,
+          deleted: false,
+          client_id: "test",
+          version: 1
+        }
+      ],
+      isLoading: false
+    } as any)
+
+    render(<ImportExportTab />)
+
+    const formatSelect = screen.getByTestId("flashcards-import-format")
+    fireEvent.mouseDown(
+      formatSelect.querySelector(".ant-select-selector") ?? formatSelect
+    )
+    fireEvent.click(screen.getByText("Structured Q&A"))
+
+    const deckSelect = screen.getByTestId("flashcards-structured-target-deck")
+    await waitFor(() => {
+      expect(deckSelect).toHaveTextContent("Biology")
+    })
+
+    const clearControl =
+      deckSelect.querySelector(".ant-select-clear") ??
+      within(deckSelect).queryByLabelText(/clear/i)
+    expect(clearControl).toBeTruthy()
+
+    fireEvent.mouseDown(clearControl as Element)
+    fireEvent.click(clearControl as Element)
+
+    await waitFor(() => {
+      expect(deckSelect).not.toHaveTextContent("Biology")
+    })
   })
 
   it("requires confirmation before importing large APKG files", async () => {
