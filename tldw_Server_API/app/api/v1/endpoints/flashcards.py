@@ -56,7 +56,11 @@ from tldw_Server_API.app.core.Flashcards.asset_refs import (
 from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (
     SchedulerSettingsError,
     build_next_interval_previews,
-    get_default_scheduler_settings,
+    get_default_scheduler_settings_envelope,
+)
+from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (
+    FsrsSettingsError,
+    build_fsrs_next_interval_previews,
 )
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 from tldw_Server_API.app.core.Flashcards.apkg_importer import (
@@ -79,6 +83,38 @@ _FLASHCARDS_INT_PARSE_EXCEPTIONS: tuple[type[BaseException], ...] = (
     TypeError,
     ValueError,
 )
+
+
+def _coerce_scheduler_type(value: Any) -> str:
+    return "fsrs" if str(value or "").strip().lower() == "fsrs" else "sm2_plus"
+
+
+def _parse_scheduler_settings_envelope(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, str):
+        if not raw.strip():
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def _attach_scheduler_preview(card: dict[str, Any], deck: dict[str, Any] | None) -> dict[str, Any]:
+    scheduler_type = _coerce_scheduler_type(deck.get("scheduler_type") if deck else None)
+    card["scheduler_type"] = scheduler_type
+    raw_settings = deck.get("scheduler_settings_json") if deck else None
+    queue_state = str(card.get("queue_state") or "").strip().lower()
+
+    if scheduler_type == "fsrs" and queue_state == "review":
+        envelope = _parse_scheduler_settings_envelope(raw_settings)
+        card["next_intervals"] = build_fsrs_next_interval_previews(card, envelope.get("fsrs"))
+    else:
+        card["next_intervals"] = build_next_interval_previews(card, raw_settings)
+    return card
 _FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
     CharactersRAGDBError,
@@ -383,6 +419,7 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
             payload.name,
             payload.description,
             payload.scheduler_settings.model_dump() if payload.scheduler_settings else None,
+            scheduler_type=payload.scheduler_type,
         )
         # Return the exact deck row by id
         deck = db.get_deck(deck_id)
@@ -398,11 +435,12 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
             "deleted": False,
             "client_id": "",
             "version": 1,
+            "scheduler_type": payload.scheduler_type,
             "scheduler_settings_json": None,
             "scheduler_settings": (
                 payload.scheduler_settings.model_dump()
                 if payload.scheduler_settings
-                else get_default_scheduler_settings()
+                else get_default_scheduler_settings_envelope()
             ),
         }
     except SchedulerSettingsError as e:
@@ -433,12 +471,14 @@ def update_deck(
     data = payload.model_dump(exclude_unset=True)
     expected_version = data.pop("expected_version", None)
     scheduler_settings = data.pop("scheduler_settings", None)
+    scheduler_type = data.pop("scheduler_type", None)
     try:
         ok = db.update_deck(
             deck_id,
             name=data.get("name"),
             description=data.get("description"),
             scheduler_settings=scheduler_settings,
+            scheduler_type=scheduler_type,
             expected_version=expected_version,
         )
         if not ok:
@@ -1401,6 +1441,8 @@ def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depe
     try:
         updated = db.review_flashcard(payload.card_uuid, payload.rating, payload.answer_time_ms)
         return updated
+    except (SchedulerSettingsError, FsrsSettingsError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except ConflictError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except CharactersRAGDBError as e:
@@ -1418,11 +1460,10 @@ def get_next_review_card(
         if not card:
             return {"card": None, "selection_reason": "none"}
         deck = db.get_deck(int(card["deck_id"])) if card.get("deck_id") is not None else None
-        card["next_intervals"] = build_next_interval_previews(
-            card,
-            deck.get("scheduler_settings_json") if deck else None,
-        )
+        card = _attach_scheduler_preview(card, deck)
         return {"card": card, "selection_reason": selection_reason}
+    except (SchedulerSettingsError, FsrsSettingsError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to fetch next review card: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch next review card") from e

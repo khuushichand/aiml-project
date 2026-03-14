@@ -25,6 +25,24 @@ export type DeckSchedulerSettings = {
   enable_fuzz: boolean
 }
 
+export type DeckSchedulerType = "sm2_plus" | "fsrs"
+
+export type FsrsSchedulerSettings = {
+  target_retention: number
+  maximum_interval_days: number
+  enable_fuzz: boolean
+}
+
+export type DeckSchedulerSettingsEnvelope = {
+  sm2_plus: DeckSchedulerSettings
+  fsrs: FsrsSchedulerSettings
+}
+
+export type DeckSchedulerSettingsEnvelopeUpdate = {
+  sm2_plus?: Partial<DeckSchedulerSettings>
+  fsrs?: Partial<FsrsSchedulerSettings>
+}
+
 export type FlashcardIntervalPreviews = {
   again: string
   hard: string
@@ -112,8 +130,9 @@ export type Deck = {
   version: number
   created_at?: string | null
   last_modified?: string | null
+  scheduler_type: DeckSchedulerType
   scheduler_settings_json?: string | null
-  scheduler_settings: DeckSchedulerSettings
+  scheduler_settings: DeckSchedulerSettingsEnvelope
 }
 
 export type Flashcard = {
@@ -141,6 +160,7 @@ export type Flashcard = {
   version: number
   model_type: "basic" | "basic_reverse" | "cloze"
   reverse: boolean
+  scheduler_type?: DeckSchedulerType | null
   source_ref_type?: "media" | "message" | "note" | "manual" | null
   source_ref_id?: string | null
   conversation_id?: string | null
@@ -151,14 +171,16 @@ export type Flashcard = {
 export type DeckUpdate = {
   name?: string | null
   description?: string | null
-  scheduler_settings?: Partial<DeckSchedulerSettings> | null
+  scheduler_type?: DeckSchedulerType | null
+  scheduler_settings?: DeckSchedulerSettingsEnvelopeUpdate | null
   expected_version?: number | null
 }
 
 export type DeckCreateInput = {
   name: string
   description?: string | null
-  scheduler_settings?: DeckSchedulerSettings | null
+  scheduler_type?: DeckSchedulerType | null
+  scheduler_settings?: DeckSchedulerSettingsEnvelope | null
 }
 
 export type FlashcardCreate = {
@@ -260,6 +282,7 @@ export type FlashcardReviewResponse = {
   last_reviewed_at?: string | null
   last_modified?: string | null
   version: number
+  scheduler_type: DeckSchedulerType
   queue_state: Flashcard["queue_state"]
   step_index?: number | null
   suspended_reason?: Flashcard["suspended_reason"]

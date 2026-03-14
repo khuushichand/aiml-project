@@ -48,15 +48,8 @@ vi.mock("../../hooks/useFlashcardQueries", () => ({
 const updateDeckMock = vi.fn()
 const refetchDecksMock = vi.fn()
 
-const biologyDeck = {
-  id: 1,
-  name: "Biology",
-  description: "Cells",
-  deleted: false,
-  client_id: "test",
-  version: 2,
-  scheduler_settings_json: null,
-  scheduler_settings: {
+const biologySettings = {
+  sm2_plus: {
     new_steps_minutes: [1, 10],
     relearn_steps_minutes: [10],
     graduating_interval_days: 1,
@@ -66,18 +59,16 @@ const biologyDeck = {
     max_interval_days: 36500,
     leech_threshold: 8,
     enable_fuzz: false
+  },
+  fsrs: {
+    target_retention: 0.9,
+    maximum_interval_days: 36500,
+    enable_fuzz: false
   }
 }
 
-const chemistryDeck = {
-  id: 2,
-  name: "Chemistry",
-  description: "Atoms",
-  deleted: false,
-  client_id: "test",
-  version: 5,
-  scheduler_settings_json: null,
-  scheduler_settings: {
+const chemistrySettings = {
+  sm2_plus: {
     new_steps_minutes: [2, 20],
     relearn_steps_minutes: [15],
     graduating_interval_days: 2,
@@ -87,7 +78,36 @@ const chemistryDeck = {
     max_interval_days: 180,
     leech_threshold: 6,
     enable_fuzz: true
+  },
+  fsrs: {
+    target_retention: 0.88,
+    maximum_interval_days: 1825,
+    enable_fuzz: true
   }
+}
+
+const biologyDeck = {
+  id: 1,
+  name: "Biology",
+  description: "Cells",
+  deleted: false,
+  client_id: "test",
+  version: 2,
+  scheduler_type: "sm2_plus",
+  scheduler_settings_json: null,
+  scheduler_settings: biologySettings
+}
+
+const chemistryDeck = {
+  id: 2,
+  name: "Chemistry",
+  description: "Atoms",
+  deleted: false,
+  client_id: "test",
+  version: 5,
+  scheduler_type: "sm2_plus",
+  scheduler_settings_json: null,
+  scheduler_settings: chemistrySettings
 }
 
 let decksData = [biologyDeck, chemistryDeck]
@@ -127,26 +147,26 @@ describe("SchedulerTab editor", () => {
   it("applies presets, copies another deck, and resets to defaults", async () => {
     render(<SchedulerTab isActive />)
 
-    expect(screen.getByTestId("flashcards-scheduler-field-new-steps")).toHaveValue("1, 10")
+    expect(screen.getByTestId("deck-scheduler-editor-field-new-steps")).toHaveValue("1, 10")
 
     fireEvent.click(screen.getByRole("button", { name: /fast acquisition/i }))
-    expect(screen.getByTestId("flashcards-scheduler-field-new-steps")).toHaveValue("1, 5, 15")
+    expect(screen.getByTestId("deck-scheduler-editor-field-new-steps")).toHaveValue("1, 5, 15")
 
     fireEvent.change(screen.getByTestId("flashcards-scheduler-copy-select"), {
       target: { value: "2" }
     })
     fireEvent.click(screen.getByRole("button", { name: /copy settings/i }))
-    expect(screen.getByTestId("flashcards-scheduler-field-new-steps")).toHaveValue("2, 20")
+    expect(screen.getByTestId("deck-scheduler-editor-field-new-steps")).toHaveValue("2, 20")
 
-    fireEvent.click(screen.getByRole("button", { name: /reset to defaults/i }))
-    expect(screen.getByTestId("flashcards-scheduler-field-new-steps")).toHaveValue("1, 10")
-    expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("8")
+    fireEvent.click(screen.getByTestId("deck-scheduler-editor-reset"))
+    expect(screen.getByTestId("deck-scheduler-editor-field-new-steps")).toHaveValue("1, 10")
+    expect(screen.getByTestId("deck-scheduler-editor-field-leech-threshold")).toHaveValue("8")
   })
 
   it("blocks save when client validation fails", async () => {
     render(<SchedulerTab isActive />)
 
-    fireEvent.change(screen.getByTestId("flashcards-scheduler-field-leech-threshold"), {
+    fireEvent.change(screen.getByTestId("deck-scheduler-editor-field-leech-threshold"), {
       target: { value: "0" }
     })
     fireEvent.click(screen.getByRole("button", { name: /save changes/i }))
@@ -160,14 +180,17 @@ describe("SchedulerTab editor", () => {
       ...biologyDeck,
       version: 3,
       scheduler_settings: {
-        ...biologyDeck.scheduler_settings,
-        leech_threshold: 9
+        ...biologySettings,
+        sm2_plus: {
+          ...biologySettings.sm2_plus,
+          leech_threshold: 9
+        }
       }
     })
 
     render(<SchedulerTab isActive />)
 
-    fireEvent.change(screen.getByTestId("flashcards-scheduler-field-leech-threshold"), {
+    fireEvent.change(screen.getByTestId("deck-scheduler-editor-field-leech-threshold"), {
       target: { value: "9" }
     })
     fireEvent.click(screen.getByRole("button", { name: /save changes/i }))
@@ -176,16 +199,20 @@ describe("SchedulerTab editor", () => {
       expect(updateDeckMock).toHaveBeenCalledWith({
         deckId: 1,
         update: {
+          scheduler_type: "sm2_plus",
           scheduler_settings: {
-            new_steps_minutes: [1, 10],
-            relearn_steps_minutes: [10],
-            graduating_interval_days: 1,
-            easy_interval_days: 4,
-            easy_bonus: 1.3,
-            interval_modifier: 1,
-            max_interval_days: 36500,
-            leech_threshold: 9,
-            enable_fuzz: false
+            sm2_plus: {
+              new_steps_minutes: [1, 10],
+              relearn_steps_minutes: [10],
+              graduating_interval_days: 1,
+              easy_interval_days: 4,
+              easy_bonus: 1.3,
+              interval_modifier: 1,
+              max_interval_days: 36500,
+              leech_threshold: 9,
+              enable_fuzz: false
+            },
+            fsrs: biologySettings.fsrs
           },
           expected_version: 2
         }
@@ -204,21 +231,24 @@ describe("SchedulerTab editor", () => {
 
     render(<SchedulerTab isActive />)
 
-    fireEvent.change(screen.getByTestId("flashcards-scheduler-field-leech-threshold"), {
+    fireEvent.change(screen.getByTestId("deck-scheduler-editor-field-leech-threshold"), {
       target: { value: "9" }
     })
     fireEvent.click(screen.getByRole("button", { name: /save changes/i }))
 
     await screen.findByText(/deck settings changed elsewhere/i)
-    expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("8")
+    expect(screen.getByTestId("deck-scheduler-editor-field-leech-threshold")).toHaveValue("8")
 
     decksData = [
       {
         ...biologyDeck,
         version: 3,
         scheduler_settings: {
-          ...biologyDeck.scheduler_settings,
-          leech_threshold: 12
+          ...biologySettings,
+          sm2_plus: {
+            ...biologySettings.sm2_plus,
+            leech_threshold: 12
+          }
         }
       },
       chemistryDeck
@@ -227,23 +257,23 @@ describe("SchedulerTab editor", () => {
 
     await waitFor(() => {
       expect(refetchDecksMock).toHaveBeenCalled()
-      expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("12")
+      expect(screen.getByTestId("deck-scheduler-editor-field-leech-threshold")).toHaveValue("12")
     })
 
-    fireEvent.change(screen.getByTestId("flashcards-scheduler-field-leech-threshold"), {
+    fireEvent.change(screen.getByTestId("deck-scheduler-editor-field-leech-threshold"), {
       target: { value: "9" }
     })
     fireEvent.click(screen.getByRole("button", { name: /save changes/i }))
 
     await screen.findByText(/deck settings changed elsewhere/i)
     fireEvent.click(screen.getByRole("button", { name: /reapply my draft/i }))
-    expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("9")
+    expect(screen.getByTestId("deck-scheduler-editor-field-leech-threshold")).toHaveValue("9")
   })
 
   it("keeps the active draft when deck search hides the selected deck", () => {
     render(<SchedulerTab isActive />)
 
-    fireEvent.change(screen.getByTestId("flashcards-scheduler-field-leech-threshold"), {
+    fireEvent.change(screen.getByTestId("deck-scheduler-editor-field-leech-threshold"), {
       target: { value: "11" }
     })
     fireEvent.change(screen.getByPlaceholderText(/search decks/i), {
@@ -251,7 +281,7 @@ describe("SchedulerTab editor", () => {
     })
 
     expect(screen.getByText("Biology Scheduler")).toBeInTheDocument()
-    expect(screen.getByTestId("flashcards-scheduler-field-leech-threshold")).toHaveValue("11")
+    expect(screen.getByTestId("deck-scheduler-editor-field-leech-threshold")).toHaveValue("11")
   })
 
   it("loads active-deck counts only for the selected deck and guards dirty deck switches", async () => {
@@ -264,7 +294,7 @@ describe("SchedulerTab editor", () => {
     expect(screen.getByText(/due review/i)).toBeInTheDocument()
     expect(screen.getByText("3")).toBeInTheDocument()
 
-    fireEvent.change(screen.getByTestId("flashcards-scheduler-field-leech-threshold"), {
+    fireEvent.change(screen.getByTestId("deck-scheduler-editor-field-leech-threshold"), {
       target: { value: "11" }
     })
     fireEvent.click(screen.getByRole("button", { name: /chemistry/i }))

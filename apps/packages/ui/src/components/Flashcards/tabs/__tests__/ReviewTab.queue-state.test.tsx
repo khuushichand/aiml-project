@@ -102,7 +102,8 @@ if (!(globalThis as any).ResizeObserver) {
 
 const makeCard = (
   queueState: "new" | "learning" | "review" | "relearning" | "suspended",
-  suspendedReason: "manual" | "leech" | null = null
+  suspendedReason: "manual" | "leech" | null = null,
+  schedulerType: "sm2_plus" | "fsrs" = "sm2_plus"
 ) => ({
   uuid: `card-${queueState}`,
   deck_id: 1,
@@ -126,6 +127,7 @@ const makeCard = (
   version: 2,
   model_type: "basic" as const,
   reverse: false,
+  scheduler_type: schedulerType,
   next_intervals: {
     again: "1 min",
     hard: "10 min",
@@ -183,5 +185,25 @@ describe("ReviewTab queue state visibility", () => {
     )
 
     expect(screen.getByTestId("flashcards-review-queue-state")).toHaveTextContent(expectedLabel)
+    expect(screen.getByTestId("flashcards-review-scheduler-type")).toHaveTextContent("SM-2+")
+  })
+
+  it("renders an FSRS scheduler badge when the active card uses the FSRS deck scheduler", () => {
+    vi.mocked(useReviewQuery).mockReturnValue({
+      data: makeCard("review", null, "fsrs"),
+      refetch: vi.fn().mockResolvedValue(undefined)
+    } as any)
+
+    render(
+      <ReviewTab
+        onNavigateToCreate={() => {}}
+        onNavigateToImport={() => {}}
+        reviewDeckId={1}
+        onReviewDeckChange={() => {}}
+        isActive
+      />
+    )
+
+    expect(screen.getByTestId("flashcards-review-scheduler-type")).toHaveTextContent("FSRS")
   })
 })

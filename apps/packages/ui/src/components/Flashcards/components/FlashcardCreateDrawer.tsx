@@ -215,7 +215,8 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
       if (!schedulerSettings) return
       const deck = await createDeckMutation.mutateAsync({
         name: inlineDeckName.trim(),
-        scheduler_settings: schedulerSettings
+        scheduler_type: schedulerSettings.scheduler_type,
+        scheduler_settings: schedulerSettings.scheduler_settings
       })
       message.success(t("common:created", { defaultValue: "Created" }))
       setShowInlineCreate(false)
@@ -416,12 +417,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
                 />
               </div>
               <DeckSchedulerSettingsEditor
-                draft={inlineSchedulerDraft.draft}
-                errors={inlineSchedulerDraft.errors}
-                summary={inlineSchedulerDraft.summary}
-                onFieldChange={inlineSchedulerDraft.updateField}
-                onApplyPreset={inlineSchedulerDraft.applyPreset}
-                onResetDefaults={inlineSchedulerDraft.resetToDefaults}
+                schedulerDraft={inlineSchedulerDraft}
               />
               <div className="flex items-center gap-2">
                 <Button
@@ -455,7 +451,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
 
           {!showInlineCreate && selectedDeck && (
             <Text type="secondary" className="block text-xs -mt-2 mb-3">
-              {formatSchedulerSummary(selectedDeck.scheduler_settings)}
+              {formatSchedulerSummary(selectedDeck.scheduler_type, selectedDeck.scheduler_settings)}
             </Text>
           )}
 

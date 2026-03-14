@@ -43,12 +43,7 @@ export const NewDeckConfigurationFields: React.FC<NewDeckConfigurationFieldsProp
       </label>
 
       <DeckSchedulerSettingsEditor
-        draft={schedulerDraft.draft}
-        errors={schedulerDraft.errors}
-        summary={schedulerDraft.summary}
-        onFieldChange={schedulerDraft.updateField}
-        onApplyPreset={schedulerDraft.applyPreset}
-        onResetDefaults={schedulerDraft.resetToDefaults}
+        schedulerDraft={schedulerDraft}
       />
 
       {hint ? (

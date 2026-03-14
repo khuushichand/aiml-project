@@ -825,7 +825,8 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
             return {
               question_ids: questionIds,
               create_deck_name: trimmedDeckName,
-              create_deck_scheduler_settings: schedulerSettings,
+              create_deck_scheduler_type: schedulerSettings.scheduler_type,
+              create_deck_scheduler_settings: schedulerSettings.scheduler_settings,
               replace_active: replaceActive
             } as const
           })()
@@ -994,7 +995,10 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
               >
                 {t("option:flashcards.selectedDeckSchedulerSummary", {
                   defaultValue: "Scheduler: {{summary}}",
-                  summary: formatSchedulerSummary(selectedDeck.scheduler_settings)
+                  summary: formatSchedulerSummary(
+                    selectedDeck.scheduler_type,
+                    selectedDeck.scheduler_settings
+                  )
                 })}
               </Text>
             ) : null}
