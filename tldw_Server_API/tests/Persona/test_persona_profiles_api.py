@@ -396,7 +396,7 @@ def test_persona_profile_voice_defaults_clamps_turn_detection_values(persona_db:
     fastapi_app.dependency_overrides.clear()
 
 
-def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGDB):
+def test_persona_profile_setup_run_id_defaults_and_roundtrip(persona_db: CharactersRAGDB):
     with _client_for_user(1, persona_db) as client:
         created = client.post(
             "/api/v1/persona/profiles",
@@ -411,6 +411,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
         assert payload["setup"] == {
             "status": "not_started",
             "version": 1,
+            "run_id": None,
             "current_step": "persona",
             "completed_steps": [],
             "completed_at": None,
@@ -423,6 +424,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
                 "setup": {
                     "status": "in_progress",
                     "version": 1,
+                    "run_id": "setup-run-1",
                     "current_step": "commands",
                     "completed_steps": ["persona", "voice"],
                     "completed_at": None,
@@ -435,6 +437,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
         assert updated_payload["setup"] == {
             "status": "in_progress",
             "version": 1,
+            "run_id": "setup-run-1",
             "current_step": "commands",
             "completed_steps": ["persona", "voice"],
             "completed_at": None,
@@ -447,6 +450,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
                 "setup": {
                     "status": "completed",
                     "version": 1,
+                    "run_id": "setup-run-1",
                     "current_step": "test",
                     "completed_steps": ["persona", "voice", "commands", "safety", "test"],
                     "completed_at": "2026-03-13T10:00:00Z",
@@ -459,6 +463,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
         assert completed_payload["setup"] == {
             "status": "completed",
             "version": 1,
+            "run_id": "setup-run-1",
             "current_step": "test",
             "completed_steps": ["persona", "voice", "commands", "safety", "test"],
             "completed_at": "2026-03-13T10:00:00Z",
@@ -471,6 +476,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
         assert fetched_payload["setup"] == {
             "status": "completed",
             "version": 1,
+            "run_id": "setup-run-1",
             "current_step": "test",
             "completed_steps": ["persona", "voice", "commands", "safety", "test"],
             "completed_at": "2026-03-13T10:00:00Z",
@@ -486,6 +492,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
         assert listed_profile["setup"] == {
             "status": "completed",
             "version": 1,
+            "run_id": "setup-run-1",
             "current_step": "test",
             "completed_steps": ["persona", "voice", "commands", "safety", "test"],
             "completed_at": "2026-03-13T10:00:00Z",
@@ -498,6 +505,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
                 "setup": {
                     "status": "in_progress",
                     "version": 1,
+                    "run_id": "setup-run-2",
                     "current_step": "persona",
                     "completed_steps": [],
                     "completed_at": None,
@@ -510,6 +518,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
         assert reset_payload["setup"] == {
             "status": "in_progress",
             "version": 1,
+            "run_id": "setup-run-2",
             "current_step": "persona",
             "completed_steps": [],
             "completed_at": None,
@@ -522,6 +531,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
                 "setup": {
                     "status": "completed",
                     "version": 1,
+                    "run_id": "setup-run-2",
                     "current_step": "test",
                     "completed_steps": ["persona", "voice", "commands", "safety", "test"],
                     "completed_at": "2026-03-13T10:05:00Z",
@@ -534,6 +544,7 @@ def test_persona_profile_setup_defaults_and_roundtrip(persona_db: CharactersRAGD
         assert completed_live_payload["setup"] == {
             "status": "completed",
             "version": 1,
+            "run_id": "setup-run-2",
             "current_step": "test",
             "completed_steps": ["persona", "voice", "commands", "safety", "test"],
             "completed_at": "2026-03-13T10:05:00Z",

@@ -17,7 +17,7 @@ import uuid
 from typing import Any
 from urllib.parse import urljoin
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect, status
 from loguru import logger
 from starlette.requests import Request as StarletteRequest
 
@@ -47,6 +47,11 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaProfileCreate,
     PersonaProfileResponse,
     PersonaProfileUpdate,
+    PersonaSetupAnalyticsResponse,
+    PersonaSetupAnalyticsRunSummary,
+    PersonaSetupAnalyticsSummary,
+    PersonaSetupEventCreate,
+    PersonaSetupEventWriteResponse,
     PersonaSetupState,
     PersonaVoiceDefaults,
     PersonaStateHistoryResponse,
@@ -3241,6 +3246,106 @@ async def replace_persona_policy_rules(
         raise
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         raise _to_http_exception(exc, action="replace persona policy rules") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/setup-analytics",
+    response_model=PersonaSetupAnalyticsResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def get_persona_setup_analytics(
+    persona_id: str,
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=50),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaSetupAnalyticsResponse:
+    """Return aggregated setup analytics and recent setup runs for one persona."""
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        analytics = db.get_persona_setup_analytics_summary(
+            user_id=int(user_id),
+            persona_id=persona_id,
+            days=days,
+            recent_run_limit=limit,
+        )
+        return PersonaSetupAnalyticsResponse(
+            persona_id=persona_id,
+            summary=PersonaSetupAnalyticsSummary.model_validate(
+                analytics.get("summary") or {}
+            ),
+            recent_runs=[
+                PersonaSetupAnalyticsRunSummary.model_validate(item)
+                for item in analytics.get("recent_runs") or []
+            ],
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="get persona setup analytics") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/setup-events",
+    response_model=PersonaSetupEventWriteResponse,
+    tags=["persona"],
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def create_persona_setup_event(
+    persona_id: str,
+    payload: PersonaSetupEventCreate = Body(...),
+    response: Response = None,
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaSetupEventWriteResponse:
+    """Append one persona setup analytics event and return its dedupe status."""
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    try:
+        await _get_persona_profile_or_404(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            include_deleted=False,
+        )
+        event_row = db.record_persona_setup_event(
+            user_id=int(user_id),
+            persona_id=persona_id,
+            event_id=payload.event_id,
+            run_id=payload.run_id,
+            event_type=payload.event_type,
+            event_key=payload.event_key,
+            step=payload.step,
+            completion_type=payload.completion_type,
+            detour_source=payload.detour_source,
+            action_target=payload.action_target,
+            metadata=payload.metadata,
+        )
+        if bool(event_row.get("deduped")) and response is not None:
+            response.status_code = status.HTTP_200_OK
+        return PersonaSetupEventWriteResponse(
+            event_id=str(event_row.get("event_id") or payload.event_id),
+            run_id=str(event_row.get("run_id") or payload.run_id),
+            event_type=str(event_row.get("event_type") or payload.event_type),
+            deduped=bool(event_row.get("deduped")),
+            created_at=str(event_row.get("created_at") or "").strip() or None,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _to_http_exception(exc, action="record persona setup event") from exc
 
 
 @router.get(

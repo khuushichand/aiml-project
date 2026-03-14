@@ -19,10 +19,14 @@ import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCar
 import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
 import {
   PersonaSetupHandoffCard,
+  type SetupHandoffRecommendedAction,
   type SetupReviewSummary
 } from "@/components/PersonaGarden/PersonaSetupHandoffCard"
 import { AssistantSetupWizard } from "@/components/PersonaGarden/AssistantSetupWizard"
-import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
+import {
+  CommandsPanel,
+  type CommandDraftSource
+} from "@/components/PersonaGarden/CommandsPanel"
 import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
 import { LiveSessionPanel } from "@/components/PersonaGarden/LiveSessionPanel"
 import { PersonaGardenTabs } from "@/components/PersonaGarden/PersonaGardenTabs"
@@ -39,7 +43,10 @@ import {
   type SetupTestOutcome
 } from "@/components/PersonaGarden/SetupTestAndFinishStep"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
-import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
+import {
+  TestLabPanel,
+  type TestLabDryRunCompletedResult,
+} from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import {
   getPersonaStarterCommandTemplate,
@@ -53,6 +60,12 @@ import {
   fetchCompanionConversationPrompts,
   isCompanionConsentRequiredResponse
 } from "@/services/companion"
+import {
+  buildSetupEventKey,
+  postPersonaSetupEvent,
+  type PersonaSetupAnalyticsEvent,
+  type PersonaSetupAnalyticsEventType
+} from "@/services/tldw/persona-setup-analytics"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { buildPersonaWebSocketUrl } from "@/services/persona-stream"
 import {
@@ -218,9 +231,31 @@ type SetupStepErrors = {
 }
 
 type SetupHandoffState = {
+  runId: string
   targetTab: PersonaGardenTabKey
   completionType: "dry_run" | "live_session"
   reviewSummary: SetupReviewSummary
+  recommendedAction: SetupHandoffRecommendedAction
+  consumedAction: SetupHandoffConsumedAction | null
+  compact: boolean
+}
+
+type SetupHandoffConsumedAction =
+  | "command_saved"
+  | "connection_saved"
+  | "connection_test_succeeded"
+  | "voice_defaults_saved"
+  | "dry_run_match"
+  | "live_response_received"
+
+type SetupCommandDetourState = {
+  phrase: string
+  returnStep: "test"
+}
+
+type SetupLiveDetourState = {
+  source: "live_unavailable" | "live_failure"
+  lastText: string
 }
 
 const DEFAULT_SETUP_REVIEW_SUMMARY: SetupReviewSummary = {
@@ -281,6 +316,37 @@ const summarizeFallbackStarterCommands = (value: unknown): SetupReviewSummary["s
   }
 
   return { mode: "skipped" }
+}
+
+const deriveSetupHandoffRecommendedAction = ({
+  completionType,
+  reviewSummary
+}: {
+  completionType: "dry_run" | "live_session"
+  reviewSummary: SetupReviewSummary
+}): SetupHandoffRecommendedAction => {
+  if (reviewSummary.starterCommands.mode === "skipped") {
+    return "add_command"
+  }
+  if (reviewSummary.connection.mode === "skipped") {
+    return "add_connection"
+  }
+  if (completionType === "dry_run") {
+    return "try_live"
+  }
+  return "review_commands"
+}
+
+const toSetupHandoffActionTarget = (
+  action: SetupHandoffConsumedAction
+): PersonaGardenTabKey => {
+  if (action === "command_saved") return "commands"
+  if (action === "connection_saved" || action === "connection_test_succeeded") {
+    return "connections"
+  }
+  if (action === "voice_defaults_saved") return "profiles"
+  if (action === "live_response_received") return "live"
+  return "test-lab"
 }
 
 type PersonaStateDocsResponse = {
@@ -589,6 +655,10 @@ const SidepanelPersona = ({
   const runtimeApprovalRowRefs = React.useRef<Map<string, HTMLDivElement | null>>(
     new Map()
   )
+  const emittedSetupEventKeysRef = React.useRef<Set<string>>(new Set())
+  const setupLiveDetourRef = React.useRef<SetupLiveDetourState | null>(null)
+  const setupHandoffRef = React.useRef<SetupHandoffState | null>(null)
+  const activeTabRef = React.useRef<PersonaGardenTabKey>("live")
   const resolvedApprovalFadeTimerRef = React.useRef<number | null>(null)
   const approvalHighlightPhaseTimerRef = React.useRef<number | null>(null)
 
@@ -619,9 +689,17 @@ const SidepanelPersona = ({
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
   const [openCommandId, setOpenCommandId] = React.useState<string | null>(null)
   const [draftCommandPhrase, setDraftCommandPhrase] = React.useState<string | null>(null)
+  const [draftCommandSource, setDraftCommandSource] =
+    React.useState<CommandDraftSource | null>(null)
   const [rerunAfterSaveCommandId, setRerunAfterSaveCommandId] =
     React.useState<string | null>(null)
   const [lastTestLabPhrase, setLastTestLabPhrase] = React.useState("")
+  const [setupCommandDetour, setSetupCommandDetour] =
+    React.useState<SetupCommandDetourState | null>(null)
+  const [setupLiveDetour, setSetupLiveDetour] =
+    React.useState<SetupLiveDetourState | null>(null)
+  const [setupNoMatchPhrase, setSetupNoMatchPhrase] = React.useState<string | null>(null)
+  const [setupTestResumeNote, setSetupTestResumeNote] = React.useState<string | null>(null)
   const [testLabRerunToken, setTestLabRerunToken] = React.useState(0)
   const [pendingRecoveryReconnectToken, setPendingRecoveryReconnectToken] =
     React.useState(0)
@@ -705,6 +783,18 @@ const SidepanelPersona = ({
     setActiveTab,
     setSelectedPersonaId
   })
+
+  React.useEffect(() => {
+    setupLiveDetourRef.current = setupLiveDetour
+  }, [setupLiveDetour])
+
+  React.useEffect(() => {
+    setupHandoffRef.current = setupHandoff
+  }, [setupHandoff])
+
+  React.useEffect(() => {
+    activeTabRef.current = activeTab
+  }, [activeTab])
 
   React.useEffect(() => {
     if (!isCompanionMode) return
@@ -898,14 +988,64 @@ const SidepanelPersona = ({
       savedPersonaSetup
     ]
   )
+  const createSetupRunId = React.useCallback(() => {
+    if (
+      typeof globalThis !== "undefined" &&
+      typeof globalThis.crypto?.randomUUID === "function"
+    ) {
+      return `setup-run-${globalThis.crypto.randomUUID()}`
+    }
+    return `setup-run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  }, [])
+  const currentSetupRunId = React.useMemo(() => {
+    const normalized = String(savedPersonaSetup?.run_id || "").trim()
+    return normalized || null
+  }, [savedPersonaSetup?.run_id])
+  const emitSetupAnalyticsEvent = React.useCallback(
+    (event: Omit<PersonaSetupAnalyticsEvent, "runId"> & { runId?: string; personaId?: string }) => {
+      const personaId = String(event.personaId || selectedPersonaId || "").trim()
+      const runId = String(event.runId || currentSetupRunId || "").trim()
+      if (!personaId || !runId) return
+
+      const eventType = event.eventType as PersonaSetupAnalyticsEventType
+      const eventKey = buildSetupEventKey({
+        eventType,
+        step: event.step,
+        detourSource: event.detourSource || undefined
+      })
+      if (eventKey) {
+        const dedupeKey = `${personaId}:${runId}:${eventKey}`
+        if (emittedSetupEventKeysRef.current.has(dedupeKey)) return
+        emittedSetupEventKeysRef.current.add(dedupeKey)
+      }
+
+      void postPersonaSetupEvent(personaId, {
+        runId,
+        eventType,
+        step: event.step,
+        completionType: event.completionType,
+        detourSource: event.detourSource || undefined,
+        actionTarget: event.actionTarget || undefined,
+        metadata: event.metadata
+      })
+    },
+    [currentSetupRunId, selectedPersonaId]
+  )
   const setSetupStepError = React.useCallback(
     (step: PersonaSetupStep, message: string | null) => {
       setSetupStepErrors((current) => ({
         ...current,
         [step]: message
       }))
+      if (message) {
+        emitSetupAnalyticsEvent({
+          eventType: "step_error",
+          step,
+          metadata: { message }
+        })
+      }
     },
-    []
+    [emitSetupAnalyticsEvent]
   )
   const clearSetupStepError = React.useCallback(
     (step: PersonaSetupStep) => {
@@ -1001,23 +1141,46 @@ const SidepanelPersona = ({
     }
     setSetupWizardDryRunLoading(false)
     setSetupTestOutcome(null)
+    setSetupTestResumeNote(null)
+    setSetupCommandDetour(null)
+    setSetupLiveDetour(null)
+    setSetupNoMatchPhrase(null)
     setupWizardLastLiveTextRef.current = ""
     setupWizardAwaitingLiveResponseRef.current = false
   }, [personaSetupWizard.currentStep, personaSetupWizard.isSetupRequired])
 
+  React.useEffect(() => {
+    if (!personaSetupWizard.isSetupRequired) return
+    if (!currentSetupRunId) return
+    void emitSetupAnalyticsEvent({
+      eventType: "step_viewed",
+      step: personaSetupWizard.currentStep,
+      runId: currentSetupRunId
+    })
+  }, [
+    currentSetupRunId,
+    emitSetupAnalyticsEvent,
+    personaSetupWizard.currentStep,
+    personaSetupWizard.isSetupRequired
+  ])
+
   const buildPersonaSetupInProgress = React.useCallback(
     (
       step: PersonaSetupState["current_step"] = "voice",
-      completedSteps: PersonaSetupStep[] = []
+      completedSteps: PersonaSetupStep[] = [],
+      options?: { runId?: string | null }
     ): PersonaSetupState => ({
       status: "in_progress",
       version: 1,
+      run_id:
+        String(options?.runId || savedPersonaSetup?.run_id || "").trim() ||
+        createSetupRunId(),
       current_step: step || "voice",
       completed_steps: completedSteps,
       completed_at: null,
       last_test_type: null
     }),
-    []
+    [createSetupRunId, savedPersonaSetup?.run_id]
   )
 
   const mergeCompletedSetupSteps = React.useCallback(
@@ -1100,6 +1263,12 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         applyPersonaProfileResponse(payload, { setup: nextSetup })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "step_completed",
+          step: "voice"
+        })
       } catch (setupError: any) {
         setSetupStepError(
           "voice",
@@ -1114,6 +1283,7 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
+      emitSetupAnalyticsEvent,
       mergeCompletedSetupSteps,
       setSetupStepError,
       selectedPersonaId
@@ -1150,6 +1320,14 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         applyPersonaProfileResponse(payload, { setup: nextSetup })
+        if (completedStep) {
+          void emitSetupAnalyticsEvent({
+            personaId,
+            runId: nextSetup.run_id || undefined,
+            eventType: "step_completed",
+            step: completedStep
+          })
+        }
       } catch (setupError: any) {
         setSetupStepError(errorStep, String(setupError?.message || errorMessage))
       } finally {
@@ -1161,6 +1339,7 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
+      emitSetupAnalyticsEvent,
       mergeCompletedSetupSteps,
       setSetupStepError,
       selectedPersonaId
@@ -1227,6 +1406,7 @@ const SidepanelPersona = ({
     const normalizedHeardText = String(heardText || "").trim()
     if (!normalizedCommandId) return
     setDraftCommandPhrase(null)
+    setDraftCommandSource(null)
     setOpenCommandId(normalizedCommandId)
     setRerunAfterSaveCommandId(normalizedCommandId)
     setLastTestLabPhrase(normalizedHeardText)
@@ -1239,9 +1419,65 @@ const SidepanelPersona = ({
     setOpenCommandId(null)
     setRerunAfterSaveCommandId(null)
     setDraftCommandPhrase(normalizedHeardText)
+    setDraftCommandSource("test_lab")
     setLastTestLabPhrase(normalizedHeardText)
     setActiveTab("commands")
   }, [])
+
+  const handleCreateCommandFromSetupNoMatch = React.useCallback((heardText: string) => {
+    const normalizedHeardText = String(heardText || "").trim()
+    if (!normalizedHeardText) return
+    setOpenCommandId(null)
+    setRerunAfterSaveCommandId(null)
+    setDraftCommandPhrase(normalizedHeardText)
+    setDraftCommandSource("setup_no_match")
+    setSetupNoMatchPhrase(normalizedHeardText)
+    setSetupTestResumeNote(null)
+    setSetupCommandDetour({
+      phrase: normalizedHeardText,
+      returnStep: "test"
+    })
+    setActiveTab("commands")
+    void emitSetupAnalyticsEvent({
+      eventType: "detour_started",
+      step: "test",
+      detourSource: "dry_run_no_match"
+    })
+  }, [emitSetupAnalyticsEvent])
+
+  const handleRecoverSetupInLiveSession = React.useCallback(
+    (context: { source: "live_unavailable" | "live_failure"; text: string }) => {
+      setSetupLiveDetour({
+        source: context.source,
+        lastText: String(context.text || "").trim()
+      })
+      setSetupTestResumeNote(null)
+      setActiveTab("live")
+      void emitSetupAnalyticsEvent({
+        eventType: "detour_started",
+        step: "test",
+        detourSource: context.source
+      })
+      if (context.source === "live_unavailable" && !connected && !connecting) {
+        setPendingRecoveryReconnectToken((current) => current + 1)
+      }
+    },
+    [connected, connecting, emitSetupAnalyticsEvent]
+  )
+
+  const handleReturnToSetupFromLiveDetour = React.useCallback(() => {
+    const detourSource = setupLiveDetour?.source || null
+    setSetupLiveDetour(null)
+    setupWizardAwaitingLiveResponseRef.current = false
+    setSetupTestResumeNote("Live session is still available if you want to retry.")
+    if (detourSource) {
+      void emitSetupAnalyticsEvent({
+        eventType: "detour_returned",
+        step: "test",
+        detourSource
+      })
+    }
+  }, [emitSetupAnalyticsEvent, setupLiveDetour?.source])
 
   const handleOpenCommandHandled = React.useCallback((commandId: string) => {
     const normalizedCommandId = String(commandId || "").trim()
@@ -1257,6 +1493,7 @@ const SidepanelPersona = ({
     setDraftCommandPhrase((current) =>
       current === normalizedHeardText ? null : current
     )
+    setDraftCommandSource(null)
   }, [])
 
   const handleRerunAfterCommandSave = React.useCallback((commandId: string) => {
@@ -1269,6 +1506,68 @@ const SidepanelPersona = ({
     }
     setRerunAfterSaveCommandId(null)
   }, [lastTestLabPhrase, rerunAfterSaveCommandId])
+
+  const consumeSetupHandoffAction = React.useCallback(
+    (action: SetupHandoffConsumedAction) => {
+      const currentHandoff = setupHandoffRef.current
+      if (!currentHandoff || currentHandoff.compact || currentHandoff.consumedAction) {
+        return
+      }
+      void emitSetupAnalyticsEvent({
+        runId: currentHandoff.runId,
+        eventType: "first_post_setup_action",
+        actionTarget: toSetupHandoffActionTarget(action)
+      })
+      setSetupHandoff((existing) => {
+        if (
+          !existing ||
+          existing.runId !== currentHandoff.runId ||
+          existing.compact ||
+          existing.consumedAction
+        ) {
+          return existing
+        }
+        return {
+          ...existing,
+          compact: true,
+          consumedAction: action
+        }
+      })
+    },
+    [emitSetupAnalyticsEvent]
+  )
+
+  const handleSetupDetourCommandSaved = React.useCallback(
+    (_commandId: string, context: { fromDraft: boolean }) => {
+      if (!setupCommandDetour || !context.fromDraft) return
+      if (setupCommandDetour.returnStep !== "test") return
+      void emitSetupAnalyticsEvent({
+        eventType: "detour_returned",
+        step: "test",
+        detourSource: "dry_run_no_match"
+      })
+      setSetupCommandDetour(null)
+      setDraftCommandPhrase(null)
+      setDraftCommandSource(null)
+      setOpenCommandId(null)
+      setRerunAfterSaveCommandId(null)
+      setSetupTestOutcome(null)
+      setSetupWizardDryRunLoading(false)
+      setSetupTestResumeNote(
+        "Command saved. Run the same phrase again to confirm setup."
+      )
+      setActiveTab(setupIntentTargetTab || "live")
+    },
+    [emitSetupAnalyticsEvent, setupCommandDetour, setupIntentTargetTab]
+  )
+
+  const handleCommandSaved = React.useCallback(
+    (commandId: string, context: { fromDraft: boolean }) => {
+      handleSetupDetourCommandSaved(commandId, context)
+      consumeSetupHandoffAction("command_saved")
+    },
+    [consumeSetupHandoffAction, handleSetupDetourCommandSaved]
+  )
 
   React.useEffect(() => {
     let cancelled = false
@@ -1587,12 +1886,12 @@ const SidepanelPersona = ({
       }
 
       if (eventType === "assistant_delta") {
+        const textDelta = String(payload?.text_delta || "").trim()
         if (
           personaSetupWizard.isSetupRequired &&
           personaSetupWizard.currentStep === "test" &&
           setupWizardAwaitingLiveResponseRef.current
         ) {
-          const textDelta = String(payload?.text_delta || "").trim()
           if (textDelta) {
             setSetupTestOutcome({
               kind: "live_success",
@@ -1600,7 +1899,26 @@ const SidepanelPersona = ({
               responseText: textDelta
             })
             setupWizardAwaitingLiveResponseRef.current = false
+            if (setupLiveDetourRef.current) {
+              void emitSetupAnalyticsEvent({
+                eventType: "detour_returned",
+                step: "test",
+                detourSource: setupLiveDetourRef.current.source
+              })
+              setSetupLiveDetour(null)
+              setSetupTestResumeNote(
+                "Live session responded. Finish setup when you're ready."
+              )
+            }
           }
+        }
+        if (
+          textDelta &&
+          activeTabRef.current === "live" &&
+          setupHandoffRef.current &&
+          !setupHandoffRef.current.compact
+        ) {
+          consumeSetupHandoffAction("live_response_received")
         }
         appendLog("assistant", String(payload?.text_delta || ""))
         return
@@ -1725,7 +2043,14 @@ const SidepanelPersona = ({
         appendLog("notice", "Received persona TTS audio chunk")
       }
     },
-    [appendLog, liveVoiceController, personaSetupWizard.currentStep, personaSetupWizard.isSetupRequired, sessionId]
+    [
+      appendLog,
+      consumeSetupHandoffAction,
+      liveVoiceController,
+      personaSetupWizard.currentStep,
+      personaSetupWizard.isSetupRequired,
+      sessionId,
+    ]
   )
 
   const applyPersonaStatePayload = React.useCallback((payload: PersonaStateDocsResponse) => {
@@ -2101,6 +2426,13 @@ const SidepanelPersona = ({
       }
     } catch (err: any) {
       const message = String(err?.message || "Failed to connect persona stream")
+      if (
+        personaSetupWizard.isSetupRequired &&
+        personaSetupWizard.currentStep === "test" &&
+        !connected
+      ) {
+        setSetupTestOutcome({ kind: "live_unavailable" })
+      }
       setError(message)
       appendLog("notice", message)
     } finally {
@@ -2118,6 +2450,8 @@ const SidepanelPersona = ({
     isCompanionMode,
     loadPersonaStateDocs,
     applySessionPreferences,
+    personaSetupWizard.currentStep,
+    personaSetupWizard.isSetupRequired,
     resetApprovalHighlightMotion,
     resumeSessionId,
     routeBootstrap.personaId,
@@ -2312,13 +2646,16 @@ const SidepanelPersona = ({
       }
       setSetupWizardSaving(true)
       clearSetupStepError("persona")
+      const nextSetup = buildPersonaSetupInProgress("voice", ["persona"], {
+        runId: createSetupRunId()
+      })
       try {
         const response = await tldwClient.fetchWithAuth(
           `/api/v1/persona/profiles/${encodeURIComponent(nextPersonaId)}` as any,
           {
             method: "PATCH",
             body: {
-              setup: buildPersonaSetupInProgress("voice", ["persona"])
+              setup: nextSetup
             }
           }
         )
@@ -2328,8 +2665,19 @@ const SidepanelPersona = ({
         const payload = (await response.json()) as PersonaProfileResponse
         setSelectedPersonaId(nextPersonaId)
         applyPersonaProfileResponse(payload, {
-          setup: buildPersonaSetupInProgress("voice", ["persona"]),
+          setup: nextSetup,
           voiceDefaults: payload?.voice_defaults || null
+        })
+        void emitSetupAnalyticsEvent({
+          personaId: nextPersonaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "setup_started"
+        })
+        void emitSetupAnalyticsEvent({
+          personaId: nextPersonaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "step_completed",
+          step: "persona"
         })
       } catch (setupError: any) {
         setSetupStepError(
@@ -2345,6 +2693,8 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       clearSetupStepError,
       confirmDiscardUnsavedStateDrafts,
+      createSetupRunId,
+      emitSetupAnalyticsEvent,
       setSetupStepError,
       selectedPersonaId
     ]
@@ -2356,6 +2706,9 @@ const SidepanelPersona = ({
       if (!normalizedName) return
       setSetupWizardSaving(true)
       clearSetupStepError("persona")
+      const nextSetup = buildPersonaSetupInProgress("voice", ["persona"], {
+        runId: createSetupRunId()
+      })
       try {
         const response = await tldwClient.fetchWithAuth(
           "/api/v1/persona/profiles" as any,
@@ -2364,7 +2717,7 @@ const SidepanelPersona = ({
             body: {
               name: normalizedName,
               mode: "persistent_scoped",
-              setup: buildPersonaSetupInProgress("voice", ["persona"])
+              setup: nextSetup
             }
           }
         )
@@ -2388,8 +2741,19 @@ const SidepanelPersona = ({
           setSelectedPersonaId(createdPersonaId)
         }
         applyPersonaProfileResponse(payload, {
-          setup: buildPersonaSetupInProgress("voice", ["persona"]),
+          setup: nextSetup,
           voiceDefaults: payload?.voice_defaults || null
+        })
+        void emitSetupAnalyticsEvent({
+          personaId: createdPersonaId || selectedPersonaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "setup_started"
+        })
+        void emitSetupAnalyticsEvent({
+          personaId: createdPersonaId || selectedPersonaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "step_completed",
+          step: "persona"
         })
       } catch (setupError: any) {
         setSetupStepError(
@@ -2404,6 +2768,9 @@ const SidepanelPersona = ({
       applyPersonaProfileResponse,
       buildPersonaSetupInProgress,
       clearSetupStepError,
+      createSetupRunId,
+      emitSetupAnalyticsEvent,
+      selectedPersonaId,
       setSetupStepError
     ]
   )
@@ -2584,6 +2951,11 @@ const SidepanelPersona = ({
           voiceDefaults: mergedVoiceDefaults,
           setup: buildPersonaSetupInProgress("test", mergeCompletedSetupSteps("safety"))
         })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          eventType: "step_completed",
+          step: "safety"
+        })
       } catch (setupError: any) {
         setSetupStepError(
           "safety",
@@ -2598,6 +2970,7 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
+      emitSetupAnalyticsEvent,
       mergeCompletedSetupSteps,
       savedPersonaVoiceDefaults,
       setSetupStepError,
@@ -2613,9 +2986,12 @@ const SidepanelPersona = ({
       clearSetupStepError("test")
       try {
         const resolvedReviewSummary = await resolveSetupReviewSummary(personaId)
+        const resolvedRunId =
+          String(savedPersonaSetup?.run_id || "").trim() || createSetupRunId()
         const completedSetup: PersonaSetupState = {
           status: "completed",
           version: 1,
+          run_id: resolvedRunId,
           current_step: "test",
           completed_steps: ["persona", "voice", "commands", "safety", "test"],
           completed_at: new Date().toISOString(),
@@ -2636,15 +3012,40 @@ const SidepanelPersona = ({
         const payload = (await response.json()) as PersonaProfileResponse
         applyPersonaProfileResponse(payload, { setup: completedSetup })
         const handoffTargetTab = setupIntentTargetTab || activeTab
-        setActiveTab(handoffTargetTab)
-        setSetupHandoff({
-          targetTab: handoffTargetTab,
+        const recommendedAction = deriveSetupHandoffRecommendedAction({
           completionType: testType,
           reviewSummary: resolvedReviewSummary
+        })
+        setActiveTab(handoffTargetTab)
+        setSetupHandoff({
+          runId: resolvedRunId,
+          targetTab: handoffTargetTab,
+          completionType: testType,
+          reviewSummary: resolvedReviewSummary,
+          recommendedAction,
+          consumedAction: null,
+          compact: false
+        })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          runId: resolvedRunId,
+          eventType: "step_completed",
+          step: "test"
+        })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          runId: resolvedRunId,
+          eventType: "setup_completed",
+          step: "test",
+          completionType: testType
         })
         setSetupIntentPersonaId("")
         setSetupIntentTargetTab(null)
         setSetupTestOutcome(null)
+        setSetupTestResumeNote(null)
+        setSetupCommandDetour(null)
+        setSetupLiveDetour(null)
+        setSetupNoMatchPhrase(null)
         setupWizardLastLiveTextRef.current = ""
       } catch (setupError: any) {
         setSetupStepError(
@@ -2660,7 +3061,10 @@ const SidepanelPersona = ({
       activeTab,
       buildSetupProfileUpdatePath,
       clearSetupStepError,
+      createSetupRunId,
+      emitSetupAnalyticsEvent,
       resolveSetupReviewSummary,
+      savedPersonaSetup?.run_id,
       selectedPersonaId,
       setupIntentTargetTab,
       setSetupHandoff,
@@ -2672,12 +3076,18 @@ const SidepanelPersona = ({
     async (errorMessage: string) => {
       const personaId = String(selectedPersonaId || "").trim()
       if (!personaId) return
-      const nextSetup = buildPersonaSetupInProgress("persona", [])
+      const nextSetup = buildPersonaSetupInProgress("persona", [], {
+        runId: createSetupRunId()
+      })
       setSetupWizardSaving(true)
       clearAllSetupStepErrors()
       setSetupIntentPersonaId(personaId)
       setSetupIntentTargetTab(activeTab)
       setSetupTestOutcome(null)
+      setSetupTestResumeNote(null)
+      setSetupCommandDetour(null)
+      setSetupLiveDetour(null)
+      setSetupNoMatchPhrase(null)
       setSetupReviewSummaryDraft(DEFAULT_SETUP_REVIEW_SUMMARY)
       setupWizardLastLiveTextRef.current = ""
       setSetupHandoff(null)
@@ -2697,6 +3107,11 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         applyPersonaProfileResponse(payload, { setup: nextSetup })
+        void emitSetupAnalyticsEvent({
+          personaId,
+          runId: nextSetup.run_id || undefined,
+          eventType: "setup_started"
+        })
       } catch (setupError: any) {
         setSetupStepError("persona", String(setupError?.message || errorMessage))
       } finally {
@@ -2709,6 +3124,8 @@ const SidepanelPersona = ({
       buildPersonaSetupInProgress,
       buildSetupProfileUpdatePath,
       clearAllSetupStepErrors,
+      createSetupRunId,
+      emitSetupAnalyticsEvent,
       selectedPersonaId,
       setSetupHandoff,
       setSetupStepError
@@ -2742,6 +3159,7 @@ const SidepanelPersona = ({
       if (!personaId || !normalizedHeardText) return
       setSetupWizardDryRunLoading(true)
       clearSetupStepError("test")
+      setSetupTestResumeNote(null)
       setSetupTestOutcome(null)
       try {
         const response = await tldwClient.fetchWithAuth(
@@ -2813,6 +3231,10 @@ const SidepanelPersona = ({
           memory_top_k: memoryTopK
         })
       )
+      if (personaSetupWizard.isSetupRequired && setupLiveDetour) {
+        setupWizardAwaitingLiveResponseRef.current = true
+        setupWizardLastLiveTextRef.current = trimmed
+      }
       appendLog("user", trimmed)
       setInput("")
     } catch (err: any) {
@@ -2826,7 +3248,9 @@ const SidepanelPersona = ({
     memoryEnabled,
     memoryTopK,
     personaStateContextEnabled,
-    sessionId
+    personaSetupWizard.isSetupRequired,
+    sessionId,
+    setupLiveDetour
   ])
 
   const sendSetupLiveTestMessage = React.useCallback(
@@ -3532,6 +3956,18 @@ const SidepanelPersona = ({
 
   const liveSessionStatusPanels = (
     <>
+      {setupLiveDetour ? (
+        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-sm text-sky-100">
+          <div>Finish this live test, then return to setup.</div>
+          <button
+            type="button"
+            className="mt-2 rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-100"
+            onClick={handleReturnToSetupFromLiveDetour}
+          >
+            Return to setup
+          </button>
+        </div>
+      ) : null}
       {errorBanner}
       {!isCompanionMode ? (
         <PersonaPolicySummary personaId={selectedPersonaId || null} />
@@ -3925,13 +4361,52 @@ const SidepanelPersona = ({
   )
 
   const dismissSetupHandoff = React.useCallback(() => {
+    if (setupHandoff) {
+      void emitSetupAnalyticsEvent({
+        runId: setupHandoff.runId,
+        eventType: "handoff_dismissed"
+      })
+    }
     setSetupHandoff(null)
-  }, [])
+  }, [emitSetupAnalyticsEvent, setupHandoff])
 
   const openSetupHandoffTab = React.useCallback((tab: PersonaGardenTabKey) => {
+    if (setupHandoff) {
+      void emitSetupAnalyticsEvent({
+        runId: setupHandoff.runId,
+        eventType: "handoff_action_clicked",
+        actionTarget: tab
+      })
+    }
     setActiveTab(tab)
-    setSetupHandoff(null)
-  }, [])
+    setSetupHandoff((current) => {
+      if (!current) return null
+      if (current.targetTab === tab) {
+        return current
+      }
+      return {
+        ...current,
+        targetTab: tab
+      }
+    })
+  }, [emitSetupAnalyticsEvent, setupHandoff])
+
+  const handleProfileDefaultsSaved = React.useCallback(() => {
+    consumeSetupHandoffAction("voice_defaults_saved")
+  }, [consumeSetupHandoffAction])
+
+  const handleConnectionSaved = React.useCallback(() => {
+    consumeSetupHandoffAction("connection_saved")
+  }, [consumeSetupHandoffAction])
+
+  const handleConnectionTestSucceeded = React.useCallback(() => {
+    consumeSetupHandoffAction("connection_test_succeeded")
+  }, [consumeSetupHandoffAction])
+
+  const handleTestLabDryRunCompleted = React.useCallback((result: TestLabDryRunCompletedResult) => {
+    if (!result.matched) return
+    consumeSetupHandoffAction("dry_run_match")
+  }, [consumeSetupHandoffAction])
 
   const renderSetupHandoffCard = React.useCallback(
     (tab: PersonaGardenTabKey) => {
@@ -3941,6 +4416,8 @@ const SidepanelPersona = ({
           targetTab={setupHandoff.targetTab}
           completionType={setupHandoff.completionType}
           reviewSummary={setupHandoff.reviewSummary}
+          recommendedAction={setupHandoff.recommendedAction}
+          compact={setupHandoff.compact}
           onDismiss={dismissSetupHandoff}
           onOpenCommands={() => openSetupHandoffTab("commands")}
           onOpenTestLab={() => openSetupHandoffTab("test-lab")}
@@ -3978,9 +4455,11 @@ const SidepanelPersona = ({
           openCommandId={openCommandId}
           onOpenCommandHandled={handleOpenCommandHandled}
           draftCommandPhrase={draftCommandPhrase}
+          draftCommandSource={draftCommandSource}
           onDraftCommandPhraseHandled={handleDraftCommandPhraseHandled}
           rerunAfterSaveCommandId={rerunAfterSaveCommandId}
           onRerunAfterSave={handleRerunAfterCommandSave}
+          onCommandSaved={handleCommandSaved}
         />
       )
     },
@@ -3998,6 +4477,7 @@ const SidepanelPersona = ({
           rerunRequestToken={testLabRerunToken}
           onOpenCommand={handleOpenCommandFromTestLab}
           onCreateCommandDraft={handleCreateCommandFromTestLab}
+          onDryRunCompleted={handleTestLabDryRunCompleted}
         />
       )
     },
@@ -4032,6 +4512,7 @@ const SidepanelPersona = ({
           onResumeSetup={handleResumeSetup}
           onResetSetup={handleResetSetup}
           onRerunSetup={handleRerunSetup}
+          onDefaultsSaved={handleProfileDefaultsSaved}
           isActive={activeTab === "profiles"}
           analytics={voiceAnalytics}
           analyticsLoading={voiceAnalyticsLoading}
@@ -4058,6 +4539,8 @@ const SidepanelPersona = ({
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "connections"}
+          onConnectionSaved={handleConnectionSaved}
+          onConnectionTestSucceeded={handleConnectionTestSucceeded}
         />
       )
     },
@@ -4242,7 +4725,7 @@ const SidepanelPersona = ({
         </div>
       ) : (
         <div className="flex flex-1 flex-col p-3">
-          {personaSetupWizard.isSetupRequired ? (
+          {personaSetupWizard.isSetupRequired && !setupCommandDetour && !setupLiveDetour ? (
             <AssistantSetupWizard
               catalog={catalog.map((persona) => ({
                 id: String(persona.id || ""),
@@ -4314,13 +4797,17 @@ const SidepanelPersona = ({
                     dryRunLoading={setupWizardDryRunLoading}
                     liveConnected={connected}
                     error={setupStepErrors.test || null}
+                    initialHeardText={setupNoMatchPhrase}
+                    notice={setupTestResumeNote}
                     outcome={setupTestOutcome}
                     onRunDryRun={(heardText) => {
                       void handleRunSetupDryRun(heardText)
                     }}
+                    onCreateCommandFromPhrase={handleCreateCommandFromSetupNoMatch}
                     onConnectLive={() => {
                       void connect()
                     }}
+                    onRecoverInLiveSession={handleRecoverSetupInLiveSession}
                     onSendLive={(text) => {
                       sendSetupLiveTestMessage(text)
                     }}

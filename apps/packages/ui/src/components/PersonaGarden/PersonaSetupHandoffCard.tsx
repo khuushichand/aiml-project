@@ -15,10 +15,18 @@ export type SetupReviewSummary = {
     | { mode: "skipped" }
 }
 
+export type SetupHandoffRecommendedAction =
+  | "add_command"
+  | "add_connection"
+  | "try_live"
+  | "review_commands"
+
 type PersonaSetupHandoffCardProps = {
   targetTab: PersonaGardenTabKey
   completionType: "dry_run" | "live_session"
   reviewSummary: SetupReviewSummary
+  recommendedAction: SetupHandoffRecommendedAction
+  compact?: boolean
   onDismiss: () => void
   onOpenCommands: () => void
   onOpenTestLab: () => void
@@ -59,10 +67,38 @@ function formatConnectionSummary(summary: SetupReviewSummary["connection"]): str
   return "No external connection yet"
 }
 
+function getRecommendedActionTitle(action: SetupHandoffRecommendedAction): string {
+  if (action === "add_command") return "Add your first command"
+  if (action === "add_connection") return "Add a connection"
+  if (action === "try_live") return "Try your first live turn"
+  return "Review starter commands"
+}
+
+function getRecommendedActionDescription(action: SetupHandoffRecommendedAction): string {
+  if (action === "add_command") {
+    return "Give your assistant one command it can reliably handle after setup."
+  }
+  if (action === "add_connection") {
+    return "Link one external tool so your assistant can take action beyond local prompts."
+  }
+  if (action === "try_live") {
+    return "Dry run worked. Confirm the same flow through a real live voice turn next."
+  }
+  return "Your assistant is already responding live. Tighten the starter pack before you branch out."
+}
+
+function getRecommendedActionButtonLabel(action: SetupHandoffRecommendedAction): string {
+  if (action === "add_command") return "Open Commands"
+  if (action === "add_connection") return "Open Connections"
+  if (action === "try_live") return "Open Live Session"
+  return "Review Commands"
+}
+
 export const PersonaSetupHandoffCard: React.FC<PersonaSetupHandoffCardProps> = ({
-  targetTab,
   completionType,
   reviewSummary,
+  recommendedAction,
+  compact = false,
   onDismiss,
   onOpenCommands,
   onOpenTestLab,
@@ -71,30 +107,49 @@ export const PersonaSetupHandoffCard: React.FC<PersonaSetupHandoffCardProps> = (
   onOpenConnections
 }) => {
   const primaryAction =
-    targetTab === "commands"
+    recommendedAction === "add_command" || recommendedAction === "review_commands"
       ? {
-          label: "Review starter commands",
+          label: getRecommendedActionButtonLabel(recommendedAction),
           onClick: onOpenCommands
         }
-      : targetTab === "test-lab"
+      : recommendedAction === "add_connection"
         ? {
-            label: "Open Test Lab",
-            onClick: onOpenTestLab
+            label: getRecommendedActionButtonLabel(recommendedAction),
+            onClick: onOpenConnections
           }
-      : targetTab === "live"
-        ? {
-            label: "Start live session",
+        : {
+            label: getRecommendedActionButtonLabel(recommendedAction),
             onClick: onOpenLive
           }
-        : targetTab === "connections"
-          ? {
-              label: "Review connections",
-              onClick: onOpenConnections
-            }
-        : {
-            label: "Adjust assistant defaults",
-            onClick: onOpenProfiles
-          }
+
+  if (compact) {
+    return (
+      <div
+        data-testid="persona-setup-handoff-card"
+        className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-3 text-sm text-sky-100"
+      >
+        <div className="font-medium">Setup complete</div>
+        <div className="mt-1 text-xs text-sky-100/80">{getCompletionCopy(completionType)}</div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="text-sm text-sky-100">{getRecommendedActionTitle(recommendedAction)}</div>
+          <button
+            type="button"
+            className="rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-100"
+            onClick={primaryAction.onClick}
+          >
+            {primaryAction.label}
+          </button>
+          <button
+            type="button"
+            className="rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-100"
+            onClick={onDismiss}
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -103,6 +158,28 @@ export const PersonaSetupHandoffCard: React.FC<PersonaSetupHandoffCardProps> = (
     >
       <div className="font-medium">Assistant setup complete</div>
       <div className="mt-1 text-xs text-sky-100/80">{getCompletionCopy(completionType)}</div>
+      <div className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-sky-100/80">
+          Recommended next step
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-sky-100">
+              {getRecommendedActionTitle(recommendedAction)}
+            </div>
+            <div className="text-xs text-sky-100/80">
+              {getRecommendedActionDescription(recommendedAction)}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="rounded-md border border-sky-500/40 px-2 py-1 text-xs font-medium text-sky-100"
+            onClick={primaryAction.onClick}
+          >
+            {primaryAction.label}
+          </button>
+        </div>
+      </div>
       <div className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-3">
         <div className="text-xs font-semibold uppercase tracking-wide text-sky-100/80">
           Starter pack review
@@ -156,13 +233,6 @@ export const PersonaSetupHandoffCard: React.FC<PersonaSetupHandoffCardProps> = (
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          className="rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-100"
-          onClick={primaryAction.onClick}
-        >
-          {primaryAction.label}
-        </button>
         <button
           type="button"
           className="rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-100"

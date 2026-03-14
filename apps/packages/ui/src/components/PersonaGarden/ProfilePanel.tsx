@@ -19,6 +19,7 @@ type ProfilePanelProps = {
   onResumeSetup?: () => void
   onResetSetup?: () => void
   onRerunSetup?: () => void
+  onDefaultsSaved?: () => void
   isActive?: boolean
   analytics?: PersonaVoiceAnalytics | null
   analyticsLoading?: boolean
@@ -35,6 +36,7 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
   onResumeSetup,
   onResetSetup,
   onRerunSetup,
+  onDefaultsSaved,
   isActive = false,
   analytics = null,
   analyticsLoading = false
@@ -113,6 +115,9 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
         isActive={isActive}
         analytics={analytics}
         analyticsLoading={analyticsLoading}
+        onSaved={() => {
+          onDefaultsSaved?.()
+        }}
       />
     </div>
   )
