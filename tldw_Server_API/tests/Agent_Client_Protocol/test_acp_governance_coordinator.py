@@ -335,6 +335,142 @@ async def test_permission_request_uses_runtime_policy_snapshot_authority(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_permission_request_governance_deny_enforced_blocks_runtime_allow(monkeypatch):
+    client = _new_runner_client_for_permissions()
+
+    async def _fake_snapshot(
+        sid: str,
+        *,
+        force_refresh: bool = False,
+    ) -> ACPRuntimePolicySnapshot | None:
+        del sid, force_refresh
+        return ACPRuntimePolicySnapshot(
+            session_id="session-governance-deny",
+            user_id=7,
+            policy_snapshot_version="resolved-v1",
+            policy_snapshot_fingerprint="snapshot-allow",
+            policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+            policy_summary={"approval_mode": "allow"},
+            policy_provenance_summary={"source_kinds": ["profile"]},
+            resolved_policy_document={"allowed_tools": ["fs.read"]},
+            approval_summary={"mode": "allow"},
+            context_summary={},
+            execution_config={},
+        )
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return {
+            "action": "deny",
+            "status": "deny",
+            "rollout_mode": "enforce",
+            "category": "acp",
+        }
+
+    monkeypatch.setattr(client, "_get_runtime_policy_snapshot", _fake_snapshot, raising=False)
+    monkeypatch.setattr(client, "check_permission_governance", _fake_check_permission_governance, raising=False)
+
+    response = await client._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="perm-governance-deny",
+            method="session/request_permission",
+            params={
+                "sessionId": "session-governance-deny",
+                "tool": {"name": "fs.read", "input": {"path": "README.md"}},
+            },
+        )
+    )
+
+    assert response.result == {
+        "outcome": {
+            "outcome": "denied",
+            "deny_reason": "governance_denied",
+            "policy_snapshot_fingerprint": "snapshot-allow",
+            "provenance_summary": {"source_kinds": ["profile"]},
+            "governance": {
+                "action": "deny",
+                "status": "deny",
+                "rollout_mode": "enforce",
+                "category": "acp",
+            },
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_permission_request_governance_require_approval_prompts_runtime_allow(monkeypatch):
+    client = _new_runner_client_for_permissions()
+    session_id = "session-governance-prompt"
+
+    async def _send(_payload: dict[str, Any]) -> None:
+        return None
+
+    registry = SessionWebSocketRegistry(session_id=session_id)
+    registry.websockets.add(_send)
+    client._ws_registry[session_id] = registry
+
+    async def _fake_snapshot(
+        sid: str,
+        *,
+        force_refresh: bool = False,
+    ) -> ACPRuntimePolicySnapshot | None:
+        del sid, force_refresh
+        return ACPRuntimePolicySnapshot(
+            session_id=session_id,
+            user_id=7,
+            policy_snapshot_version="resolved-v1",
+            policy_snapshot_fingerprint="snapshot-allow",
+            policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+            policy_summary={"approval_mode": "allow"},
+            policy_provenance_summary={"source_kinds": ["profile"]},
+            resolved_policy_document={"allowed_tools": ["fs.read"]},
+            approval_summary={"mode": "allow"},
+            context_summary={},
+            execution_config={},
+        )
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return {
+            "action": "require_approval",
+            "status": "require_approval",
+            "rollout_mode": "enforce",
+            "category": "acp",
+        }
+
+    prompts: list[dict[str, Any]] = []
+
+    async def _fake_broadcast(sid: str, message: dict[str, Any]) -> None:
+        if message.get("type") == "permission_request":
+            prompts.append(message)
+            await client.respond_to_permission(sid, str(message["request_id"]), True)
+
+    monkeypatch.setattr(client, "_get_runtime_policy_snapshot", _fake_snapshot, raising=False)
+    monkeypatch.setattr(client, "check_permission_governance", _fake_check_permission_governance, raising=False)
+    monkeypatch.setattr(client, "_broadcast_to_session", _fake_broadcast)
+
+    response = await client._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="perm-governance-prompt",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "fs.read", "input": {"path": "README.md"}},
+            },
+        )
+    )
+
+    assert response.result == {"outcome": {"outcome": "approved"}}
+    assert len(prompts) == 1
+    assert prompts[0]["approval_requirement"] == "approval_required"
+    assert prompts[0]["governance_reason"] == "governance_approval_required"
+    assert prompts[0]["policy_snapshot_fingerprint"] == "snapshot-allow"
+    assert prompts[0]["governance"]["action"] == "require_approval"
+
+
+@pytest.mark.asyncio
 async def test_denied_tool_from_runtime_snapshot_returns_denied_without_prompt(monkeypatch):
     client = _new_runner_client_for_permissions()
 

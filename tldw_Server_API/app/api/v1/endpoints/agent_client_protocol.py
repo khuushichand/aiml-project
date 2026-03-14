@@ -120,19 +120,24 @@ _ACP_DIAGNOSTIC_REASON_MAP: dict[str, str] = {
 }
 
 
+def get_acp_runtime_policy_service() -> ACPRuntimePolicyService:
+    """Provide the ACP runtime policy service for endpoint dependency injection."""
+    return ACPRuntimePolicyService()
+
+
 async def _build_initial_runtime_policy_snapshot(
     *,
     session_store: Any,
     session_record: Any,
     user_id: int,
+    runtime_policy_service: ACPRuntimePolicyService,
 ) -> Any:
     """Build and persist the initial ACP runtime policy snapshot for a new session."""
-    service = ACPRuntimePolicyService()
-    snapshot = await service.build_snapshot(
+    snapshot = await runtime_policy_service.build_snapshot(
         session_record=session_record,
         user_id=int(user_id),
     )
-    return await service.persist_snapshot(
+    return await runtime_policy_service.persist_snapshot(
         session_store=session_store,
         snapshot=snapshot,
     )
@@ -1042,30 +1047,21 @@ async def _handle_client_message(
             return
 
         pending_metadata: dict[str, Any] = {}
-        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
-            registry_map = getattr(client, "_ws_registry", None)
-            if isinstance(registry_map, dict):
-                registry = registry_map.get(session_id)
-                pending_map = getattr(registry, "pending_permissions", None)
-                if isinstance(pending_map, dict):
-                    pending = pending_map.get(request_id)
-                    if pending is not None:
-                        pending_metadata = {
-                            "tool_name": getattr(pending, "tool_name", None),
-                            "approval_requirement": getattr(pending, "approval_requirement", None),
-                            "governance_reason": getattr(pending, "governance_reason", None),
-                            "deny_reason": getattr(pending, "deny_reason", None),
-                            "runtime_narrowing_reason": getattr(
-                                pending,
-                                "runtime_narrowing_reason",
-                                None,
-                            ),
-                            "policy_snapshot_fingerprint": getattr(
-                                pending,
-                                "policy_snapshot_fingerprint",
-                                None,
-                            ),
-                        }
+        metadata_getter = getattr(client, "get_pending_permission_metadata", None)
+        if callable(metadata_getter):
+            try:
+                maybe_metadata = metadata_getter(session_id, request_id)
+                if inspect.isawaitable(maybe_metadata):
+                    maybe_metadata = await maybe_metadata
+                if isinstance(maybe_metadata, dict):
+                    pending_metadata = {str(k): v for k, v in maybe_metadata.items()}
+            except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Failed to load ACP pending permission metadata for session {} request {}: {}",
+                    session_id,
+                    request_id,
+                    exc,
+                )
 
         success = await client.respond_to_permission(
             session_id,
@@ -1709,6 +1705,7 @@ async def acp_session_new(
 
     # Generate session name if not provided
     session_name = payload.name or _generate_session_name(payload.cwd)
+    runtime_policy_service = get_acp_runtime_policy_service()
 
     # Convert MCP server configs to dicts for the runner client
     mcp_servers_dicts = None
@@ -1793,6 +1790,7 @@ async def acp_session_new(
                     session_store=store,
                     session_record=persisted_record,
                     user_id=int(user.id),
+                    runtime_policy_service=runtime_policy_service,
                 )
             except Exception as exc:
                 logger.warning(

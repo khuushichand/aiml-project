@@ -208,6 +208,7 @@ async def test_runtime_policy_refresh_applies_updated_permissions() -> None:
 
     client._runtime_policy_service = _RuntimePolicyService()  # type: ignore[assignment]
     client._get_acp_session_store = _get_store  # type: ignore[assignment]
+    client._should_force_runtime_policy_refresh = lambda *, tier: True  # type: ignore[assignment]
 
     allowed_response = await client._handle_request(
         ACPMessage(
@@ -246,6 +247,109 @@ async def test_runtime_policy_refresh_applies_updated_permissions() -> None:
         }
     }
     assert call_count["build_snapshot"] == 2
+
+
+@pytest.mark.unit
+async def test_low_risk_permission_reuses_cached_runtime_snapshot() -> None:
+    client = _new_runner_client_for_permissions()
+    session_id = "session-refresh-cache"
+    policy_state = {"allowed_tools": ["web.search"], "fingerprint": "snap-cache"}
+    call_count = {"build_snapshot": 0}
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    client.check_permission_governance = _fake_check_permission_governance  # type: ignore[assignment]
+
+    class _Store:
+        def __init__(self) -> None:
+            self.record = SimpleNamespace(
+                session_id=session_id,
+                user_id=7,
+                policy_snapshot_fingerprint=None,
+                policy_snapshot_version=None,
+                policy_snapshot_refreshed_at=None,
+                policy_summary=None,
+                policy_provenance_summary=None,
+                policy_refresh_error=None,
+            )
+
+        async def get_session(self, _session_id: str):
+            return self.record
+
+        async def update_policy_snapshot_state(self, _session_id: str, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self.record, key, value)
+            return self.record
+
+    class _RuntimePolicyService:
+        async def build_snapshot(self, **kwargs):
+            del kwargs
+            call_count["build_snapshot"] += 1
+            return ACPRuntimePolicySnapshot(
+                session_id=session_id,
+                user_id=7,
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_fingerprint=policy_state["fingerprint"],
+                policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+                policy_summary={"allowed_tool_count": len(policy_state["allowed_tools"])},
+                policy_provenance_summary={"source_kinds": ["capability_mapping"]},
+                resolved_policy_document={"allowed_tools": list(policy_state["allowed_tools"])},
+                approval_summary={"mode": "allow"},
+                context_summary={},
+                execution_config={},
+            )
+
+        async def persist_snapshot(self, *, session_store, snapshot):
+            return await session_store.update_policy_snapshot_state(
+                snapshot.session_id,
+                policy_snapshot_version=snapshot.policy_snapshot_version,
+                policy_snapshot_fingerprint=snapshot.policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at=snapshot.policy_snapshot_refreshed_at,
+                policy_summary=snapshot.policy_summary,
+                policy_provenance_summary=snapshot.policy_provenance_summary,
+                policy_refresh_error=snapshot.refresh_error,
+            )
+
+    store = _Store()
+
+    async def _get_store():
+        return store
+
+    client._runtime_policy_service = _RuntimePolicyService()  # type: ignore[assignment]
+    client._get_acp_session_store = _get_store  # type: ignore[assignment]
+
+    first = await client._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="perm-cache-1",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert first.result == {"outcome": {"outcome": "approved"}}
+    assert call_count["build_snapshot"] == 1
+
+    policy_state["allowed_tools"] = ["fs.read"]
+    policy_state["fingerprint"] = "snap-cache-updated"
+
+    second = await client._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="perm-cache-2",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert second.result == {"outcome": {"outcome": "approved"}}
+    assert call_count["build_snapshot"] == 1
 
 
 @pytest.mark.unit

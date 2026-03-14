@@ -168,7 +168,12 @@ def test_acp_session_new_success(client_user_only, stub_runner_client, tmp_path,
                 policy_refresh_error=snapshot.refresh_error,
             )
 
-    monkeypatch.setattr(acp_endpoints, "ACPRuntimePolicyService", _RuntimePolicyService, raising=False)
+    monkeypatch.setattr(
+        acp_endpoints,
+        "get_acp_runtime_policy_service",
+        lambda: _RuntimePolicyService(),
+        raising=False,
+    )
 
     resp = client_user_only.post(
         "/api/v1/acp/sessions/new",

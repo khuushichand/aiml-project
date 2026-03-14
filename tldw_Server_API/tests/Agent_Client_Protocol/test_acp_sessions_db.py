@@ -5,7 +5,7 @@ import tempfile
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB, _ensure_column
 
 
 @pytest.fixture
@@ -178,6 +178,16 @@ class TestSessionCRUD:
         assert row["completion_tokens"] == 0
         assert row["total_tokens"] == 0
         assert row["bootstrap_ready"] is True
+
+
+def test_ensure_column_rejects_unknown_table_or_definition(db):
+    conn = db._get_conn()
+
+    with pytest.raises(ValueError, match="Unsupported ACP session migration target"):
+        _ensure_column(conn, "unknown_table", "policy_snapshot_version", "policy_snapshot_version TEXT")
+
+    with pytest.raises(ValueError, match="Unsupported ACP session migration target"):
+        _ensure_column(conn, "sessions", "policy_snapshot_version", "policy_snapshot_version INTEGER")
         assert row["needs_bootstrap"] is False
         assert row["forked_from"] is None
         assert row["persona_id"] is None

@@ -100,6 +100,16 @@ _BOOL_FIELDS = frozenset({"bootstrap_ready", "needs_bootstrap"})
 # Columns that are stored as JSON TEXT but should be returned as parsed objects
 _JSON_LIST_FIELDS = frozenset({"tags", "mcp_servers"})
 _JSON_OBJECT_FIELDS = frozenset({"policy_summary", "policy_provenance_summary"})
+_ALLOWED_MIGRATION_COLUMNS = {
+    "sessions": {
+        "policy_snapshot_version": "policy_snapshot_version TEXT",
+        "policy_snapshot_fingerprint": "policy_snapshot_fingerprint TEXT",
+        "policy_snapshot_refreshed_at": "policy_snapshot_refreshed_at TEXT",
+        "policy_summary": "policy_summary TEXT",
+        "policy_provenance_summary": "policy_provenance_summary TEXT",
+        "policy_refresh_error": "policy_refresh_error TEXT",
+    }
+}
 
 
 def _utcnow_iso() -> str:
@@ -112,12 +122,16 @@ def _ensure_column(
     column_name: str,
     column_sql: str,
 ) -> None:
+    expected_column_sql = _ALLOWED_MIGRATION_COLUMNS.get(table_name, {}).get(column_name)
+    if expected_column_sql != column_sql:
+        raise ValueError("Unsupported ACP session migration target")
+
     existing_columns = {
-        str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()
     }
     if column_name in existing_columns:
         return
-    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+    conn.execute(f'ALTER TABLE "{table_name}" ADD COLUMN {column_sql}')
 
 
 class ACPSessionsDB:
