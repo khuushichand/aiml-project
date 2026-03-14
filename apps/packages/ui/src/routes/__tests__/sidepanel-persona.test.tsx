@@ -933,6 +933,97 @@ describe("SidepanelPersona", () => {
     )
   })
 
+  it("creates a starter command from the setup step and advances to safety", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=live"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            { id: "research_assistant", name: "Research Assistant" },
+            { id: "garden-helper", name: "Garden Helper" }
+          ]
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "GET").toUpperCase() === "GET"
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            use_persona_state_context_default: true,
+            setup: {
+              status: "in_progress",
+              version: 1,
+              current_step: "commands",
+              completed_at: null,
+              last_test_type: null
+            }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/voice-commands")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "cmd-search-notes"
+          })
+        })
+      }
+      if (
+        path.includes("/persona/profiles/garden-helper") &&
+        String(init?.method || "").toUpperCase() === "PATCH" &&
+        init?.body?.setup
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            setup: init.body.setup
+          })
+        })
+      }
+      if (path.includes("/persona/sessions?persona_id=garden-helper")) {
+        return Promise.resolve({ ok: true, json: async () => [] })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Search Notes" })).toBeInTheDocument()
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Search Notes" }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId("assistant-setup-current-step")).toHaveTextContent("safety")
+    )
+
+    const createCommandCall = mocks.fetchWithAuth.mock.calls.find(
+      ([calledPath]) =>
+        String(calledPath).includes("/persona/profiles/garden-helper/voice-commands")
+    )
+    expect(createCommandCall?.[1]).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({
+          name: "Search Notes",
+          action_type: "mcp_tool",
+          action_config: { tool_name: "notes.search" }
+        })
+      })
+    )
+  })
+
   it("records the current draft as a companion check-in", async () => {
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
       if (path.includes("/api/v1/companion/check-ins")) {

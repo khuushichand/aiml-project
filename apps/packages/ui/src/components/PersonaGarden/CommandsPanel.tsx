@@ -16,6 +16,7 @@ import {
   type PersonaVoiceCommandAnalyticsItem
 } from "./CommandAnalyticsSummary"
 import { McpToolPicker } from "./McpToolPicker"
+import { PERSONA_STARTER_COMMAND_TEMPLATES } from "./personaStarterCommandTemplates"
 
 type VoiceCommandActionType = "mcp_tool" | "workflow" | "custom" | "llm_chat"
 
@@ -108,46 +109,20 @@ const DEFAULT_FORM_STATE: CommandFormState = {
 }
 
 const COMMAND_TEMPLATES: CommandTemplate[] = [
-  {
-    key: "notes-search",
-    label: "Search Notes",
-    description: "Find notes by spoken topic",
+  ...PERSONA_STARTER_COMMAND_TEMPLATES.map((template) => ({
+    key: template.key,
+    label: template.label,
+    description: template.description,
     apply: () => ({
       ...DEFAULT_FORM_STATE,
-      name: "Search Notes",
-      description: "Find notes related to a spoken topic",
-      phrasesText: "search notes for {topic}\nfind notes about {topic}",
-      toolName: "notes.search",
-      slotMapText: JSON.stringify({ query: "topic" }, null, 2)
+      name: template.name,
+      description: template.commandDescription,
+      phrasesText: template.phrases.join("\n"),
+      toolName: template.toolName,
+      slotMapText: JSON.stringify(template.slotMap, null, 2),
+      requiresConfirmation: template.requiresConfirmation
     })
-  },
-  {
-    key: "note-create",
-    label: "Create Note",
-    description: "Save dictated notes quickly",
-    apply: () => ({
-      ...DEFAULT_FORM_STATE,
-      name: "Create Note",
-      description: "Create a new note from spoken content",
-      phrasesText: "create note {content}\nnote this {content}",
-      toolName: "notes.create",
-      slotMapText: JSON.stringify({ content: "content" }, null, 2),
-      requiresConfirmation: true
-    })
-  },
-  {
-    key: "media-search",
-    label: "Search Library",
-    description: "Search ingested media by phrase",
-    apply: () => ({
-      ...DEFAULT_FORM_STATE,
-      name: "Search Library",
-      description: "Search media and research content",
-      phrasesText: "search library for {query}\nfind media about {query}",
-      toolName: "media.search",
-      slotMapText: JSON.stringify({ query: "query" }, null, 2)
-    })
-  },
+  })),
   {
     key: "external-api",
     label: "External API",

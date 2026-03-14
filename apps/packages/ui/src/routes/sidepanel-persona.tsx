@@ -25,9 +25,11 @@ import { PersonaGardenTabs } from "@/components/PersonaGarden/PersonaGardenTabs"
 import { PoliciesPanel } from "@/components/PersonaGarden/PoliciesPanel"
 import { ProfilePanel } from "@/components/PersonaGarden/ProfilePanel"
 import { ScopesPanel } from "@/components/PersonaGarden/ScopesPanel"
+import { SetupStarterCommandsStep } from "@/components/PersonaGarden/SetupStarterCommandsStep"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import { TestLabPanel } from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
+import { getPersonaStarterCommandTemplate } from "@/components/PersonaGarden/personaStarterCommandTemplates"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import {
@@ -674,6 +676,39 @@ const SidepanelPersona = ({
         setSetupWizardError(
           String(setupError?.message || "Failed to advance assistant setup")
         )
+      } finally {
+        setSetupWizardSaving(false)
+      }
+    },
+    [buildPersonaSetupInProgress, selectedPersonaId]
+  )
+
+  const advancePersonaSetupStep = React.useCallback(
+    async (
+      step: PersonaSetupState["current_step"],
+      errorMessage: string
+    ) => {
+      const personaId = String(selectedPersonaId || "").trim()
+      if (!personaId) return
+      setSetupWizardSaving(true)
+      setSetupWizardError(null)
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+          {
+            method: "PATCH",
+            body: {
+              setup: buildPersonaSetupInProgress(step)
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || errorMessage)
+        }
+        const payload = (await response.json()) as PersonaProfileResponse
+        setSavedPersonaSetup(payload?.setup || buildPersonaSetupInProgress(step))
+      } catch (setupError: any) {
+        setSetupWizardError(String(setupError?.message || errorMessage))
       } finally {
         setSetupWizardSaving(false)
       }
@@ -1871,6 +1906,88 @@ const SidepanelPersona = ({
       }
     },
     [buildPersonaSetupInProgress]
+  )
+
+  const handleCreateStarterCommandFromTemplate = React.useCallback(
+    async (templateKey: string) => {
+      const personaId = String(selectedPersonaId || "").trim()
+      if (!personaId) return
+      const template = getPersonaStarterCommandTemplate(templateKey)
+      if (!template) return
+      setSetupWizardSaving(true)
+      setSetupWizardError(null)
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/voice-commands` as any,
+          {
+            method: "POST",
+            body: {
+              name: template.name,
+              description: template.commandDescription,
+              phrases: template.phrases,
+              action_type: "mcp_tool",
+              action_config: {
+                tool_name: template.toolName
+              },
+              priority: 50,
+              enabled: true,
+              requires_confirmation: template.requiresConfirmation
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to create starter command")
+        }
+        await advancePersonaSetupStep("safety", "Failed to advance assistant setup")
+      } catch (setupError: any) {
+        setSetupWizardError(
+          String(setupError?.message || "Failed to create starter command")
+        )
+        setSetupWizardSaving(false)
+      }
+    },
+    [advancePersonaSetupStep, selectedPersonaId]
+  )
+
+  const handleCreateMcpStarterCommand = React.useCallback(
+    async (toolName: string, phrase: string) => {
+      const personaId = String(selectedPersonaId || "").trim()
+      const normalizedToolName = String(toolName || "").trim()
+      const normalizedPhrase = String(phrase || "").trim()
+      if (!personaId || !normalizedToolName || !normalizedPhrase) return
+      setSetupWizardSaving(true)
+      setSetupWizardError(null)
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/voice-commands` as any,
+          {
+            method: "POST",
+            body: {
+              name: normalizedPhrase.charAt(0).toUpperCase() + normalizedPhrase.slice(1),
+              description: `Run ${normalizedToolName} from assistant setup`,
+              phrases: [normalizedPhrase],
+              action_type: "mcp_tool",
+              action_config: {
+                tool_name: normalizedToolName
+              },
+              priority: 50,
+              enabled: true,
+              requires_confirmation: false
+            }
+          }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to create starter command")
+        }
+        await advancePersonaSetupStep("safety", "Failed to advance assistant setup")
+      } catch (setupError: any) {
+        setSetupWizardError(
+          String(setupError?.message || "Failed to create starter command")
+        )
+        setSetupWizardSaving(false)
+      }
+    },
+    [advancePersonaSetupStep, selectedPersonaId]
   )
 
   const handleResumeSessionSelectionChange = React.useCallback(
@@ -3105,6 +3222,25 @@ const SidepanelPersona = ({
                     analyticsLoading={false}
                     onSaved={() => {
                       void handleSetupVoiceDefaultsSaved()
+                    }}
+                  />
+                ) : undefined
+              }
+              commandsStepContent={
+                personaSetupWizard.currentStep === "commands" ? (
+                  <SetupStarterCommandsStep
+                    saving={setupWizardSaving}
+                    onCreateFromTemplate={(templateKey) => {
+                      void handleCreateStarterCommandFromTemplate(templateKey)
+                    }}
+                    onCreateMcpStarter={(toolName, phrase) => {
+                      void handleCreateMcpStarterCommand(toolName, phrase)
+                    }}
+                    onSkip={() => {
+                      void advancePersonaSetupStep(
+                        "safety",
+                        "Failed to advance assistant setup"
+                      )
                     }}
                   />
                 ) : undefined
