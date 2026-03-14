@@ -77,6 +77,7 @@ from tldw_Server_API.app.services.mcp_hub_external_legacy_inventory import (
     McpHubExternalLegacyInventoryService,
 )
 from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+    GovernancePackAlreadyExistsError,
     McpHubGovernancePackService,
 )
 from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
@@ -650,6 +651,83 @@ def _assert_principal_can_access_scope(
     )
 
 
+def _resolve_governance_pack_mutation_scope(
+    *,
+    principal: AuthPrincipal,
+    owner_scope_type: str,
+    owner_scope_id: int | None,
+) -> tuple[str, int | None]:
+    """Resolve governance-pack mutation scope, defaulting user scope to the active principal."""
+    scope_type = str(owner_scope_type or "").strip().lower()
+    if scope_type not in _VALID_SCOPE_TYPES:
+        raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+
+    if scope_type == "global":
+        if owner_scope_id is not None:
+            raise HTTPException(status_code=422, detail="global scope cannot include owner_scope_id")
+        return ("global", None)
+
+    if scope_type == "user":
+        if owner_scope_id is not None:
+            return ("user", int(owner_scope_id))
+        if principal.user_id is None:
+            raise HTTPException(status_code=422, detail="user scope requires owner_scope_id")
+        return ("user", int(principal.user_id))
+
+    if owner_scope_id is None:
+        raise HTTPException(status_code=422, detail=f"{scope_type} scope requires owner_scope_id")
+    return (scope_type, int(owner_scope_id))
+
+
+def _portable_grant_capability(capability: Any) -> str | None:
+    """Map a portable governance-pack capability to the runtime grant-authority root capability."""
+    normalized = str(capability or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in _CAPABILITY_GRANT_PERMISSIONS:
+        return normalized
+    if normalized.startswith("tool.invoke."):
+        return "tool.invoke"
+    if normalized.startswith("network.external."):
+        return "network.external"
+    if normalized.startswith("process.execute."):
+        return "process.execute"
+    if normalized.startswith("mcp.server.connect"):
+        return "mcp.server.connect"
+    if normalized.startswith("filesystem."):
+        return normalized if normalized in _CAPABILITY_GRANT_PERMISSIONS else None
+    return None
+
+
+def _governance_pack_grant_document(pack_document: dict[str, Any]) -> dict[str, Any]:
+    """Build a synthetic policy document for grant-authority evaluation of portable capabilities."""
+    capabilities: list[str] = []
+    raw_profiles = pack_document.get("profiles")
+    if not isinstance(raw_profiles, list):
+        return {"capabilities": capabilities}
+    for raw_profile in raw_profiles:
+        if not isinstance(raw_profile, dict):
+            continue
+        raw_capabilities = raw_profile.get("capabilities")
+        if not isinstance(raw_capabilities, dict):
+            continue
+        for capability in _as_str_list(raw_capabilities.get("allow")):
+            mapped = _portable_grant_capability(capability)
+            if mapped:
+                capabilities.append(mapped)
+    return {"capabilities": _unique(capabilities)}
+
+
+def _governance_pack_manifest_summary(pack_document: dict[str, Any]) -> tuple[str, str]:
+    """Return safe manifest identifiers for audit logging without logging the full pack payload."""
+    manifest = pack_document.get("manifest")
+    if not isinstance(manifest, dict):
+        return ("<unknown>", "<unknown>")
+    pack_id = str(manifest.get("pack_id") or "").strip() or "<unknown>"
+    pack_version = str(manifest.get("pack_version") or "").strip() or "<unknown>"
+    return (pack_id, pack_version)
+
+
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Deduplicate row dictionaries by `id` while preserving final-write wins semantics."""
     deduped: dict[str, dict[str, Any]] = {}
@@ -1161,13 +1239,28 @@ async def dry_run_governance_pack(
 ) -> GovernancePackDryRunResponse:
     """Validate a governance-pack document and report dry-run compatibility details."""
     _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
     try:
         report = await svc.dry_run_pack_document(
-            document=payload.pack.model_dump(),
-            owner_scope_type=payload.owner_scope_type,
-            owner_scope_id=payload.owner_scope_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
         )
     except ValueError as exc:
+        logger.warning(
+            "Governance pack dry-run rejected for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     report_payload = report.model_dump() if hasattr(report, "model_dump") else dict(report)
     return GovernancePackDryRunResponse.model_validate({"report": report_payload})
@@ -1181,14 +1274,40 @@ async def import_governance_pack(
 ) -> GovernancePackImportResponse:
     """Persist an importable governance-pack document into immutable MCP Hub base objects."""
     _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
     try:
         result = await svc.import_pack_document(
-            document=payload.pack.model_dump(),
-            owner_scope_type=payload.owner_scope_type,
-            owner_scope_id=payload.owner_scope_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
             actor_id=principal.user_id,
         )
+    except GovernancePackAlreadyExistsError as exc:
+        logger.warning(
+            "Governance pack import conflict for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
+        logger.warning(
+            "Governance pack import rejected for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return GovernancePackImportResponse.model_validate(result)
 

@@ -44,6 +44,7 @@ def _load_yaml_directory(path: Path) -> list[dict[str, Any]]:
 
 
 def load_governance_pack_fixture(name_or_path: str | Path) -> GovernancePack:
+    """Load a governance-pack fixture directory by fixture name or explicit path."""
     candidate_path = Path(name_or_path)
     pack_path = candidate_path if candidate_path.exists() else _fixture_root() / str(name_or_path)
 

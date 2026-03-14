@@ -20,6 +20,7 @@ def _collect_duplicates(documents: list[dict[str, object]], key: str) -> list[st
 
 
 def validate_governance_pack(pack: GovernancePack) -> GovernancePackValidationResult:
+    """Validate a schema-first governance pack and return collected structural errors."""
     errors: list[str] = []
     manifest = pack.manifest
 

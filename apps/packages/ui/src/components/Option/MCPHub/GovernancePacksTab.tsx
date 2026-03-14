@@ -23,6 +23,7 @@ const DEFAULT_PACK_JSON = JSON.stringify(
   null,
   2
 )
+const DETAIL_LOAD_ERROR = "Failed to load pack details."
 
 const getVerdictColor = (verdict?: McpHubGovernancePackDryRunReport["verdict"]) => {
   if (verdict === "importable") return "green"
@@ -76,12 +77,13 @@ export const GovernancePacksTab = () => {
     setErrorMessage(null)
     try {
       const rows = await listGovernancePacks()
-      setPacks(Array.isArray(rows) ? rows : [])
+      const safeRows = Array.isArray(rows) ? rows : []
+      setPacks(safeRows)
       setSelectedPackId((current) => {
-        if (rows.some((row) => row.id === current)) {
+        if (safeRows.some((row) => row.id === current)) {
           return current
         }
-        return rows[0]?.id ?? null
+        return safeRows[0]?.id ?? null
       })
     } catch {
       setPacks([])
@@ -102,6 +104,7 @@ export const GovernancePacksTab = () => {
     const loadDetail = async () => {
       if (!selectedPackId) {
         setSelectedPack(null)
+        setErrorMessage((current) => (current === DETAIL_LOAD_ERROR ? null : current))
         return
       }
       setLoadingDetail(true)
@@ -109,10 +112,12 @@ export const GovernancePacksTab = () => {
         const detail = await getGovernancePackDetail(selectedPackId)
         if (!cancelled) {
           setSelectedPack(detail)
+          setErrorMessage((current) => (current === DETAIL_LOAD_ERROR ? null : current))
         }
       } catch {
         if (!cancelled) {
           setSelectedPack(null)
+          setErrorMessage(DETAIL_LOAD_ERROR)
         }
       } finally {
         if (!cancelled) {

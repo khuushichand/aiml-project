@@ -458,6 +458,42 @@ class McpHubRepo:
         )
         return self._normalize_governance_pack_row(self._row_to_dict(row) if row else None)
 
+    async def get_governance_pack_by_identity(
+        self,
+        *,
+        pack_id: str,
+        pack_version: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> dict[str, Any] | None:
+        scope_type = _normalize_scope_type(owner_scope_type)
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
+                   adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
+                   bundle_digest, manifest_json, normalized_ir_json, created_by, updated_by,
+                   created_at, updated_at
+            FROM mcp_governance_packs
+            WHERE pack_id = ?
+              AND pack_version = ?
+              AND owner_scope_type = ?
+              AND (
+                (owner_scope_id IS NULL AND ? IS NULL)
+                OR owner_scope_id = ?
+              )
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (
+                str(pack_id or "").strip(),
+                str(pack_version or "").strip(),
+                scope_type,
+                owner_scope_id,
+                owner_scope_id,
+            ),
+        )
+        return self._normalize_governance_pack_row(self._row_to_dict(row) if row else None)
+
     async def list_governance_packs(
         self,
         *,
@@ -492,6 +528,14 @@ class McpHubRepo:
             self._normalize_governance_pack_row(self._row_to_dict(row)) or {}
             for row in rows
         ]
+
+    async def delete_governance_pack(self, governance_pack_id: int) -> bool:
+        cursor = await self.db_pool.execute(
+            "DELETE FROM mcp_governance_packs WHERE id = ?",
+            (int(governance_pack_id),),
+        )
+        rowcount = getattr(cursor, "rowcount", 0)
+        return bool(rowcount and rowcount > 0)
 
     async def create_governance_pack_object(
         self,

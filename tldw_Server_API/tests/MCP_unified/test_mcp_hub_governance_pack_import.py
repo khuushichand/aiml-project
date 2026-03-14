@@ -98,3 +98,111 @@ async def test_import_governance_pack_materializes_immutable_base_objects_with_p
     )
     assert override is not None
     assert override["override_policy_document"]["allowed_tools"] == ["Read"]
+
+
+@pytest.mark.asyncio
+async def test_import_governance_pack_rejects_duplicate_scope_identity(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        GovernancePackAlreadyExistsError,
+        McpHubGovernancePackService,
+    )
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    pack = load_governance_pack_fixture("minimal_researcher_pack")
+    service = McpHubGovernancePackService(repo=repo)
+
+    await service.import_pack(
+        pack=pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    with pytest.raises(GovernancePackAlreadyExistsError):
+        await service.import_pack(
+            pack=pack,
+            owner_scope_type="user",
+            owner_scope_id=7,
+            actor_id=7,
+        )
+
+    inventory = await repo.list_governance_packs(owner_scope_type="user", owner_scope_id=7)
+    assert len(inventory) == 1
+
+
+@pytest.mark.asyncio
+async def test_import_governance_pack_rolls_back_partial_objects_on_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    original_create_policy_assignment = repo.create_policy_assignment
+
+    async def _boom_create_policy_assignment(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("assignment insert failed")
+
+    repo.create_policy_assignment = _boom_create_policy_assignment  # type: ignore[method-assign]
+
+    pack = load_governance_pack_fixture("minimal_researcher_pack")
+    service = McpHubGovernancePackService(repo=repo)
+
+    with pytest.raises(RuntimeError, match="assignment insert failed"):
+        await service.import_pack(
+            pack=pack,
+            owner_scope_type="user",
+            owner_scope_id=7,
+            actor_id=7,
+        )
+
+    repo.create_policy_assignment = original_create_policy_assignment  # type: ignore[method-assign]
+
+    assert await repo.list_governance_packs(owner_scope_type="user", owner_scope_id=7) == []
+    assert await repo.list_permission_profiles(owner_scope_type="user", owner_scope_id=7) == []
+    assert await repo.list_approval_policies(owner_scope_type="user", owner_scope_id=7) == []
+    assert await repo.list_policy_assignments(owner_scope_type="user", owner_scope_id=7) == []

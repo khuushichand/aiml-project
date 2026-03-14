@@ -147,4 +147,23 @@ describe("GovernancePacksTab", () => {
     expect(screen.getByText("tool.invoke.research")).toBeTruthy()
     expect(screen.getByText("Importable")).toBeTruthy()
   })
+
+  it("surfaces detail load failures without clearing the inventory", async () => {
+    mocks.getGovernancePackDetail.mockRejectedValueOnce(new Error("boom"))
+
+    render(<GovernancePacksTab />)
+
+    expect(await screen.findByText("Researcher Pack")).toBeTruthy()
+    expect(await screen.findByText("Failed to load pack details.")).toBeTruthy()
+    expect(screen.getByText("Installed Packs")).toBeTruthy()
+  })
+
+  it("handles non-array inventory responses without crashing", async () => {
+    mocks.listGovernancePacks.mockResolvedValueOnce({ rows: [] })
+
+    render(<GovernancePacksTab />)
+
+    expect(await screen.findByText("No governance packs imported yet")).toBeTruthy()
+    expect(screen.getByText("Installed Packs")).toBeTruthy()
+  })
 })

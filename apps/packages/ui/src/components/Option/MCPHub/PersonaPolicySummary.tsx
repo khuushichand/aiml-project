@@ -74,9 +74,10 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
     }
   }, [personaId])
 
+  const provenance = Array.isArray(policy?.provenance) ? policy.provenance : []
   const governancePackLabels = Array.from(
     new Set(
-      policy?.provenance
+      provenance
         .filter((entry) => entry.field === "governance_pack")
         .map((entry) => {
           const value = entry.value as { pack_id?: unknown; pack_version?: unknown } | null
@@ -87,7 +88,7 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
           }
           return `Pack ${packId}@${packVersion}`
         })
-        .filter((label): label is string => Boolean(label)) ?? []
+        .filter((label): label is string => Boolean(label))
     )
   )
 
@@ -150,10 +151,10 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
             {getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes) ? (
               <Tag color="blue">{`paths ${getPathAllowlistSummary(policy.policy_document?.path_allowlist_prefixes)}`}</Tag>
             ) : null}
-            {policy.provenance.some((entry) => entry.source_kind === "assignment_override") ? (
+            {provenance.some((entry) => entry.source_kind === "assignment_override") ? (
               <Tag color="cyan">Override active</Tag>
             ) : null}
-            {policy.provenance.some((entry) => entry.source_kind === "assignment_path_scope_object") ? (
+            {provenance.some((entry) => entry.source_kind === "assignment_path_scope_object") ? (
               <Tag color="purple">Named path scope</Tag>
             ) : null}
             {governancePackLabels.map((label) => (

@@ -11,6 +11,9 @@ from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.endpoints import mcp_hub_management
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+    GovernancePackAlreadyExistsError,
+)
 
 
 def _make_principal(
@@ -132,12 +135,38 @@ class _FakeGovernancePackService:
             ],
         }
 
-    async def dry_run_pack_document(self, **kwargs):
-        self.dry_run_calls.append(dict(kwargs))
+    async def dry_run_pack_document(
+        self,
+        *,
+        document: dict[str, object],
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> dict[str, object]:
+        self.dry_run_calls.append(
+            {
+                "document": dict(document),
+                "owner_scope_type": owner_scope_type,
+                "owner_scope_id": owner_scope_id,
+            }
+        )
         return dict(self.report)
 
-    async def import_pack_document(self, **kwargs):
-        self.import_calls.append(dict(kwargs))
+    async def import_pack_document(
+        self,
+        *,
+        document: dict[str, object],
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+    ) -> dict[str, object]:
+        self.import_calls.append(
+            {
+                "document": dict(document),
+                "owner_scope_type": owner_scope_type,
+                "owner_scope_id": owner_scope_id,
+                "actor_id": actor_id,
+            }
+        )
         return {
             "governance_pack_id": 81,
             "imported_object_counts": {
@@ -149,10 +178,16 @@ class _FakeGovernancePackService:
             "report": dict(self.report),
         }
 
-    async def list_governance_packs(self, **_kwargs):
+    async def list_governance_packs(
+        self,
+        *,
+        owner_scope_type: str | None = None,
+        owner_scope_id: int | None = None,
+    ) -> list[dict[str, object]]:
+        del owner_scope_type, owner_scope_id
         return list(self.inventory)
 
-    async def get_governance_pack_detail(self, governance_pack_id: int):
+    async def get_governance_pack_detail(self, governance_pack_id: int) -> dict[str, object] | None:
         if int(governance_pack_id) == 81:
             return dict(self.detail)
         return None
@@ -275,6 +310,100 @@ def test_governance_pack_import_returns_import_result() -> None:
     assert payload["governance_pack_id"] == 81
     assert payload["imported_object_counts"]["permission_profiles"] == 1
     assert governance_service.import_calls
+
+
+def test_governance_pack_dry_run_defaults_user_scope_id_from_principal() -> None:
+    governance_service = _FakeGovernancePackService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=governance_service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/dry-run",
+            json={
+                "owner_scope_type": "user",
+                "pack": _minimal_pack_document(),
+            },
+        )
+
+    assert resp.status_code == 200
+    assert governance_service.dry_run_calls[0]["owner_scope_id"] == 7
+
+
+def test_governance_pack_import_requires_grant_authority_for_portable_tool_capability() -> None:
+    governance_service = _FakeGovernancePackService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read"]),
+        governance_service=governance_service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/import",
+            json={
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "pack": _minimal_pack_document(),
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "grant.tool.invoke" in resp.json()["detail"]
+    assert governance_service.import_calls == []
+
+
+def test_governance_pack_import_defaults_user_scope_id_from_principal() -> None:
+    governance_service = _FakeGovernancePackService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=governance_service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/import",
+            json={
+                "owner_scope_type": "user",
+                "pack": _minimal_pack_document(),
+            },
+        )
+
+    assert resp.status_code == 201
+    assert governance_service.import_calls[0]["owner_scope_id"] == 7
+
+
+def test_governance_pack_import_returns_conflict_for_duplicate_pack() -> None:
+    class _DuplicateGovernancePackService(_FakeGovernancePackService):
+        async def import_pack_document(
+            self,
+            *,
+            document: dict[str, object],
+            owner_scope_type: str,
+            owner_scope_id: int | None,
+            actor_id: int | None,
+        ) -> dict[str, object]:
+            del document, owner_scope_type, owner_scope_id, actor_id
+            raise GovernancePackAlreadyExistsError("researcher-pack", "1.0.0", "user", 7)
+
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=_DuplicateGovernancePackService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/import",
+            json={
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "pack": _minimal_pack_document(),
+            },
+        )
+
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"].lower()
 
 
 def test_update_permission_profile_rejects_immutable_pack_managed_base_object() -> None:
