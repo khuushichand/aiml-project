@@ -24,6 +24,13 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 }))
 
 vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
+  PERSONA_TURN_DETECTION_BALANCED_DEFAULTS: {
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
+  },
   useResolvedPersonaVoiceDefaults: () => ({
     sttLanguage: "en-US",
     sttModel: "whisper-1",
@@ -32,7 +39,12 @@ vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
     confirmationMode: "destructive_only",
     voiceChatTriggerPhrases: [],
     autoResume: true,
-    bargeIn: false
+    bargeIn: false,
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
   })
 }))
 

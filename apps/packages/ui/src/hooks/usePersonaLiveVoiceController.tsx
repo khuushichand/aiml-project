@@ -101,19 +101,19 @@ export const usePersonaLiveVoiceController = ({
   const [sessionAutoResume, setSessionAutoResume] = React.useState(resolvedDefaults.autoResume)
   const [sessionBargeIn, setSessionBargeIn] = React.useState(resolvedDefaults.bargeIn)
   const [autoCommitEnabled, setAutoCommitEnabled] = React.useState(
-    LIVE_VAD_PRESETS.balanced.autoCommitEnabled
+    resolvedDefaults.autoCommitEnabled
   )
   const [vadThreshold, setVadThreshold] = React.useState(
-    LIVE_VAD_PRESETS.balanced.vadThreshold
+    resolvedDefaults.vadThreshold
   )
   const [minSilenceMs, setMinSilenceMs] = React.useState(
-    LIVE_VAD_PRESETS.balanced.minSilenceMs
+    resolvedDefaults.minSilenceMs
   )
   const [turnStopSecs, setTurnStopSecs] = React.useState(
-    LIVE_VAD_PRESETS.balanced.turnStopSecs
+    resolvedDefaults.turnStopSecs
   )
   const [minUtteranceSecs, setMinUtteranceSecs] = React.useState(
-    LIVE_VAD_PRESETS.balanced.minUtteranceSecs
+    resolvedDefaults.minUtteranceSecs
   )
   const [recoveryMode, setRecoveryMode] =
     React.useState<PersonaLiveVoiceRecoveryMode>("none")
@@ -495,11 +495,11 @@ export const usePersonaLiveVoiceController = ({
   React.useEffect(() => {
     setSessionAutoResume(resolvedDefaults.autoResume)
     setSessionBargeIn(resolvedDefaults.bargeIn)
-    setAutoCommitEnabled(LIVE_VAD_PRESETS.balanced.autoCommitEnabled)
-    setVadThreshold(LIVE_VAD_PRESETS.balanced.vadThreshold)
-    setMinSilenceMs(LIVE_VAD_PRESETS.balanced.minSilenceMs)
-    setTurnStopSecs(LIVE_VAD_PRESETS.balanced.turnStopSecs)
-    setMinUtteranceSecs(LIVE_VAD_PRESETS.balanced.minUtteranceSecs)
+    setAutoCommitEnabled(resolvedDefaults.autoCommitEnabled)
+    setVadThreshold(resolvedDefaults.vadThreshold)
+    setMinSilenceMs(resolvedDefaults.minSilenceMs)
+    setTurnStopSecs(resolvedDefaults.turnStopSecs)
+    setMinUtteranceSecs(resolvedDefaults.minUtteranceSecs)
     manualModeRequiredRef.current = false
     setManualModeRequired(false)
     textOnlyDueToTtsFailureRef.current = false
@@ -526,8 +526,13 @@ export const usePersonaLiveVoiceController = ({
     clearListeningRecoveryTimeout,
     clearThinkingRecoveryTimeout,
     personaId,
+    resolvedDefaults.autoCommitEnabled,
     resolvedDefaults.autoResume,
     resolvedDefaults.bargeIn,
+    resolvedDefaults.minSilenceMs,
+    resolvedDefaults.minUtteranceSecs,
+    resolvedDefaults.turnStopSecs,
+    resolvedDefaults.vadThreshold,
     sessionId,
     stopMicStream,
     stopCurrentPlayback
@@ -535,11 +540,11 @@ export const usePersonaLiveVoiceController = ({
 
   React.useEffect(() => {
     if (!connected) {
-      setAutoCommitEnabled(LIVE_VAD_PRESETS.balanced.autoCommitEnabled)
-      setVadThreshold(LIVE_VAD_PRESETS.balanced.vadThreshold)
-      setMinSilenceMs(LIVE_VAD_PRESETS.balanced.minSilenceMs)
-      setTurnStopSecs(LIVE_VAD_PRESETS.balanced.turnStopSecs)
-      setMinUtteranceSecs(LIVE_VAD_PRESETS.balanced.minUtteranceSecs)
+      setAutoCommitEnabled(resolvedDefaults.autoCommitEnabled)
+      setVadThreshold(resolvedDefaults.vadThreshold)
+      setMinSilenceMs(resolvedDefaults.minSilenceMs)
+      setTurnStopSecs(resolvedDefaults.turnStopSecs)
+      setMinUtteranceSecs(resolvedDefaults.minUtteranceSecs)
       manualModeRequiredRef.current = false
       setManualModeRequired(false)
       setRecoveryMode("none")
@@ -556,7 +561,19 @@ export const usePersonaLiveVoiceController = ({
       stopMicStream()
       stopCurrentPlayback()
     }
-  }, [clearAwaitingTtsTimeout, clearListeningRecoveryTimeout, clearThinkingRecoveryTimeout, connected, stopMicStream, stopCurrentPlayback])
+  }, [
+    clearAwaitingTtsTimeout,
+    clearListeningRecoveryTimeout,
+    clearThinkingRecoveryTimeout,
+    connected,
+    resolvedDefaults.autoCommitEnabled,
+    resolvedDefaults.minSilenceMs,
+    resolvedDefaults.minUtteranceSecs,
+    resolvedDefaults.turnStopSecs,
+    resolvedDefaults.vadThreshold,
+    stopMicStream,
+    stopCurrentPlayback
+  ])
 
   React.useEffect(() => {
     const normalizedHeardText = String(heardText || "").trim()

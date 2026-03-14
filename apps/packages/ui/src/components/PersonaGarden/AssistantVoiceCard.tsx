@@ -26,6 +26,8 @@ type AssistantVoiceCardProps = {
   manualModeRequired: boolean
   canSendNow: boolean
   textOnlyDueToTtsFailure: boolean
+  showSaveCurrentSettingsAsDefaults?: boolean
+  savingCurrentSettingsAsDefaults?: boolean
   sessionAutoResume: boolean
   sessionBargeIn: boolean
   autoCommitEnabled?: boolean
@@ -49,6 +51,7 @@ type AssistantVoiceCardProps = {
   onWaitOnRecovery: () => void
   onCopyLastCommandToComposer: () => void
   onJumpToApproval: () => void
+  onSaveCurrentSettingsAsDefaults?: () => void
   onReconnectPersonaSession: () => void
 }
 
@@ -70,6 +73,8 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   manualModeRequired,
   canSendNow,
   textOnlyDueToTtsFailure,
+  showSaveCurrentSettingsAsDefaults = false,
+  savingCurrentSettingsAsDefaults = false,
   sessionAutoResume,
   sessionBargeIn,
   autoCommitEnabled = true,
@@ -93,6 +98,7 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
   onWaitOnRecovery,
   onCopyLastCommandToComposer,
   onJumpToApproval,
+  onSaveCurrentSettingsAsDefaults = () => undefined,
   onReconnectPersonaSession
 }) => {
   const turnDetectionDisabled = !connected || manualModeRequired
@@ -204,6 +210,17 @@ export const AssistantVoiceCard: React.FC<AssistantVoiceCardProps> = ({
         onTurnStopSecsChange={onTurnStopSecsChange}
         onMinUtteranceSecsChange={onMinUtteranceSecsChange}
       />
+      {showSaveCurrentSettingsAsDefaults ? (
+        <div className="mt-2 flex justify-end">
+          <Button
+            size="small"
+            loading={savingCurrentSettingsAsDefaults}
+            onClick={onSaveCurrentSettingsAsDefaults}
+          >
+            Save current settings as defaults
+          </Button>
+        </div>
+      ) : null}
 
       {warning ? (
         <div

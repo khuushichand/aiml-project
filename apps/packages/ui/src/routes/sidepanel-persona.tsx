@@ -14,6 +14,7 @@ import { PersonaPolicySummary } from "@/components/Option/MCPHub"
 import {
   type PersonaVoiceAnalytics
 } from "@/components/PersonaGarden/CommandAnalyticsSummary"
+import type { PersonaTurnDetectionValues } from "@/components/PersonaGarden/PersonaTurnDetectionControls"
 import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCard"
 import { CommandsPanel } from "@/components/PersonaGarden/CommandsPanel"
 import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
@@ -218,6 +219,38 @@ const RESOLVED_RUNTIME_APPROVAL_FADE_MS = 1500
 const APPROVAL_HIGHLIGHT_PRIMARY_MS = 900
 const APPROVAL_HIGHLIGHT_SECONDARY_MS = 650
 
+const hasExplicitTurnDetectionDefaults = (
+  voiceDefaults?: PersonaVoiceDefaults | null
+): boolean =>
+  typeof voiceDefaults?.auto_commit_enabled === "boolean" &&
+  typeof voiceDefaults?.vad_threshold === "number" &&
+  typeof voiceDefaults?.min_silence_ms === "number" &&
+  typeof voiceDefaults?.turn_stop_secs === "number" &&
+  typeof voiceDefaults?.min_utterance_secs === "number"
+
+const buildTurnDetectionValuesFromSavedDefaults = (
+  voiceDefaults?: PersonaVoiceDefaults | null
+): PersonaTurnDetectionValues | null => {
+  if (!hasExplicitTurnDetectionDefaults(voiceDefaults)) return null
+  return {
+    autoCommitEnabled: Boolean(voiceDefaults?.auto_commit_enabled),
+    vadThreshold: Number(voiceDefaults?.vad_threshold),
+    minSilenceMs: Number(voiceDefaults?.min_silence_ms),
+    turnStopSecs: Number(voiceDefaults?.turn_stop_secs),
+    minUtteranceSecs: Number(voiceDefaults?.min_utterance_secs)
+  }
+}
+
+const areTurnDetectionValuesEqual = (
+  left: PersonaTurnDetectionValues,
+  right: PersonaTurnDetectionValues
+): boolean =>
+  left.autoCommitEnabled === right.autoCommitEnabled &&
+  left.vadThreshold === right.vadThreshold &&
+  left.minSilenceMs === right.minSilenceMs &&
+  left.turnStopSecs === right.turnStopSecs &&
+  left.minUtteranceSecs === right.minUtteranceSecs
+
 type ApprovalHighlightPhase =
   | "none"
   | "landing_primary"
@@ -345,7 +378,9 @@ const SidepanelPersona = ({
   const [catalog, setCatalog] = React.useState<PersonaInfo[]>([])
   const [selectedPersonaId, setSelectedPersonaId] =
     React.useState<string>(DEFAULT_PERSONA_ID)
-  const [personaVoiceDefaults, setPersonaVoiceDefaults] =
+  const [savedPersonaVoiceDefaults, setSavedPersonaVoiceDefaults] =
+    React.useState<PersonaVoiceDefaults | null>(null)
+  const [liveSessionVoiceDefaultsBaseline, setLiveSessionVoiceDefaultsBaseline] =
     React.useState<PersonaVoiceDefaults | null>(null)
   const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
   const [openCommandId, setOpenCommandId] = React.useState<string | null>(null)
@@ -360,6 +395,7 @@ const SidepanelPersona = ({
     null
   )
   const [voiceAnalyticsLoading, setVoiceAnalyticsLoading] = React.useState(false)
+  const [savingLiveVoiceDefaults, setSavingLiveVoiceDefaults] = React.useState(false)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
   const [sessionHistory, setSessionHistory] = React.useState<PersonaSessionSummary[]>([])
   const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
@@ -529,7 +565,10 @@ const SidepanelPersona = ({
   React.useEffect(() => {
     const normalizedPersonaId = String(selectedPersonaId || "").trim()
     if (!normalizedPersonaId || isCompanionMode) {
-      setPersonaVoiceDefaults(null)
+      setSavedPersonaVoiceDefaults(null)
+      if (!connected) {
+        setLiveSessionVoiceDefaultsBaseline(null)
+      }
       return
     }
 
@@ -545,11 +584,11 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         if (!cancelled) {
-          setPersonaVoiceDefaults(payload?.voice_defaults || null)
+          setSavedPersonaVoiceDefaults(payload?.voice_defaults || null)
         }
       } catch {
         if (!cancelled) {
-          setPersonaVoiceDefaults(null)
+          setSavedPersonaVoiceDefaults(null)
         }
       }
     })()
@@ -557,16 +596,18 @@ const SidepanelPersona = ({
     return () => {
       cancelled = true
     }
-  }, [isCompanionMode, selectedPersonaId])
+  }, [connected, isCompanionMode, selectedPersonaId])
 
-  const resolvedPersonaVoiceDefaults = useResolvedPersonaVoiceDefaults(personaVoiceDefaults)
+  const resolvedLivePersonaVoiceDefaults = useResolvedPersonaVoiceDefaults(
+    connected ? liveSessionVoiceDefaultsBaseline : savedPersonaVoiceDefaults
+  )
   const livePersonaId = connected ? activeSessionPersonaId || selectedPersonaId : selectedPersonaId
   const liveVoiceController = usePersonaLiveVoiceController({
     ws: wsRef.current,
     connected,
     sessionId: sessionId || "",
     personaId: String(livePersonaId || "").trim(),
-    resolvedDefaults: resolvedPersonaVoiceDefaults,
+    resolvedDefaults: resolvedLivePersonaVoiceDefaults,
     canUseServerStt: Boolean(capabilities?.hasAudio)
   })
 
@@ -836,7 +877,12 @@ const SidepanelPersona = ({
       return false
     }
     const ws = wsRef.current
-    if (!ws) return
+    if (!ws) {
+      setConnected(false)
+      setActiveSessionPersonaId(null)
+      setLiveSessionVoiceDefaultsBaseline(null)
+      return false
+    }
     manuallyClosingRef.current = true
     try {
       ws.close()
@@ -846,6 +892,7 @@ const SidepanelPersona = ({
     wsRef.current = null
     setConnected(false)
     setActiveSessionPersonaId(null)
+    setLiveSessionVoiceDefaultsBaseline(null)
     setPersonaStateHistory([])
     setPersonaStateHistoryLoaded(false)
     setActiveApprovalKey(null)
@@ -1228,6 +1275,7 @@ const SidepanelPersona = ({
     try {
       disconnect({ force: true })
       setActiveSessionPersonaId(null)
+      setLiveSessionVoiceDefaultsBaseline(null)
       setPendingPlan(null)
       setApprovedStepMap({})
       setPersonaStateHistory([])
@@ -1275,6 +1323,7 @@ const SidepanelPersona = ({
       } else {
         setPersonaStateContextEnabled(true)
         setPersonaStateContextProfileDefault(true)
+        let nextSavedVoiceDefaults = savedPersonaVoiceDefaults
         try {
           const profileResp = await tldwClient.fetchWithAuth(
             `/api/v1/persona/profiles/${encodeURIComponent(resolvedPersonaId)}` as any,
@@ -1286,10 +1335,13 @@ const SidepanelPersona = ({
               profilePayload?.use_persona_state_context_default !== false
             setPersonaStateContextEnabled(stateContextDefault)
             setPersonaStateContextProfileDefault(stateContextDefault)
+            nextSavedVoiceDefaults = profilePayload?.voice_defaults || null
+            setSavedPersonaVoiceDefaults(nextSavedVoiceDefaults)
           }
         } catch {
           // profile fetch is optional for route initialization
         }
+        setLiveSessionVoiceDefaultsBaseline(nextSavedVoiceDefaults || null)
         void loadPersonaStateDocs(resolvedPersonaId, { silent: true })
       }
 
@@ -1416,6 +1468,7 @@ const SidepanelPersona = ({
     resetApprovalHighlightMotion,
     resumeSessionId,
     routeBootstrap.personaId,
+    savedPersonaVoiceDefaults,
     selectedPersonaId
   ])
 
@@ -1891,6 +1944,77 @@ const SidepanelPersona = ({
   const selectedPersonaName =
     catalog.find((persona) => String(persona.id || "") === selectedPersonaId)?.name ||
     selectedPersonaId
+  const savedTurnDetectionValues = React.useMemo(
+    () => buildTurnDetectionValuesFromSavedDefaults(savedPersonaVoiceDefaults),
+    [savedPersonaVoiceDefaults]
+  )
+  const liveTurnDetectionValues = React.useMemo<PersonaTurnDetectionValues>(
+    () => ({
+      autoCommitEnabled: liveVoiceController.autoCommitEnabled,
+      vadThreshold: liveVoiceController.vadThreshold,
+      minSilenceMs: liveVoiceController.minSilenceMs,
+      turnStopSecs: liveVoiceController.turnStopSecs,
+      minUtteranceSecs: liveVoiceController.minUtteranceSecs
+    }),
+    [
+      liveVoiceController.autoCommitEnabled,
+      liveVoiceController.minSilenceMs,
+      liveVoiceController.minUtteranceSecs,
+      liveVoiceController.turnStopSecs,
+      liveVoiceController.vadThreshold
+    ]
+  )
+  const showSaveCurrentSettingsAsDefaults =
+    connected &&
+    !isCompanionMode &&
+    (!savedTurnDetectionValues ||
+      !areTurnDetectionValuesEqual(savedTurnDetectionValues, liveTurnDetectionValues))
+
+  const handleSaveCurrentLiveTurnDetectionDefaults = React.useCallback(async () => {
+    const personaId = getTargetPersonaId()
+    if (!personaId || savingLiveVoiceDefaults) return
+    setSavingLiveVoiceDefaults(true)
+    setError(null)
+    try {
+      const mergedVoiceDefaults: PersonaVoiceDefaults = {
+        ...(savedPersonaVoiceDefaults || {}),
+        auto_commit_enabled: liveVoiceController.autoCommitEnabled,
+        vad_threshold: liveVoiceController.vadThreshold,
+        min_silence_ms: liveVoiceController.minSilenceMs,
+        turn_stop_secs: liveVoiceController.turnStopSecs,
+        min_utterance_secs: liveVoiceController.minUtteranceSecs
+      }
+      const response = await tldwClient.fetchWithAuth(
+        `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+        {
+          method: "PATCH",
+          body: {
+            voice_defaults: mergedVoiceDefaults
+          }
+        }
+      )
+      if (!response.ok) {
+        throw new Error(response.error || "Failed to save current live settings as defaults")
+      }
+      const payload = (await response.json()) as PersonaProfileResponse
+      setSavedPersonaVoiceDefaults(payload?.voice_defaults || mergedVoiceDefaults)
+      appendLog("notice", "Saved current live turn detection defaults")
+    } catch (err: any) {
+      setError(String(err?.message || "Failed to save current live settings as defaults"))
+    } finally {
+      setSavingLiveVoiceDefaults(false)
+    }
+  }, [
+    appendLog,
+    getTargetPersonaId,
+    liveVoiceController.autoCommitEnabled,
+    liveVoiceController.minSilenceMs,
+    liveVoiceController.minUtteranceSecs,
+    liveVoiceController.turnStopSecs,
+    liveVoiceController.vadThreshold,
+    savedPersonaVoiceDefaults,
+    savingLiveVoiceDefaults
+  ])
 
   const liveSessionControls = (
     <div className="flex flex-wrap items-center gap-2">
@@ -2010,7 +2134,7 @@ const SidepanelPersona = ({
 
   const assistantVoiceCard = (
     <AssistantVoiceCard
-      resolvedDefaults={resolvedPersonaVoiceDefaults}
+      resolvedDefaults={resolvedLivePersonaVoiceDefaults}
       connected={connected}
       state={liveVoiceController.state}
       speechAvailable={liveVoiceController.speechAvailable}
@@ -2024,6 +2148,8 @@ const SidepanelPersona = ({
       manualModeRequired={liveVoiceController.manualModeRequired}
       canSendNow={liveVoiceController.canSendNow}
       textOnlyDueToTtsFailure={liveVoiceController.textOnlyDueToTtsFailure}
+      showSaveCurrentSettingsAsDefaults={showSaveCurrentSettingsAsDefaults}
+      savingCurrentSettingsAsDefaults={savingLiveVoiceDefaults}
       sessionAutoResume={liveVoiceController.sessionAutoResume}
       sessionBargeIn={liveVoiceController.sessionBargeIn}
       autoCommitEnabled={liveVoiceController.autoCommitEnabled}
@@ -2047,6 +2173,7 @@ const SidepanelPersona = ({
       onWaitOnRecovery={liveVoiceController.waitOnRecovery}
       onCopyLastCommandToComposer={handleCopyLastVoiceCommandToComposer}
       onJumpToApproval={handleJumpToRuntimeApproval}
+      onSaveCurrentSettingsAsDefaults={handleSaveCurrentLiveTurnDetectionDefaults}
       onReconnectPersonaSession={handleReconnectPersonaSessionFromRecovery}
     />
   )

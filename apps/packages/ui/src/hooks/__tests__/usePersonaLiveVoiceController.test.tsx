@@ -74,7 +74,12 @@ describe("usePersonaLiveVoiceController", () => {
     confirmationMode: "destructive_only" as const,
     voiceChatTriggerPhrases: ["hey helper"],
     autoResume: true,
-    bargeIn: false
+    bargeIn: false,
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
   }
 
   const getSentPayloads = (ws: WebSocket & { send: ReturnType<typeof vi.fn> }) =>

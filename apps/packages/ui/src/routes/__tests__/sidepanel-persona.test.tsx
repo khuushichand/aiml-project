@@ -98,15 +98,52 @@ vi.mock("@/services/companion", () => ({
 }))
 
 vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
-  useResolvedPersonaVoiceDefaults: () => ({
-    sttLanguage: "en-US",
-    sttModel: "whisper-1",
-    ttsProvider: "tldw",
-    ttsVoice: "af_heart",
-    confirmationMode: "destructive_only",
-    voiceChatTriggerPhrases: ["hey helper"],
-    autoResume: true,
-    bargeIn: false
+  PERSONA_TURN_DETECTION_BALANCED_DEFAULTS: {
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
+  },
+  useResolvedPersonaVoiceDefaults: (voiceDefaults?: Record<string, unknown> | null) => ({
+    sttLanguage: String(voiceDefaults?.stt_language || "en-US"),
+    sttModel: String(voiceDefaults?.stt_model || "whisper-1"),
+    ttsProvider: String(voiceDefaults?.tts_provider || "tldw"),
+    ttsVoice: String(voiceDefaults?.tts_voice || "af_heart"),
+    confirmationMode: String(
+      voiceDefaults?.confirmation_mode || "destructive_only"
+    ) as "always" | "destructive_only" | "never",
+    voiceChatTriggerPhrases:
+      Array.isArray(voiceDefaults?.voice_chat_trigger_phrases) &&
+      voiceDefaults.voice_chat_trigger_phrases.length > 0
+        ? (voiceDefaults.voice_chat_trigger_phrases as string[])
+        : ["hey helper"],
+    autoResume:
+      typeof voiceDefaults?.auto_resume === "boolean"
+        ? voiceDefaults.auto_resume
+        : true,
+    bargeIn:
+      typeof voiceDefaults?.barge_in === "boolean" ? voiceDefaults.barge_in : false,
+    autoCommitEnabled:
+      typeof voiceDefaults?.auto_commit_enabled === "boolean"
+        ? voiceDefaults.auto_commit_enabled
+        : true,
+    vadThreshold:
+      typeof voiceDefaults?.vad_threshold === "number"
+        ? voiceDefaults.vad_threshold
+        : 0.5,
+    minSilenceMs:
+      typeof voiceDefaults?.min_silence_ms === "number"
+        ? voiceDefaults.min_silence_ms
+        : 250,
+    turnStopSecs:
+      typeof voiceDefaults?.turn_stop_secs === "number"
+        ? voiceDefaults.turn_stop_secs
+        : 0.2,
+    minUtteranceSecs:
+      typeof voiceDefaults?.min_utterance_secs === "number"
+        ? voiceDefaults.min_utterance_secs
+        : 0.4
   })
 }))
 
@@ -227,6 +264,110 @@ class MockWebSocket {
 
 const getSentPayloads = (ws: MockWebSocket) =>
   ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)))
+
+type MockPersonaVoiceDefaults = {
+  stt_language?: string
+  stt_model?: string
+  tts_provider?: string
+  tts_voice?: string
+  confirmation_mode?: "always" | "destructive_only" | "never"
+  voice_chat_trigger_phrases?: string[]
+  auto_resume?: boolean
+  barge_in?: boolean
+  auto_commit_enabled?: boolean
+  vad_threshold?: number
+  min_silence_ms?: number
+  turn_stop_secs?: number
+  min_utterance_secs?: number
+}
+
+const buildMockPersonaVoiceDefaults = (
+  overrides: Partial<MockPersonaVoiceDefaults> = {}
+): MockPersonaVoiceDefaults => ({
+  stt_language: "en-US",
+  stt_model: "whisper-1",
+  tts_provider: "tldw",
+  tts_voice: "af_heart",
+  confirmation_mode: "destructive_only",
+  voice_chat_trigger_phrases: ["hey helper"],
+  auto_resume: true,
+  barge_in: false,
+  ...overrides
+})
+
+const mockPersonaLiveVoiceFetches = ({
+  sessionId,
+  voiceDefaults,
+  patchHandler
+}: {
+  sessionId: string
+  voiceDefaults: MockPersonaVoiceDefaults
+  patchHandler?: (body: { voice_defaults?: MockPersonaVoiceDefaults }) => MockPersonaVoiceDefaults
+}) => {
+  mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
+    const method = String(init?.method || "GET").toUpperCase()
+    if (path.includes("/persona/catalog")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+      })
+    }
+    if (path.includes("/persona/profiles/research_assistant/state")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          persona_id: "research_assistant",
+          soul_md: "persona soul",
+          identity_md: "persona identity",
+          heartbeat_md: "persona heartbeat"
+        })
+      })
+    }
+    if (path.includes("/persona/profiles/research_assistant")) {
+      if (method === "PATCH") {
+        const nextVoiceDefaults = patchHandler
+          ? patchHandler(init?.body || {})
+          : (init?.body?.voice_defaults as MockPersonaVoiceDefaults)
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "research_assistant",
+            use_persona_state_context_default: true,
+            voice_defaults: nextVoiceDefaults
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          id: "research_assistant",
+          use_persona_state_context_default: true,
+          voice_defaults: voiceDefaults
+        })
+      })
+    }
+    if (path.includes("/persona/sessions")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => []
+      })
+    }
+    if (path.includes("/persona/session")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          session_id: sessionId,
+          persona: { id: "research_assistant" }
+        })
+      })
+    }
+    return Promise.resolve({
+      ok: false,
+      error: `unhandled path: ${path}`,
+      json: async () => ({})
+    })
+  })
+}
 
 type RuntimeApprovalOptions = {
   sessionId: string
@@ -3641,6 +3782,356 @@ describe("SidepanelPersona", () => {
       "data-active",
       "true"
     )
+  })
+
+  it("initializes live turn detection from saved persona defaults on connect", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mockPersonaLiveVoiceFetches({
+      sessionId: "sess-live-saved-defaults",
+      voiceDefaults: buildMockPersonaVoiceDefaults({
+        auto_commit_enabled: false,
+        vad_threshold: 0.61,
+        min_silence_ms: 640,
+        turn_stop_secs: 0.48,
+        min_utterance_secs: 0.82
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    await waitFor(() => {
+      expect(getSentPayloads(ws)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-live-saved-defaults",
+            stt: expect.objectContaining({
+              enable_vad: false,
+              vad_threshold: 0.61,
+              min_silence_ms: 640,
+              turn_stop_secs: 0.48,
+              min_utterance_secs: 0.82
+            })
+          })
+        ])
+      )
+    })
+  })
+
+  it("shows save current settings as defaults when saved turn detection defaults are absent", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mockPersonaLiveVoiceFetches({
+      sessionId: "sess-live-save-cta-absent",
+      voiceDefaults: buildMockPersonaVoiceDefaults()
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Save current settings as defaults" })
+      ).toBeInTheDocument()
+    })
+  })
+
+  it("shows save current settings as defaults only when explicit saved turn detection defaults are different", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mockPersonaLiveVoiceFetches({
+      sessionId: "sess-live-save-cta-different",
+      voiceDefaults: buildMockPersonaVoiceDefaults({
+        auto_commit_enabled: true,
+        vad_threshold: 0.5,
+        min_silence_ms: 250,
+        turn_stop_secs: 0.2,
+        min_utterance_secs: 0.4
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    expect(
+      screen.queryByRole("button", { name: "Save current settings as defaults" })
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Save current settings as defaults" })
+      ).toBeInTheDocument()
+    })
+  })
+
+  it("saves merged voice defaults from the live session without dropping saved non-vad fields", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mockPersonaLiveVoiceFetches({
+      sessionId: "sess-live-save-merge",
+      voiceDefaults: buildMockPersonaVoiceDefaults({
+        stt_language: "fr-FR",
+        stt_model: "parakeet",
+        tts_provider: "openai",
+        tts_voice: "nova",
+        confirmation_mode: "always",
+        voice_chat_trigger_phrases: ["bonjour helper"],
+        auto_resume: false,
+        barge_in: true
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    MockWebSocket.instances[0].emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
+    fireEvent.click(screen.getByRole("button", { name: "Save current settings as defaults" }))
+
+    await waitFor(() => {
+      const patchCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/research_assistant") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PATCH" &&
+          Boolean(
+            (calledInit as { body?: { voice_defaults?: unknown } } | undefined)?.body
+              ?.voice_defaults
+          )
+      )
+      expect(patchCall).toBeTruthy()
+      expect(
+        (
+          patchCall?.[1] as {
+            body?: {
+              voice_defaults?: MockPersonaVoiceDefaults
+            }
+          } | undefined
+        )?.body?.voice_defaults
+      ).toEqual(
+        expect.objectContaining({
+          stt_language: "fr-FR",
+          stt_model: "parakeet",
+          tts_provider: "openai",
+          tts_voice: "nova",
+          confirmation_mode: "always",
+          voice_chat_trigger_phrases: ["bonjour helper"],
+          auto_resume: false,
+          barge_in: true,
+          auto_commit_enabled: true,
+          vad_threshold: 0.35,
+          min_silence_ms: 150,
+          turn_stop_secs: 0.1,
+          min_utterance_secs: 0.25
+        })
+      )
+    })
+  })
+
+  it("does not hot-reset the connected live session when assistant defaults are saved", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mockPersonaLiveVoiceFetches({
+      sessionId: "sess-live-save-no-reset",
+      voiceDefaults: buildMockPersonaVoiceDefaults()
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
+
+    await waitFor(() => {
+      expect(getSentPayloads(ws)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-live-save-no-reset",
+            stt: expect.objectContaining({
+              vad_threshold: 0.35,
+              min_silence_ms: 150,
+              turn_stop_secs: 0.1,
+              min_utterance_secs: 0.25
+            })
+          })
+        ])
+      )
+    })
+
+    const voiceConfigCountBeforeSave = getSentPayloads(ws).filter(
+      (payload) => payload.type === "voice_config"
+    ).length
+
+    fireEvent.click(screen.getByRole("button", { name: "Save current settings as defaults" }))
+
+    await waitFor(() => {
+      const patchCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/research_assistant") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PATCH"
+      )
+      expect(patchCall).toBeTruthy()
+    })
+
+    expect(
+      getSentPayloads(ws).filter((payload) => payload.type === "voice_config")
+    ).toHaveLength(voiceConfigCountBeforeSave)
+    expect(screen.getByTestId("live-vad-preset-fast")).toHaveAttribute(
+      "data-active",
+      "true"
+    )
+  })
+
+  it("uses updated saved turn detection defaults after reconnect", async () => {
+    mocks.capabilitiesState.capabilities = {
+      hasPersona: true,
+      hasPersonalization: true,
+      hasAudio: true
+    } as any
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    const savedVoiceDefaults = buildMockPersonaVoiceDefaults()
+    mockPersonaLiveVoiceFetches({
+      sessionId: "sess-live-reconnect-saved-defaults",
+      voiceDefaults: savedVoiceDefaults,
+      patchHandler: (body) => {
+        Object.assign(savedVoiceDefaults, body.voice_defaults || {})
+        return savedVoiceDefaults
+      }
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+    const firstWs = MockWebSocket.instances[0]
+    firstWs.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    fireEvent.click(screen.getByTestId("live-vad-preset-fast"))
+    fireEvent.click(screen.getByRole("button", { name: "Save current settings as defaults" }))
+
+    await waitFor(() => {
+      const patchCall = mocks.fetchWithAuth.mock.calls.find(
+        ([calledPath, calledInit]) =>
+          String(calledPath).includes("/persona/profiles/research_assistant") &&
+          String((calledInit as { method?: string } | undefined)?.method || "").toUpperCase() ===
+            "PATCH"
+      )
+      expect(patchCall).toBeTruthy()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Connect/ })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(2)
+    })
+    const secondWs = MockWebSocket.instances[1]
+    secondWs.emitOpen()
+    await screen.findByText("Persona stream connected")
+
+    await waitFor(() => {
+      expect(getSentPayloads(secondWs)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "voice_config",
+            session_id: "sess-live-reconnect-saved-defaults",
+            stt: expect.objectContaining({
+              enable_vad: true,
+              vad_threshold: 0.35,
+              min_silence_ms: 150,
+              turn_stop_secs: 0.1,
+              min_utterance_secs: 0.25
+            })
+          })
+        ])
+      )
+    })
   })
 
   it("does not append tool processing notices into the visible persona log", async () => {
