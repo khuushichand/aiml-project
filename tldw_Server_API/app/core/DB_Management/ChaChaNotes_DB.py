@@ -4717,6 +4717,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 conn.execute(
                     "ALTER TABLE conversations ADD COLUMN persona_memory_mode TEXT CHECK(persona_memory_mode IN ('read_only','read_write'))"
                 )
+            self._ensure_conversations_fts_triggers_sqlite(conn)
+            self._rebuild_conversations_fts_sqlite(conn)
             conn.execute(
                 """
                 UPDATE conversations
@@ -4906,6 +4908,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V36 to V37 for DB: {self.db_path_str}...")
         try:
             self._ensure_workspace_subresource_schema_sqlite(conn)
+            self._ensure_flashcard_asset_schema_sqlite(conn)
             self._ensure_flashcard_scheduler_schema_sqlite(conn)
             conn.executescript(self._MIGRATION_SQL_V36_TO_V37)
             final_version = self._get_db_version(conn)
@@ -4944,6 +4947,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             conn.execute(
                 "ALTER TABLE conversations ADD COLUMN persona_memory_mode TEXT CHECK(persona_memory_mode IN ('read_only','read_write'))"
             )
+        self._ensure_conversations_fts_triggers_sqlite(conn)
+        self._rebuild_conversations_fts_sqlite(conn)
         conn.execute(
             """
             UPDATE conversations
@@ -5957,6 +5962,72 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring character_cards FTS triggers: {exc}") from exc  # noqa: TRY003
 
+    def _ensure_conversations_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Normalize conversations FTS triggers to avoid invalid delete operations.
+
+        Legacy SQLite trigger shapes update `conversations_fts` on every
+        conversation update, even when only non-search columns changed. On older
+        databases with stale `conversations_fts` contents, that unconditional
+        delete can raise `database disk image is malformed` from FTS internals.
+        Restrict FTS work to title/deleted changes only.
+        """
+
+        try:
+            conn.executescript(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts
+                USING fts5(
+                  title,
+                  content='conversations',
+                  content_rowid='rowid'
+                );
+
+                DROP TRIGGER IF EXISTS conversations_ai;
+                DROP TRIGGER IF EXISTS conversations_au;
+                DROP TRIGGER IF EXISTS conversations_ad;
+
+                CREATE TRIGGER conversations_ai
+                AFTER INSERT ON conversations BEGIN
+                  INSERT INTO conversations_fts(rowid,title)
+                  SELECT new.rowid,new.title
+                  WHERE new.deleted = 0 AND new.title IS NOT NULL;
+                END;
+
+                CREATE TRIGGER conversations_au
+                AFTER UPDATE ON conversations BEGIN
+                  INSERT INTO conversations_fts(conversations_fts,rowid,title)
+                  SELECT 'delete',old.rowid,old.title
+                  WHERE old.deleted = 0
+                    AND old.title IS NOT NULL
+                    AND (old.title IS NOT new.title OR old.deleted IS NOT new.deleted);
+
+                  INSERT INTO conversations_fts(rowid,title)
+                  SELECT new.rowid,new.title
+                  WHERE new.deleted = 0
+                    AND new.title IS NOT NULL
+                    AND (old.title IS NOT new.title OR old.deleted IS NOT new.deleted);
+                END;
+
+                CREATE TRIGGER conversations_ad
+                AFTER DELETE ON conversations BEGIN
+                  INSERT INTO conversations_fts(conversations_fts,rowid,title)
+                  SELECT 'delete',old.rowid,old.title
+                  WHERE old.deleted = 0 AND old.title IS NOT NULL;
+                END;
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring conversations FTS triggers: {exc}") from exc  # noqa: TRY003
+
+    def _rebuild_conversations_fts_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Rebuild the SQLite conversations FTS index for legacy databases."""
+
+        try:
+            conn.execute("INSERT INTO conversations_fts(conversations_fts) VALUES('rebuild')")
+        except sqlite3.Error as exc:
+            logger.error("Failed rebuilding conversations_fts: {}", exc)
+            raise SchemaError(f"Failed rebuilding conversations_fts: {exc}") from exc  # noqa: TRY003
+
     def _ensure_notes_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
         """Normalize notes FTS triggers to avoid invalid delete operations.
 
@@ -6069,6 +6140,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             except sqlite3.Error as exc:
                 raise SchemaError(f"Failed adding flashcards.{column_name}: {exc}") from exc  # noqa: TRY003
             missing_shadow_cols.append(column_name)
+
+        self._ensure_flashcard_fts_triggers_sqlite(conn)
 
         needs_backfill = bool(missing_shadow_cols)
         if not needs_backfill:
