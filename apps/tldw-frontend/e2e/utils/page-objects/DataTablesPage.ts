@@ -61,7 +61,7 @@ export class DataTablesPage extends BasePage {
 
   /** Search input in the My Tables list */
   get searchInput(): Locator {
-    return this.page.getByPlaceholder("Search tables...")
+    return this.page.getByPlaceholder(/search/i).first()
   }
 
   /** Refresh button in the My Tables list */

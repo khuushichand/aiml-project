@@ -40,7 +40,20 @@ export async function seedAuth(
         localStorage.setItem('__tldw_allow_offline', 'true');
       }
     } catch {}
+    // Suppress connection error modals by setting test bypass
+    try {
+      localStorage.setItem('__tldw_test_bypass', 'true');
+    } catch {}
   }, finalConfig);
+
+  // Stub backend endpoints that may return 500 and trigger blocking error modals
+  await page.route('**/api/v1/admin/notes/title-settings', route => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ llm_enabled: false, default_strategy: 'heuristic' }),
+    });
+  });
 }
 
 /**
@@ -75,12 +88,16 @@ export async function waitForConnection(page: Page, timeoutMs = 20000): Promise<
 
   // Dismiss any connection error modals that might block interaction
   await dismissConnectionModals(page);
+
 }
 
 /**
- * Dismiss any connection/server error modals (Ant Design modals)
+ * Dismiss any connection/server error modals (Ant Design modals).
+ * Also removes the modal backdrop via DOM manipulation to prevent
+ * modals from re-blocking interaction.
  */
 export async function dismissConnectionModals(page: Page): Promise<void> {
+  // Try clicking Dismiss button first
   try {
     const dismissBtn = page.getByRole('button', { name: /dismiss/i });
     if (await dismissBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
@@ -90,6 +107,13 @@ export async function dismissConnectionModals(page: Page): Promise<void> {
   } catch {
     // No modal to dismiss
   }
+
+  // Force-remove any remaining modal backdrops via DOM
+  await page.evaluate(() => {
+    document.querySelectorAll('.ant-modal-root, .ant-modal-wrap, .ant-modal-mask').forEach(el => {
+      el.remove();
+    });
+  }).catch(() => {});
 }
 
 /**

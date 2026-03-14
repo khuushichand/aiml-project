@@ -18,6 +18,8 @@ const {
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
+  mockCreateChatCompletion,
+  mockGetMediaDetails,
   mockAddArtifact,
   mockUpdateArtifactStatus,
   mockRemoveArtifact,
@@ -39,6 +41,8 @@ const {
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
+  const createChatCompletion = vi.fn()
+  const getMediaDetails = vi.fn()
 
   const addArtifact = vi.fn()
   const updateArtifactStatus = vi.fn()
@@ -52,10 +56,30 @@ const {
   const messageSuccess = vi.fn()
   const messageError = vi.fn()
   const messageInfo = vi.fn()
+  const defaultSources = [
+    {
+      id: "source-1",
+      mediaId: 101,
+      title: "DSPy Prompting Talk",
+      type: "video" as const,
+      status: "ready" as const,
+      addedAt: new Date("2026-02-18T00:00:00.000Z")
+    }
+  ]
 
   const state = {
     selectedSourceIds: ["source-1"],
+    selectedSourceFolderIds: [] as string[],
+    sources: defaultSources,
     getSelectedMediaIds: () => [101],
+    getEffectiveSelectedSources: () =>
+      state.sources.filter((source: { id: string }) =>
+        state.selectedSourceIds.includes(source.id)
+      ),
+    getEffectiveSelectedMediaIds: () =>
+      state
+        .getEffectiveSelectedSources()
+        .map((source: { mediaId: number }) => source.mediaId),
     generatedArtifacts: [] as Array<any>,
     isGeneratingOutput: false,
     generatingOutputType: null as any,
@@ -113,6 +137,8 @@ const {
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
+    mockCreateChatCompletion: createChatCompletion,
+    mockGetMediaDetails: getMediaDetails,
     mockAddArtifact: addArtifact,
     mockUpdateArtifactStatus: updateArtifactStatus,
     mockRemoveArtifact: removeArtifact,
@@ -199,6 +225,8 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    createChatCompletion: mockCreateChatCompletion,
+    getMediaDetails: mockGetMediaDetails,
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
   }
@@ -318,12 +346,28 @@ describe("StudioPane Stage 2 workflows", () => {
     )
 
     workspaceStoreState.selectedSourceIds = ["source-1"]
+    workspaceStoreState.selectedSourceFolderIds = []
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "DSPy Prompting Talk",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ]
     workspaceStoreState.getSelectedMediaIds = () => [101]
     workspaceStoreState.generatedArtifacts = []
     workspaceStoreState.isGeneratingOutput = false
     workspaceStoreState.generatingOutputType = null
     workspaceStoreState.noteFocusTarget = null
     mockCaptureToCurrentNote.mockReset()
+    messageOptionStoreState.selectedModel = "gpt-4o-mini"
+    chatModelSettingsStoreState.apiProvider = undefined
+    chatModelSettingsStoreState.temperature = 0.7
+    chatModelSettingsStoreState.topP = 1
+    chatModelSettingsStoreState.numPredict = 800
 
     let artifactCounter = 0
     mockAddArtifact.mockImplementation((artifactData: any) => {
@@ -460,6 +504,24 @@ describe("StudioPane Stage 2 workflows", () => {
   it("generates quiz content across all selected media", async () => {
     workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
     workspaceStoreState.getSelectedMediaIds = () => [101, 202]
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "DSPy Prompting Talk",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      },
+      {
+        id: "source-2",
+        mediaId: 202,
+        title: "E2E DB Media",
+        type: "document",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ]
 
     renderStudioPane()
 
@@ -837,6 +899,24 @@ describe("StudioPane Stage 2 workflows", () => {
   it("generates compare sources output with usage metrics", async () => {
     workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
     workspaceStoreState.getSelectedMediaIds = () => [101, 202]
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "DSPy Prompting Talk",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      },
+      {
+        id: "source-2",
+        mediaId: 202,
+        title: "E2E DB Media",
+        type: "document",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ]
     mockRagSearch.mockResolvedValue({
       generation: "Compared sources output",
       usage: {
@@ -850,19 +930,19 @@ describe("StudioPane Stage 2 workflows", () => {
     fireEvent.click(screen.getByRole("button", { name: "Compare Sources" }))
 
     await waitFor(() => {
-      expect(mockRagSearch).toHaveBeenCalledWith(
-        "agreements disagreements claims evidence",
-        expect.objectContaining({
-          include_media_ids: [101, 202],
-          generation_prompt: expect.stringContaining(
-            "Compare the selected sources"
-          ),
-          top_k: 30,
-          enable_generation: true,
-          enable_citations: true
-        })
-      )
+      expect(mockRagSearch).toHaveBeenCalled()
     })
+
+    expect(mockRagSearch).toHaveBeenCalledWith(
+      "agreements disagreements claims evidence",
+      expect.objectContaining({
+        include_media_ids: [101, 202],
+        generation_prompt: expect.stringContaining("Compare the selected sources"),
+        top_k: 30,
+        enable_generation: true,
+        enable_citations: true
+      })
+    )
 
     await waitFor(() => {
       expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
@@ -875,6 +955,157 @@ describe("StudioPane Stage 2 workflows", () => {
         })
       )
     })
+  })
+
+  it("generates data table output from selected source content via chat completion", async () => {
+    workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
+    workspaceStoreState.getSelectedMediaIds = () => [101, 202]
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "DSPy Prompting Talk",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      },
+      {
+        id: "source-2",
+        mediaId: 202,
+        title: "E2E DB Media",
+        type: "document",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ]
+    mockGetMediaDetails
+      .mockResolvedValueOnce({
+        source: { title: "DSPy Prompting Talk" },
+        content: {
+          text: "DSPy helps optimize prompting workflows and compound AI pipelines."
+        }
+      })
+      .mockResolvedValueOnce({
+        source: { title: "E2E DB Media" },
+        content: {
+          text: "Hello world from E2E document processing."
+        }
+      })
+    mockCreateChatCompletion.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content:
+                  "| Source | Fact |\n|---|---|\n| DSPy Prompting Talk | Prompt optimization |\n| E2E DB Media | Hello world |"
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Data Table" }))
+
+    await waitFor(() => {
+      expect(mockGetMediaDetails).toHaveBeenCalledTimes(2)
+    })
+
+    expect(mockCreateChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-4o-mini",
+        temperature: 0.7,
+        top_p: 1,
+        max_tokens: 800,
+        messages: [
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("Return ONLY a markdown table")
+          }),
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining("DSPy Prompting Talk")
+          })
+        ]
+      })
+    )
+    expect(mockRagSearch).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        expect.stringMatching(/^artifact-/),
+        "completed",
+        expect.objectContaining({
+          content: expect.stringContaining("| Source | Fact |"),
+          data: expect.objectContaining({
+            table: expect.objectContaining({
+              headers: ["Source", "Fact"]
+            })
+          })
+        })
+      )
+    })
+  })
+
+  it("falls back to the first available chat model for data tables when no model is selected", async () => {
+    messageOptionStoreState.selectedModel = null
+    mockGetChatModels.mockResolvedValue([
+      {
+        id: "gpt-4o-mini",
+        name: "GPT-4o mini",
+        provider: "openai"
+      },
+      {
+        id: "claude-3-5-sonnet",
+        name: "Claude 3.5 Sonnet",
+        provider: "anthropic"
+      }
+    ])
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "DSPy helps optimize prompting workflows and compound AI pipelines."
+      }
+    })
+    mockCreateChatCompletion.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content:
+                  "| Source | Fact |\n|---|---|\n| DSPy Prompting Talk | Prompt optimization |"
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Data Table" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
+
+    expect(mockCreateChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-4o-mini"
+      })
+    )
   })
 
   it("renders cumulative workspace usage and per-artifact usage", async () => {

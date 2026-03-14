@@ -36,7 +36,7 @@ export class STTPage extends BasePage {
   }
 
   get subtitle(): Locator {
-    return this.page.getByText(/record audio and compare transcription/i)
+    return this.page.getByText(/try out transcription models|record audio and compare transcription|select models and record audio/i)
   }
 
   // -- Locators: Recording strip ----------------------------------------------

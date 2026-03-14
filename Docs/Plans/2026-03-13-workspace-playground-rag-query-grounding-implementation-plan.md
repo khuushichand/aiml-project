@@ -1,36 +1,32 @@
-# Workspace Playground RAG Query Grounding Implementation Plan
+# Workspace Playground Data Table Reliability Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Ground workspace studio RAG retrieval queries in the selected sources so live artifact generation retrieves relevant content instead of falling back to generic no-context answers.
+**Goal:** Make `/workspace-playground` `Data Table` generation reliable by replacing the brittle unified-RAG retrieval path with direct selected-source content extraction plus constrained chat-completion formatting.
 
-**Architecture:** Add a shared retrieval-query builder in `StudioPane/index.tsx` that derives a compact source-grounded query from the effective selected workspace sources. Update RAG-backed generators to use that grounded query plus small artifact-specific hints while leaving `generation_prompt` responsible for authoring instructions.
+**Architecture:** Keep the existing shared studio result validation and the existing unified-RAG flows for other output types. For `data_table` only, fetch the selected source content directly from the media API, build a bounded source-context payload, generate markdown-table output through chat completion, then parse that table into structured artifact data.
 
-**Tech Stack:** React, TypeScript, Zustand, Vitest, Playwright, unified RAG API
+**Tech Stack:** React, TypeScript, Zustand, Vitest, Playwright, existing `tldwClient` media and chat APIs
 
 ---
 
 ### Task 1: Add failing request-contract tests
 
 **Files:**
-- Modify: `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx`
 - Modify: `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx`
 
 **Step 1: Write the failing test**
 
-Add a `summary` regression test that:
+Add a `Data Table` regression test that:
 
-- renders `StudioPane` with ready selected sources that have titles
-- triggers `Summary`
-- inspects the mocked `ragSearch` call
-- expects `query` to include selected source-title terms
-- expects `generation_prompt` to remain present
-
-Add a `data_table` regression test that:
-
+- renders `StudioPane` with multiple selected sources
 - triggers `Data Table`
-- expects the `query` not to equal the old generic string alone
-- expects the grounded query to include selected source-title terms and data-table hints
+- expects `getMediaDetails(...)` to be called for each selected media id
+- expects `createChatCompletion(...)` to receive the selected source titles and source text
+- expects `ragSearch(...)` not to be called
+- expects the resulting artifact to store both raw markdown and parsed table data
+
+Keep the existing `summary` and `compare_sources` tests unchanged so they continue locking the current RAG request contract.
 
 **Step 2: Run tests to verify they fail**
 
@@ -42,16 +38,16 @@ bunx vitest run ../packages/ui/src/components/Option/WorkspacePlayground/__tests
 
 Expected:
 
-- new assertions fail because current generators still use generic retrieval queries
+- the new `Data Table` assertions fail because the page still uses generic RAG generation
 
 **Step 3: Commit**
 
 ```bash
-git add apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx
-git commit -m "test: lock grounded workspace rag query contract"
+git add apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx
+git commit -m "test: lock workspace data table direct-content contract"
 ```
 
-### Task 2: Implement grounded retrieval query building
+### Task 2: Implement the direct-content data-table path
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx`
@@ -62,15 +58,19 @@ git commit -m "test: lock grounded workspace rag query contract"
 
 In `StudioPane/index.tsx`:
 
-- read `getEffectiveSelectedSources` from the workspace store
-- add a helper that converts selected `WorkspaceSource[]` into a compact grounded retrieval string
-- update the RAG-backed generators to accept selected sources and use grounded queries with small artifact-specific suffixes
+- read `getEffectiveSelectedSources()` from the workspace store
+- derive the selected source records for the current media ids
+- add helper extraction for usable media-detail text
+- fetch source content through `tldwClient.getMediaDetails(...)`
+- clip per-source and total prompt payload size
+- send the bounded source context to `tldwClient.createChatCompletion(...)`
+- parse the markdown table and return it in `GenerationResult.data.table`
 
 Keep the change minimal:
 
 - no backend schema changes
-- no parser redesign
-- no unrelated refactors
+- no new background job dependency
+- no changes to other output generators unless needed for shared helper reuse
 
 **Step 2: Run tests to verify they pass**
 
@@ -88,7 +88,7 @@ Expected:
 
 ```bash
 git add apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx
-git commit -m "fix: ground workspace studio rag queries in selected sources"
+git commit -m "fix: generate workspace data tables from selected source content"
 ```
 
 ### Task 3: Verify live workspace behavior
@@ -98,7 +98,7 @@ git commit -m "fix: ground workspace studio rag queries in selected sources"
 
 **Step 1: Run targeted live verification**
 
-With the local frontend and backend running, execute the workspace output probe and confirm that `Data Table` no longer fails with `No usable data table content was returned.`
+With the local frontend and backend running, execute the workspace output probe and confirm that `Data Table` now completes and yields a usable download.
 
 Run:
 
@@ -108,21 +108,21 @@ TLDW_WEB_URL=http://localhost:3000 TLDW_SERVER_URL=http://127.0.0.1:8002 TLDW_AP
 
 Expected:
 
-- the matrix probe passes for the covered outputs
-- `Data Table` completes and exposes view/download actions
+- the probe passes for the covered outputs
+- `Data Table` no longer fails with `No usable data table content was returned.`
 
 **Step 2: Run security validation on touched scope**
 
 Run:
 
 ```bash
-source .venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx -f json -o /tmp/bandit_workspace_rag_query_grounding.json
+source .venv/bin/activate && python -m bandit -r apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx -f json -o /tmp/bandit_workspace_data_table_fix.json
 ```
 
 Expected:
 
-- no new findings
-- possible TypeScript parse warning only
+- no security findings
+- TypeScript AST parse errors only
 
 **Step 3: Clean temporary verification artifact if no longer needed**
 

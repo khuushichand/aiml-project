@@ -71,7 +71,7 @@ export class TTSPage extends BasePage {
 
   /** TTS history section heading */
   get historyHeading(): Locator {
-    return this.page.getByText(/tts history/i)
+    return this.page.getByText("TTS history", { exact: true })
   }
 
   // -- Helpers ---------------------------------------------------------------

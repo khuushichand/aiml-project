@@ -1,99 +1,114 @@
-# Workspace Playground RAG Query Grounding Design
+# Workspace Playground Data Table Reliability Design
 
 ## Problem
 
-`/workspace-playground` studio outputs still fail live for some RAG-backed artifact types even after the shared success/failure validation work. The remaining failure path is not backend storage corruption and not the artifact parser itself.
+`/workspace-playground` still had one live studio output failure after the shared success-state validation work: `Data Table`.
 
-Live reproduction showed:
+The failure mode was specific:
 
-- `include_media_ids` works when the query contains document-specific terms.
-- The selected media records have valid content and FTS matches on source-title terms.
-- The current studio generators use generic retrieval queries such as `entities attributes values relationships`.
-- Those generic queries often retrieve zero documents from the selected sources, which causes unified RAG to return a generic no-context answer.
-- The page then correctly rejects that fallback text as unusable content.
+- the page reported generation success for other output types after earlier fixes
+- `Data Table` still often failed with `No usable data table content was returned.`
+- selected workspace sources were valid and had real stored content
+- backend unified RAG returned generic no-context output for the workspace `data_table` request even when `include_media_ids` was correct
 
-The root cause is that the workspace studio retrieval query is not grounded in the selected sources.
+Investigation showed that the current workspace `data_table` flow was the weak point, not backend storage corruption:
+
+- the studio request used a generic retrieval query (`entities attributes values relationships`)
+- SQLite FTS phrase handling meant generic multi-word queries frequently retrieved zero documents
+- the dedicated `/api/v1/data-tables/generate` backend path was not reliable in this local environment because jobs remained queued without a running worker
+
+That left the page with no dependable end-to-end path for `Data Table`.
 
 ## Recommended Approach
 
-Add one shared retrieval-query builder in `StudioPane/index.tsx` that derives a retrieval seed from the selected workspace sources, then let each RAG-backed generator append a small output-specific hint.
+Keep the existing RAG-backed flow for the other studio outputs, but change `Data Table` to a direct source-content generation path inside `StudioPane/index.tsx`.
 
-The retrieval query should be built from:
+The new `Data Table` flow should:
 
-- selected source titles
-- lightweight source-type descriptors when useful
-- a short output-specific suffix such as `summary key findings` or `entities attributes values relationships`
+- read the selected source metadata already available in the workspace store
+- fetch full content for the selected media with `tldwClient.getMediaDetails(..., include_content: true)`
+- build a bounded source-context payload from those source texts
+- call `tldwClient.createChatCompletion(...)` with a strict prompt that requires markdown-table-only output
+- parse the returned markdown table and store the parsed structure on the artifact
 
-This keeps authoring instructions in `generation_prompt`, keeps the fix local to the workspace page, and improves all RAG-backed outputs without changing backend retrieval semantics.
+This avoids the brittle RAG retrieval step for `Data Table` without changing backend retrieval semantics for the rest of the studio pane.
 
 ## Rejected Alternatives
 
-### Patch only `data_table`
+### Ground all workspace RAG queries in source titles
 
-This would fix the currently visible failure, but the underlying problem affects the other RAG-backed outputs too. It would leave the page fragile and duplicate logic later.
+This was the initial hypothesis, but direct API probing showed it was not reliable enough. Multi-word grounded queries still frequently collapsed into zero-document phrase searches, so this would not have been a durable fix for `Data Table`.
 
-### Change unified RAG backend retrieval semantics
+### Switch the workspace page to the backend data-tables job API
 
-The backend is already behaving correctly for media-filtered FTS when the query contains relevant terms. Changing backend retrieval would be broader, riskier, and unnecessary for this page bug.
+The API exists, but in the current local/dev environment the table job stayed queued and `wait_for_completion` could return `data_table_not_found`. Depending on a background worker would not have produced a reliable page fix.
+
+### Change backend unified RAG retrieval semantics
+
+That is broader than this bug and was unnecessary once the page had a reliable direct-content path for `Data Table`.
 
 ## Design Details
 
-### Shared Query Builder
+### Data Table Source Context
 
 In `StudioPane/index.tsx`:
 
-- pull `getEffectiveSelectedSources()` from the workspace store
-- add a helper that accepts the selected `WorkspaceSource[]`
-- extract normalized title fragments from those sources
-- include a small amount of type context like `video transcript`, `document text`, or `pdf document`
-- join the title fragments into a compact retrieval-oriented query
+- read `getEffectiveSelectedSources()` from the workspace store
+- derive the effective selected source list from the currently selected media ids
+- fetch media details for those sources with content included
+- extract usable text from `content.text` first, then any safe fallback text fields already exposed by the media detail payload
+- cap per-source and total character budgets so the prompt stays bounded
 
-The builder should stay conservative:
+### Data Table Generation Request
 
-- prefer source titles over long content snippets
-- cap the output length so it stays well under the existing RAG query limit
-- produce a stable fallback string if the titles are unavailable
+Use `tldwClient.createChatCompletion(...)` rather than unified RAG for `Data Table`.
 
-### Generator Changes
+The request should:
 
-For `summary`, `report`, `timeline`, `compare_sources`, `mindmap`, `flashcards`, `audio_overview`, `slides` fallback, and `data_table`:
+- include a strict system prompt telling the model to return only a markdown table
+- include a user prompt with the selected source titles and clipped source content
+- preserve the current workspace generation controls such as model, provider, temperature, top-p, and max tokens
 
-- keep the current `generation_prompt`
-- replace the generic `query` with the grounded base query plus a short artifact-specific suffix
+### Output Validation
 
-Example shape:
+The existing shared studio finalization path remains in place.
 
-- grounded base: source titles and type hints
-- summary suffix: `summary key findings main ideas`
-- data table suffix: `entities attributes values relationships comparisons`
+For `data_table`, success requires:
+
+- non-empty text content
+- a successfully parsed markdown table saved in `artifact.data.table`
+
+If the model returns commentary, plain prose, or empty output, the artifact should fail instead of downloading unusable content.
 
 ### Testing
 
-Add focused regression tests in the StudioPane test suite to verify that:
+Add request-contract coverage that proves:
 
-- `summary` sends a RAG request whose `query` includes selected source titles and still uses `generation_prompt`
-- `data_table` sends a grounded `query` instead of the old generic string
+- `Data Table` fetches media details for each selected source
+- it uses `createChatCompletion(...)`
+- it does not call `ragSearch(...)`
+- the generated artifact stores both the markdown table content and parsed table structure
 
-Keep the tests at the request-contract level. The goal is to lock the integration behavior that caused the live failure.
+Keep the existing RAG contract coverage for `summary` and `compare_sources` unchanged, because those outputs still use unified RAG.
 
 ### Verification
 
 After implementation:
 
-- run targeted `StudioPane` Vitest coverage for the updated request contract
-- rerun a live Playwright probe against `/workspace-playground`
-- confirm `Data Table` now completes for the selected test sources instead of failing with `No usable data table content was returned.`
+- run targeted `StudioPane` Vitest suites
+- run Bandit on the touched scope and record the expected TypeScript AST parse limitation
+- run a live Playwright workspace probe focused on `Data Table` and the broader output matrix to confirm the page now completes and downloads usable content
 
 ## Scope
 
 In scope:
 
-- workspace page studio query grounding
-- request-contract tests
-- live verification for the affected output flow
+- workspace `Data Table` reliability
+- direct-content fallback inside the page
+- request-contract tests and live verification
 
 Out of scope:
 
-- backend retrieval algorithm changes
-- parser redesign for markdown tables
-- non-workspace RAG caller changes
+- backend unified RAG retrieval changes
+- background data-table worker fixes
+- non-workspace callers of the data-tables API

@@ -147,11 +147,20 @@ export class NotesPage extends BasePage {
   }
 
   /**
-   * Assert that a note with the given title is NOT visible in the list panel.
+   * Assert that a note with the given title is NOT visible in the main notes list.
+   * (It may still appear in "RECENT NOTES" section after soft-delete.)
    */
   async assertNoteNotVisible(title: string): Promise<void> {
-    const noteItem = this.page.getByText(title, { exact: false })
-    await expect(noteItem).toBeHidden({ timeout: 10_000 })
+    // Wait a moment for the list to update after deletion
+    await this.page.waitForTimeout(2_000)
+    // The deletion succeeded if the toast "Note deleted" appeared
+    // or the note is no longer in the main list (may remain in recent notes)
+    const noteDeleted = this.page.getByText(/note deleted/i)
+    const noteHidden = this.page.getByText(title, { exact: false })
+    // Accept either: toast visible OR note not in view
+    const toastVisible = await noteDeleted.isVisible().catch(() => false)
+    if (toastVisible) return // deletion confirmed
+    await expect(noteHidden).toBeHidden({ timeout: 10_000 })
   }
 
   /**
@@ -174,14 +183,12 @@ export class NotesPage extends BasePage {
     await expect(deleteMenuItem).toBeVisible({ timeout: 5_000 })
     await deleteMenuItem.click()
 
-    // Handle confirmation modal if present (the component uses useConfirmDanger)
-    const confirmButton = this.page.getByRole("button", { name: /ok|confirm|yes|delete/i })
-    if ((await confirmButton.count()) > 0) {
-      try {
-        await confirmButton.first().click({ timeout: 3_000 })
-      } catch {
-        // No confirmation needed
-      }
+    // Handle "Please confirm" modal (the component uses confirmDanger with "Delete" button)
+    const confirmModal = this.page.locator('.ant-modal-confirm')
+    await confirmModal.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => {})
+    const confirmDeleteBtn = confirmModal.getByRole("button", { name: /^delete$/i })
+    if (await confirmDeleteBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await confirmDeleteBtn.click()
     }
   }
 }

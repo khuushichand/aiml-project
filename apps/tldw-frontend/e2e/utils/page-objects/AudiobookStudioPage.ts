@@ -55,7 +55,7 @@ export class AudiobookStudioPage extends BasePage {
   }
 
   get saveButton(): Locator {
-    return this.page.getByRole("button", { name: /save|saved/i })
+    return this.page.getByRole("button", { name: /save|saved/i }).first()
   }
 
   get projectTitleInput(): Locator {

@@ -47,7 +47,7 @@ export class KanbanPage extends BasePage {
 
   /** "New Board" button in the header toolbar */
   get newBoardButton(): Locator {
-    return this.page.getByRole("button", { name: /new board/i })
+    return this.page.getByRole("button", { name: /new board/i }).first()
   }
 
   /** "Create Board" button in the empty-state gallery */

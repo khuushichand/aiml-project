@@ -31,19 +31,19 @@ export class SpeechPage extends BasePage {
 
   /** The Round-trip / Speak / Listen mode segmented control */
   get modeSelector(): Locator {
-    return this.page.locator(".ant-segmented")
+    return this.page.locator(".ant-segmented").first()
   }
 
   get roundTripOption(): Locator {
-    return this.page.getByText("Round-trip")
+    return this.page.locator(".ant-segmented").first().getByText("Round-trip")
   }
 
   get speakOption(): Locator {
-    return this.page.locator(".ant-segmented").getByText("Speak")
+    return this.page.locator(".ant-segmented").first().getByText("Speak")
   }
 
   get listenOption(): Locator {
-    return this.page.locator(".ant-segmented").getByText("Listen")
+    return this.page.locator(".ant-segmented").first().getByText("Listen")
   }
 
   /** The playback controls toolbar */

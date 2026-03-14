@@ -22,7 +22,7 @@ export class SourcesPage extends BasePage {
     // Wait for heading, offline state, unsupported state, or empty state
     const heading = this.page.getByText("Sources")
     const offline = this.page.getByText("Server is offline. Connect to manage ingestion sources.")
-    const unsupported = this.page.getByText("This server does not advertise ingestion source support.")
+    const unsupported = this.page.getByText(/does not advertise ingestion source/i)
     const empty = this.page.getByText("No ingestion sources yet.")
     await Promise.race([
       heading.first().waitFor({ state: "visible", timeout: 20_000 }),
@@ -47,7 +47,7 @@ export class SourcesPage extends BasePage {
   }
 
   get unsupportedMessage(): Locator {
-    return this.page.getByText("This server does not advertise ingestion source support.")
+    return this.page.getByText(/does not advertise ingestion source/i)
   }
 
   get emptyMessage(): Locator {
@@ -91,11 +91,13 @@ export class SourcesPage extends BasePage {
 
   // -- Helpers ---------------------------------------------------------------
 
-  /** Whether the page is showing the online workspace (heading + new source button) */
+  /** Whether the page is showing the online workspace (heading + new source button, no unsupported/offline banner) */
   async isOnlineWorkspace(): Promise<boolean> {
     const headingVisible = await this.heading.isVisible().catch(() => false)
     const newSourceVisible = await this.newSourceButton.isVisible().catch(() => false)
-    return headingVisible && newSourceVisible
+    const unsupportedVisible = await this.unsupportedMessage.isVisible().catch(() => false)
+    const offlineVisible = await this.offlineMessage.isVisible().catch(() => false)
+    return headingVisible && newSourceVisible && !unsupportedVisible && !offlineVisible
   }
 
   /** Whether sources are listed */

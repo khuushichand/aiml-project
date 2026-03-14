@@ -55,7 +55,12 @@ import { createFlashcard, createDeck, listDecks } from "@/services/flashcards"
 import { fetchTldwVoiceCatalog, type TldwVoice } from "@/services/tldw/audio-voices"
 import { inferTldwProviderFromModel } from "@/services/tts-provider"
 import { OUTPUT_TYPES } from "@/types/workspace"
-import type { ArtifactType, GeneratedArtifact, AudioTtsProvider } from "@/types/workspace"
+import type {
+  ArtifactType,
+  GeneratedArtifact,
+  AudioTtsProvider,
+  WorkspaceSource
+} from "@/types/workspace"
 import { useStoreMessageOption } from "@/store/option"
 import { useStoreChatModelSettings } from "@/store/model"
 import Mermaid from "@/components/Common/Mermaid"
@@ -464,6 +469,25 @@ type GenerationResult = {
   data?: Record<string, unknown>
 }
 
+type DataTableSourceContext = {
+  title: string
+  text: string
+}
+
+type DataTableGenerationOptions = {
+  mediaIds: number[]
+  selectedSources: WorkspaceSource[]
+  model?: string
+  apiProvider?: string
+  temperature: number
+  topP: number
+  maxTokens: number
+  abortSignal?: AbortSignal
+}
+
+const DATA_TABLE_SOURCE_CHAR_LIMIT = 6000
+const DATA_TABLE_TOTAL_SOURCE_CHAR_LIMIT = 18000
+
 const extractUsageMetrics = (payload: unknown): UsageMetrics => {
   if (!payload || typeof payload !== "object") {
     return {}
@@ -512,6 +536,72 @@ const extractUsageMetrics = (payload: unknown): UsageMetrics => {
 
 const buildMissingContentError = (label: string): Error =>
   new Error(`No usable ${label} content was returned.`)
+
+const extractNestedText = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map(extractNestedText).filter(Boolean).join("")
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    return (
+      extractNestedText(record.text) ||
+      extractNestedText(record.content) ||
+      extractNestedText(record.parts)
+    )
+  }
+  return ""
+}
+
+const extractChatCompletionText = (payload: unknown): string => {
+  if (!payload || typeof payload !== "object") {
+    return ""
+  }
+  const record = payload as Record<string, unknown>
+  const choices = Array.isArray(record.choices) ? record.choices : []
+  if (choices.length > 0) {
+    const choice = choices[0] as Record<string, unknown>
+    const choiceText = extractNestedText(choice.message ?? choice.delta ?? choice.text)
+    if (choiceText.trim()) {
+      return choiceText.trim()
+    }
+  }
+  return extractNestedText(
+    record.message ?? record.content ?? record.text ?? record.output_text
+  ).trim()
+}
+
+const extractMediaDetailText = (payload: unknown): string => {
+  if (!isRecord(payload)) {
+    return ""
+  }
+  if (typeof payload.content === "string" && payload.content.trim()) {
+    return payload.content.trim()
+  }
+  const content = isRecord(payload.content) ? payload.content : null
+  if (typeof content?.text === "string" && content.text.trim()) {
+    return content.text.trim()
+  }
+  const processing = isRecord(payload.processing) ? payload.processing : null
+  if (typeof processing?.analysis === "string" && processing.analysis.trim()) {
+    return processing.analysis.trim()
+  }
+  return ""
+}
+
+const readChatCompletionResponseText = async (response: Response): Promise<string> => {
+  const bodyText = (await response.text()).trim()
+  if (!bodyText) {
+    return ""
+  }
+  try {
+    return extractChatCompletionText(JSON.parse(bodyText))
+  } catch {
+    return bodyText
+  }
+}
 
 const extractRequiredRagText = (response: unknown, label: string): string => {
   const candidate = isRecord(response) ? response : {}
@@ -655,6 +745,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const getSelectedMediaIds = useWorkspaceStore((s) => s.getSelectedMediaIds)
   const getEffectiveSelectedMediaIds = useWorkspaceStore(
     (s) => s.getEffectiveSelectedMediaIds
+  )
+  const getEffectiveSelectedSources = useWorkspaceStore(
+    (s) => s.getEffectiveSelectedSources
   )
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const isGeneratingOutput = useWorkspaceStore((s) => s.isGeneratingOutput)
@@ -819,6 +912,20 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       selectedSourceIds
     ]
   )
+  const selectedSources = React.useMemo(
+    () =>
+      typeof getEffectiveSelectedSources === "function"
+        ? getEffectiveSelectedSources().filter((source) =>
+            selectedMediaIds.includes(source.mediaId)
+          )
+        : [],
+    [
+      getEffectiveSelectedSources,
+      selectedMediaIds,
+      selectedSourceFolderIds,
+      selectedSourceIds
+    ]
+  )
   const hasSelectedSources = selectedMediaIds.length > 0
   const selectedMediaCount = selectedMediaIds.length
   const contextualAudioSettingsVisible =
@@ -915,6 +1022,45 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     }
     return options
   }, [filteredChatModels, selectedModel, t])
+  const resolveStudioChatModel = React.useCallback(async () => {
+    if (typeof selectedModel === "string" && selectedModel.trim().length > 0) {
+      return selectedModel.trim()
+    }
+
+    const pickFirstModelId = (models: ModelInfo[]) => {
+      const providerFiltered =
+        normalizedApiProvider === "__auto__"
+          ? models
+          : models.filter(
+              (model) =>
+                String(model.provider || "").trim().toLowerCase() ===
+                normalizedApiProvider
+            )
+      const fallbackModel =
+        providerFiltered.find(
+          (model) => typeof model.id === "string" && model.id.trim().length > 0
+        ) ||
+        models.find(
+          (model) => typeof model.id === "string" && model.id.trim().length > 0
+        )
+
+      return fallbackModel?.id?.trim() || undefined
+    }
+
+    const cachedModel = pickFirstModelId(chatModels)
+    if (cachedModel) {
+      return cachedModel
+    }
+
+    try {
+      const models = await tldwModels.getChatModels()
+      const normalizedModels = Array.isArray(models) ? models : []
+      setChatModels(normalizedModels)
+      return pickFirstModelId(normalizedModels)
+    } catch {
+      return undefined
+    }
+  }, [chatModels, normalizedApiProvider, selectedModel])
   const patchRagAdvancedOptions = React.useCallback(
     (patch: Record<string, unknown>) => {
       setRagAdvancedOptions({
@@ -1434,11 +1580,17 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           result = await generateSlidesFromApi(mediaIds[0], activeAbort.signal)
           break
         case "data_table":
-          result = await generateDataTable(
+          result = await generateDataTable({
             mediaIds,
-            workspaceTag,
-            activeAbort.signal
-          )
+            selectedSources,
+            model: await resolveStudioChatModel(),
+            apiProvider:
+              normalizedApiProvider !== "__auto__" ? normalizedApiProvider : undefined,
+            temperature: resolvedTemperature,
+            topP: resolvedTopP,
+            maxTokens: resolvedNumPredict,
+            abortSignal: activeAbort.signal
+          })
           break
         default:
           throw new Error(`Unsupported output type: ${type}`)
@@ -3831,35 +3983,98 @@ Include:
 }
 
 async function generateDataTable(
-  mediaIds: number[],
-  workspaceTag?: string,
-  abortSignal?: AbortSignal
+  options: DataTableGenerationOptions
 ): Promise<GenerationResult> {
-  const generationPrompt = `Extract structured data from the content and format it as a markdown table.
-Identify:
-- Key entities (people, organizations, places, products)
-- Attributes and values
-- Relationships and comparisons
+  const model = typeof options.model === "string" ? options.model.trim() : ""
+  if (!model) {
+    throw new Error("Select a chat model before generating a data table.")
+  }
+  const sourceByMediaId = new Map(
+    options.selectedSources.map((source) => [source.mediaId, source])
+  )
+  const mediaDetails = await Promise.all(
+    options.mediaIds.map(async (mediaId) => {
+      const detail = await tldwClient.getMediaDetails(mediaId, {
+        include_content: true,
+        include_versions: false,
+        include_version_content: false,
+        signal: options.abortSignal
+      })
+      const source = sourceByMediaId.get(mediaId)
+      const sourceMeta = isRecord(detail) && isRecord(detail.source) ? detail.source : null
+      return {
+        title:
+          source?.title ||
+          (typeof sourceMeta?.title === "string" ? sourceMeta.title : "") ||
+          `Source ${mediaId}`,
+        text: extractMediaDetailText(detail)
+      }
+    })
+  )
 
-Format as:
-| Column 1 | Column 2 | Column 3 |
-|----------|----------|----------|
-| Data 1   | Data 2   | Data 3   |`
-  const ragResponse = await requestStudioRagGeneration({
-    query: "entities attributes values relationships",
-    generationPrompt,
-    mediaIds,
-    topK: 25,
-    abortSignal
+  let remainingChars = DATA_TABLE_TOTAL_SOURCE_CHAR_LIMIT
+  const sourceContexts: DataTableSourceContext[] = []
+  for (const detail of mediaDetails) {
+    if (!detail.text || remainingChars <= 0) {
+      continue
+    }
+    const clippedText = detail.text
+      .slice(0, Math.min(DATA_TABLE_SOURCE_CHAR_LIMIT, remainingChars))
+      .trim()
+    if (!clippedText) {
+      continue
+    }
+    sourceContexts.push({
+      title: detail.title,
+      text: clippedText
+    })
+    remainingChars -= clippedText.length
+  }
+
+  if (sourceContexts.length === 0) {
+    throw buildMissingContentError("data table")
+  }
+
+  const response = await tldwClient.createChatCompletion({
+    model,
+    api_provider: options.apiProvider,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a data table generator. Return ONLY a markdown table with pipe delimiters, a header row, and a separator row. Do not include commentary or code fences."
+      },
+      {
+        role: "user",
+        content: `Extract structured data from the provided sources and format it as a markdown table.
+
+Include:
+- Key entities, people, organizations, places, or products when present
+- Important attributes and values
+- Relationships or comparisons when they are supported by the source text
+
+Sources:
+${sourceContexts
+  .map(
+    (source, index) =>
+      `Source ${index + 1}: ${source.title}\n${source.text}`
+  )
+  .join("\n\n")}`
+      }
+    ],
+    temperature: options.temperature,
+    top_p: options.topP,
+    max_tokens: options.maxTokens
   })
-  const usage = extractUsageMetrics(ragResponse)
 
-  const content = extractRequiredRagText(ragResponse, "data table")
+  const content = (await readChatCompletionResponseText(response)).trim()
+  if (!content) {
+    throw buildMissingContentError("data table")
+  }
   const parsedTable = parseMarkdownTable(content)
 
   return {
     content,
-    ...usage,
     data: parsedTable ? { table: parsedTable } : undefined
   }
 }

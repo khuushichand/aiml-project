@@ -17,6 +17,8 @@ const {
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
   mockDownloadOutput,
+  mockCreateChatCompletion,
+  mockGetMediaDetails,
   mockGetChatModels,
   messageOptionStoreState,
   chatModelSettingsStoreState,
@@ -36,6 +38,8 @@ const {
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
   const downloadOutput = vi.fn()
+  const createChatCompletion = vi.fn()
+  const getMediaDetails = vi.fn()
   const getChatModels = vi.fn()
   const defaultAudioSettings = {
     provider: "browser" as const,
@@ -44,9 +48,29 @@ const {
     speed: 1,
     format: "mp3" as const
   }
+  const defaultSources = [
+    {
+      id: "source-1",
+      mediaId: 101,
+      title: "DSPy Prompting Talk",
+      type: "video" as const,
+      status: "ready" as const,
+      addedAt: new Date("2026-02-18T00:00:00.000Z")
+    }
+  ]
   const storeState = {
     selectedSourceIds: ["source-1"],
+    selectedSourceFolderIds: [] as string[],
+    sources: defaultSources,
     getSelectedMediaIds: () => [101],
+    getEffectiveSelectedSources: () =>
+      storeState.sources.filter((source: { id: string }) =>
+        storeState.selectedSourceIds.includes(source.id)
+      ),
+    getEffectiveSelectedMediaIds: () =>
+      storeState
+        .getEffectiveSelectedSources()
+        .map((source: { mediaId: number }) => source.mediaId),
     generatedArtifacts: [] as Array<any>,
     isGeneratingOutput: false,
     generatingOutputType: null as any,
@@ -101,6 +125,8 @@ const {
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
     mockDownloadOutput: downloadOutput,
+    mockCreateChatCompletion: createChatCompletion,
+    mockGetMediaDetails: getMediaDetails,
     mockGetChatModels: getChatModels,
     messageOptionStoreState: messageOptionState,
     chatModelSettingsStoreState: chatModelSettingsState,
@@ -165,6 +191,8 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    createChatCompletion: mockCreateChatCompletion,
+    getMediaDetails: mockGetMediaDetails,
     exportPresentation: vi.fn(),
     downloadOutput: mockDownloadOutput
   }
@@ -256,6 +284,17 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     localStorage.removeItem("tldw:workspace-playground:recent-output-types:v1")
 
     workspaceStoreState.selectedSourceIds = ["source-1"]
+    workspaceStoreState.selectedSourceFolderIds = []
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "DSPy Prompting Talk",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ]
     workspaceStoreState.getSelectedMediaIds = () => [101]
     workspaceStoreState.generatedArtifacts = []
     workspaceStoreState.isGeneratingOutput = false

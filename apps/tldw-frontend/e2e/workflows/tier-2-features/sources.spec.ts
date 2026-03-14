@@ -48,8 +48,10 @@ test.describe("Sources & Connectors", () => {
 
       expect(headingVisible || offlineVisible || unsupportedVisible || emptyVisible).toBe(true)
 
-      // If the online workspace is showing, the "New source" button should be visible
-      if (headingVisible) {
+      // If the online workspace is showing (heading + no unsupported/offline banner),
+      // the "New source" button should be visible
+      const isOnline = await sources.isOnlineWorkspace()
+      if (isOnline) {
         await expect(sources.newSourceButton).toBeVisible()
         await expect(sources.description).toBeVisible()
       }
