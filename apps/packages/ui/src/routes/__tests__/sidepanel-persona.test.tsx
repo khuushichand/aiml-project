@@ -460,7 +460,7 @@ describe("SidepanelPersona", () => {
     )
 
     fireEvent.click(screen.getByRole("tab", { name: "Live Session" }))
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
 
     await waitFor(() => {
       expect(mocks.fetchWithAuth).toHaveBeenCalled()
@@ -663,7 +663,7 @@ describe("SidepanelPersona", () => {
 
     render(<SidepanelPersona mode="companion" />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
     })
@@ -768,7 +768,7 @@ describe("SidepanelPersona", () => {
 
     render(<SidepanelPersona />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
 
     await waitFor(() => {
       expect(mocks.fetchWithAuth).toHaveBeenCalled()
@@ -926,7 +926,7 @@ describe("SidepanelPersona", () => {
 
     render(<SidepanelPersona />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
 
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
@@ -1444,6 +1444,79 @@ describe("SidepanelPersona", () => {
     expect(screen.getByRole("button", { name: "Approve and retry" })).toHaveFocus()
   })
 
+  it("scrolls and focuses the highlighted approval row instead of only the card root", async () => {
+    const cardScrollIntoViewMock = vi.fn()
+    const rowScrollIntoViewMock = vi.fn()
+
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-row-jump" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-row-jump",
+      planId: "plan-approval-row-jump",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    const card = screen.getByTestId("persona-runtime-approval-card")
+    const row = screen.getByText("knowledge.search").closest("[data-approval-key]")
+    Object.defineProperty(card, "scrollIntoView", {
+      configurable: true,
+      value: cardScrollIntoViewMock
+    })
+    Object.defineProperty(row as HTMLElement, "scrollIntoView", {
+      configurable: true,
+      value: rowScrollIntoViewMock
+    })
+
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+
+    expect(rowScrollIntoViewMock).toHaveBeenCalled()
+    expect(cardScrollIntoViewMock).not.toHaveBeenCalled()
+    expect(within(row as HTMLElement).getByRole("button", { name: "Approve and retry" })).toHaveFocus()
+  })
+
   it("highlights the first pending approval row after jump to approval", async () => {
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
@@ -1650,6 +1723,489 @@ describe("SidepanelPersona", () => {
     expect(screen.getByTestId("live-voice-current-action")).toHaveTextContent(
       "Waiting for approval: knowledge.search (+1 more)"
     )
+  })
+
+  it("moves the highlight to the next pending approval after the active one is approved", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-advance-approve" })
+        })
+      }
+      if (path.includes("/mcp/hub/approval-decisions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 200,
+            approval_policy_id: init?.body?.approval_policy_id ?? 17,
+            tool_name: init?.body?.tool_name,
+            decision: init?.body?.decision
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-advance-approve",
+      planId: "plan-approval-advance-approve",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-advance-approve",
+      planId: "plan-approval-advance-approve",
+      stepIdx: 1,
+      tool: "notes.export",
+      args: { format: "md" },
+      why: "Need to export notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+    fireEvent.click(within(screen.getByText("knowledge.search").closest("[data-approval-key]") as HTMLElement).getByRole("button", { name: "Approve and retry" }))
+
+    await screen.findByText("Waiting for approval: notes.export")
+    const exportRow = screen.getByText("notes.export").closest("[data-approval-key]")
+    expect(exportRow).toHaveAttribute("data-highlighted", "true")
+  })
+
+  it("moves the highlight to the next pending approval after the active one is denied", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-advance-deny" })
+        })
+      }
+      if (path.includes("/mcp/hub/approval-decisions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 201,
+            approval_policy_id: init?.body?.approval_policy_id ?? 17,
+            tool_name: init?.body?.tool_name,
+            decision: init?.body?.decision
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-advance-deny",
+      planId: "plan-approval-advance-deny",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-advance-deny",
+      planId: "plan-approval-advance-deny",
+      stepIdx: 1,
+      tool: "notes.export",
+      args: { format: "md" },
+      why: "Need to export notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search (+1 more)")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+    fireEvent.click(within(screen.getByText("knowledge.search").closest("[data-approval-key]") as HTMLElement).getByRole("button", { name: "Deny" }))
+
+    await screen.findByText("Waiting for approval: notes.export")
+    const exportRow = screen.getByText("notes.export").closest("[data-approval-key]")
+    expect(exportRow).toHaveAttribute("data-highlighted", "true")
+  })
+
+  it("shows a transient answered banner after the last highlighted approval is resolved", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-answered" })
+        })
+      }
+      if (path.includes("/mcp/hub/approval-decisions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 202,
+            approval_policy_id: init?.body?.approval_policy_id ?? 17,
+            tool_name: init?.body?.tool_name,
+            decision: init?.body?.decision
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-answered",
+      planId: "plan-approval-answered",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+    vi.useFakeTimers()
+    fireEvent.click(within(screen.getByText("knowledge.search").closest("[data-approval-key]") as HTMLElement).getByRole("button", { name: "Deny" }))
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText("Answered: knowledge.search")).toBeInTheDocument()
+
+    await act(async () => {
+      vi.runAllTimers()
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByText("Answered: knowledge.search")).not.toBeInTheDocument()
+  })
+
+  it("clears a stale answered snapshot if the same approval key reappears", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { body?: any }) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-snapshot" })
+        })
+      }
+      if (path.includes("/mcp/hub/approval-decisions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: 203,
+            approval_policy_id: init?.body?.approval_policy_id ?? 17,
+            tool_name: init?.body?.tool_name,
+            decision: init?.body?.decision
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-snapshot",
+      planId: "plan-approval-snapshot",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+    vi.useFakeTimers()
+    fireEvent.click(within(screen.getByText("knowledge.search").closest("[data-approval-key]") as HTMLElement).getByRole("button", { name: "Deny" }))
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText("Answered: knowledge.search")).toBeInTheDocument()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-snapshot",
+      planId: "plan-approval-snapshot",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText("Waiting for approval: knowledge.search")).toBeInTheDocument()
+    expect(screen.queryByText("Answered: knowledge.search")).not.toBeInTheDocument()
+  })
+
+  it("clears approval guidance on disconnect", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: "sess-approval-disconnect" })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const ws = MockWebSocket.instances[0]
+    ws.emitOpen()
+
+    emitRuntimeApprovalRequired(ws, {
+      sessionId: "sess-approval-disconnect",
+      planId: "plan-approval-disconnect",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+    expect(screen.getByText("Needs your approval")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("persona-runtime-approval-card")).not.toBeInTheDocument()
+      expect(screen.queryByText("Needs your approval")).not.toBeInTheDocument()
+      expect(screen.queryByText(/Waiting for approval:/)).not.toBeInTheDocument()
+    })
+  })
+
+  it("clears approval guidance on reconnect and session reset", async () => {
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "persona-key"
+    })
+    let sessionCounter = 0
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "research_assistant", name: "Research Assistant" }]
+        })
+      }
+      if (path.includes("/persona/sessions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      if (path.includes("/persona/session")) {
+        sessionCounter += 1
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ session_id: `sess-approval-reset-${sessionCounter}` })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const firstWs = MockWebSocket.instances[0]
+    firstWs.emitOpen()
+
+    emitRuntimeApprovalRequired(firstWs, {
+      sessionId: "sess-approval-reset-1",
+      planId: "plan-approval-reset",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    fireEvent.click(screen.getByTestId("live-voice-jump-to-approval"))
+    expect(screen.getByText("Needs your approval")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: /Disconnect/ }))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("persona-runtime-approval-card")).not.toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /Connect/ }))
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(2)
+    })
+
+    const secondWs = MockWebSocket.instances[1]
+    secondWs.emitOpen()
+
+    emitRuntimeApprovalRequired(secondWs, {
+      sessionId: "sess-approval-reset-2",
+      planId: "plan-approval-reset",
+      stepIdx: 0,
+      tool: "knowledge.search",
+      args: { query: "approval needed" },
+      why: "Need to search notes"
+    })
+
+    await screen.findByText("Waiting for approval: knowledge.search")
+    const resetRow = screen.getByText("knowledge.search").closest("[data-approval-key]")
+    expect(resetRow).toHaveAttribute("data-highlighted", "false")
+    expect(screen.queryByText("Needs your approval")).not.toBeInTheDocument()
   })
 
   it("records deny as current-request-only and does not retry the tool", async () => {

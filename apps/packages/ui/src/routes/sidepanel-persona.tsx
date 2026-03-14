@@ -214,6 +214,7 @@ const _historyEntrySortEpoch = (entry: PersonaStateHistoryEntry): number => {
 const PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY =
   "sidepanel:persona:state-editor-expanded"
 const PERSONA_STATE_HISTORY_ORDER_PREF_KEY = "sidepanel:persona:state-history-order"
+const RESOLVED_RUNTIME_APPROVAL_FADE_MS = 1500
 
 const _approvalRequestKey = (
   approval: PersonaRuntimeApprovalPayload,
@@ -327,6 +328,10 @@ const SidepanelPersona = ({
   const wsRef = React.useRef<WebSocket | null>(null)
   const manuallyClosingRef = React.useRef(false)
   const runtimeApprovalCardRef = React.useRef<HTMLDivElement | null>(null)
+  const runtimeApprovalRowRefs = React.useRef<Map<string, HTMLDivElement | null>>(
+    new Map()
+  )
+  const resolvedApprovalFadeTimerRef = React.useRef<number | null>(null)
 
   const [catalog, setCatalog] = React.useState<PersonaInfo[]>([])
   const [selectedPersonaId, setSelectedPersonaId] =
@@ -397,6 +402,10 @@ const SidepanelPersona = ({
     PersonaRuntimeApprovalRequest[]
   >([])
   const [activeApprovalKey, setActiveApprovalKey] = React.useState<string | null>(null)
+  const [resolvedApprovalSnapshot, setResolvedApprovalSnapshot] = React.useState<{
+    key: string
+    toolName: string
+  } | null>(null)
   const [approvedStepMap, setApprovedStepMap] = React.useState<
     Record<number, boolean>
   >({})
@@ -419,6 +428,12 @@ const SidepanelPersona = ({
     setPersonaStateContextProfileDefault(false)
   }, [isCompanionMode])
 
+  const clearResolvedApprovalFadeTimer = React.useCallback(() => {
+    if (resolvedApprovalFadeTimerRef.current == null) return
+    window.clearTimeout(resolvedApprovalFadeTimerRef.current)
+    resolvedApprovalFadeTimerRef.current = null
+  }, [])
+
   React.useEffect(() => {
     if (!activeApprovalKey) return
     if (pendingApprovals.some((approval) => approval.key === activeApprovalKey)) return
@@ -426,6 +441,35 @@ const SidepanelPersona = ({
       pendingApprovals.length ? pendingApprovals[0]?.key || null : null
     )
   }, [activeApprovalKey, pendingApprovals])
+
+  React.useEffect(() => {
+    if (!resolvedApprovalSnapshot) {
+      clearResolvedApprovalFadeTimer()
+      return
+    }
+    if (
+      pendingApprovals.length > 0 ||
+      pendingApprovals.some((approval) => approval.key === resolvedApprovalSnapshot.key)
+    ) {
+      clearResolvedApprovalFadeTimer()
+      setResolvedApprovalSnapshot(null)
+      return
+    }
+    clearResolvedApprovalFadeTimer()
+    resolvedApprovalFadeTimerRef.current = window.setTimeout(() => {
+      resolvedApprovalFadeTimerRef.current = null
+      setResolvedApprovalSnapshot(null)
+    }, RESOLVED_RUNTIME_APPROVAL_FADE_MS)
+    return () => {
+      clearResolvedApprovalFadeTimer()
+    }
+  }, [clearResolvedApprovalFadeTimer, pendingApprovals, resolvedApprovalSnapshot])
+
+  React.useEffect(() => {
+    return () => {
+      clearResolvedApprovalFadeTimer()
+    }
+  }, [clearResolvedApprovalFadeTimer])
 
   React.useEffect(() => {
     const normalizedPersonaId = String(selectedPersonaId || "").trim()
@@ -749,9 +793,13 @@ const SidepanelPersona = ({
     setActiveSessionPersonaId(null)
     setPersonaStateHistory([])
     setPersonaStateHistoryLoaded(false)
+    setActiveApprovalKey(null)
+    clearResolvedApprovalFadeTimer()
+    setResolvedApprovalSnapshot(null)
+    runtimeApprovalRowRefs.current.clear()
     setPendingApprovals([])
     return true
-  }, [confirmDiscardUnsavedStateDrafts])
+  }, [clearResolvedApprovalFadeTimer, confirmDiscardUnsavedStateDrafts])
 
   const handleIncomingPayload = React.useCallback(
     (payload: any) => {
@@ -881,6 +929,10 @@ const SidepanelPersona = ({
                 : {},
             why: payload?.why ? String(payload.why) : null,
             description: payload?.description ? String(payload.description) : null
+          }
+          if (resolvedApprovalSnapshot?.key === request.key) {
+            clearResolvedApprovalFadeTimer()
+            setResolvedApprovalSnapshot(null)
           }
           setPendingApprovals((prev) => {
             const next = prev.filter((entry) => entry.key !== request.key)
@@ -1120,6 +1172,10 @@ const SidepanelPersona = ({
       setApprovedStepMap({})
       setPersonaStateHistory([])
       setPersonaStateHistoryLoaded(false)
+      setActiveApprovalKey(null)
+      clearResolvedApprovalFadeTimer()
+      setResolvedApprovalSnapshot(null)
+      runtimeApprovalRowRefs.current.clear()
 
       const config = await tldwClient.getConfig()
       if (!config) {
@@ -1286,6 +1342,7 @@ const SidepanelPersona = ({
     }
   }, [
     appendLog,
+    clearResolvedApprovalFadeTimer,
     confirmDiscardUnsavedStateDrafts,
     connected,
     connecting,
@@ -1652,6 +1709,13 @@ const SidepanelPersona = ({
           throw new Error(response.error || "Failed to submit approval decision")
         }
         await response.json()
+        if (approval.key === activeApprovalKey) {
+          clearResolvedApprovalFadeTimer()
+          setResolvedApprovalSnapshot({
+            key: approval.key,
+            toolName: approval.tool_name
+          })
+        }
         setPendingApprovals((prev) => prev.filter((entry) => entry.key !== approval.key))
         appendLog(
           "notice",
@@ -1686,7 +1750,7 @@ const SidepanelPersona = ({
         setSubmittingApprovalKey(null)
       }
     },
-    [appendLog, connected, sessionId]
+    [activeApprovalKey, appendLog, clearResolvedApprovalFadeTimer, connected, sessionId]
   )
 
   const activePendingApproval = React.useMemo(() => {
@@ -1708,23 +1772,40 @@ const SidepanelPersona = ({
     return `Waiting for approval: ${primaryToolName} (+${additionalCount} more)`
   }, [activePendingApproval, pendingApprovals])
 
+  const registerRuntimeApprovalRow = React.useCallback(
+    (approvalKey: string, node: HTMLDivElement | null) => {
+      if (node) {
+        runtimeApprovalRowRefs.current.set(approvalKey, node)
+        return
+      }
+      runtimeApprovalRowRefs.current.delete(approvalKey)
+    },
+    []
+  )
+
   const handleJumpToRuntimeApproval = React.useCallback(() => {
     if (!pendingApprovals.length) return
-    setActiveApprovalKey((current) => current || pendingApprovals[0]?.key || null)
+    const targetApprovalKey = activeApprovalKey || pendingApprovals[0]?.key || null
+    setActiveApprovalKey((current) => current || targetApprovalKey)
     const card = runtimeApprovalCardRef.current
-    if (!card) return
+    const targetRow = targetApprovalKey
+      ? runtimeApprovalRowRefs.current.get(targetApprovalKey) || null
+      : null
+    const scrollTarget = targetRow || card
+    if (!scrollTarget) return
     try {
-      card.scrollIntoView?.({ block: "start", behavior: "smooth" })
+      scrollTarget.scrollIntoView?.({ block: "start", behavior: "smooth" })
     } catch {
       // Ignore environments without scrollIntoView support.
     }
-    const buttons = Array.from(card.querySelectorAll("button")) as HTMLButtonElement[]
+    const focusRoot = targetRow || card
+    const buttons = Array.from(focusRoot.querySelectorAll("button")) as HTMLButtonElement[]
     const preferredButton =
       buttons.find((button) =>
         String(button.textContent || "").toLowerCase().includes("approve")
       ) || buttons.find((button) => !button.disabled)
     preferredButton?.focus()
-  }, [pendingApprovals])
+  }, [activeApprovalKey, pendingApprovals])
   const personaUnsupported =
     !capsLoading &&
     capabilities &&
@@ -1895,7 +1976,7 @@ const SidepanelPersona = ({
     />
   )
 
-  const runtimeApprovalCard = pendingApprovals.length ? (
+  const runtimeApprovalCard = pendingApprovals.length || resolvedApprovalSnapshot ? (
     <div
       ref={runtimeApprovalCardRef}
       data-testid="persona-runtime-approval-card"
@@ -1904,6 +1985,14 @@ const SidepanelPersona = ({
       <Typography.Text strong>
         {t("sidepanel:persona.runtimeApproval", "Runtime approval required")}
       </Typography.Text>
+      {resolvedApprovalSnapshot && !pendingApprovals.length ? (
+        <div
+          data-testid="persona-runtime-approval-answered"
+          className="mt-2 rounded-md border border-success/30 bg-success/10 p-2 text-xs text-success"
+        >
+          {`Answered: ${resolvedApprovalSnapshot.toolName}`}
+        </div>
+      ) : null}
       <div className="mt-2 space-y-3">
         {pendingApprovals.map((approval) => {
           const isSubmitting = submittingApprovalKey === approval.key
@@ -1911,6 +2000,9 @@ const SidepanelPersona = ({
           return (
             <div
               key={approval.key}
+              ref={(node) => {
+                registerRuntimeApprovalRow(approval.key, node)
+              }}
               data-approval-key={approval.key}
               data-highlighted={isHighlighted ? "true" : "false"}
               className={`rounded-md border p-3 ${
