@@ -42,7 +42,17 @@
     "test:characters-harness": "vitest run ../packages/ui/src/components/Option/Characters/__tests__/Manager.first-use.test.tsx ../packages/ui/src/components/Option/Characters/__tests__/CharacterGalleryCard.test.tsx ../packages/ui/src/components/Option/Characters/__tests__/search-utils.test.ts",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:integration": "bash ../../Helper_Scripts/run-frontend-integration.sh"
+    "test:integration": "bash ../../Helper_Scripts/run-frontend-integration.sh",
+    "e2e:tier1": "playwright test --project=tier-1",
+    "e2e:tier2": "playwright test --project=tier-2",
+    "e2e:tier3": "playwright test --project=tier-3",
+    "e2e:tier4": "playwright test --project=tier-4",
+    "e2e:tier5": "playwright test --project=tier-5",
+    "e2e:journeys": "playwright test --project=journeys",
+    "e2e:critical": "playwright test --project=tier-1 --project=journeys",
+    "e2e:features": "playwright test --project=tier-2 --project=tier-3",
+    "e2e:admin": "playwright test --project=tier-4 --project=tier-5",
+    "e2e:all-tiers": "playwright test --project=tier-1 --project=tier-2 --project=tier-3 --project=tier-4 --project=tier-5 --project=journeys"
   },
   "dependencies": {
     "@ant-design/cssinjs": "^2.0.3",

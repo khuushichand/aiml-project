@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildApiUrl } from '@/lib/api-config';
+import { buildApiUrlForRequest } from '@/lib/api-config';
 import { setJwtSessionCookies } from '@/lib/server-auth';
 
 type MfaLoginResponsePayload = {
@@ -11,7 +11,7 @@ type MfaLoginResponsePayload = {
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const body = await request.text();
-  const response = await fetch(buildApiUrl('/auth/mfa/login'), {
+  const response = await fetch(buildApiUrlForRequest(request, '/auth/mfa/login'), {
     method: 'POST',
     headers: {
       'Content-Type': request.headers.get('content-type') ?? 'application/json',

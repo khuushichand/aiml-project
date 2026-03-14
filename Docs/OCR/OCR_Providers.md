@@ -3,6 +3,7 @@
 This guide covers enabling and using optional OCR providers with the PDF pipeline. You can select the provider via the `ocr_backend` option in API/WebUI forms.
 
 Supported backends
+- mineru (document-level CLI, PDF-only)
 - tesseract (built-in, CLI)
 - dots (dots.ocr project)
 - points (Tencent POINTS-Reader)
@@ -11,7 +12,7 @@ Supported backends
 - dolphin (ByteDance Dolphin-v2, Transformers + remote server)
 
 Common usage
-- Set `enable_ocr=true` and choose `ocr_backend` (`tesseract`, `dots`, `points`, `deepseek`, `hunyuan`, or `dolphin`).
+- Set `enable_ocr=true` and choose `ocr_backend` (`mineru`, `tesseract`, `dots`, `points`, `deepseek`, `hunyuan`, or `dolphin`).
 - `ocr_mode`: `fallback` (only pages lacking text) or `always` (force OCR).
 - `ocr_dpi`: 200-300 is a good balance.
 - Structured outputs:
@@ -19,6 +20,36 @@ Common usage
   - `ocr_prompt_preset`: `general|doc|table|spotting|json`
 - Parallelism: `OCR_PAGE_CONCURRENCY` controls per-page OCR concurrency (default 1). Keep small (1-2) for GPU-backed models.
 - Config override: `Config_Files/config.txt` supports `[OCR] backend_priority` (comma-separated list or JSON array) to control auto selection order.
+
+MinerU-specific notes
+- `ocr_backend=mineru` is PDF-only in v1 and runs once per document rather than once per page.
+- MinerU is discoverable via `/api/v1/ocr/backends`, but it is opt-in only and excluded from `auto`, `auto_high_quality`, and `backend_priority`.
+- `ocr_lang` and `ocr_dpi` are currently advisory only for MinerU. The PDF pipeline records them in metadata and warns when they are ignored.
+- MinerU normalizes output into Markdown plus a bounded structured payload with `pages`, `tables`, and bounded excerpts from upstream artifacts.
+
+## MinerU (backend: `mineru`)
+
+Summary
+- Document-level CLI integration for PDF OCR and layout parsing.
+- Best fit when table fidelity and structured downstream payloads matter more than page-image OCR interchangeability.
+- Returns Markdown as the primary OCR content and stores normalized structured artifacts under `analysis_details.ocr.structured`.
+
+Environment
+- `MINERU_CMD`: command used to launch MinerU (default `mineru`). Tokenized safely and never shell-interpolated.
+- `MINERU_TIMEOUT_SEC`: whole-document timeout in seconds (default `120`).
+- `MINERU_MAX_CONCURRENCY`: maximum concurrent MinerU document runs (default `1`).
+- `MINERU_TMP_ROOT`: optional temp root for MinerU working directories.
+- `MINERU_DEBUG_SAVE_RAW`: `true` to include full raw `content_list.json` and `middle.json` payloads in the structured artifact block.
+
+Behavior
+- Requested via `enable_ocr=true` and `ocr_backend=mineru`.
+- `ocr_mode=fallback` preserves parser text on MinerU failure and appends a warning.
+- `ocr_mode=always` replaces parser text when MinerU succeeds, but still preserves parser text on failure.
+- `ocr_output_format=text|markdown|json` is accepted. MinerU always keeps a normalized structured JSON payload; `result["content"]` is derived from the Markdown output.
+
+Notes
+- MinerU does not participate in generic image OCR flows in v1.
+- The CLI output directory may be nested; the adapter resolves the primary artifact directory automatically.
 
 ## dots.ocr (backend: `dots`)
 
@@ -163,7 +194,7 @@ Notes
 
 - OCR Evaluation is available under WebUI → Evaluations → “OCR Evaluation / OCR PDF”.
 - Fields map to API parameters: `enable_ocr`, `ocr_backend`, `ocr_mode`, `ocr_dpi`, etc.
-- Set `ocr_backend` to `dots` or `points` after installing the respective provider.
+- Set `ocr_backend` to `mineru`, `dots`, or `points` after installing the respective provider.
 
 ## Tips
 
@@ -176,6 +207,7 @@ Notes
 | Backend   | Modes             | Best for                          | Notes                                  |
 |-----------|-------------------|-----------------------------------|----------------------------------------|
 | tesseract | CLI               | Light installs, fast text         | No layout semantics, basic accuracy    |
+| mineru    | CLI (document)    | Tables, layout, structured OCR    | PDF-only; opt-in only; not in `auto`   |
 | dots      | CLI + vLLM        | High quality OCR + layout         | Heavy; recommend vLLM; prompt-tunable  |
 | points    | Transformers/SGLang | OCR + HTML tables + Markdown text | trust_remote_code required; SGLang ideal |
 | deepseek  | Transformers      | Layout-rich OCR to Markdown       | Heavy GPU stack; trust_remote_code required |

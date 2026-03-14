@@ -7,6 +7,15 @@ import { QuizWorkspace } from "../QuizWorkspace"
 const mocks = vi.hoisted(() => ({
   isOnline: true,
   demoEnabled: false,
+  uxState: "connected_ok" as
+    | "connected_ok"
+    | "testing"
+    | "configuring_url"
+    | "configuring_auth"
+    | "error_auth"
+    | "error_unreachable"
+    | "unconfigured",
+  hasCompletedFirstRun: true,
   capabilities: {
     hasQuizzes: true,
     specVersion: "test-spec"
@@ -65,6 +74,10 @@ vi.mock("@/hooks/useScrollToServerCard", () => ({
 }))
 
 vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => ({
+    uxState: mocks.uxState,
+    hasCompletedFirstRun: mocks.hasCompletedFirstRun
+  }),
   useConnectionActions: () => ({
     checkOnce: mocks.checkOnce
   })
@@ -78,6 +91,8 @@ describe("QuizWorkspace connection and availability states", () => {
   beforeEach(() => {
     mocks.isOnline = true
     mocks.demoEnabled = false
+    mocks.uxState = "connected_ok"
+    mocks.hasCompletedFirstRun = true
     mocks.capabilities = { hasQuizzes: true, specVersion: "test-spec" }
     mocks.capsLoading = false
     mocks.navigate.mockReset()
@@ -115,6 +130,55 @@ describe("QuizWorkspace connection and availability states", () => {
       expect(screen.getByTestId("quiz-demo-results")).toBeInTheDocument()
       expect(screen.getByTestId("quiz-demo-score")).toHaveTextContent("100%")
     })
+  })
+
+  it("keeps demo preview visible while surfacing auth guidance", () => {
+    mocks.isOnline = false
+    mocks.demoEnabled = true
+    mocks.uxState = "error_auth"
+
+    render(<QuizWorkspace />)
+
+    expect(screen.getByText("Explore Quiz Playground in demo mode")).toBeInTheDocument()
+    expect(screen.getByTestId("quiz-demo-preview")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Demo stays available, but your Quiz Playground credentials need attention."
+      )
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Go to server card" })[0])
+    expect(mocks.scrollToServerCard).toHaveBeenCalled()
+  })
+
+  it("shows setup guidance when demo mode is disabled and first-run setup is incomplete", () => {
+    mocks.isOnline = false
+    mocks.demoEnabled = false
+    mocks.uxState = "unconfigured"
+    mocks.hasCompletedFirstRun = false
+
+    render(<QuizWorkspace />)
+
+    expect(
+      screen.getByText("Finish setup to use Quiz Playground")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to server card" }))
+    expect(mocks.scrollToServerCard).toHaveBeenCalled()
+  })
+
+  it("shows unreachable guidance without hiding the demo preview", () => {
+    mocks.isOnline = false
+    mocks.demoEnabled = true
+    mocks.uxState = "error_unreachable"
+
+    render(<QuizWorkspace />)
+
+    expect(screen.getByTestId("quiz-demo-preview")).toBeInTheDocument()
+    expect(
+      screen.getByText("Demo stays available, but your tldw server is unreachable.")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Retry connection" })).toBeInTheDocument()
   })
 
   it("shows actionable capability guidance with diagnostics and setup actions", () => {

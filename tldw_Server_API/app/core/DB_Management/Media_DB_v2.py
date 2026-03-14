@@ -76,6 +76,10 @@ except ImportError:  # pragma: no cover - defensive fallback
 import yaml
 
 from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator, MigrationError
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    begin_immediate_if_needed,
+    configure_sqlite_connection,
+)
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 
 try:
@@ -1437,8 +1441,7 @@ class MediaDatabase:
             pc = sqlite3.connect(self.db_path_str, check_same_thread=False, isolation_level=None)
             try:
                 pc.row_factory = sqlite3.Row
-                pc.execute("PRAGMA foreign_keys = ON")
-                pc.execute("PRAGMA busy_timeout = 10000")
+                self._apply_sqlite_connection_pragmas(pc)
             except sqlite3.Error:
                 pass
             self._persistent_conn = pc
@@ -1805,14 +1808,14 @@ class MediaDatabase:
                 wal_mode = bool(getattr(cfg, "sqlite_wal_mode", True))
                 foreign_keys = bool(getattr(cfg, "sqlite_foreign_keys", True))
 
-            if foreign_keys:
-                conn.execute("PRAGMA foreign_keys = ON")
-            if wal_mode and not self.is_memory_db:
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.execute("PRAGMA synchronous = NORMAL")
-            conn.execute("PRAGMA busy_timeout = 10000")
-            conn.execute("PRAGMA cache_size = -2000")
-            conn.execute("PRAGMA temp_store = MEMORY")
+            configure_sqlite_connection(
+                conn,
+                use_wal=wal_mode,
+                synchronous="NORMAL" if wal_mode else None,
+                foreign_keys=foreign_keys,
+                busy_timeout_ms=10000,
+                cache_size=-2000,
+            )
         except _MEDIA_NONCRITICAL_EXCEPTIONS:
             pass
 
@@ -2507,8 +2510,7 @@ class MediaDatabase:
                 with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
                     conn.row_factory = sqlite3.Row
                 try:
-                    conn.execute("PRAGMA foreign_keys = ON")
-                    conn.execute("PRAGMA busy_timeout = 10000")
+                    self._apply_sqlite_connection_pragmas(conn)
                 except sqlite3.Error:
                     pass
             else:
@@ -2517,7 +2519,7 @@ class MediaDatabase:
             self._inc_tx_depth()
             try:
                 if outermost:
-                    conn.execute("BEGIN")
+                    begin_immediate_if_needed(conn)
                     self._set_txn_conn(conn)
                     logging.debug("Started SQLite transaction.")
                 yield conn

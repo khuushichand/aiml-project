@@ -351,6 +351,23 @@ const isAbortLikeError = (error: unknown): boolean => {
   return /\babort(ed|error)?\b/i.test(message)
 }
 
+const TEXT_FAILURE_SENTINELS: Partial<Record<ArtifactType, string[]>> = {
+  summary: ["Summary generation failed"],
+  report: ["Report generation failed"],
+  compare_sources: ["Compare sources generation failed"],
+  timeline: ["Timeline generation failed"],
+  mindmap: ["Mind map generation failed"],
+  slides: ["Slides generation failed"],
+  data_table: ["Data table generation failed"]
+}
+
+const KNOWN_ERROR_RESPONSE_TEXTS = new Set([
+  "sorry, i encountered an error. please try again.",
+  "i'm sorry, i encountered an error processing your request.",
+  "i encountered an error generating a response.",
+  "the workflow encountered an error."
+])
+
 export const estimateGenerationSeconds = (
   type: ArtifactType,
   sourceCount: number
@@ -490,6 +507,135 @@ const extractUsageMetrics = (payload: unknown): UsageMetrics => {
       typeof totalCostUsd === "number" && Number.isFinite(totalCostUsd)
         ? Number(totalCostUsd.toFixed(4))
         : undefined
+  }
+}
+
+const buildMissingContentError = (label: string): Error =>
+  new Error(`No usable ${label} content was returned.`)
+
+const extractRequiredRagText = (response: unknown, label: string): string => {
+  const candidate = isRecord(response) ? response : {}
+  const generation =
+    typeof candidate.generation === "string" ? candidate.generation.trim() : ""
+  const generatedAnswer =
+    typeof candidate.generated_answer === "string"
+      ? candidate.generated_answer.trim()
+      : ""
+  const answer = typeof candidate.answer === "string" ? candidate.answer.trim() : ""
+  const responseText =
+    typeof candidate.response === "string" ? candidate.response.trim() : ""
+  const text = generation || generatedAnswer || answer || responseText
+
+  if (!text) {
+    throw buildMissingContentError(label)
+  }
+
+  return text
+}
+
+type StudioRagGenerationRequest = {
+  query: string
+  generationPrompt: string
+  mediaIds: number[]
+  topK: number
+  abortSignal?: AbortSignal
+  enableCitations?: boolean
+}
+
+const requestStudioRagGeneration = async ({
+  query,
+  generationPrompt,
+  mediaIds,
+  topK,
+  abortSignal,
+  enableCitations = false
+}: StudioRagGenerationRequest): Promise<any> =>
+  tldwClient.ragSearch(query, {
+    include_media_ids: mediaIds,
+    top_k: topK,
+    enable_generation: true,
+    enable_citations: enableCitations,
+    generation_prompt: generationPrompt,
+    timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
+    signal: abortSignal
+  })
+
+const requireUsableTextResult = (
+  type: ArtifactType,
+  result: GenerationResult,
+  label: string
+): GenerationResult => {
+  const content = typeof result.content === "string" ? result.content.trim() : ""
+  const sentinels = TEXT_FAILURE_SENTINELS[type] ?? []
+  const normalizedContent = content.toLowerCase()
+
+  if (
+    !content ||
+    sentinels.includes(content) ||
+    KNOWN_ERROR_RESPONSE_TEXTS.has(normalizedContent)
+  ) {
+    throw buildMissingContentError(label)
+  }
+
+  return {
+    ...result,
+    content
+  }
+}
+
+const finalizeGenerationResult = (
+  type: ArtifactType,
+  result: GenerationResult,
+  options?: {
+    audioProvider?: AudioTtsProvider
+  }
+): GenerationResult => {
+  switch (type) {
+    case "summary":
+      return requireUsableTextResult(type, result, "summary")
+    case "report":
+      return requireUsableTextResult(type, result, "report")
+    case "compare_sources":
+      return requireUsableTextResult(type, result, "comparison")
+    case "timeline":
+      return requireUsableTextResult(type, result, "timeline")
+    case "mindmap": {
+      const normalized = requireUsableTextResult(type, result, "mind map")
+      const mermaid =
+        isRecord(normalized.data) && typeof normalized.data.mermaid === "string"
+          ? normalized.data.mermaid.trim()
+          : ""
+      if (!mermaid || !isLikelyMermaidDiagram(mermaid)) {
+        throw buildMissingContentError("mind map")
+      }
+      return normalized
+    }
+    case "data_table": {
+      const normalized = requireUsableTextResult(type, result, "data table")
+      const table =
+        isRecord(normalized.data) && normalized.data.table ? normalized.data.table : null
+      if (!table) {
+        throw buildMissingContentError("data table")
+      }
+      return normalized
+    }
+    case "slides":
+      if (result.presentationId) {
+        return result
+      }
+      return requireUsableTextResult(type, result, "slide")
+    case "audio_overview": {
+      const normalized = requireUsableTextResult(type, result, "audio")
+      if (options?.audioProvider === "browser") {
+        return normalized
+      }
+      if (!result.audioUrl) {
+        throw new Error("No usable audio output was returned.")
+      }
+      return normalized
+    }
+    default:
+      return result
   }
 }
 
@@ -1306,6 +1452,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         throw new Error("Artifact placeholder was not created")
       }
 
+      result = finalizeGenerationResult(type, result, {
+        audioProvider: audioSettings.provider
+      })
+
       updateArtifactStatus(artifact.id, "completed", {
         serverId: result.serverId,
         content: result.content,
@@ -1555,6 +1705,37 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         messageApi.success(t("common:downloadSuccess", "Downloaded successfully"))
       } catch (error) {
         messageApi.error(t("common:downloadError", "Download failed"))
+      }
+      return
+    }
+
+    if (artifact.type === "quiz") {
+      const questions =
+        isRecord(artifact.data) && Array.isArray(artifact.data.questions)
+          ? artifact.data.questions
+          : null
+
+      if (questions) {
+        const quizBlob = new Blob(
+          [
+            JSON.stringify(
+              {
+                title: artifact.title,
+                questions
+              },
+              null,
+              2
+            )
+          ],
+          { type: "application/json" }
+        )
+        downloadBlobFile(quizBlob, `${artifact.title}.json`)
+        return
+      }
+
+      if (artifact.content) {
+        const quizTextBlob = new Blob([artifact.content], { type: "text/plain" })
+        downloadBlobFile(quizTextBlob, `${artifact.title}.txt`)
       }
       return
     }
@@ -3187,22 +3368,19 @@ async function generateSummary(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  // Use RAG to get content and generate summary via chat
-  const ragResponse = await tldwClient.ragSearch(
-    "Provide a comprehensive summary of the key points and main ideas.",
-    {
-      media_ids: mediaIds,
-      top_k: 20,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+  const ragResponse = await requestStudioRagGeneration({
+    query: "key points main ideas summary",
+    generationPrompt:
+      "Provide a comprehensive summary of the key points and main ideas.",
+    mediaIds,
+    topK: 20,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Summary generation failed",
+    content: extractRequiredRagText(ragResponse, "summary"),
     ...usage
   }
 }
@@ -3212,28 +3390,26 @@ async function generateReport(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Generate a detailed report with the following sections:
+  const generationPrompt = `Generate a detailed report with the following sections:
 1. Executive Summary
 2. Key Findings
 3. Detailed Analysis
 4. Conclusions
 5. Recommendations
 
-Use the provided sources to create a comprehensive report.`,
-    {
-      media_ids: mediaIds,
-      top_k: 30,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Use the provided sources to create a comprehensive report.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "key findings detailed analysis conclusions recommendations",
+    generationPrompt,
+    mediaIds,
+    topK: 30,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Report generation failed",
+    content: extractRequiredRagText(ragResponse, "report"),
     ...usage
   }
 }
@@ -3243,25 +3419,23 @@ async function generateTimeline(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Extract and organize all events, dates, and chronological information into a timeline format.
+  const generationPrompt = `Extract and organize all events, dates, and chronological information into a timeline format.
 Present the timeline as:
 - [Date/Period] - Event description
 
-List events in chronological order.`,
-    {
-      media_ids: mediaIds,
-      top_k: 30,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+List events in chronological order.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "events dates chronology timeline",
+    generationPrompt,
+    mediaIds,
+    topK: 30,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Timeline generation failed",
+    content: extractRequiredRagText(ragResponse, "timeline"),
     ...usage
   }
 }
@@ -3271,28 +3445,23 @@ async function generateCompareSources(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Compare the selected sources and produce:
+  const generationPrompt = `Compare the selected sources and produce:
 1. A short synthesis of where they agree.
 2. A list of key disagreements or conflicting claims.
 3. Evidence strength notes for each disagreement.
 4. Open questions that need additional verification.
 
-Use markdown headings and bullet lists. Cite source-specific evidence when possible.`,
-    {
-      media_ids: mediaIds,
-      top_k: 30,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Use markdown headings and bullet lists. Cite source-specific evidence when possible.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "agreements disagreements claims evidence",
+    generationPrompt,
+    mediaIds,
+    topK: 30,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
-  const content =
-    ragResponse?.generation ||
-    ragResponse?.answer ||
-    "Compare sources generation failed"
+  const content = extractRequiredRagText(ragResponse, "comparison")
 
   return {
     content,
@@ -3390,25 +3559,21 @@ async function generateFlashcards(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  // First, get content via RAG
-  const ragResponse = await tldwClient.ragSearch(
-    `Extract key concepts, definitions, and important facts that would make good flashcards.
+  const generationPrompt = `Extract key concepts, definitions, and important facts that would make good flashcards.
 Format each as:
 Front: [Question or term]
 Back: [Answer or definition]
 
-Generate 10-15 flashcards.`,
-    {
-      media_ids: mediaIds,
-      top_k: 20,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Generate 10-15 flashcards.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "key concepts definitions important facts",
+    generationPrompt,
+    mediaIds,
+    topK: 20,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
-
-  const content = ragResponse?.generation || ragResponse?.answer || ""
+  const content = extractRequiredRagText(ragResponse, "flashcards")
 
   // Parse and create flashcards
   const flashcards = parseFlashcards(content)
@@ -3480,8 +3645,7 @@ async function generateMindMap(
   mediaIds: number[],
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Analyze the content and create a mind map in Mermaid format.
+  const generationPrompt = `Analyze the content and create a mind map in Mermaid format.
 Use the following structure:
 \`\`\`mermaid
 mindmap
@@ -3494,19 +3658,17 @@ mindmap
       Sub-topic 2.2
 \`\`\`
 
-Identify the central theme and 3-5 main branches with their sub-topics.`,
-    {
-      media_ids: mediaIds,
-      top_k: 20,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Identify the central theme and 3-5 main branches with their sub-topics.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "central theme main branches subtopics",
+    generationPrompt,
+    mediaIds,
+    topK: 20,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
 
-  const content =
-    ragResponse?.generation || ragResponse?.answer || "Mind map generation failed"
+  const content = extractRequiredRagText(ragResponse, "mind map")
   return {
     content,
     ...usage,
@@ -3521,25 +3683,21 @@ async function generateAudioOverview(
   audioSettings: import("@/types/workspace").AudioGenerationSettings,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  // First generate a spoken overview script
-  const ragResponse = await tldwClient.ragSearch(
-    `Create a spoken overview script (2-3 minutes when read aloud) that:
+  const generationPrompt = `Create a spoken overview script (2-3 minutes when read aloud) that:
 1. Introduces the topic
 2. Covers the main points
 3. Concludes with key takeaways
 
-Write in a conversational, easy-to-listen style. Do not include any stage directions, speaker labels, or formatting - just the spoken text.`,
-    {
-      media_ids: mediaIds,
-      top_k: 15,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Write in a conversational, easy-to-listen style. Do not include any stage directions, speaker labels, or formatting - just the spoken text.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "topic main points key takeaways overview",
+    generationPrompt,
+    mediaIds,
+    topK: 15,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
-
-  const script = ragResponse?.generation || ragResponse?.answer || ""
+  const script = extractRequiredRagText(ragResponse, "audio")
 
   if (!script.trim()) {
     throw new Error("Failed to generate audio script")
@@ -3589,12 +3747,8 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
     if (isAbortLikeError(ttsError)) {
       throw ttsError
     }
-    // If TTS fails, fall back to returning just the script
     console.error("TTS generation failed:", ttsError)
-    return {
-      content: `[Audio Script]\n\n${script}\n\n[Note: Audio generation failed - TTS service unavailable]`,
-      ...usage
-    }
+    throw new Error("Audio generation failed because speech synthesis did not return audio.")
   }
 }
 
@@ -3647,8 +3801,7 @@ async function generateSlidesFallback(
   mediaIds: number[],
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Create a presentation outline with 8-12 slides:
+  const generationPrompt = `Create a presentation outline with 8-12 slides:
 
 For each slide provide:
 # Slide [Number]: [Title]
@@ -3661,19 +3814,18 @@ Include:
 2. Introduction/Overview
 3-10. Main content slides
 11. Summary/Key Takeaways
-12. Conclusion/Q&A`,
-    {
-      media_ids: mediaIds,
-      top_k: 25,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+12. Conclusion/Q&A`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "presentation outline overview key takeaways",
+    generationPrompt,
+    mediaIds,
+    topK: 25,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Slides generation failed",
+    content: extractRequiredRagText(ragResponse, "slide"),
     ...usage
   }
 }
@@ -3683,8 +3835,7 @@ async function generateDataTable(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Extract structured data from the content and format it as a markdown table.
+  const generationPrompt = `Extract structured data from the content and format it as a markdown table.
 Identify:
 - Key entities (people, organizations, places, products)
 - Attributes and values
@@ -3693,19 +3844,17 @@ Identify:
 Format as:
 | Column 1 | Column 2 | Column 3 |
 |----------|----------|----------|
-| Data 1   | Data 2   | Data 3   |`,
-    {
-      media_ids: mediaIds,
-      top_k: 25,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+| Data 1   | Data 2   | Data 3   |`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "entities attributes values relationships",
+    generationPrompt,
+    mediaIds,
+    topK: 25,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
 
-  const content =
-    ragResponse?.generation || ragResponse?.answer || "Data table generation failed"
+  const content = extractRequiredRagText(ragResponse, "data table")
   const parsedTable = parseMarkdownTable(content)
 
   return {

@@ -16,6 +16,7 @@ const {
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
+  mockDownloadOutput,
   mockGetChatModels,
   messageOptionStoreState,
   chatModelSettingsStoreState,
@@ -34,6 +35,7 @@ const {
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
+  const downloadOutput = vi.fn()
   const getChatModels = vi.fn()
   const defaultAudioSettings = {
     provider: "browser" as const,
@@ -98,6 +100,7 @@ const {
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
+    mockDownloadOutput: downloadOutput,
     mockGetChatModels: getChatModels,
     messageOptionStoreState: messageOptionState,
     chatModelSettingsStoreState: chatModelSettingsState,
@@ -163,7 +166,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
     exportPresentation: vi.fn(),
-    downloadOutput: vi.fn()
+    downloadOutput: mockDownloadOutput
   }
 }))
 
@@ -387,6 +390,245 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockMessageInfo).not.toHaveBeenCalledWith("Generation canceled")
   })
 
+  it("marks summary artifacts failed when ragSearch returns no usable content", async () => {
+    mockRagSearch.mockResolvedValue({ generation: "", answer: "" })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable summary")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+  })
+
+  it("marks summary artifacts failed when ragSearch returns the local failure sentinel", async () => {
+    mockRagSearch.mockResolvedValue({ generation: "Summary generation failed" })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable summary")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+  })
+
+  it("marks summary artifacts failed when ragSearch returns a backend error string", async () => {
+    mockRagSearch.mockResolvedValue({
+      generation: "Sorry, I encountered an error. Please try again."
+    })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable summary")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+  })
+
+  it("marks summary artifacts failed when ragSearch returns a voice assistant backend error string", async () => {
+    mockRagSearch.mockResolvedValue({
+      generation: "I'm sorry, I encountered an error processing your request."
+    })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable summary")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+  })
+
+  it("still completes valid summary artifacts from generated_answer responses", async () => {
+    mockRagSearch.mockResolvedValue({ generated_answer: "Generated summary" })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "completed",
+        expect.objectContaining({
+          content: "Generated summary"
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).toHaveBeenCalledWith(
+      expect.stringContaining("generated successfully")
+    )
+  })
+
+  it("still completes valid summary artifacts", async () => {
+    mockRagSearch.mockResolvedValue({ generation: "Generated summary" })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "completed",
+        expect.objectContaining({
+          content: "Generated summary"
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).toHaveBeenCalledWith(
+      expect.stringContaining("generated successfully")
+    )
+  })
+
+  it("downloads quiz artifacts locally instead of calling outputs download", async () => {
+    mockDownloadOutput.mockResolvedValue(new Blob(["server download"]))
+
+    const createObjectUrlSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:quiz")
+    const revokeObjectUrlSpy = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => {})
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {})
+
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-quiz",
+        type: "quiz",
+        title: "Quiz",
+        status: "completed",
+        serverId: 42,
+        content: "Question 1\nA. One\nB. Two",
+        data: {
+          questions: [
+            {
+              question: "Question 1",
+              options: ["One", "Two"],
+              answer: "One"
+            }
+          ]
+        },
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Download" }))
+
+    await waitFor(() => {
+      expect(createObjectUrlSpy).toHaveBeenCalled()
+    })
+
+    expect(mockDownloadOutput).not.toHaveBeenCalled()
+    expect(anchorClickSpy).toHaveBeenCalled()
+    expect(revokeObjectUrlSpy).toHaveBeenCalled()
+
+    createObjectUrlSpy.mockRestore()
+    revokeObjectUrlSpy.mockRestore()
+    anchorClickSpy.mockRestore()
+  })
+
+  it("fails non-browser audio overview generation when TTS does not return audio", async () => {
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {})
+
+    workspaceStoreState.audioSettings = {
+      ...baseAudioSettings,
+      provider: "tldw",
+      model: "kokoro"
+    }
+    mockRagSearch.mockResolvedValue({ generation: "Audio script" })
+    mockSynthesizeSpeech.mockRejectedValue(new Error("TTS service unavailable"))
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Audio Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("audio")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("fails non-browser audio overview generation when the script is an error response", async () => {
+    workspaceStoreState.audioSettings = {
+      ...baseAudioSettings,
+      provider: "tldw",
+      model: "kokoro"
+    }
+    mockRagSearch.mockResolvedValue({
+      generation: "Sorry, I encountered an error. Please try again."
+    })
+    mockSynthesizeSpeech.mockResolvedValue(new ArrayBuffer(8))
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Audio Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable audio")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+  })
+
   it("passes extended timeout to summary generation RAG request", async () => {
     renderStudioPane()
 
@@ -400,6 +642,25 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       expect.any(String),
       expect.objectContaining({
         timeoutMs: 120000
+      })
+    )
+  })
+
+  it("routes summary authoring instructions through generation_prompt", async () => {
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockRagSearch).toHaveBeenCalled()
+    })
+
+    expect(mockRagSearch).toHaveBeenLastCalledWith(
+      "key points main ideas summary",
+      expect.objectContaining({
+        include_media_ids: [101],
+        generation_prompt:
+          "Provide a comprehensive summary of the key points and main ideas."
       })
     )
   })

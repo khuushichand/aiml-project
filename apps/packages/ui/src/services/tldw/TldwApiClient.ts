@@ -1,3 +1,5 @@
+import type { ChatScope } from "@/types/chat-scope"
+import { toChatScopeParams } from "@/types/chat-scope"
 import { Storage } from "@plasmohq/storage"
 import { createSafeStorage, safeStorageSerde } from "@/utils/safe-storage"
 import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
@@ -250,6 +252,64 @@ export interface OpenAICredentialSourceSwitchResponse {
   provider: "openai"
   auth_source: "api_key" | "oauth"
   updated_at?: string | null
+}
+
+export type PresentationStudioSlide = {
+  order: number
+  layout: string
+  title?: string | null
+  content: string
+  speaker_notes?: string | null
+  metadata: Record<string, any>
+}
+
+export type PresentationStudioRecord = {
+  id: string
+  title: string
+  description?: string | null
+  theme: string
+  marp_theme?: string | null
+  template_id?: string | null
+  settings?: Record<string, any> | null
+  studio_data?: Record<string, any> | null
+  slides: PresentationStudioSlide[]
+  custom_css?: string | null
+  source_type?: string | null
+  source_ref?: unknown
+  source_query?: string | null
+  created_at: string
+  last_modified: string
+  deleted?: boolean
+  client_id?: string
+  version: number
+}
+
+export type PresentationRenderFormat = "mp4" | "webm"
+
+export type PresentationRenderJob = {
+  job_id: number
+  status: string
+  job_type: string
+  presentation_id?: string | null
+  presentation_version?: number | null
+  format?: PresentationRenderFormat | null
+  output_id?: number | null
+  download_url?: string | null
+  error?: string | null
+}
+
+export type PresentationRenderArtifact = {
+  output_id: number
+  format: PresentationRenderFormat
+  title?: string | null
+  download_url: string
+  presentation_version?: number | null
+  created_at?: string | null
+}
+
+export type PresentationRenderArtifactList = {
+  presentation_id: string
+  artifacts: PresentationRenderArtifact[]
 }
 
 export type UserProfileUpdateEntry = {
@@ -4073,9 +4133,9 @@ export class TldwApiClient {
 
   async listChats(
     params?: Record<string, any>,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; scope?: ChatScope }
   ): Promise<ServerChatSummary[]> {
-    const query = this.buildQuery(params)
+    const query = this.buildQuery({ ...toChatScopeParams(options?.scope), ...params })
     const data = await bgRequest<any>({
       path: `/api/v1/chats/${query}`,
       method: "GET",
@@ -4104,9 +4164,9 @@ export class TldwApiClient {
 
   async listChatsWithMeta(
     params?: Record<string, any>,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; scope?: ChatScope }
   ): Promise<{ chats: ServerChatSummary[]; total: number }> {
-    const query = this.buildQuery(params)
+    const query = this.buildQuery({ ...toChatScopeParams(options?.scope), ...params })
     const data = await bgRequest<any>({
       path: `/api/v1/chats/${query}`,
       method: "GET",
@@ -4145,9 +4205,9 @@ export class TldwApiClient {
 
   async searchConversationsWithMeta(
     params?: Record<string, any>,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; scope?: ChatScope }
   ): Promise<{ chats: ServerChatSummary[]; total: number }> {
-    const query = this.buildQuery(params)
+    const query = this.buildQuery({ ...toChatScopeParams(options?.scope), ...params })
     const data = await bgRequest<any>({
       path: `/api/v1/chats/conversations${query}`,
       method: "GET",
@@ -4186,12 +4246,12 @@ export class TldwApiClient {
     }
   }
 
-  async createChat(payload: Record<string, any>): Promise<ServerChatSummary> {
+  async createChat(payload: Record<string, any>, options?: { scope?: ChatScope }): Promise<ServerChatSummary> {
     const res = await bgRequest<any>({
       path: "/api/v1/chats/",
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: payload
+      body: { ...toChatScopeParams(options?.scope), ...payload }
     })
     return this.normalizeChatSummary(res)
   }
@@ -7029,24 +7089,102 @@ export class TldwApiClient {
     })
   }
 
-  async getPresentation(presentationId: string): Promise<{
-    id: string
-    title: string
-    description?: string
-    theme: string
-    slides: Array<{
-      order: number
-      layout: string
-      title?: string
-      content: string
-      speaker_notes?: string
-    }>
-    version: number
-    created_at: string
-    last_modified: string
-  }> {
-    return await this.request<any>({
+  async getPresentation(presentationId: string): Promise<PresentationStudioRecord> {
+    return await this.request<PresentationStudioRecord>({
       path: `/api/v1/slides/presentations/${encodeURIComponent(presentationId)}`,
+      method: "GET"
+    })
+  }
+
+  async createPresentation(payload: {
+    title: string
+    description?: string | null
+    theme?: string
+    marp_theme?: string | null
+    template_id?: string | null
+    settings?: Record<string, any> | null
+    studio_data?: Record<string, any> | null
+    slides: PresentationStudioSlide[]
+    custom_css?: string | null
+  }): Promise<PresentationStudioRecord> {
+    const path = await this.resolveApiPath("slides.presentations.create", [
+      "/api/v1/slides/presentations"
+    ])
+    return await this.request<PresentationStudioRecord>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async patchPresentation(
+    presentationId: string,
+    payload: {
+      title?: string | null
+      description?: string | null
+      theme?: string | null
+      marp_theme?: string | null
+      template_id?: string | null
+      settings?: Record<string, any> | null
+      studio_data?: Record<string, any> | null
+      slides?: PresentationStudioSlide[] | null
+      custom_css?: string | null
+    },
+    options?: { ifMatch?: string | number | null }
+  ): Promise<PresentationStudioRecord> {
+    const template = await this.resolveApiPath("slides.presentations.patch", [
+      "/api/v1/slides/presentations/{presentation_id}"
+    ])
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (options?.ifMatch != null) {
+      headers["If-Match"] = String(options.ifMatch)
+    }
+    return await this.request<PresentationStudioRecord>({
+      path: this.fillPathParams(template, presentationId),
+      method: "PATCH",
+      headers,
+      body: payload
+    })
+  }
+
+  async submitPresentationRenderJob(
+    presentationId: string,
+    payload: { format: PresentationRenderFormat },
+    options: { ifMatch: string | number }
+  ): Promise<PresentationRenderJob> {
+    const template = await this.resolveApiPath("slides.presentations.render.create", [
+      "/api/v1/slides/presentations/{presentation_id}/render-jobs"
+    ])
+    return await this.request<PresentationRenderJob>({
+      path: this.fillPathParams(template, presentationId),
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(options.ifMatch)
+      },
+      body: payload
+    })
+  }
+
+  async getPresentationRenderJob(jobId: number): Promise<PresentationRenderJob> {
+    const template = await this.resolveApiPath("slides.presentations.render.get", [
+      "/api/v1/slides/render-jobs/{job_id}"
+    ])
+    return await this.request<PresentationRenderJob>({
+      path: this.fillPathParams(template, String(jobId)),
+      method: "GET"
+    })
+  }
+
+  async listPresentationRenderArtifacts(
+    presentationId: string
+  ): Promise<PresentationRenderArtifactList> {
+    const template = await this.resolveApiPath("slides.presentations.render.artifacts", [
+      "/api/v1/slides/presentations/{presentation_id}/render-artifacts"
+    ])
+    return await this.request<PresentationRenderArtifactList>({
+      path: this.fillPathParams(template, presentationId),
       method: "GET"
     })
   }
@@ -7260,6 +7398,99 @@ export class TldwApiClient {
       "/api/v1/skills/context/"
     ])
     return await bgRequest<any>({ path: base, method: "GET" })
+  }
+
+  // --- Workspace sub-resource methods ---
+
+  async getWorkspace(workspaceId: string): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}`, method: "GET" })
+  }
+
+  async getWorkspaceSources(workspaceId: string): Promise<any[]> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}/sources`, method: "GET" })
+  }
+
+  async addWorkspaceSource(workspaceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/sources`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async updateWorkspaceSource(workspaceId: string, sourceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/sources/${sourceId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async deleteWorkspaceSource(workspaceId: string, sourceId: string): Promise<void> {
+    await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/sources/${sourceId}`,
+      method: "DELETE",
+    })
+  }
+
+  async getWorkspaceArtifacts(workspaceId: string): Promise<any[]> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}/artifacts`, method: "GET" })
+  }
+
+  async addWorkspaceArtifact(workspaceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/artifacts`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async updateWorkspaceArtifact(workspaceId: string, artifactId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/artifacts/${artifactId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async deleteWorkspaceArtifact(workspaceId: string, artifactId: string): Promise<void> {
+    await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/artifacts/${artifactId}`,
+      method: "DELETE",
+    })
+  }
+
+  async getWorkspaceNotes(workspaceId: string): Promise<any[]> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}/notes`, method: "GET" })
+  }
+
+  async addWorkspaceNote(workspaceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/notes`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async updateWorkspaceNote(workspaceId: string, noteId: number, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/notes/${noteId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async deleteWorkspaceNote(workspaceId: string, noteId: number): Promise<void> {
+    await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/notes/${noteId}`,
+      method: "DELETE",
+    })
   }
 }
 

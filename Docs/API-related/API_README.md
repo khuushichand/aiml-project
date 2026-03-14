@@ -85,6 +85,27 @@ Notes:
 
 See: [Media Ingest Jobs API](Media_Ingest_Jobs_API.md)
 
+#### Slides / Presentation Studio - `/api/v1/slides`
+
+Slides now back both generated presentations and the Presentation Studio editor surfaces.
+
+- `POST /api/v1/slides/presentations` - create a presentation, including `studio_data`
+- `GET /api/v1/slides/presentations/{presentation_id}` - fetch a saved presentation
+- `PATCH /api/v1/slides/presentations/{presentation_id}` - optimistic-locking updates with `If-Match`
+- `GET /api/v1/slides/presentations/{presentation_id}/export` - slide-native exports (`revealjs`, `markdown`, `json`, `pdf`)
+- `POST /api/v1/slides/presentations/{presentation_id}/render-jobs` - enqueue versioned `mp4` or `webm` render jobs
+- `GET /api/v1/slides/render-jobs/{job_id}` - inspect render job status
+- `GET /api/v1/slides/presentations/{presentation_id}/render-artifacts` - list render outputs for a presentation
+
+Capability notes:
+
+- `hasSlides` indicates the slide/presentation surface is available
+- `hasPresentationStudio` indicates the structured Presentation Studio editor should be exposed
+- `hasPresentationRender` indicates render-job powered video publishing is available
+
+Presentation Studio clients should treat saved presentation content as the source of truth and
+rendered `mp4`/`webm` artifacts as versioned derivatives.
+
 #### Reading List - `/api/v1/reading`
 
 Reading List supports URL capture, clean text extraction, tagging, import/export, and actions (summarize/TTS).

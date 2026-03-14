@@ -3,6 +3,7 @@ import {
   DEFAULT_ALERT_RULE_DRAFT,
   ensureTriggeredHistoryEntries,
   formatSnoozeCountdown,
+  normalizeMonitoringAlert,
   normalizeAdminAlertHistoryPayload,
   validateAlertRuleDraft,
 } from './monitoring-alerts';
@@ -99,5 +100,25 @@ describe('normalizeAdminAlertHistoryPayload', () => {
         timestamp: '2026-02-17T12:00:00.000Z',
       },
     ]);
+  });
+});
+
+describe('normalizeMonitoringAlert', () => {
+  it('preserves numeric assigned_to_user_id values for alert assignee rendering', () => {
+    const alert = normalizeMonitoringAlert({
+      id: 1,
+      alert_identity: 'alert:1',
+      severity: 'warning',
+      text_snippet: 'CPU high',
+      source: 'system',
+      created_at: '2026-03-12T06:54:08.142506+00:00',
+      assigned_to_user_id: 1,
+    });
+
+    expect(alert).toMatchObject({
+      id: '1',
+      alert_identity: 'alert:1',
+      assigned_to: '1',
+    });
   });
 });

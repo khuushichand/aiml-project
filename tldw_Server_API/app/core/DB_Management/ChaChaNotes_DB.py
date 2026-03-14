@@ -85,6 +85,7 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (  # noq
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths  # noqa: E402
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import begin_immediate_if_needed  # noqa: E402
 from tldw_Server_API.app.core.Flashcards.asset_refs import (  # noqa: E402
     extract_flashcard_asset_uuids,
     sanitize_flashcard_text_for_search,
@@ -451,7 +452,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 37  # Schema v37 adds flashcard scheduler state and deck settings
+    _CURRENT_SCHEMA_VERSION = 37  # Schema v37 adds workspace sub-resources, settings, and flashcard scheduler state
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -3064,16 +3065,30 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 35;
 """
-    _MIGRATION_SQL_V35_TO_V36 = """
+    _MIGRATION_SQL_V35_TO_V36_POSTGRES = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 36 - Conversation list indexes (2026-03-11)
+  Migration to Version 36 - Workspaces table + conversation scope (2026-03-12)
 ───────────────────────────────────────────────────────────────*/
-CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified
-  ON conversations(client_id, deleted, last_modified DESC);
-CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified
-  ON conversations(client_id, character_id, deleted, last_modified DESC);
-CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at
-  ON conversations(client_id, deleted, created_at DESC);
+CREATE TABLE IF NOT EXISTS workspaces (
+    id            TEXT    PRIMARY KEY NOT NULL,
+    name          TEXT    NOT NULL,
+    description   TEXT,
+    metadata_json TEXT    NOT NULL DEFAULT '{}',
+    archived      BOOLEAN NOT NULL DEFAULT false,
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted       BOOLEAN NOT NULL DEFAULT false,
+    client_id     TEXT    NOT NULL DEFAULT 'unknown',
+    version       INTEGER NOT NULL DEFAULT 1
+);
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'global';
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_conversations_scope ON conversations(scope_type, workspace_id);
 
 UPDATE db_schema_version
    SET version = 36
@@ -3082,8 +3097,69 @@ UPDATE db_schema_version
 """
     _MIGRATION_SQL_V36_TO_V37 = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 37 - Flashcard scheduler state and deck settings (2026-03-13)
+  Migration to Version 37 - Workspace sub-resources + flashcard scheduler state (2026-03-13)
 ───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 37
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 37;
+"""
+    _MIGRATION_SQL_V36_TO_V37_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 37 - Workspace sub-resources + flashcard scheduler state (2026-03-13)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS tag TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_title TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_subtitle TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_color TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_provider TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_model TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_voice TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_speed REAL DEFAULT 1.0;
+
+CREATE TABLE IF NOT EXISTS workspace_sources (
+    id            TEXT    NOT NULL,
+    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    media_id      INTEGER NOT NULL,
+    title         TEXT    NOT NULL,
+    source_type   TEXT    NOT NULL,
+    url           TEXT,
+    position      INTEGER NOT NULL DEFAULT 0,
+    selected      BOOLEAN NOT NULL DEFAULT true,
+    added_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version       INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (workspace_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_ws_sources_workspace ON workspace_sources(workspace_id);
+
+CREATE TABLE IF NOT EXISTS workspace_artifacts (
+    id              TEXT    NOT NULL,
+    workspace_id    TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    artifact_type   TEXT    NOT NULL,
+    title           TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'pending',
+    content         TEXT,
+    total_tokens    INTEGER,
+    total_cost_usd  REAL,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at    TIMESTAMP,
+    version         INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (workspace_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_ws_artifacts_workspace ON workspace_artifacts(workspace_id);
+
+CREATE TABLE IF NOT EXISTS workspace_notes (
+    id            SERIAL PRIMARY KEY,
+    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    title         TEXT    NOT NULL DEFAULT '',
+    content       TEXT    NOT NULL DEFAULT '',
+    keywords_json TEXT    NOT NULL DEFAULT '[]',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted       BOOLEAN NOT NULL DEFAULT false,
+    version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_ws_notes_workspace ON workspace_notes(workspace_id);
 UPDATE db_schema_version
    SET version = 37
  WHERE schema_name = 'rag_char_chat_schema'
@@ -4765,10 +4841,51 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Unexpected error migrating to V35 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
     def _migrate_from_v35_to_v36(self, conn: sqlite3.Connection) -> None:
-        """Migrate schema from V35 to V36 (conversation list indexes)."""
+        """Migrate schema from V35 to V36 (workspaces table + conversation scope columns)."""
         logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V35 to V36 for DB: {self.db_path_str}...")
         try:
-            conn.executescript(self._MIGRATION_SQL_V35_TO_V36)
+            # 1. Create workspaces table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    id            TEXT    PRIMARY KEY NOT NULL,
+                    name          TEXT    NOT NULL,
+                    description   TEXT,
+                    metadata_json TEXT    NOT NULL DEFAULT '{}',
+                    archived      BOOLEAN  NOT NULL DEFAULT 0,
+                    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted       BOOLEAN  NOT NULL DEFAULT 0,
+                    client_id     TEXT    NOT NULL DEFAULT 'unknown',
+                    version       INTEGER  NOT NULL DEFAULT 1
+                )
+            """)
+
+            # 2. Add scope columns to conversations
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
+            if "scope_type" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'global' "
+                    "CHECK(scope_type IN ('global','workspace'))"
+                )
+            if "workspace_id" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
+                )
+
+            # 3. Create index for scope filtering
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_scope ON conversations(scope_type, workspace_id)"
+            )
+
+            # 4. Update schema version
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 36
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 36;
+                """
+            )
             final_version = self._get_db_version(conn)
             if final_version != 36:
                 raise SchemaError(  # noqa: TRY003, TRY301
@@ -4785,9 +4902,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Unexpected error migrating to V36 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
     def _migrate_from_v36_to_v37(self, conn: sqlite3.Connection) -> None:
-        """Migrate schema from V36 to V37 (flashcard scheduler state and deck settings)."""
+        """Migrate schema from V36 to V37 (workspace sub-resources + flashcard scheduler state)."""
         logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V36 to V37 for DB: {self.db_path_str}...")
         try:
+            self._ensure_workspace_subresource_schema_sqlite(conn)
+            self._ensure_flashcard_scheduler_schema_sqlite(conn)
             conn.executescript(self._MIGRATION_SQL_V36_TO_V37)
             final_version = self._get_db_version(conn)
             if final_version != 37:
@@ -4877,6 +4996,146 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             """,
             "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS activity_surface TEXT NOT NULL DEFAULT 'api.persona'",
             "ALTER TABLE persona_sessions ADD COLUMN IF NOT EXISTS preferences_json TEXT NOT NULL DEFAULT '{}'",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
+    def _ensure_workspace_subresource_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure workspace settings columns and sub-resource tables exist for SQLite."""
+        try:
+            ws_cols = {row[1] for row in conn.execute("PRAGMA table_info('workspaces')").fetchall()}
+            new_ws_cols = {
+                "tag": "TEXT",
+                "banner_title": "TEXT",
+                "banner_subtitle": "TEXT",
+                "banner_color": "TEXT",
+                "audio_provider": "TEXT",
+                "audio_model": "TEXT",
+                "audio_voice": "TEXT",
+                "audio_speed": "REAL DEFAULT 1.0",
+            }
+            for col_name, col_type in new_ws_cols.items():
+                if col_name not in ws_cols:
+                    conn.execute(f"ALTER TABLE workspaces ADD COLUMN {col_name} {col_type}")  # nosec B608
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_sources (
+                    id            TEXT    NOT NULL,
+                    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    media_id      INTEGER NOT NULL,
+                    title         TEXT    NOT NULL,
+                    source_type   TEXT    NOT NULL,
+                    url           TEXT,
+                    position      INTEGER NOT NULL DEFAULT 0,
+                    selected      BOOLEAN NOT NULL DEFAULT 1,
+                    added_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    version       INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY (workspace_id, id)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ws_sources_workspace ON workspace_sources(workspace_id)"
+            )
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_artifacts (
+                    id              TEXT    NOT NULL,
+                    workspace_id    TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    artifact_type   TEXT    NOT NULL,
+                    title           TEXT    NOT NULL,
+                    status          TEXT    NOT NULL DEFAULT 'pending',
+                    content         TEXT,
+                    total_tokens    INTEGER,
+                    total_cost_usd  REAL,
+                    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at    DATETIME,
+                    version         INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY (workspace_id, id)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ws_artifacts_workspace ON workspace_artifacts(workspace_id)"
+            )
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_notes (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    title         TEXT    NOT NULL DEFAULT '',
+                    content       TEXT    NOT NULL DEFAULT '',
+                    keywords_json TEXT    NOT NULL DEFAULT '[]',
+                    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted       BOOLEAN NOT NULL DEFAULT 0,
+                    version       INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ws_notes_workspace ON workspace_notes(workspace_id)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite workspace sub-resource schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_workspace_subresource_schema_postgres(self, conn: Any) -> None:
+        """Ensure workspace settings columns and sub-resource tables exist for PostgreSQL."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS tag TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_title TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_subtitle TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_color TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_provider TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_model TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_voice TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_speed REAL DEFAULT 1.0",
+            """
+            CREATE TABLE IF NOT EXISTS workspace_sources (
+                id            TEXT    NOT NULL,
+                workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                media_id      INTEGER NOT NULL,
+                title         TEXT    NOT NULL,
+                source_type   TEXT    NOT NULL,
+                url           TEXT,
+                position      INTEGER NOT NULL DEFAULT 0,
+                selected      BOOLEAN NOT NULL DEFAULT true,
+                added_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                version       INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (workspace_id, id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ws_sources_workspace ON workspace_sources(workspace_id)",
+            """
+            CREATE TABLE IF NOT EXISTS workspace_artifacts (
+                id              TEXT    NOT NULL,
+                workspace_id    TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                artifact_type   TEXT    NOT NULL,
+                title           TEXT    NOT NULL,
+                status          TEXT    NOT NULL DEFAULT 'pending',
+                content         TEXT,
+                total_tokens    INTEGER,
+                total_cost_usd  REAL,
+                created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at    TIMESTAMP,
+                version         INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (workspace_id, id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ws_artifacts_workspace ON workspace_artifacts(workspace_id)",
+            """
+            CREATE TABLE IF NOT EXISTS workspace_notes (
+                id            SERIAL PRIMARY KEY,
+                workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                title         TEXT    NOT NULL DEFAULT '',
+                content       TEXT    NOT NULL DEFAULT '',
+                keywords_json TEXT    NOT NULL DEFAULT '[]',
+                created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                deleted       BOOLEAN NOT NULL DEFAULT false,
+                version       INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ws_notes_workspace ON workspace_notes(workspace_id)",
         ]
         for statement in statements:
             self.backend.execute(statement, connection=conn)
@@ -5030,6 +5289,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
                     self._verify_required_fts_tables_sqlite(conn)
+                    self._ensure_workspace_subresource_schema_sqlite(conn)
                     self._ensure_flashcard_asset_schema_sqlite(conn)
                     self._ensure_flashcard_scheduler_schema_sqlite(conn)
                     self._ensure_study_assistant_schema_sqlite(conn)
@@ -5572,6 +5832,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         f"Schema migration process completed, but final DB version is {final_version_check}, expected {target_version}. Manual check required.")
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
+                self._ensure_workspace_subresource_schema_sqlite(conn)
                 self._ensure_flashcard_asset_schema_sqlite(conn)
                 self._ensure_flashcard_scheduler_schema_sqlite(conn)
                 self._ensure_study_assistant_schema_sqlite(conn)
@@ -6576,10 +6837,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V34_TO_V35, conn, expected_version=35)
                 current_version = 35
             if current_version < 36:
-                self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36, conn, expected_version=36)
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36_POSTGRES, conn, expected_version=36)
                 current_version = 36
             if current_version < 37:
-                self._apply_postgres_migration_script(self._MIGRATION_SQL_V36_TO_V37, conn, expected_version=37)
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V36_TO_V37_POSTGRES, conn, expected_version=37)
                 current_version = 37
 
             if current_version > target_version:
@@ -6592,10 +6853,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self._ensure_study_assistant_schema_postgres(conn)
             self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
+            self._ensure_workspace_subresource_schema_postgres(conn)
 
             if current_version < target_version:
                 logger.warning(
-                    'ChaChaNotes PostgreSQL schema is at version {} but code expects {}. Pending migrations will be addressed in a future update.',
+                    'ChaChaNotes PostgreSQL schema is at version {} but code expects {}. '
+                    'Some migrations may not yet be available for PostgreSQL.',
                     current_version,
                     target_version,
                 )
@@ -12364,6 +12627,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return stripped if stripped else None
         return str(value)
 
+    _ALLOWED_SCOPE_TYPES: tuple[str, ...] = ("global", "workspace")
+
+    @staticmethod
+    def _normalize_scope(
+        scope_type: str | None,
+        workspace_id: str | None,
+    ) -> tuple[str, str | None]:
+        """Validate and normalize conversation scope fields.
+
+        Returns:
+            (scope_type, workspace_id) tuple.
+
+        Raises:
+            InputError: If scope_type is invalid or workspace scope lacks workspace_id.
+        """
+        if scope_type is None:
+            scope_type = "global"
+        scope_type = scope_type.strip().lower()
+        if scope_type not in ("global", "workspace"):
+            raise InputError(  # noqa: TRY003
+                f"Invalid scope_type '{scope_type}'. Allowed: global, workspace"
+            )
+        if scope_type == "workspace":
+            if not workspace_id:
+                raise InputError("workspace_id is required when scope_type is 'workspace'.")  # noqa: TRY003
+        else:
+            workspace_id = None  # global scope never references a workspace
+        return scope_type, workspace_id
+
     def _normalize_conversation_assistant_identity(
         self,
         *,
@@ -12473,27 +12765,34 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             persona_memory_mode=conv_data.get('persona_memory_mode'),
         )
 
+        scope_type, workspace_id = self._normalize_scope(
+            conv_data.get('scope_type'), conv_data.get('workspace_id'),
+        )
+
         now = self._get_current_utc_timestamp_iso()
         query = """
                 INSERT INTO conversations (id, root_id, forked_from_message_id, parent_conversation_id, \
                                            character_id, assistant_kind, assistant_id, persona_memory_mode, \
                                            title, state, topic_label, cluster_id, source, external_ref, rating, \
-                                           created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                                           created_at, last_modified, client_id, version, deleted, \
+                                           scope_type, workspace_id) \
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                 """ # created_at added
         if self.backend_type == BackendType.POSTGRESQL:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
                 conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
-                now, now, client_id, 1, False
+                now, now, client_id, 1, False,
+                scope_type, workspace_id
             )
         else:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
                 conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
-                now, now, client_id, 1, 0
+                now, now, client_id, 1, 0,
+                scope_type, workspace_id
             )
         try:
             with self.transaction() as conn:
@@ -12592,6 +12891,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         include_deleted: bool = False,
         deleted_only: bool = False,
         character_scope: str | None = None,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> int:
         """
         Count total non-deleted conversations for a given user (client_id).
@@ -12616,6 +12917,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         character_scope_clause = self._conversation_character_scope_clause(character_scope)
         if character_scope_clause:
             clauses.append(character_scope_clause)
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        if scope_type is not None:
+            normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
+            clauses.append("scope_type = ?")
+            params.append(normalized_scope)
+            if normalized_workspace_id is not None:
+                clauses.append("workspace_id = ?")
+                params.append(normalized_workspace_id)
+        elif normalized_workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(normalized_workspace_id)
         query = f"SELECT COUNT(*) as cnt FROM conversations WHERE {' AND '.join(clauses)}"  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(params))
@@ -12632,6 +12944,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
         character_scope: str | None = None,
     ) -> list[dict[str, Any]]:
         """
@@ -12641,6 +12955,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             client_id: The user/client identifier as string.
             limit: Max number of rows to return.
             offset: Number of rows to skip.
+            scope_type: Optional scope filter ('global' or 'workspace').
+            workspace_id: Optional workspace ID filter (used with scope_type='workspace').
 
         Returns:
             List of conversation records.
@@ -12660,6 +12976,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         character_scope_clause = self._conversation_character_scope_clause(character_scope)
         if character_scope_clause:
             clauses.append(character_scope_clause)
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        if scope_type is not None:
+            normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
+            clauses.append("scope_type = ?")
+            params.append(normalized_scope)
+            if normalized_workspace_id is not None:
+                clauses.append("workspace_id = ?")
+                params.append(normalized_workspace_id)
+        elif normalized_workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(normalized_workspace_id)
         query = (
             "SELECT * FROM conversations "  # nosec B608
             f"WHERE {' AND '.join(clauses)} "
@@ -13567,6 +13894,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         deleted_only: bool,
         character_id: int | None,
         character_scope: str | None,
+        scope_type: str | None,
+        workspace_id: str | None,
         state: str | None,
         topic_label: str | None,
         topic_prefix: bool,
@@ -13600,6 +13929,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             params.append(character_id)
         elif normalized_character_scope != "all":
             filters.append(self._conversation_character_scope_clause(normalized_character_scope, column=f"{alias}.character_id"))
+
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        if scope_type is not None:
+            normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
+            filters.append(f"{alias}.scope_type = ?")
+            params.append(normalized_scope)
+            if normalized_workspace_id is not None:
+                filters.append(f"{alias}.workspace_id = ?")
+                params.append(normalized_workspace_id)
+        elif normalized_workspace_id is not None:
+            filters.append(f"{alias}.workspace_id = ?")
+            params.append(normalized_workspace_id)
 
         if client_filter is not None:
             filters.append(f"{alias}.client_id = ?")
@@ -13676,6 +14017,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         start_date: str | None = None,
         end_date: str | None = None,
         date_field: str = "last_modified",
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Search/filter conversations with optional FTS query and metadata filters.
@@ -13697,6 +14040,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
             base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE TRUE"
             params: list[Any] = []
+            filters: list[str] = []
             if safe_query:
                 if use_deleted_text_search:
                     text_clause, text_params = self._conversation_deleted_text_search_clause(
@@ -13735,6 +14079,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 keyword_deleted_literal="FALSE",
                 deleted_true_literal="TRUE",
                 deleted_false_literal="FALSE",
+                scope_type=scope_type,
+                workspace_id=workspace_id,
             )
             params.extend(filter_params)
 
@@ -13791,6 +14137,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             keyword_deleted_literal="0",
             deleted_true_literal="1",
             deleted_false_literal="0",
+            scope_type=scope_type,
+            workspace_id=workspace_id,
         )
         filters.extend(extra_filters)
         params.extend(extra_params)
@@ -13829,6 +14177,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         half_life_days: float = 14.0,
         bm25_weight: float = 0.65,
         recency_weight: float = 0.35,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int, float]:
         """Search conversations using DB-side ordering and pagination."""
         client_filter = self.client_id if client_id is None else client_id
@@ -13891,6 +14241,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 deleted_only=deleted_only,
                 character_id=character_id,
                 character_scope=character_scope,
+                scope_type=scope_type,
+                workspace_id=workspace_id,
                 state=state,
                 topic_label=topic_label,
                 topic_prefix=topic_prefix,
@@ -13941,6 +14293,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 deleted_only=deleted_only,
                 character_id=character_id,
                 character_scope=character_scope,
+                scope_type=scope_type,
+                workspace_id=workspace_id,
                 state=state,
                 topic_label=topic_label,
                 topic_prefix=topic_prefix,
@@ -14072,6 +14426,484 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
         return rows, total, max_bm25
+
+    # --- Workspace Methods ---
+
+    def upsert_workspace(
+        self,
+        workspace_id: str,
+        name: str,
+        *,
+        description: str | None = None,
+        metadata_json: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a workspace or return the existing one (idempotent by id).
+
+        If the workspace already exists (and is not deleted), its current row is
+        returned without modification, making the call idempotent.
+
+        Returns:
+            A dict representing the workspace row.
+
+        Raises:
+            InputError: If *workspace_id* or *name* are empty.
+            CharactersRAGDBError: On database errors.
+        """
+        if not workspace_id or not name:
+            raise InputError("workspace_id and name are required.")  # noqa: TRY003
+
+        existing = self.get_workspace(workspace_id)
+        if existing is not None:
+            return existing
+
+        now = self._get_current_utc_timestamp_iso()
+        client_id = self.client_id or "unknown"
+        query = (
+            "INSERT INTO workspaces (id, name, description, metadata_json, created_at, last_modified, deleted, client_id, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, ?, 1)"
+        )
+        params = (
+            workspace_id,
+            name,
+            description,
+            metadata_json or "{}",
+            now,
+            now,
+            client_id,
+        )
+        try:
+            with self.transaction() as conn:
+                conn.execute(query, params)
+        except sqlite3.IntegrityError:
+            # Race condition: another thread inserted between our check and insert.
+            existing = self.get_workspace(workspace_id)
+            if existing is not None:
+                return existing
+            raise  # pragma: no cover
+        return self.get_workspace(workspace_id)  # type: ignore[return-value]
+
+    def get_workspace(self, workspace_id: str) -> dict[str, Any] | None:
+        """Retrieve a non-deleted workspace by id."""
+        query = "SELECT * FROM workspaces WHERE id = ? AND deleted = 0"
+        cursor = self.execute_query(query, (workspace_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def list_workspaces(self) -> list[dict[str, Any]]:
+        """Return all non-deleted workspaces ordered by name."""
+        query = "SELECT * FROM workspaces WHERE deleted = 0 ORDER BY name"
+        cursor = self.execute_query(query, ())
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_workspace(
+        self,
+        workspace_id: str,
+        update_data: dict[str, Any],
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Update a workspace with optimistic locking.
+
+        Returns:
+            The updated workspace row dict.
+
+        Raises:
+            ConflictError: If the workspace is not found or version mismatch.
+        """
+        existing = self.get_workspace(workspace_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' not found.",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' version mismatch (db={existing['version']}, expected={expected_version}).",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+
+        now = self._get_current_utc_timestamp_iso()
+        set_clauses = ["last_modified = ?", "version = ?"]
+        params: list[Any] = [now, expected_version + 1]
+
+        for col in (
+            "name", "description", "metadata_json", "archived", "tag",
+            "banner_title", "banner_subtitle", "banner_color",
+            "audio_provider", "audio_model", "audio_voice", "audio_speed",
+        ):
+            if col in update_data:
+                set_clauses.append(f"{col} = ?")
+                params.append(update_data[col])
+
+        query = f"UPDATE workspaces SET {', '.join(set_clauses)} WHERE id = ? AND version = ?"  # nosec B608
+        params.extend([workspace_id, expected_version])
+
+        with self.transaction() as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Workspace '{workspace_id}' concurrent update detected.",
+                    entity="workspaces",
+                    entity_id=workspace_id,
+                )
+        return self.get_workspace(workspace_id)  # type: ignore[return-value]
+
+    def delete_workspace(
+        self,
+        workspace_id: str,
+        expected_version: int,
+    ) -> bool:
+        """Soft-delete a workspace and cascade soft-delete its scoped conversations.
+
+        Returns:
+            True on success.
+
+        Raises:
+            ConflictError: If not found or version mismatch.
+        """
+        existing = self.get_workspace(workspace_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' not found.",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' version mismatch.",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+
+        now = self._get_current_utc_timestamp_iso()
+        with self.transaction() as conn:
+            # Soft-delete the workspace itself
+            cursor = conn.execute(
+                "UPDATE workspaces SET deleted = 1, last_modified = ?, version = ? WHERE id = ? AND version = ?",
+                (now, expected_version + 1, workspace_id, expected_version),
+            )
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Workspace '{workspace_id}' concurrent delete detected.",
+                    entity="workspaces",
+                    entity_id=workspace_id,
+                )
+            # Cascade: soft-delete conversations scoped to this workspace
+            conn.execute(
+                "UPDATE conversations SET deleted = 1, last_modified = ? WHERE workspace_id = ? AND deleted = 0",
+                (now, workspace_id),
+            )
+        return True
+
+    def hard_delete_workspace(self, workspace_id: str) -> None:
+        """Permanently delete a workspace row. FK CASCADE handles sub-resources."""
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
+
+    # --- Workspace Source Methods ---
+
+    def add_workspace_source(self, workspace_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Add a source to a workspace."""
+        source_id = data.get("id")
+        if not source_id:
+            raise InputError("Source id is required.")  # noqa: TRY003
+        now = self._get_current_utc_timestamp_iso()
+        query = (
+            "INSERT INTO workspace_sources (id, workspace_id, media_id, title, source_type, url, position, selected, added_at, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)"
+        )
+        params = (
+            source_id,
+            workspace_id,
+            data.get("media_id", 0),
+            data.get("title", ""),
+            data.get("source_type", ""),
+            data.get("url"),
+            data.get("position", 0),
+            1 if data.get("selected", True) else 0,
+            now,
+        )
+        with self.transaction() as conn:
+            conn.execute(query, params)
+        return self._get_workspace_source(workspace_id, source_id)  # type: ignore[return-value]
+
+    def _get_workspace_source(self, workspace_id: str, source_id: str) -> dict[str, Any] | None:
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_sources WHERE workspace_id = ? AND id = ?",
+            (workspace_id, source_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def list_workspace_sources(self, workspace_id: str) -> list[dict[str, Any]]:
+        """List all sources for a workspace ordered by position."""
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_sources WHERE workspace_id = ? ORDER BY position, added_at",
+            (workspace_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_workspace_source(
+        self,
+        workspace_id: str,
+        source_id: str,
+        updates: dict[str, Any],
+        *,
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Update a workspace source with optimistic locking."""
+        existing = self._get_workspace_source(workspace_id, source_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace source '{source_id}' not found.",
+                entity="workspace_sources",
+                entity_id=source_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Source '{source_id}' version mismatch (db={existing['version']}, expected={expected_version}).",
+                entity="workspace_sources",
+                entity_id=source_id,
+            )
+        set_clauses = ["version = ?"]
+        params: list[Any] = [expected_version + 1]
+        for col in ("title", "source_type", "url", "position", "selected"):
+            if col in updates:
+                set_clauses.append(f"{col} = ?")
+                params.append(updates[col])
+        query = f"UPDATE workspace_sources SET {', '.join(set_clauses)} WHERE workspace_id = ? AND id = ? AND version = ?"  # nosec B608
+        params.extend([workspace_id, source_id, expected_version])
+        with self.transaction() as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Source '{source_id}' concurrent update detected.",
+                    entity="workspace_sources",
+                    entity_id=source_id,
+                )
+        return self._get_workspace_source(workspace_id, source_id)  # type: ignore[return-value]
+
+    def delete_workspace_source(self, workspace_id: str, source_id: str) -> None:
+        """Hard-delete a workspace source."""
+        with self.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workspace_sources WHERE workspace_id = ? AND id = ?",
+                (workspace_id, source_id),
+            )
+
+    def update_workspace_source_selection(self, workspace_id: str, *, selected_ids: list[str]) -> None:
+        """Batch-update selection: mark listed ids as selected, all others as unselected.
+
+        Bumps the version of every affected row so clients holding stale versions
+        will see a conflict on their next individual update.
+        """
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE workspace_sources SET selected = 0, version = version + 1 WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+            if selected_ids:
+                placeholders = ", ".join("?" for _ in selected_ids)
+                conn.execute(
+                    f"UPDATE workspace_sources SET selected = 1, version = version + 1 WHERE workspace_id = ? AND id IN ({placeholders})",  # nosec B608
+                    (workspace_id, *selected_ids),
+                )
+
+    def reorder_workspace_sources(self, workspace_id: str, ordered_ids: list[str]) -> None:
+        """Set position of sources based on list order.
+
+        Bumps the version of every reordered row for conflict detection.
+        """
+        with self.transaction() as conn:
+            for idx, source_id in enumerate(ordered_ids):
+                conn.execute(
+                    "UPDATE workspace_sources SET position = ?, version = version + 1 WHERE workspace_id = ? AND id = ?",
+                    (idx, workspace_id, source_id),
+                )
+
+    # --- Workspace Artifact Methods ---
+
+    def add_workspace_artifact(self, workspace_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Add an artifact to a workspace."""
+        artifact_id = data.get("id")
+        if not artifact_id:
+            raise InputError("Artifact id is required.")  # noqa: TRY003
+        now = self._get_current_utc_timestamp_iso()
+        query = (
+            "INSERT INTO workspace_artifacts (id, workspace_id, artifact_type, title, status, content, "
+            "total_tokens, total_cost_usd, created_at, completed_at, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)"
+        )
+        params = (
+            artifact_id,
+            workspace_id,
+            data.get("artifact_type", ""),
+            data.get("title", ""),
+            data.get("status", "pending"),
+            data.get("content"),
+            data.get("total_tokens"),
+            data.get("total_cost_usd"),
+            now,
+            data.get("completed_at"),
+        )
+        with self.transaction() as conn:
+            conn.execute(query, params)
+        return self._get_workspace_artifact(workspace_id, artifact_id)  # type: ignore[return-value]
+
+    def _get_workspace_artifact(self, workspace_id: str, artifact_id: str) -> dict[str, Any] | None:
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_artifacts WHERE workspace_id = ? AND id = ?",
+            (workspace_id, artifact_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def list_workspace_artifacts(self, workspace_id: str) -> list[dict[str, Any]]:
+        """List all artifacts for a workspace."""
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_artifacts WHERE workspace_id = ? ORDER BY created_at DESC",
+            (workspace_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_workspace_artifact(
+        self,
+        workspace_id: str,
+        artifact_id: str,
+        updates: dict[str, Any],
+        *,
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Update a workspace artifact with optimistic locking."""
+        existing = self._get_workspace_artifact(workspace_id, artifact_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace artifact '{artifact_id}' not found.",
+                entity="workspace_artifacts",
+                entity_id=artifact_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Artifact '{artifact_id}' version mismatch (db={existing['version']}, expected={expected_version}).",
+                entity="workspace_artifacts",
+                entity_id=artifact_id,
+            )
+        set_clauses = ["version = ?"]
+        params: list[Any] = [expected_version + 1]
+        for col in ("title", "status", "content", "total_tokens", "total_cost_usd", "completed_at"):
+            if col in updates:
+                set_clauses.append(f"{col} = ?")
+                params.append(updates[col])
+        query = f"UPDATE workspace_artifacts SET {', '.join(set_clauses)} WHERE workspace_id = ? AND id = ? AND version = ?"  # nosec B608
+        params.extend([workspace_id, artifact_id, expected_version])
+        with self.transaction() as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Artifact '{artifact_id}' concurrent update detected.",
+                    entity="workspace_artifacts",
+                    entity_id=artifact_id,
+                )
+        return self._get_workspace_artifact(workspace_id, artifact_id)  # type: ignore[return-value]
+
+    def delete_workspace_artifact(self, workspace_id: str, artifact_id: str) -> None:
+        """Hard-delete a workspace artifact."""
+        with self.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workspace_artifacts WHERE workspace_id = ? AND id = ?",
+                (workspace_id, artifact_id),
+            )
+
+    # --- Workspace Note Methods ---
+
+    def add_workspace_note(self, workspace_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Add a note to a workspace."""
+        now = self._get_current_utc_timestamp_iso()
+        import json as _json
+        keywords_json = _json.dumps(data.get("keywords", []))
+        query = (
+            "INSERT INTO workspace_notes (workspace_id, title, content, keywords_json, created_at, last_modified, deleted, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, 1)"
+        )
+        params = (
+            workspace_id,
+            data.get("title", ""),
+            data.get("content", ""),
+            keywords_json,
+            now,
+            now,
+        )
+        with self.transaction() as conn:
+            cursor = conn.execute(query, params)
+            note_id = cursor.lastrowid
+        return self._get_workspace_note(workspace_id, note_id)  # type: ignore[return-value]
+
+    def _get_workspace_note(self, workspace_id: str, note_id: int) -> dict[str, Any] | None:
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_notes WHERE workspace_id = ? AND id = ? AND deleted = 0",
+            (workspace_id, note_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def list_workspace_notes(self, workspace_id: str) -> list[dict[str, Any]]:
+        """List all non-deleted notes for a workspace."""
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_notes WHERE workspace_id = ? AND deleted = 0 ORDER BY last_modified DESC",
+            (workspace_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_workspace_note(
+        self,
+        workspace_id: str,
+        note_id: int,
+        updates: dict[str, Any],
+        *,
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Update a workspace note with optimistic locking."""
+        existing = self._get_workspace_note(workspace_id, note_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace note '{note_id}' not found.",
+                entity="workspace_notes",
+                entity_id=str(note_id),
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Note '{note_id}' version mismatch (db={existing['version']}, expected={expected_version}).",
+                entity="workspace_notes",
+                entity_id=str(note_id),
+            )
+        now = self._get_current_utc_timestamp_iso()
+        set_clauses = ["last_modified = ?", "version = ?"]
+        params: list[Any] = [now, expected_version + 1]
+        for col in ("title", "content", "keywords_json"):
+            if col in updates:
+                set_clauses.append(f"{col} = ?")
+                params.append(updates[col])
+        query = f"UPDATE workspace_notes SET {', '.join(set_clauses)} WHERE workspace_id = ? AND id = ? AND version = ?"  # nosec B608
+        params.extend([workspace_id, note_id, expected_version])
+        with self.transaction() as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Note '{note_id}' concurrent update detected.",
+                    entity="workspace_notes",
+                    entity_id=str(note_id),
+                )
+        return self._get_workspace_note(workspace_id, note_id)  # type: ignore[return-value]
+
+    def delete_workspace_note(self, workspace_id: str, note_id: int) -> None:
+        """Soft-delete a workspace note."""
+        now = self._get_current_utc_timestamp_iso()
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE workspace_notes SET deleted = 1, last_modified = ? WHERE workspace_id = ? AND id = ?",
+                (now, workspace_id, note_id),
+            )
 
     # --- Message Methods ---
     def add_message(self, msg_data: dict[str, Any]) -> str | None:
@@ -20826,8 +21658,7 @@ class TransactionContextManager:
         self.db._ensure_sqlite_backend()
         self.conn = self.db.get_connection()
         if not self.conn.in_transaction:
-            # Using deferred transaction by default. Could be "IMMEDIATE" or "EXCLUSIVE" if needed.
-            self.conn.execute("BEGIN")
+            begin_immediate_if_needed(self.conn)
             self.is_outermost_transaction = True
             logger.debug(f"Transaction started (outermost) on thread {threading.get_ident()}.")
         else:

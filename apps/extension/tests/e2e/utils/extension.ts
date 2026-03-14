@@ -106,6 +106,15 @@ function resolveChromiumExecutablePath(explicitPath?: string): string | undefine
   return undefined
 }
 
+function resolvePlaywrightChannel(): string | undefined {
+  const explicitChannel = String(process.env.TLDW_E2E_PLAYWRIGHT_CHANNEL || '').trim()
+  if (explicitChannel) {
+    return explicitChannel
+  }
+
+  return process.env.CI ? 'chromium' : undefined
+}
+
 export interface LaunchWithExtensionResult {
   context: BrowserContext
   page: Page
@@ -182,9 +191,11 @@ export async function launchWithExtension(
   const executablePath = resolveChromiumExecutablePath(
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
   )
+  const channel = resolvePlaywrightChannel()
   const context = await chromium.launchPersistentContext(userDataDir, {
     timeout: effectiveLaunchTimeoutMs,
     headless: !!process.env.CI,
+    channel,
     acceptDownloads: true,
     ignoreDefaultArgs: ['--disable-extensions'],
     env: {

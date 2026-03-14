@@ -18,6 +18,7 @@ import { ProfilePanel } from "@/components/PersonaGarden/ProfilePanel"
 import { ScopesPanel } from "@/components/PersonaGarden/ScopesPanel"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import {
@@ -401,6 +402,7 @@ const SidepanelPersona = ({
   const navigate = useNavigate()
   const location = useLocation()
   const isOnline = useServerOnline()
+  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const isCompanionMode = mode === "companion"
   const routeTitle = isCompanionMode
@@ -1603,6 +1605,20 @@ const SidepanelPersona = ({
         </Typography.Text>
       </div>
     )
+  const settingsRoute = shell === "options" ? "/settings/tldw" : "/settings"
+  const diagnosticsRoute = shell === "options" ? "/settings/health" : settingsRoute
+  const settingsLabel = t("sidepanel:header.settingsShortLabel", "Settings")
+  const setupActionLabel =
+    shell === "options" && !hasCompletedFirstRun ? "Finish Setup" : settingsLabel
+  const openSettings = () => navigate(settingsRoute)
+  const openDiagnostics = () => navigate(diagnosticsRoute)
+  const openSetup = () => {
+    if (shell === "options" && !hasCompletedFirstRun) {
+      navigate("/")
+      return
+    }
+    openSettings()
+  }
   const selectedPersonaName =
     catalog.find((persona) => String(persona.id || "") === selectedPersonaId)?.name ||
     selectedPersonaId
@@ -2286,6 +2302,95 @@ const SidepanelPersona = ({
       content: <PoliciesPanel hasPendingPlan={Boolean(pendingPlan)} />
     }
   ]
+  if (uxState === "error_auth" || uxState === "configuring_auth") {
+    return (
+      <div
+        data-testid="persona-route-root"
+        className={routeRootClassName}
+      >
+        {routeHeader}
+        <div className="p-4">
+          <FeatureEmptyState
+            title={
+              isCompanionMode
+                ? "Add your credentials to use Companion"
+                : "Add your credentials to use Persona"
+            }
+            description={
+              isCompanionMode
+                ? "Companion conversation needs a reachable tldw server plus valid credentials before a session can start."
+                : "Persona streaming needs a reachable tldw server plus valid credentials before a session can start."
+            }
+            primaryActionLabel={settingsLabel}
+            onPrimaryAction={openSettings}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (uxState === "unconfigured" || uxState === "configuring_url") {
+    return (
+      <div
+        data-testid="persona-route-root"
+        className={routeRootClassName}
+      >
+        {routeHeader}
+        <div className="p-4">
+          <FeatureEmptyState
+            title={
+              isCompanionMode
+                ? "Finish setup to use Companion"
+                : "Finish setup to use Persona"
+            }
+            description={
+              isCompanionMode
+                ? "Companion conversation depends on a configured tldw server before you can start a session."
+                : "Persona streaming depends on a configured tldw server before you can start a session."
+            }
+            primaryActionLabel={setupActionLabel}
+            onPrimaryAction={openSetup}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (uxState === "error_unreachable") {
+    return (
+      <div
+        data-testid="persona-route-root"
+        className={routeRootClassName}
+      >
+        {routeHeader}
+        <div className="p-4">
+          <FeatureEmptyState
+            title="Can't reach your tldw server right now"
+            description={
+              isCompanionMode
+                ? "Companion conversation depends on a reachable tldw server. Review your server status and URL before trying again."
+                : "Persona streaming depends on a reachable tldw server. Review your server status and URL before trying again."
+            }
+            primaryActionLabel={
+              shell === "options"
+                ? "Health & diagnostics"
+                : settingsLabel
+            }
+            onPrimaryAction={
+              shell === "options" ? openDiagnostics : openSettings
+            }
+            secondaryActionLabel={
+              shell === "options" ? settingsLabel : undefined
+            }
+            onSecondaryAction={
+              shell === "options" ? openSettings : undefined
+            }
+          />
+        </div>
+      </div>
+    )
+  }
+
   if (!isOnline) {
     return (
       <div
@@ -2308,8 +2413,8 @@ const SidepanelPersona = ({
                     "Persona streaming runs on your tldw server. Connect to a server to start a session."
                   )
             }
-            primaryActionLabel={t("sidepanel:header.settingsShortLabel", "Settings")}
-            onPrimaryAction={() => navigate("/settings")}
+            primaryActionLabel={settingsLabel}
+            onPrimaryAction={openSettings}
           />
         </div>
       </div>

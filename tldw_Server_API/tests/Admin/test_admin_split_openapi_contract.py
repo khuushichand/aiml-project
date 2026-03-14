@@ -50,6 +50,7 @@ EXPECTED_SPLIT_ADMIN_OPERATIONS: set[tuple[str, str]] = {
     ("POST", "/api/v1/admin/backup-schedules/{schedule_id}/resume"),
     ("DELETE", "/api/v1/admin/backup-schedules/{schedule_id}"),
     ("GET", "/api/v1/admin/retention-policies"),
+    ("POST", "/api/v1/admin/retention-policies/{policy_key}/preview"),
     ("PUT", "/api/v1/admin/retention-policies/{policy_key}"),
     ("GET", "/api/v1/admin/maintenance"),
     ("PUT", "/api/v1/admin/maintenance"),

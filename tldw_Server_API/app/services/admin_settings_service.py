@@ -45,9 +45,13 @@ async def get_notes_title_settings() -> dict[str, Any]:
     try:
         llm_enabled = bool(app_settings.get("NOTES_TITLE_LLM_ENABLED", False))
         default_strategy = str(app_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+        effective_strategy = (
+            default_strategy if llm_enabled or default_strategy == "heuristic" else "heuristic"
+        )
         return {
             "llm_enabled": llm_enabled,
             "default_strategy": default_strategy,
+            "effective_strategy": effective_strategy,
             "strategies": ["heuristic", "llm", "llm_fallback"],
         }
     except Exception as exc:

@@ -1,0 +1,260 @@
+/**
+ * Workflow Editor E2E Tests (Tier 3)
+ *
+ * Tests the Workflow Editor (node-based visual editor) page lifecycle:
+ * - Page loads with toolbar, canvas, and status bar
+ * - Undo/Redo buttons present in toolbar
+ * - Toggle Grid and Toggle Minimap buttons work
+ * - Save button present (disabled when not dirty)
+ * - More actions dropdown opens
+ * - Sidebar panel switching (palette, config, run)
+ * - Status bar shows node and connection counts
+ *
+ * Run: npx playwright test e2e/workflows/tier-3-automation/workflow-editor.spec.ts
+ */
+import {
+  test,
+  expect,
+  skipIfServerUnavailable,
+  assertNoCriticalErrors,
+} from "../../utils/fixtures"
+import { WorkflowEditorPage } from "../../utils/page-objects/WorkflowEditorPage"
+import { expectApiCall } from "../../utils/api-assertions"
+import { seedAuth } from "../../utils/helpers"
+
+test.describe("Workflow Editor", () => {
+  let editor: WorkflowEditorPage
+
+  test.beforeEach(async ({ page }) => {
+    await seedAuth(page)
+    editor = new WorkflowEditorPage(page)
+  })
+
+  // =========================================================================
+  // Page Load
+  // =========================================================================
+
+  test.describe("Page Load", () => {
+    test("should render Workflow Editor with toolbar and status bar", async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      editor = new WorkflowEditorPage(authedPage)
+      await editor.goto()
+      await editor.assertPageReady()
+
+      // Save button should be visible in toolbar
+      const saveVisible = await editor.saveButton.isVisible().catch(() => false)
+      expect(saveVisible).toBe(true)
+
+      // Status bar should show node/connection counts
+      const nodeCountVisible = await editor.nodeCount.isVisible().catch(() => false)
+      const connectionCountVisible = await editor.connectionCount.isVisible().catch(() => false)
+      expect(nodeCountVisible || connectionCountVisible).toBe(true)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("should show undo and redo buttons in toolbar", async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      editor = new WorkflowEditorPage(authedPage)
+      await editor.goto()
+      await editor.assertPageReady()
+
+      const undoVisible = await editor.undoButton.isVisible().catch(() => false)
+      const redoVisible = await editor.redoButton.isVisible().catch(() => false)
+
+      expect(undoVisible).toBe(true)
+      expect(redoVisible).toBe(true)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("should have Save button disabled on fresh load (no changes)", async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      editor = new WorkflowEditorPage(authedPage)
+      await editor.goto()
+      await editor.assertPageReady()
+
+      const saveDisabled = await editor.saveButton.isDisabled().catch(() => false)
+      expect(saveDisabled).toBe(true)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+
+  // =========================================================================
+  // Toolbar Interactions
+  // =========================================================================
+
+  test.describe("Toolbar Interactions", () => {
+    test("should toggle grid visibility", async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      editor = new WorkflowEditorPage(authedPage)
+      await editor.goto()
+      await editor.assertPageReady()
+
+      const gridBtnVisible = await editor.toggleGridButton.isVisible().catch(() => false)
+      if (!gridBtnVisible) return
+
+      // Get initial class (tracks primary vs text type)
+      const classBefore = await editor.toggleGridButton.getAttribute("class") ?? ""
+      await editor.toggleGridButton.click()
+      await authedPage.waitForTimeout(300)
+      const classAfter = await editor.toggleGridButton.getAttribute("class") ?? ""
+
+      // Button type should toggle between "primary" and "text"
+      expect(classBefore).not.toBe(classAfter)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("should toggle minimap visibility", async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      editor = new WorkflowEditorPage(authedPage)
+      await editor.goto()
+      await editor.assertPageReady()
+
+      const minimapBtnVisible = await editor.toggleMinimapButton.isVisible().catch(() => false)
+      if (!minimapBtnVisible) return
+
+      const classBefore = await editor.toggleMinimapButton.getAttribute("class") ?? ""
+      await editor.toggleMinimapButton.click()
+      await authedPage.waitForTimeout(300)
+      const classAfter = await editor.toggleMinimapButton.getAttribute("class") ?? ""
+
+      expect(classBefore).not.toBe(classAfter)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("should open More actions dropdown", async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      editor = new WorkflowEditorPage(authedPage)
+      await editor.goto()
+      await editor.assertPageReady()
+
+      const moreBtnVisible = await editor.moreActionsButton.isVisible().catch(() => false)
+      if (!moreBtnVisible) return
+
+      await editor.openMoreActions()
+      await authedPage.waitForTimeout(500)
+
+      // Dropdown menu should appear with New Workflow, Import, Export, Clear Canvas
+      const newWorkflowVisible = await editor.newWorkflowMenuItem.isVisible().catch(() => false)
+      const clearCanvasVisible = await editor.clearCanvasMenuItem.isVisible().catch(() => false)
+
+      expect(newWorkflowVisible || clearCanvasVisible).toBe(true)
+
+      // Close dropdown by pressing Escape
+      await authedPage.keyboard.press("Escape")
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("should allow editing the workflow name", async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      editor = new WorkflowEditorPage(authedPage)
+      await editor.goto()
+      await editor.assertPageReady()
+
+      const nameDisplayVisible = await editor.workflowNameDisplay.isVisible().catch(() => false)
+      if (!nameDisplayVisible) return
+
+      // Click to start editing
+      await editor.startEditingName()
+      await authedPage.waitForTimeout(300)
+
+      // Input should appear
+      const inputVisible = await editor.workflowNameInput.isVisible().catch(() => false)
+      expect(inputVisible).toBe(true)
+
+      // Type a new name and press Enter
+      await editor.workflowNameInput.fill("E2E Test Workflow")
+      await editor.workflowNameInput.press("Enter")
+      await authedPage.waitForTimeout(300)
+
+      // Name should update
+      const nameText = await editor.workflowNameDisplay.textContent().catch(() => "")
+      expect(nameText).toContain("E2E Test Workflow")
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+
+  // =========================================================================
+  // Sidebar Panels (Desktop)
+  // =========================================================================
+
+  test.describe("Sidebar Panels", () => {
+    test("should switch between Nodes, Config, and Run panels", async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      editor = new WorkflowEditorPage(authedPage)
+      await editor.goto()
+      await editor.assertPageReady()
+
+      const segmentedVisible = await editor.sidebarSegmented.isVisible().catch(() => false)
+      if (!segmentedVisible) return
+
+      // Switch to Config
+      const configVisible = await editor.configTab.isVisible().catch(() => false)
+      if (configVisible) {
+        await editor.switchSidebarPanel("config")
+        await authedPage.waitForTimeout(300)
+      }
+
+      // Switch to Run
+      const runVisible = await editor.runTab.isVisible().catch(() => false)
+      if (runVisible) {
+        await editor.switchSidebarPanel("execution")
+        await authedPage.waitForTimeout(300)
+      }
+
+      // Switch back to Palette
+      const paletteVisible = await editor.nodesPaletteTab.isVisible().catch(() => false)
+      if (paletteVisible) {
+        await editor.switchSidebarPanel("palette")
+        await authedPage.waitForTimeout(300)
+      }
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+
+  // =========================================================================
+  // Status Bar
+  // =========================================================================
+
+  test.describe("Status Bar", () => {
+    test("should display node and connection counts", async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      editor = new WorkflowEditorPage(authedPage)
+      await editor.goto()
+      await editor.assertPageReady()
+
+      const nodeCountVisible = await editor.nodeCount.isVisible().catch(() => false)
+      const connectionCountVisible = await editor.connectionCount.isVisible().catch(() => false)
+
+      // At least one count should be visible
+      expect(nodeCountVisible || connectionCountVisible).toBe(true)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+})

@@ -81,6 +81,40 @@ calls in-browser, and verifies the hardened password+MFA login path plus privile
 It does not require a live backend. To point the smoke suite at an already running server, set
 `TLDW_ADMIN_UI_AUTOSTART=false` and `TLDW_ADMIN_UI_URL=http://127.0.0.1:3001`.
 
+Run the real-backend privileged admin lane from `admin-ui/` when you need browser coverage against
+real FastAPI state instead of stubbed proxy responses:
+
+```bash
+bunx playwright install --with-deps chromium
+bun run test:real-backend -- --project=chromium-real-jwt --project=chromium-real-single-user --reporter=line
+```
+
+This lane auto-starts two auth-specific admin-ui servers plus matching backend instances by default:
+
+- `chromium-real-jwt`: multi-user JWT admin flows
+- `chromium-real-single-user`: single-user API-key admin flows
+
+The script runs the suite with `--workers=1` on purpose. Each auth-mode project shares one managed
+backend instance and uses deterministic seed/reset helpers, so serial execution is the truthful
+gate for these privileged flows.
+
+The backend instances require Python dependencies from the repo root. The harness finds the project
+virtualenv automatically, or you can point it at a specific interpreter with `TLDW_ADMIN_E2E_PYTHON`.
+
+For local debugging, you can reuse already-running backend instances instead of letting Playwright
+boot them:
+
+```bash
+TLDW_ADMIN_E2E_JWT_API_URL=http://127.0.0.1:8101 \
+TLDW_ADMIN_E2E_SINGLE_USER_API_URL=http://127.0.0.1:8102 \
+bun run test:real-backend -- --project=chromium-real-jwt --project=chromium-real-single-user --reporter=line
+```
+
+If your backends are already listening on the default ports, set
+`TLDW_ADMIN_E2E_AUTOSTART_BACKEND=false` instead. Reused backends must enable the test-support
+surface with `ENABLE_ADMIN_E2E_TEST_MODE=true`; otherwise the seed/reset/bootstrap helpers will be
+unavailable and the lane will fail closed.
+
 ## Authentication
 
 - **Single-user mode**: API key login remains supported, but the validated key is moved into an

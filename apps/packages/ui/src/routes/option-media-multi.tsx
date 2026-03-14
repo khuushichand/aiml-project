@@ -4,6 +4,7 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useDemoMode } from "@/context/demo-mode"
@@ -14,6 +15,7 @@ const MediaMultiInner = () => {
   const navigate = useNavigate()
   const isOnline = useServerOnline()
   const { demoEnabled } = useDemoMode()
+  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
 
   const demoMediaItems = React.useMemo(
@@ -49,9 +51,30 @@ const MediaMultiInner = () => {
     [t]
   )
 
+  const demoConnectionWarning = (() => {
+    if (uxState === "error_auth" || uxState === "configuring_auth") {
+      return "Demo stays available, but your Media credentials need attention."
+    }
+    if (uxState === "unconfigured" || uxState === "configuring_url") {
+      return "Demo stays available while you finish Media setup."
+    }
+    if (uxState === "error_unreachable") {
+      return "Demo stays available, but your tldw server is unreachable."
+    }
+    return null
+  })()
+
   if (!isOnline) {
     return demoEnabled ? (
       <div className="space-y-4">
+        {demoConnectionWarning ? (
+          <div
+            data-testid="media-demo-connection-warning"
+            className="rounded-2xl border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-text"
+          >
+            <div className="font-medium">{demoConnectionWarning}</div>
+          </div>
+        ) : null}
         <FeatureEmptyState
           title={t("review:mediaEmpty.demoTitle", {
             defaultValue: "Explore Media in demo mode"
@@ -102,26 +125,71 @@ const MediaMultiInner = () => {
         </div>
       </div>
     ) : (
-      <FeatureEmptyState
-        title={t("review:mediaEmpty.connectTitle", {
-          defaultValue: "Connect to use Media"
-        })}
-        description={t("review:mediaEmpty.connectDescription", {
-          defaultValue:
-            "To view processed media, first connect to your tldw server so recordings and documents can be listed here."
-        })}
-        examples={[
-          t("review:mediaEmpty.connectExample1", {
-            defaultValue: "Open Settings → tldw server to add your server URL."
-          }),
-          t("review:mediaEmpty.connectExample2", {
-            defaultValue:
-              "Once connected, use Quick ingest in the header to add media from your own recordings and files."
-          })
-        ]}
-        primaryActionLabel={t("settings:tldw.setupLink", "Set up server")}
-        onPrimaryAction={() => navigate("/settings/tldw")}
-      />
+      (() => {
+        if (uxState === "error_auth" || uxState === "configuring_auth") {
+          return (
+            <FeatureEmptyState
+              title="Add your credentials to use Media"
+              description="Media Review needs a reachable tldw server plus valid credentials before your recordings and documents can load."
+              primaryActionLabel="Open Settings"
+              onPrimaryAction={() => navigate("/settings/tldw")}
+            />
+          )
+        }
+        if (uxState === "unconfigured" || uxState === "configuring_url") {
+          return (
+            <FeatureEmptyState
+              title="Finish setup to use Media"
+              description={
+                hasCompletedFirstRun
+                  ? "Media Review still needs a configured tldw server before recordings and documents can load."
+                  : "Finish connecting your tldw server before Media Review can load your recordings and documents."
+              }
+              primaryActionLabel={hasCompletedFirstRun ? "Open Settings" : "Finish Setup"}
+              onPrimaryAction={() =>
+                navigate(hasCompletedFirstRun ? "/settings/tldw" : "/")
+              }
+            />
+          )
+        }
+        if (uxState === "error_unreachable") {
+          return (
+            <FeatureEmptyState
+              title="Can't reach your tldw server right now"
+              description="Media Review depends on a reachable tldw server. Review your server status and URL before trying again."
+              primaryActionLabel={t(
+                "settings:healthSummary.diagnostics",
+                "Health & diagnostics"
+              )}
+              onPrimaryAction={() => navigate("/settings/health")}
+              secondaryActionLabel="Open Settings"
+              onSecondaryAction={() => navigate("/settings/tldw")}
+            />
+          )
+        }
+        return (
+          <FeatureEmptyState
+            title={t("review:mediaEmpty.connectTitle", {
+              defaultValue: "Connect to use Media"
+            })}
+            description={t("review:mediaEmpty.connectDescription", {
+              defaultValue:
+                "To view processed media, first connect to your tldw server so recordings and documents can be listed here."
+            })}
+            examples={[
+              t("review:mediaEmpty.connectExample1", {
+                defaultValue: "Open Settings → tldw server to add your server URL."
+              }),
+              t("review:mediaEmpty.connectExample2", {
+                defaultValue:
+                  "Once connected, use Quick ingest in the header to add media from your own recordings and files."
+              })
+            ]}
+            primaryActionLabel={t("settings:tldw.setupLink", "Set up server")}
+            onPrimaryAction={() => navigate("/settings/tldw")}
+          />
+        )
+      })()
     )
   }
 

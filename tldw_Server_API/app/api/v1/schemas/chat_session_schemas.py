@@ -53,6 +53,11 @@ class ChatSessionCreate(BaseModel):
     cluster_id: Optional[str] = Field(None, description="Cluster/group identifier for navigation")
     source: Optional[str] = Field(None, description="Source of the conversation (e.g., email, issue)")
     external_ref: Optional[str] = Field(None, description="External reference/link for the conversation")
+    scope_type: Literal["global", "workspace"] | None = Field(
+        None,
+        description="Scope type: 'global' for /chat, 'workspace' for per-workspace chats. Defaults to 'global'.",
+    )
+    workspace_id: Optional[str] = Field(None, description="Workspace ID (required when scope_type='workspace')")
 
     model_config = {"json_schema_extra": {
         "example": {

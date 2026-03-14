@@ -3,6 +3,7 @@
 # Extends PromptsDatabase to add Prompt Studio specific functionality
 
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -74,6 +75,27 @@ _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS = (
     InputError,
     SchemaError,
 )
+
+
+def _should_enable_prompt_studio_sqlite_wal() -> bool:
+    """Default Prompt Studio SQLite to WAL outside CI and explicit test runtimes."""
+    from tldw_Server_API.app.core.testing import (
+        env_flag_enabled,
+        is_explicit_pytest_runtime,
+        is_test_mode,
+    )
+
+    override = os.getenv("TLDW_PS_SQLITE_WAL")
+    if override is not None:
+        return env_flag_enabled("TLDW_PS_SQLITE_WAL")
+
+    if env_flag_enabled("CI") or env_flag_enabled("GITHUB_ACTIONS"):
+        return False
+
+    if is_explicit_pytest_runtime() or is_test_mode():
+        return False
+
+    return True
 
 
 def _serialise_tags(tags: Optional[Union[str, Iterable[str]]]) -> Optional[str]:
@@ -3687,6 +3709,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
     _PROMPT_STUDIO_SCHEMA_VERSION = 1
 
+    def _sqlite_journal_mode(self) -> str | None:
+        if self.is_memory_db:
+            return None
+        return "WAL" if _should_enable_prompt_studio_sqlite_wal() else "DELETE"
+
     def __init__(self, db_path: Union[str, Path], client_id: str):
         """
         Initialize PromptStudioDatabase with path and client ID.
@@ -3705,26 +3732,6 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         # Initialize prompt studio schema
         self._init_prompt_studio_schema()
-
-        # Set pragmas for better reliability
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            # Keep SQLite lock wait short to avoid long blocking during concurrent tests
-            # By default, avoid WAL for per-test temp DBs to reduce file artifact churn in CI.
-            # Allow opting into WAL to mimic production via TLDW_PS_SQLITE_WAL=1
-            try:
-                from tldw_Server_API.app.core.testing import env_flag_enabled
-
-                _wal_requested = env_flag_enabled("TLDW_PS_SQLITE_WAL")
-                _mode = "WAL" if _wal_requested else "DELETE"
-                cursor.execute(f"PRAGMA journal_mode={_mode}")
-            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
-                pass
-            cursor.execute("PRAGMA busy_timeout=1000")  # 1 second timeout for locked database
-            conn.commit()
-        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
-            logger.debug(f"Could not set pragmas: {e}")
 
         logger.info(f"PromptStudioDatabase initialized for {db_path} with client {client_id}")
 

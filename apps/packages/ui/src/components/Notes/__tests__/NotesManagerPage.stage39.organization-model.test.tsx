@@ -321,11 +321,13 @@ describe("NotesManagerPage stage 39 organization model", () => {
     renderPage()
 
     fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
-    const applyFiltersButton = await screen.findByRole("button", { name: "Apply filters" })
+    const modalBody = await screen.findByTestId("notes-keyword-picker-modal")
     const pickerDialog =
-      (applyFiltersButton.closest(".ant-modal") as HTMLElement | null) ?? document.body
+      (modalBody.closest(".ant-modal") as HTMLElement | null) ??
+      (modalBody.closest(".ant-modal-root") as HTMLElement | null) ??
+      document.body
     fireEvent.click(within(pickerDialog).getByText(/^research\b/i))
-    fireEvent.click(screen.getByRole("button", { name: "Apply filters" }))
+    fireEvent.click(within(pickerDialog).getByRole("button", { name: "Apply filters" }))
     await waitFor(() => {
       expect(screen.getByTestId("notes-save-notebook")).not.toBeDisabled()
     })

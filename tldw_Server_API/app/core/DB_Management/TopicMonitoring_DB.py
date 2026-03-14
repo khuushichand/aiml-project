@@ -43,6 +43,10 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    begin_immediate_if_needed,
+    configure_sqlite_connection,
+)
 
 
 def _utcnow_iso() -> str:
@@ -114,11 +118,8 @@ class TopicMonitoringDB:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10, isolation_level=None)
         conn.row_factory = sqlite3.Row
-        # Pragmas to improve robustness
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("PRAGMA busy_timeout=5000")
+            configure_sqlite_connection(conn)
         except Exception as pragma_error:
             logger.debug("TopicMonitoringDB pragma initialization failed", exc_info=pragma_error)
         return conn
@@ -239,7 +240,7 @@ class TopicMonitoringDB:
     def _migrate_watchlist_rules_schema(self, conn: sqlite3.Connection) -> None:
         logger.info("Migrating monitoring_watchlist_rules schema to composite primary key")
         try:
-            conn.execute("BEGIN")
+            begin_immediate_if_needed(conn)
             conn.execute("DROP INDEX IF EXISTS idx_monitoring_watchlist_rules_watchlist")
             conn.execute("ALTER TABLE monitoring_watchlist_rules RENAME TO monitoring_watchlist_rules_old")
             conn.execute(
@@ -501,7 +502,7 @@ class TopicMonitoringDB:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute("BEGIN")
+                begin_immediate_if_needed(conn)
                 conn.execute(
                     "DELETE FROM monitoring_watchlist_rules WHERE watchlist_id = ?",
                     (str(watchlist_id),),

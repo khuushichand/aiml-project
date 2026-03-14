@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildApiUrl } from '@/lib/api-config';
+import { buildApiUrlForRequest } from '@/lib/api-config';
 import { clearAdminSessionCookies, getBackendAuthHeaders } from '@/lib/server-auth';
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const headers = getBackendAuthHeaders(request);
 
   try {
-    await fetch(buildApiUrl('/auth/logout'), {
+    await fetch(buildApiUrlForRequest(request, '/auth/logout'), {
       method: 'POST',
       headers,
       cache: 'no-store',

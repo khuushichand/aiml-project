@@ -27,6 +27,10 @@ from typing import Any
 from uuid import uuid4
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    begin_immediate_if_needed,
+    configure_sqlite_connection,
+)
 
 def _validate_regex_pattern(pattern: str) -> None:
     """Validate a regex pattern for ReDoS safety at creation time.
@@ -312,9 +316,7 @@ class GuardianDB:
         conn = sqlite3.connect(self.db_path, timeout=10, isolation_level=None)
         conn.row_factory = sqlite3.Row
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("PRAGMA busy_timeout=5000")
+            configure_sqlite_connection(conn)
         except _GUARDIAN_NONCRITICAL_EXCEPTIONS:
             pass
         return conn
@@ -2696,7 +2698,7 @@ class GuardianDB:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute("BEGIN")
+                begin_immediate_if_needed(conn)
                 # Guardian relationships and linked data
                 rows = conn.execute(
                     """SELECT id FROM guardian_relationships

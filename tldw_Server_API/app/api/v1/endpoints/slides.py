@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user, get_chacha_db_for_user_id
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
@@ -28,6 +31,12 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     GenerateFromPromptRequest,
     GenerateFromRagRequest,
     PresentationCreateRequest,
+    PresentationRenderArtifactInfo,
+    PresentationRenderArtifactListResponse,
+    PresentationRenderFormat,
+    PresentationRenderJobResponse,
+    PresentationRenderJobStatusResponse,
+    PresentationRenderRequest,
     PresentationListResponse,
     PresentationPatchRequest,
     PresentationReorderRequest,
@@ -42,13 +51,17 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     SlidesTemplateListResponse,
     SlidesTemplateResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, MEDIA_DELETE, MEDIA_READ, MEDIA_UPDATE
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase
+from tldw_Server_API.app.core.Slides.slides_assets import resolve_slide_asset
 from tldw_Server_API.app.core.Slides.slides_export import (
     SlidesAssetsMissingError,
     SlidesExportError,
@@ -77,6 +90,7 @@ from tldw_Server_API.app.core.Slides.slides_templates import (
     get_slide_template,
     list_slide_templates,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 
 router = APIRouter(prefix="/slides", tags=["slides"])
 
@@ -148,6 +162,31 @@ def _format_etag(version: int) -> str:
     return f'W/"v{version}"'
 
 
+def _slides_jobs_manager() -> JobManager:
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    if not db_url:
+        return JobManager()
+    backend = "postgres" if db_url.startswith("postgres") else None
+    return JobManager(backend=backend, db_url=db_url)
+
+
+def _render_enabled() -> bool:
+    return is_truthy(os.getenv("PRESENTATION_RENDER_ENABLED", "true"))
+
+
+def _presentation_render_queue_name() -> str:
+    configured_queue = (os.getenv("PRESENTATION_RENDER_JOBS_QUEUE") or "").strip().lower()
+    if configured_queue in {"default", "high", "low"}:
+        return configured_queue
+    if configured_queue.endswith("-high"):
+        return "high"
+    if configured_queue.endswith("-low"):
+        return "low"
+    if configured_queue.endswith("-default"):
+        return "default"
+    return "default"
+
+
 def _normalize_dt(value: str) -> datetime:
     try:
         dt = datetime.fromisoformat(value)
@@ -209,6 +248,23 @@ def _flatten_slides_text(slides: list[Slide]) -> str:
     return "\n".join(parts)
 
 
+def _normalize_job_status(job_status: Any) -> str:
+    status_value = str(job_status or "").strip().lower()
+    return status_value or "queued"
+
+
+def _safe_json_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _validate_theme(theme: str) -> None:
     if theme not in _ALLOWED_THEMES:
         raise HTTPException(status_code=422, detail="invalid_theme")
@@ -247,6 +303,14 @@ def _serialize_settings(settings: dict[str, Any] | None) -> str | None:
     return json.dumps(settings)
 
 
+def _serialize_studio_data(studio_data: dict[str, Any] | None) -> str | None:
+    if studio_data is None:
+        return None
+    if not isinstance(studio_data, dict):
+        raise HTTPException(status_code=422, detail="invalid_studio_data")
+    return json.dumps(studio_data)
+
+
 def _deserialize_settings(value: str | None) -> dict[str, Any] | None:
     if not value:
         return None
@@ -254,6 +318,16 @@ def _deserialize_settings(value: str | None) -> dict[str, Any] | None:
         parsed = json.loads(value)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=422, detail="invalid_settings_json") from exc
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _deserialize_studio_data(value: str | None) -> dict[str, Any] | None:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="invalid_studio_data_json") from exc
     return parsed if isinstance(parsed, dict) else None
 
 
@@ -365,6 +439,9 @@ def _payload_to_presentation(payload: dict[str, Any]) -> PresentationResponse:
     settings = payload.get("settings")
     if isinstance(settings, str):
         settings = _deserialize_settings(settings)
+    studio_data = payload.get("studio_data")
+    if isinstance(studio_data, str):
+        studio_data = _deserialize_studio_data(studio_data)
     source_ref = payload.get("source_ref")
     if isinstance(source_ref, str):
         source_ref = _deserialize_source_ref(source_ref)
@@ -388,6 +465,7 @@ def _payload_to_presentation(payload: dict[str, Any]) -> PresentationResponse:
         marp_theme=payload.get("marp_theme"),
         template_id=payload.get("template_id"),
         settings=settings if isinstance(settings, dict) or settings is None else None,
+        studio_data=studio_data if isinstance(studio_data, dict) or studio_data is None else None,
         slides=slides,
         custom_css=payload.get("custom_css"),
         source_type=payload.get("source_type"),
@@ -432,6 +510,7 @@ def _build_presentation_response(row) -> PresentationResponse:
         marp_theme=getattr(row, "marp_theme", None),
         template_id=getattr(row, "template_id", None),
         settings=_deserialize_settings(row.settings),
+        studio_data=_deserialize_studio_data(getattr(row, "studio_data", None)),
         slides=slides,
         custom_css=row.custom_css,
         source_type=row.source_type,
@@ -496,6 +575,18 @@ def _format_notes(notes: list[dict[str, Any]]) -> str:
         if content:
             parts.append(str(content))
     return "\n\n".join(parts).strip()
+
+
+async def _resolve_notes_db_for_request(http_request: Request, current_user: User) -> CharactersRAGDB:
+    """Resolve the per-user notes DB lazily while still honoring test/app dependency overrides."""
+
+    override_fn = http_request.app.dependency_overrides.get(get_chacha_db_for_user)
+    if override_fn is not None:
+        result = override_fn()
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+    return await get_chacha_db_for_user_id(current_user.id, str(current_user.id))
 
 
 def _format_rag_documents(documents: list[Any]) -> str:
@@ -597,6 +688,7 @@ def _generate_presentation(
         marp_theme=marp_theme,
         template_id=template.template_id if template else None,
         settings=_serialize_settings(settings),
+        studio_data=None,
         slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
         slides_text=slides_text,
         source_type=source_type,
@@ -651,6 +743,7 @@ async def create_presentation(
         marp_theme=marp_theme,
         template_id=template.template_id if template else None,
         settings=_serialize_settings(settings),
+        studio_data=_serialize_studio_data(request.studio_data),
         slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
         slides_text=slides_text,
         source_type="manual",
@@ -772,6 +865,7 @@ async def update_presentation(
                 "marp_theme": marp_theme,
                 "template_id": template.template_id if template else None,
                 "settings": _serialize_settings(settings),
+                "studio_data": _serialize_studio_data(request.studio_data),
                 "slides": json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
                 "slides_text": slides_text,
                 "custom_css": custom_css,
@@ -822,6 +916,8 @@ async def patch_presentation(
     if request.settings is not None:
         settings = _validate_settings(request.settings)
         update_fields["settings"] = _serialize_settings(settings)
+    if _field_was_set(request, "studio_data"):
+        update_fields["studio_data"] = _serialize_studio_data(request.studio_data)
     if request.slides is not None:
         slides = _normalize_slides([_slide_from_obj(s) for s in request.slides])
         update_fields["slides"] = json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides])
@@ -1060,6 +1156,7 @@ async def restore_presentation_version(
     _validate_theme(theme)
     marp_theme = _validate_marp_theme(restored.marp_theme)
     settings = _validate_settings(restored.settings)
+    studio_data = restored.studio_data if isinstance(restored.studio_data, dict) or restored.studio_data is None else None
     slides = _normalize_slides(restored.slides)
     slides_text = _flatten_slides_text(slides)
     title = restored.title.strip()
@@ -1075,6 +1172,7 @@ async def restore_presentation_version(
                 "marp_theme": marp_theme,
                 "template_id": restored.template_id,
                 "settings": _serialize_settings(settings),
+                "studio_data": _serialize_studio_data(studio_data),
                 "slides": json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
                 "slides_text": slides_text,
                 "custom_css": restored.custom_css,
@@ -1094,6 +1192,146 @@ async def restore_presentation_version(
     response.headers["ETag"] = _format_etag(row.version)
     response.headers["Last-Modified"] = row.last_modified
     return _build_presentation_response(row)
+
+
+@router.post(
+    "/presentations/{presentation_id}/render-jobs",
+    response_model=PresentationRenderJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Submit a presentation render job",
+    dependencies=[Depends(require_permissions(MEDIA_UPDATE)), Depends(rbac_rate_limit("slides.render.submit"))],
+)
+async def submit_presentation_render_job(
+    presentation_id: str,
+    request: PresentationRenderRequest,
+    if_match: str | None = Header(None, alias="If-Match"),
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+    current_user: User = Depends(get_request_user),
+    job_manager: JobManager = Depends(_slides_jobs_manager),
+) -> PresentationRenderJobResponse:
+    if not _render_enabled():
+        raise HTTPException(status_code=503, detail="presentation_render_unavailable")
+    expected_version = _parse_etag(if_match)
+    try:
+        row = db.get_presentation_by_id(presentation_id, include_deleted=False)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="presentation_not_found") from None
+    if int(row.version) != expected_version:
+        raise HTTPException(status_code=412, detail="precondition_failed")
+
+    render_format = str(request.format.value if hasattr(request.format, "value") else request.format)
+    payload = {
+        "user_id": int(current_user.id),
+        "presentation_id": presentation_id,
+        "presentation_version": int(row.version),
+        "format": render_format,
+        "theme": row.theme,
+        "title": row.title,
+    }
+    job = await asyncio.to_thread(
+        job_manager.create_job,
+        domain="presentation_render",
+        queue=_presentation_render_queue_name(),
+        job_type="presentation_render",
+        payload=payload,
+        owner_user_id=str(current_user.id),
+        priority=5,
+        max_retries=2,
+    )
+    return PresentationRenderJobResponse(
+        job_id=int(job["id"]),
+        status=_normalize_job_status(job.get("status")),
+        job_type="presentation_render",
+        presentation_id=presentation_id,
+        presentation_version=int(row.version),
+        format=PresentationRenderFormat(render_format),
+    )
+
+
+@router.get(
+    "/render-jobs/{job_id}",
+    response_model=PresentationRenderJobStatusResponse,
+    summary="Get presentation render job status",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.render.status"))],
+)
+async def get_presentation_render_job_status(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+    job_manager: JobManager = Depends(_slides_jobs_manager),
+) -> PresentationRenderJobStatusResponse:
+    job = await asyncio.to_thread(job_manager.get_job, int(job_id))
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    if str(job.get("owner_user_id") or "") != str(current_user.id):
+        raise HTTPException(status_code=404, detail="job_not_found")
+
+    payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    render_format = payload.get("format")
+    format_value = PresentationRenderFormat(render_format) if render_format in {"mp4", "webm"} else None
+    error_text = None
+    for key in ("last_error", "error_message", "error_code"):
+        if job.get(key):
+            error_text = str(job.get(key))
+            break
+
+    return PresentationRenderJobStatusResponse(
+        job_id=int(job["id"]),
+        status=_normalize_job_status(job.get("status")),
+        job_type=str(job.get("job_type") or "presentation_render"),
+        presentation_id=payload.get("presentation_id"),
+        presentation_version=payload.get("presentation_version"),
+        format=format_value,
+        output_id=result.get("output_id"),
+        download_url=result.get("download_url"),
+        error=error_text,
+    )
+
+
+@router.get(
+    "/presentations/{presentation_id}/render-artifacts",
+    response_model=PresentationRenderArtifactListResponse,
+    summary="List presentation render artifacts",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.render.artifacts"))],
+)
+async def list_presentation_render_artifacts(
+    presentation_id: str,
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
+) -> PresentationRenderArtifactListResponse:
+    artifacts: list[PresentationRenderArtifactInfo] = []
+    page_size = 200
+    offset = 0
+    total = 1
+    while offset < total:
+        rows, total = await asyncio.to_thread(
+            collections_db.list_output_artifacts,
+            limit=page_size,
+            offset=offset,
+            type_="presentation_render",
+            metadata_origin="presentation_studio",
+            metadata_presentation_id=presentation_id,
+        )
+        for row in rows:
+            metadata = _safe_json_dict(getattr(row, "metadata_json", None))
+            fmt = str(getattr(row, "format", "") or "").lower()
+            if fmt not in {"mp4", "webm"}:
+                continue
+            created_at = getattr(row, "created_at", None)
+            artifacts.append(
+                PresentationRenderArtifactInfo(
+                    output_id=int(getattr(row, "id")),
+                    format=PresentationRenderFormat(fmt),
+                    title=getattr(row, "title", None),
+                    download_url=f"/api/v1/outputs/{int(getattr(row, 'id'))}/download",
+                    presentation_version=metadata.get("presentation_version"),
+                    created_at=_normalize_dt(created_at) if isinstance(created_at, str) else None,
+                )
+            )
+        offset += page_size
+    return PresentationRenderArtifactListResponse(
+        presentation_id=presentation_id,
+        artifacts=artifacts,
+    )
 
 
 @router.post(
@@ -1130,12 +1368,14 @@ async def generate_from_prompt(
 async def generate_from_chat(
     request: GenerateFromChatRequest,
     response: Response,
+    http_request: Request,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
 ) -> PresentationResponse:
     conversation_id = request.conversation_id.strip()
     if not conversation_id:
         raise HTTPException(status_code=422, detail="conversation_id_required")
+    notes_db = await _resolve_notes_db_for_request(http_request, current_user)
     conversation = notes_db.get_conversation_by_id(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="conversation_not_found")
@@ -1196,11 +1436,13 @@ async def generate_from_media(
 async def generate_from_notes(
     request: GenerateFromNotesRequest,
     response: Response,
+    http_request: Request,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
 ) -> PresentationResponse:
     if not request.note_ids:
         raise HTTPException(status_code=422, detail="note_ids_required")
+    notes_db = await _resolve_notes_db_for_request(http_request, current_user)
     notes: list[dict[str, Any]] = []
     missing: list[str] = []
     for note_id in request.note_ids:
@@ -1285,6 +1527,7 @@ async def export_presentation(
     pdf_margin_left: str | None = Query(None),
     pdf_margin_right: str | None = Query(None),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> Response:
     try:
         row = db.get_presentation_by_id(presentation_id, include_deleted=False)
@@ -1295,6 +1538,17 @@ async def export_presentation(
     slides = [_slide_from_obj(item) for item in slides_raw]
     slides = _normalize_slides(slides)
     settings = _deserialize_settings(row.settings)
+    try:
+        user_id = int(db.client_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="user_unavailable") from exc
+
+    def _asset_resolver(asset_ref: str) -> dict[str, Any]:
+        return resolve_slide_asset(
+            asset_ref,
+            collections_db=collections_db,
+            user_id=user_id,
+        )
     try:
         metrics = get_metrics_registry()
     except _SLIDES_NONCRITICAL_EXCEPTIONS:
@@ -1308,12 +1562,15 @@ async def export_presentation(
         media_type = "application/json"
     elif format == ExportFormat.MARKDOWN:
         try:
-            body = export_presentation_markdown(
+            markdown_text = await asyncio.to_thread(
+                export_presentation_markdown,
                 title=row.title,
                 slides=slides,
                 theme=row.theme,
                 marp_theme=getattr(row, "marp_theme", None),
-            ).encode("utf-8")
+                asset_resolver=_asset_resolver,
+            )
+            body = markdown_text.encode("utf-8")
         except SlidesExportInputError as exc:
             if metrics is not None:
                 with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
@@ -1354,6 +1611,7 @@ async def export_presentation(
                 settings=settings,
                 custom_css=row.custom_css,
                 pdf_options=pdf_options,
+                asset_resolver=_asset_resolver,
             )
         except SlidesExportInputError as exc:
             if metrics is not None:
@@ -1375,12 +1633,14 @@ async def export_presentation(
         media_type = "application/pdf"
     elif format == ExportFormat.REVEAL:
         try:
-            body = export_presentation_bundle(
+            body = await asyncio.to_thread(
+                export_presentation_bundle,
                 title=row.title,
                 slides=slides,
                 theme=row.theme,
                 settings=settings,
                 custom_css=row.custom_css,
+                asset_resolver=_asset_resolver,
             )
         except SlidesAssetsMissingError as exc:
             if metrics is not None:

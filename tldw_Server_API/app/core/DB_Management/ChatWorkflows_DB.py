@@ -19,6 +19,8 @@ from uuid import uuid4
 
 from loguru import logger
 
+from .sqlite_policy import configure_sqlite_connection
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -46,9 +48,7 @@ class ChatWorkflowsDatabase:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA foreign_keys=ON;")
-        self._conn.execute("PRAGMA busy_timeout=5000;")
-        self._conn.execute("PRAGMA journal_mode=WAL;")
+        configure_sqlite_connection(self._conn)
         self._create_schema()
 
     def _table_columns(self, table_name: str) -> set[str]:

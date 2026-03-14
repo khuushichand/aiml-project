@@ -19,9 +19,9 @@ import dayjs from "dayjs"
 import { Filter, RefreshCw, Search, Star, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { PageShell } from "@/components/Common/PageShell"
+import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
-import { useServerOnline } from "@/hooks/useServerOnline"
 
 type ItemStatus = "saved" | "reading" | "read" | "archived"
 
@@ -83,7 +83,6 @@ export const ItemsWorkspace: React.FC = () => {
   const { t } = useTranslation(["option", "collections", "common"])
   const api = useTldwApiClient()
   const { showUndoNotification } = useUndoNotification()
-  const isOnline = useServerOnline()
 
   const [items, setItems] = useState<SharedItem[]>([])
   const [itemsLoading, setItemsLoading] = useState(false)
@@ -167,9 +166,8 @@ export const ItemsWorkspace: React.FC = () => {
   ])
 
   useEffect(() => {
-    if (!isOnline) return
     void fetchItems()
-  }, [fetchItems, isOnline])
+  }, [fetchItems])
 
   useEffect(() => {
     const pageIds = new Set(items.map((item) => item.id))
@@ -559,27 +557,22 @@ export const ItemsWorkspace: React.FC = () => {
     setItemsPage(1)
   }, [])
 
-  if (!isOnline) {
-    return (
-      <PageShell className="py-6" maxWidthClassName="max-w-6xl">
-        <Empty
-          description={t(
-            "collections:offline",
-            "Server is offline. Please connect to use Items."
-          )}
-        />
-      </PageShell>
-    )
-  }
-
   return (
-    <PageShell className="py-6 space-y-4" maxWidthClassName="max-w-6xl">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold text-text">Items</h1>
-        <p className="text-sm text-text-muted">
-          Manage shared items with bulk actions and output generation.
-        </p>
-      </div>
+    <WorkspaceConnectionGate
+      featureName={t("collections:itemsTitle", "Items")}
+      setupDescription={t(
+        "collections:itemsSetupRequired",
+        "Items depends on your connected tldw server to load, update, and generate outputs from saved reading items."
+      )}
+      maxWidthClassName="max-w-6xl"
+    >
+      <PageShell className="py-6 space-y-4" maxWidthClassName="max-w-6xl">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold text-text">Items</h1>
+          <p className="text-sm text-text-muted">
+            Manage shared items with bulk actions and output generation.
+          </p>
+        </div>
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
@@ -940,6 +933,7 @@ export const ItemsWorkspace: React.FC = () => {
           </p>
         </div>
       </Modal>
-    </PageShell>
+      </PageShell>
+    </WorkspaceConnectionGate>
   )
 }

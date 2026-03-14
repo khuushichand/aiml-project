@@ -16,6 +16,7 @@ export const useConnectionActions = () =>
     enableOfflineBypass: s.enableOfflineBypass,
     disableOfflineBypass: s.disableOfflineBypass,
     beginOnboarding: s.beginOnboarding,
+    restartOnboarding: s.restartOnboarding,
     setConfigPartial: s.setConfigPartial,
     testConnectionFromOnboarding: s.testConnectionFromOnboarding,
     setDemoMode: s.setDemoMode,

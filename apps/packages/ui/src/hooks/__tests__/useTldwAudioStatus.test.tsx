@@ -154,6 +154,30 @@ describe("useTldwAudioStatus", () => {
     expect(result.current.sttHealthState).toBe("unhealthy")
   })
 
+  it("treats on-demand Whisper models as healthy for first-use downloads", async () => {
+    state.capabilities = {
+      hasAudio: true,
+      hasStt: true,
+      hasTts: false,
+      hasVoiceChat: false
+    }
+    state.apiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { available: false, provider: "whisper", on_demand: true }
+    })
+
+    const { result } = renderHook(() => useTldwAudioStatus(), {
+      wrapper: buildWrapper()
+    })
+
+    await waitFor(() => {
+      expect(result.current.sttHealthLoading).toBe(false)
+    })
+
+    expect(result.current.sttHealthState).toBe("healthy")
+  })
+
   it("fail-opens STT health for non-whisper providers that report not-ready models", async () => {
     state.capabilities = {
       hasAudio: true,
