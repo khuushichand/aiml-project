@@ -15,6 +15,10 @@ type ProfilePanelProps = {
   connected: boolean
   sessionId: string | null
   setup?: PersonaSetupState | null
+  onStartSetup?: () => void
+  onResumeSetup?: () => void
+  onResetSetup?: () => void
+  onRerunSetup?: () => void
   isActive?: boolean
   analytics?: PersonaVoiceAnalytics | null
   analyticsLoading?: boolean
@@ -27,6 +31,10 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
   connected,
   sessionId,
   setup = null,
+  onStartSetup,
+  onResumeSetup,
+  onResetSetup,
+  onRerunSetup,
   isActive = false,
   analytics = null,
   analyticsLoading = false
@@ -94,6 +102,10 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
       <PersonaSetupStatusCard
         setup={setup}
         progressItems={setupProgressItems}
+        onStartSetup={onStartSetup}
+        onResumeSetup={onResumeSetup}
+        onResetSetup={onResetSetup}
+        onRerunSetup={onRerunSetup}
       />
       <AssistantDefaultsPanel
         selectedPersonaId={selectedPersonaId}

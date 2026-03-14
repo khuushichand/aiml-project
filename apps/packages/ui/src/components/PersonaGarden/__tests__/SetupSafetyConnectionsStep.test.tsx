@@ -102,4 +102,27 @@ describe("SetupSafetyConnectionsStep", () => {
       "password"
     )
   })
+
+  it("renders a step-local safety error while keeping the explicit skip path available", () => {
+    const onContinue = vi.fn()
+
+    render(
+      <SetupSafetyConnectionsStep
+        saving={false}
+        error="Failed to save assistant safety settings"
+        currentConfirmationMode="destructive_only"
+        onContinue={onContinue}
+      />
+    )
+
+    expect(screen.getByText("Failed to save assistant safety settings")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Ask for destructive actions" }))
+    fireEvent.click(screen.getByRole("button", { name: "No external connections for now" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save safety choices" }))
+
+    expect(onContinue).toHaveBeenCalledWith({
+      confirmationMode: "destructive_only",
+      connectionMode: "none"
+    })
+  })
 })

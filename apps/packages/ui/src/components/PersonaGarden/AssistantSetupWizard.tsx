@@ -11,6 +11,7 @@ type AssistantSetupWizardProps = {
   currentStep: PersonaSetupStep
   postSetupTargetTab: PersonaGardenTabKey
   progressItems?: PersonaSetupProgressItem[]
+  onResetSetup?: () => void
   voiceStepContent?: React.ReactNode
   commandsStepContent?: React.ReactNode
   safetyStepContent?: React.ReactNode
@@ -27,6 +28,7 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
   currentStep,
   postSetupTargetTab,
   progressItems = [],
+  onResetSetup,
   voiceStepContent,
   commandsStepContent,
   safetyStepContent,
@@ -49,13 +51,25 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
       data-testid="assistant-setup-overlay"
       className="flex flex-1 flex-col gap-3 rounded-xl border border-border bg-surface p-4"
     >
-      <div>
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-text-subtle">
-          Assistant Setup
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-text-subtle">
+            Assistant Setup
+          </div>
+          <div className="mt-2 text-sm text-text">
+            Finish setup before using this persona in Persona Garden.
+          </div>
         </div>
-        <div className="mt-2 text-sm text-text">
-          Finish setup before using this persona in Persona Garden.
-        </div>
+        {onResetSetup && currentStep !== "persona" ? (
+          <button
+            type="button"
+            className="rounded-md border border-border px-3 py-2 text-xs font-medium text-text disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={saving}
+            onClick={onResetSetup}
+          >
+            Reset setup
+          </button>
+        ) : null}
       </div>
       {progressItems.length ? (
         <div

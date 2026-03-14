@@ -259,7 +259,7 @@ git commit -m "feat: add persona setup progress rail and status card"
 
 ### Task 4: Add Reset/Rerun Actions And Step-Scoped Error State
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/routes/sidepanel-persona.tsx`
@@ -354,6 +354,8 @@ git commit -m "feat: add setup reset and step-scoped error handling"
 ```
 
 ### Task 5: Add Structured Test Outcomes And Unified Post-Setup Handoff
+
+**Status:** Not Started
 
 **Files:**
 - Create: `apps/packages/ui/src/components/PersonaGarden/PersonaSetupHandoffCard.tsx`

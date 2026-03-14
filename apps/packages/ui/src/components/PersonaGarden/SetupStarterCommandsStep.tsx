@@ -5,6 +5,7 @@ import { PERSONA_STARTER_COMMAND_TEMPLATES } from "./personaStarterCommandTempla
 
 type SetupStarterCommandsStepProps = {
   saving: boolean
+  error?: string | null
   onCreateFromTemplate: (templateKey: string) => void
   onCreateMcpStarter: (toolName: string, phrase: string) => void
   onSkip: () => void
@@ -12,6 +13,7 @@ type SetupStarterCommandsStepProps = {
 
 export const SetupStarterCommandsStep: React.FC<SetupStarterCommandsStepProps> = ({
   saving,
+  error = null,
   onCreateFromTemplate,
   onCreateMcpStarter,
   onSkip
@@ -34,6 +36,11 @@ export const SetupStarterCommandsStep: React.FC<SetupStarterCommandsStepProps> =
           Add a useful command now or continue explicitly without one.
         </div>
       </div>
+      {error ? (
+        <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+          {error}
+        </div>
+      ) : null}
       <div className="space-y-2">
         {PERSONA_STARTER_COMMAND_TEMPLATES.map((template) => (
           <button

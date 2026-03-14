@@ -22,6 +22,7 @@ type SetupSafetyConnectionsStepSubmit =
 
 type SetupSafetyConnectionsStepProps = {
   saving: boolean
+  error?: string | null
   currentConfirmationMode?: PersonaConfirmationMode | null
   onContinue: (payload: SetupSafetyConnectionsStepSubmit) => void
 }
@@ -58,7 +59,7 @@ const formatConfirmationMode = (
 
 export const SetupSafetyConnectionsStep: React.FC<
   SetupSafetyConnectionsStepProps
-> = ({ saving, currentConfirmationMode, onContinue }) => {
+> = ({ saving, error = null, currentConfirmationMode, onContinue }) => {
   const [confirmationMode, setConfirmationMode] =
     React.useState<PersonaConfirmationMode | null>(null)
   const [connectionMode, setConnectionMode] = React.useState<"none" | "create" | null>(
@@ -122,6 +123,11 @@ export const SetupSafetyConnectionsStep: React.FC<
           </div>
         ) : null}
       </div>
+      {error ? (
+        <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+          {error}
+        </div>
+      ) : null}
 
       <div className="space-y-2">
         <div className="text-xs font-semibold uppercase tracking-wide text-text-subtle">

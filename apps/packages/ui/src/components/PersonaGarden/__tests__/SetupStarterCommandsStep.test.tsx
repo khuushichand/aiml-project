@@ -100,4 +100,22 @@ describe("SetupStarterCommandsStep", () => {
     expect(screen.getByLabelText("MCP starter phrase")).toBeDisabled()
     expect(screen.getByRole("button", { name: "Add MCP starter" })).toBeDisabled()
   })
+
+  it("renders a step-local starter-command error while keeping retry actions available", () => {
+    const onCreateFromTemplate = vi.fn()
+
+    render(
+      <SetupStarterCommandsStep
+        saving={false}
+        error="Failed to create starter command"
+        onCreateFromTemplate={onCreateFromTemplate}
+        onCreateMcpStarter={vi.fn()}
+        onSkip={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText("Failed to create starter command")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Search Notes" }))
+    expect(onCreateFromTemplate).toHaveBeenCalledWith("notes-search")
+  })
 })
