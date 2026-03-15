@@ -139,4 +139,65 @@ describe("launchWithExtension", () => {
       fs.rmSync(tempRoot, { recursive: true, force: true })
     }
   })
+
+  it("allows CI extension launches to opt into headed mode via env override", async () => {
+    process.env.CI = "true"
+    process.env.TLDW_E2E_EXTENSION_HEADLESS = "0"
+    process.env.TLDW_E2E_EXTENSION_TARGET_WAIT_MS = "1"
+
+    const resolveExtensionId = vi.fn().mockResolvedValue("c".repeat(32))
+    const page = {
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue(undefined),
+      waitForFunction: vi.fn().mockResolvedValue(undefined),
+    }
+    const context = {
+      serviceWorkers: vi.fn(() => []),
+      backgroundPages: vi.fn(() => []),
+      waitForEvent: vi.fn(() => new Promise(() => {})),
+      addInitScript: vi.fn().mockResolvedValue(undefined),
+      newPage: vi.fn().mockResolvedValue(page),
+    }
+    const launchPersistentContext = vi.fn().mockResolvedValue(context)
+
+    vi.doMock("@playwright/test", () => ({
+      BrowserContext: class BrowserContext {},
+      Page: class Page {},
+      chromium: {
+        launchPersistentContext,
+      },
+    }))
+
+    vi.doMock("./extension-id", () => ({
+      resolveExtensionId,
+    }))
+
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tldw-extension-launch-"))
+    const extensionDir = path.join(tempRoot, "chrome-mv3")
+    fs.mkdirSync(extensionDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(extensionDir, "manifest.json"),
+      JSON.stringify({ manifest_version: 3, name: "Test Extension", version: "1.0.0" }),
+      "utf8",
+    )
+    fs.writeFileSync(path.join(extensionDir, "background.js"), "// background", "utf8")
+    fs.writeFileSync(path.join(extensionDir, "options.html"), "<html></html>", "utf8")
+    fs.writeFileSync(path.join(extensionDir, "sidepanel.html"), "<html></html>", "utf8")
+
+    try {
+      const { launchWithExtension } = await import("./extension")
+
+      await launchWithExtension(extensionDir)
+
+      expect(launchPersistentContext).toHaveBeenCalledWith(
+        expect.stringContaining("tmp-playwright-profile/user-data-"),
+        expect.objectContaining({
+          headless: false,
+          channel: "chromium",
+        }),
+      )
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
 })

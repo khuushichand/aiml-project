@@ -857,6 +857,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       }
     },
     onNewEntity: () => {
+      navigateToTab("sources")
       openSourceForm()
     },
     onRefresh: triggerRefresh,

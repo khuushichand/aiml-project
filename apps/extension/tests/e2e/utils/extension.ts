@@ -115,6 +115,15 @@ function resolvePlaywrightChannel(): string | undefined {
   return process.env.CI ? 'chromium' : undefined
 }
 
+function resolveExtensionHeadlessMode(): boolean {
+  const explicitHeadless = String(process.env.TLDW_E2E_EXTENSION_HEADLESS || "").trim().toLowerCase()
+  if (explicitHeadless) {
+    return !["0", "false", "no", "off"].includes(explicitHeadless)
+  }
+
+  return !!process.env.CI
+}
+
 export interface LaunchWithExtensionResult {
   context: BrowserContext
   page: Page
@@ -192,9 +201,10 @@ export async function launchWithExtension(
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
   )
   const channel = resolvePlaywrightChannel()
+  const headless = resolveExtensionHeadlessMode()
   const context = await chromium.launchPersistentContext(userDataDir, {
     timeout: effectiveLaunchTimeoutMs,
-    headless: !!process.env.CI,
+    headless,
     channel,
     acceptDownloads: true,
     ignoreDefaultArgs: ['--disable-extensions'],

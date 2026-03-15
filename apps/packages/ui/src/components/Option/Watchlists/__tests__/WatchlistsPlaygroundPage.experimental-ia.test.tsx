@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     recordWatchlistsIaExperimentTelemetryMock: vi.fn(),
     trackWatchlistsOnboardingTelemetryMock: vi.fn(),
     notificationDestroyMock: vi.fn(),
+    openSourceFormMock: vi.fn(),
     state
   }
 })
@@ -153,6 +154,7 @@ vi.mock("@/store/watchlists", () => ({
     selector({
       activeTab: mocks.state.activeTab,
       setActiveTab: mocks.state.setActiveTab,
+      openSourceForm: mocks.openSourceFormMock,
       openRunDetail: vi.fn(),
       resetStore: vi.fn()
     })
@@ -259,6 +261,17 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     mocks.state.activeTab = "templates"
     render(<WatchlistsPlaygroundPage />)
     expect(screen.getByTestId("watchlists-task-view-briefings")).toHaveAttribute("aria-pressed", "true")
+  })
+
+  it("routes the new-entity keyboard shortcut to feeds before opening the source form", () => {
+    mocks.state.activeTab = "items"
+
+    render(<WatchlistsPlaygroundPage />)
+
+    fireEvent.keyDown(document, { key: "n" })
+
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("sources")
+    expect(mocks.openSourceFormMock).toHaveBeenCalledTimes(1)
   })
 
   it("records tab transition telemetry when experiment mode is active", () => {

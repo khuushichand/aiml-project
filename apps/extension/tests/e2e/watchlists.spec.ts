@@ -34,7 +34,30 @@ const installWatchlistsRuntimeBridge = async (context: BrowserContext) => {
 
           if (bridgeHandler) {
             try {
-              const data = await bridgeHandler(message.payload || {})
+              const payload = message.payload || {}
+              const data = await bridgeHandler(payload)
+              if (data == null && message?.type === 'tldw:request') {
+                const path = String(payload?.path || '')
+                const method = String(payload?.method || 'GET').toUpperCase()
+                const [pathname, queryString] = path.split('?')
+
+                if (pathname === '/api/v1/watchlists/outputs' && method === 'GET') {
+                  const params = new URLSearchParams(queryString || '')
+                  const page = Number(params.get('page') || 1)
+                  const size = Number(params.get('size') || 20)
+                  return {
+                    ok: true,
+                    status: 200,
+                    data: {
+                      items: [],
+                      total: 0,
+                      page,
+                      size,
+                      has_more: false,
+                    },
+                  }
+                }
+              }
               if (data == null) {
                 return { ok: false, status: 404, error: 'Not found' }
               }
@@ -477,7 +500,7 @@ test.describe('Watchlists playground smoke', () => {
 
     const page = await context.newPage()
     page.setDefaultTimeout(15_000)
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -649,7 +672,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -660,7 +683,7 @@ test.describe('Watchlists playground smoke', () => {
 
     await page.getByTestId('watchlists-run-cancel-101').click()
 
-    await expect(page.getByText('Cancelled')).toBeVisible()
+    await expect(page.getByText('Cancelled', { exact: true }).first()).toBeVisible()
 
     await context.close()
   })
@@ -834,7 +857,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -1012,7 +1035,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -1097,7 +1120,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -1271,7 +1294,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -1416,7 +1439,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -1483,7 +1506,10 @@ test.describe('Watchlists playground smoke', () => {
     test.setTimeout(120_000)
     const extPath = path.resolve('.output/chrome-mv3')
     const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
-      seedConfig: seededWatchlistsConfig
+      seedConfig: seededWatchlistsConfig,
+      seedLocalStorage: {
+        'watchlists:items:page-size': '50',
+      },
     })
     await installWatchlistsRuntimeBridge(context)
 
@@ -1627,14 +1653,14 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
     await basePage.close().catch(() => {})
 
     await page.getByRole('tab', { name: 'Articles' }).click()
-    await expect(page.locator('[data-testid^="watchlists-item-row-"]')).toHaveCount(25)
+    await expect(page.locator('button[data-testid^="watchlists-item-row-"]')).toHaveCount(50)
 
     await page.getByTestId('watchlists-items-mark-page').click()
     const firstConfirm = page.locator('.ant-modal-confirm').last()
@@ -1642,7 +1668,7 @@ test.describe('Watchlists playground smoke', () => {
 
     await expect
       .poll(async () => page.evaluate(() => (window as any).__watchlistsItemReviewUpdates))
-      .toBe(25)
+      .toBe(50)
 
     await expect(page.getByTestId('watchlists-items-mark-page')).toBeDisabled()
 
@@ -1828,7 +1854,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -1863,7 +1889,6 @@ test.describe('Watchlists playground smoke', () => {
       .toBeGreaterThan(fetchCountBeforeRefresh)
 
     await page.keyboard.press('n')
-    await expect(page.getByRole('tab', { name: 'Feeds' })).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByRole('dialog', { name: 'Add Source' })).toBeVisible()
 
     await context.close()
@@ -1982,7 +2007,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -2112,7 +2137,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -2273,7 +2298,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
@@ -2450,7 +2475,7 @@ test.describe('Watchlists playground smoke', () => {
     })
 
     const page = await context.newPage()
-    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.goto(optionsUrl + '?e2e=1&view=all#/watchlists', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
       timeout: 5_000
     })
