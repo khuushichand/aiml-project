@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
@@ -64,6 +68,20 @@ class GovernancePackDryRunReport(BaseModel):
     verdict: str
 
 
+class GovernancePackUpgradePlan(BaseModel):
+    source_governance_pack_id: int
+    source_manifest: dict[str, Any] = Field(default_factory=dict)
+    target_manifest: dict[str, Any] = Field(default_factory=dict)
+    object_diff: list[dict[str, Any]] = Field(default_factory=list)
+    dependency_impact: list[dict[str, Any]] = Field(default_factory=list)
+    structural_conflicts: list[str] = Field(default_factory=list)
+    behavioral_conflicts: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    planner_inputs_fingerprint: str
+    adapter_state_fingerprint: str
+    upgradeable: bool
+
+
 class GovernancePackAlreadyExistsError(ValueError):
     """Raised when a governance pack identity already exists in the target scope."""
 
@@ -95,6 +113,64 @@ def _is_duplicate_governance_pack_error(exc: Exception) -> bool:
         or "unique constraint failed: mcp_governance_packs" in message
         or "duplicate key value violates unique constraint" in message
     )
+
+
+def _stable_digest(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _governance_pack_ref(document: dict[str, Any]) -> tuple[str, str] | None:
+    metadata = dict(document.get("governance_pack") or {})
+    pack_id = str(metadata.get("pack_id") or "").strip()
+    pack_version = str(metadata.get("pack_version") or "").strip()
+    if not pack_id or not pack_version:
+        return None
+    return pack_id, pack_version
+
+
+def _source_object_key(object_type: str, item: dict[str, Any]) -> str:
+    if object_type == "approval_policy":
+        return str(item.get("approval_template_id") or "").strip()
+    if object_type == "permission_profile":
+        return str(item.get("profile_id") or "").strip()
+    if object_type == "policy_assignment":
+        return str(item.get("assignment_template_id") or "").strip()
+    return ""
+
+
+def _normalized_runtime_object_maps(normalized_ir: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
+    data = dict(normalized_ir.get("data") or {})
+    object_map: dict[str, dict[str, dict[str, Any]]] = {
+        "approval_policy": {},
+        "permission_profile": {},
+        "policy_assignment": {},
+    }
+    for object_type, items in (
+        ("approval_policy", data.get("approvals") or []),
+        ("permission_profile", data.get("profiles") or []),
+        ("policy_assignment", data.get("assignments") or []),
+    ):
+        for raw_item in items:
+            item = dict(raw_item or {})
+            source_object_id = _source_object_key(object_type, item)
+            if source_object_id:
+                object_map[object_type][source_object_id] = item
+    return object_map
+
+
+def _normalize_string_values(values: Any) -> list[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for value in values:
+        cleaned = str(value or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
 
 
 class McpHubGovernancePackService:
@@ -133,6 +209,123 @@ class McpHubGovernancePackService:
         if owner_scope_type == "org" and owner_scope_id is not None:
             return {"org_id": owner_scope_id}
         return {}
+
+    @staticmethod
+    def _semantic_runtime_object(object_type: str, item: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(item or {})
+        if object_type == "permission_profile":
+            capabilities = dict(payload.get("capabilities") or {})
+            return {
+                "capabilities": {
+                    "allow": _normalize_string_values(capabilities.get("allow")),
+                    "deny": _normalize_string_values(capabilities.get("deny")),
+                },
+                "approval_intent": str(payload.get("approval_intent") or "").strip(),
+                "environment_requirements": _normalize_string_values(
+                    payload.get("environment_requirements")
+                ),
+            }
+        if object_type == "approval_policy":
+            return {
+                "mode": str(payload.get("mode") or "").strip().lower(),
+            }
+        if object_type == "policy_assignment":
+            return {
+                "target_type": str(payload.get("target_type") or "").strip().lower(),
+                "capability_profile_id": str(payload.get("capability_profile_id") or "").strip(),
+                "persona_template_id": str(payload.get("persona_template_id") or "").strip(),
+                "approval_template_id": str(payload.get("approval_template_id") or "").strip(),
+            }
+        return payload
+
+    async def _collect_upgrade_dependencies(
+        self,
+        *,
+        governance_pack_id: int,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> tuple[list[dict[str, Any]], dict[tuple[str, str], list[dict[str, Any]]]]:
+        imported_objects = await self.repo.list_governance_pack_objects(governance_pack_id)
+        assignments = await self.repo.list_policy_assignments(
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+        assignment_rows_by_id = {
+            str(item.get("id")): item
+            for item in assignments
+            if item.get("id") is not None
+        }
+        mutable_assignments = [
+            item for item in assignments if not bool(item.get("is_immutable"))
+        ]
+        mutable_assignments_by_profile: dict[str, list[dict[str, Any]]] = {}
+        mutable_assignments_by_approval: dict[str, list[dict[str, Any]]] = {}
+        for assignment in mutable_assignments:
+            profile_id = assignment.get("profile_id")
+            if profile_id is not None:
+                mutable_assignments_by_profile.setdefault(str(profile_id), []).append(assignment)
+            approval_policy_id = assignment.get("approval_policy_id")
+            if approval_policy_id is not None:
+                mutable_assignments_by_approval.setdefault(
+                    str(approval_policy_id),
+                    [],
+                ).append(assignment)
+
+        dependencies: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for imported_object in imported_objects:
+            object_type = str(imported_object.get("object_type") or "").strip().lower()
+            source_object_id = str(imported_object.get("source_object_id") or "").strip()
+            object_id = str(imported_object.get("object_id") or "").strip()
+            dependents: list[dict[str, Any]] = []
+            if object_type == "permission_profile":
+                for assignment in mutable_assignments_by_profile.get(object_id, []):
+                    dependents.append(
+                        {
+                            "dependent_type": "policy_assignment",
+                            "dependent_id": int(assignment["id"]),
+                            "reference_field": "profile_id",
+                            "target_type": assignment.get("target_type"),
+                            "target_id": assignment.get("target_id"),
+                        }
+                    )
+            elif object_type == "approval_policy":
+                for assignment in mutable_assignments_by_approval.get(object_id, []):
+                    dependents.append(
+                        {
+                            "dependent_type": "policy_assignment",
+                            "dependent_id": int(assignment["id"]),
+                            "reference_field": "approval_policy_id",
+                            "target_type": assignment.get("target_type"),
+                            "target_id": assignment.get("target_id"),
+                        }
+                    )
+            elif object_type == "policy_assignment":
+                assignment = assignment_rows_by_id.get(object_id)
+                if assignment and assignment.get("has_override") and assignment.get("override_active"):
+                    dependents.append(
+                        {
+                            "dependent_type": "policy_override",
+                            "dependent_id": int(assignment["override_id"]),
+                            "reference_field": "assignment_id",
+                            "target_type": assignment.get("target_type"),
+                            "target_id": assignment.get("target_id"),
+                        }
+                    )
+            dependencies[(object_type, source_object_id)] = dependents
+        return imported_objects, dependencies
+
+    @staticmethod
+    def _version_compare(source_version: str, target_version: str) -> int | None:
+        try:
+            source = Version(str(source_version or "").strip())
+            target = Version(str(target_version or "").strip())
+        except InvalidVersion:
+            return None
+        if target > source:
+            return 1
+        if target < source:
+            return -1
+        return 0
 
     async def _rollback_import(
         self,
@@ -327,6 +520,235 @@ class McpHubGovernancePackService:
     ) -> GovernancePackDryRunReport:
         pack = self.build_pack_from_document(document)
         return await self.dry_run_pack(
+            pack=pack,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+
+    async def dry_run_upgrade_pack(
+        self,
+        *,
+        source_governance_pack_id: int,
+        pack: GovernancePack,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> GovernancePackUpgradePlan:
+        validation = validate_governance_pack(pack)
+        if validation.errors:
+            raise ValueError("; ".join(validation.errors))
+
+        source_pack = await self.repo.get_governance_pack(source_governance_pack_id)
+        if source_pack is None:
+            raise ValueError(
+                f"mcp_governance_pack '{source_governance_pack_id}' was not found"
+            )
+
+        source_scope_type = str(source_pack.get("owner_scope_type") or "").strip().lower()
+        source_scope_id = source_pack.get("owner_scope_id")
+        structural_conflicts: list[str] = []
+        behavioral_conflicts: list[str] = []
+        warnings: list[str] = []
+        object_diff: list[dict[str, Any]] = []
+        dependency_impact: list[dict[str, Any]] = []
+
+        if not bool(source_pack.get("is_active_install")):
+            structural_conflicts.append(
+                "Only active governance pack installs can be upgraded in place"
+            )
+        if (
+            str(owner_scope_type or "").strip().lower() != source_scope_type
+            or owner_scope_id != source_scope_id
+        ):
+            structural_conflicts.append(
+                "Target upgrade must use the same owner scope as the installed governance pack"
+            )
+
+        target_manifest = {
+            "pack_id": pack.manifest.pack_id,
+            "pack_version": pack.manifest.pack_version,
+            "title": pack.manifest.title,
+            "description": pack.manifest.description,
+        }
+        source_manifest = dict(source_pack.get("manifest") or {})
+        if str(pack.manifest.pack_id or "").strip() != str(source_pack.get("pack_id") or "").strip():
+            structural_conflicts.append(
+                "Target upgrade must keep the same pack_id as the installed governance pack"
+            )
+
+        version_compare = self._version_compare(
+            str(source_pack.get("pack_version") or ""),
+            str(pack.manifest.pack_version or ""),
+        )
+        if version_compare is None:
+            structural_conflicts.append(
+                "Governance pack upgrades require semantic versions for both installed and target versions"
+            )
+        elif version_compare <= 0:
+            structural_conflicts.append(
+                "Target governance pack version must be newer than the installed version"
+            )
+
+        existing_target = await self.repo.get_governance_pack_by_identity(
+            pack_id=pack.manifest.pack_id,
+            pack_version=pack.manifest.pack_version,
+            owner_scope_type=source_scope_type,
+            owner_scope_id=source_scope_id,
+        )
+        if existing_target is not None and int(existing_target["id"]) != int(source_governance_pack_id):
+            structural_conflicts.append(
+                f"Governance pack '{pack.manifest.pack_id}@{pack.manifest.pack_version}' is already installed in this scope"
+            )
+
+        report = await self.dry_run_pack(
+            pack=pack,
+            owner_scope_type=str(owner_scope_type or "").strip().lower(),
+            owner_scope_id=owner_scope_id,
+        )
+        if report.verdict != "importable":
+            structural_conflicts.append(
+                "Target governance pack is not importable under the current adapter mapping state"
+            )
+        warnings = self._unique(
+            warnings
+            + list(report.warnings)
+            + [
+                f"unresolved capability:{name}"
+                for name in report.unresolved_capabilities
+            ]
+            + [f"blocked object:{name}" for name in report.blocked_objects]
+        )
+
+        source_object_maps = _normalized_runtime_object_maps(
+            dict(source_pack.get("normalized_ir") or {})
+        )
+        target_ir = normalize_governance_pack(pack).to_dict()
+        target_object_maps = _normalized_runtime_object_maps(target_ir)
+
+        _, dependencies_by_object = await self._collect_upgrade_dependencies(
+            governance_pack_id=source_governance_pack_id,
+            owner_scope_type=source_scope_type,
+            owner_scope_id=source_scope_id,
+        )
+
+        for object_type in ("approval_policy", "permission_profile", "policy_assignment"):
+            source_items = source_object_maps.get(object_type, {})
+            target_items = target_object_maps.get(object_type, {})
+            for source_object_id in sorted(set(source_items) | set(target_items)):
+                source_item = source_items.get(source_object_id)
+                target_item = target_items.get(source_object_id)
+                change_type = "unchanged"
+                if source_item is None and target_item is not None:
+                    change_type = "added"
+                elif source_item is not None and target_item is None:
+                    change_type = "removed"
+                elif (
+                    source_item is not None
+                    and target_item is not None
+                    and self._semantic_runtime_object(object_type, source_item)
+                    != self._semantic_runtime_object(object_type, target_item)
+                ):
+                    change_type = "modified"
+
+                if change_type == "unchanged":
+                    continue
+
+                object_diff.append(
+                    {
+                        "object_type": object_type,
+                        "source_object_id": source_object_id,
+                        "change_type": change_type,
+                        "previous_digest": (
+                            _stable_digest(self._semantic_runtime_object(object_type, source_item))
+                            if source_item is not None
+                            else None
+                        ),
+                        "next_digest": (
+                            _stable_digest(self._semantic_runtime_object(object_type, target_item))
+                            if target_item is not None
+                            else None
+                        ),
+                    }
+                )
+
+                dependents = dependencies_by_object.get((object_type, source_object_id), [])
+                if not dependents:
+                    continue
+                for dependent in dependents:
+                    impact = "structural_conflict" if change_type == "removed" else "behavioral_conflict"
+                    dependency_impact.append(
+                        {
+                            "object_type": object_type,
+                            "source_object_id": source_object_id,
+                            "change_type": change_type,
+                            "impact": impact,
+                            **dependent,
+                        }
+                    )
+                    if change_type == "removed":
+                        structural_conflicts.append(
+                            f"{object_type}:{source_object_id} is removed but dependent "
+                            f"{dependent['dependent_type'].replace('_', ' ')} {dependent['dependent_id']} "
+                            f"still references it via {dependent['reference_field']}"
+                        )
+                    else:
+                        behavioral_conflicts.append(
+                            f"{object_type}:{source_object_id} materially changes while dependent "
+                            f"{dependent['dependent_type'].replace('_', ' ')} {dependent['dependent_id']} "
+                            f"still references it via {dependent['reference_field']}"
+                        )
+
+        planner_inputs_fingerprint = _stable_digest(
+            {
+                "source_governance_pack_id": int(source_governance_pack_id),
+                "source_manifest": source_manifest,
+                "target_manifest": target_manifest,
+                "source_scope_type": source_scope_type,
+                "source_scope_id": source_scope_id,
+                "requested_scope_type": str(owner_scope_type or "").strip().lower(),
+                "requested_scope_id": owner_scope_id,
+                "object_diff": object_diff,
+                "dependency_impact": dependency_impact,
+            }
+        )
+        adapter_state_fingerprint = _stable_digest(
+            {
+                "digest": report.digest,
+                "resolved_capabilities": report.resolved_capabilities,
+                "unresolved_capabilities": report.unresolved_capabilities,
+                "capability_mapping_summary": report.capability_mapping_summary,
+                "supported_environment_requirements": report.supported_environment_requirements,
+                "unsupported_environment_requirements": report.unsupported_environment_requirements,
+                "warnings": report.warnings,
+                "blocked_objects": report.blocked_objects,
+                "verdict": report.verdict,
+            }
+        )
+
+        return GovernancePackUpgradePlan(
+            source_governance_pack_id=int(source_governance_pack_id),
+            source_manifest=source_manifest,
+            target_manifest=target_manifest,
+            object_diff=object_diff,
+            dependency_impact=dependency_impact,
+            structural_conflicts=self._unique(structural_conflicts),
+            behavioral_conflicts=self._unique(behavioral_conflicts),
+            warnings=self._unique(warnings),
+            planner_inputs_fingerprint=planner_inputs_fingerprint,
+            adapter_state_fingerprint=adapter_state_fingerprint,
+            upgradeable=not structural_conflicts and not behavioral_conflicts,
+        )
+
+    async def dry_run_upgrade_document(
+        self,
+        *,
+        source_governance_pack_id: int,
+        document: dict[str, Any],
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> GovernancePackUpgradePlan:
+        pack = self.build_pack_from_document(document)
+        return await self.dry_run_upgrade_pack(
+            source_governance_pack_id=source_governance_pack_id,
             pack=pack,
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,

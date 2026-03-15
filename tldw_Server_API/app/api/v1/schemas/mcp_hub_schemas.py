@@ -759,6 +759,13 @@ class GovernancePackImportRequest(BaseModel):
     pack: GovernancePackDocumentRequest
 
 
+class GovernancePackUpgradeDryRunRequest(BaseModel):
+    source_governance_pack_id: int = Field(..., ge=1)
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    pack: GovernancePackDocumentRequest
+
+
 class GovernancePackReportManifestResponse(BaseModel):
     pack_id: str
     pack_version: str
@@ -781,6 +788,44 @@ class GovernancePackDryRunReportResponse(BaseModel):
 
 class GovernancePackDryRunResponse(BaseModel):
     report: GovernancePackDryRunReportResponse
+
+
+class GovernancePackUpgradeObjectDiffResponse(BaseModel):
+    object_type: str
+    source_object_id: str
+    change_type: str
+    previous_digest: str | None = None
+    next_digest: str | None = None
+
+
+class GovernancePackUpgradeDependencyImpactResponse(BaseModel):
+    object_type: str
+    source_object_id: str
+    change_type: str
+    impact: str
+    dependent_type: str
+    dependent_id: int
+    reference_field: str
+    target_type: str | None = None
+    target_id: str | None = None
+
+
+class GovernancePackUpgradePlanResponse(BaseModel):
+    source_governance_pack_id: int
+    source_manifest: dict[str, Any] = Field(default_factory=dict)
+    target_manifest: dict[str, Any] = Field(default_factory=dict)
+    object_diff: list[GovernancePackUpgradeObjectDiffResponse] = Field(default_factory=list)
+    dependency_impact: list[GovernancePackUpgradeDependencyImpactResponse] = Field(default_factory=list)
+    structural_conflicts: list[str] = Field(default_factory=list)
+    behavioral_conflicts: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    planner_inputs_fingerprint: str
+    adapter_state_fingerprint: str
+    upgradeable: bool
+
+
+class GovernancePackUpgradeDryRunResponse(BaseModel):
+    plan: GovernancePackUpgradePlanResponse
 
 
 class GovernancePackObjectProvenanceResponse(BaseModel):
