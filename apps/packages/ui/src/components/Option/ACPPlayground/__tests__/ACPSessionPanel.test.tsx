@@ -165,6 +165,38 @@ describe("ACPSessionPanel filters and sorting", () => {
     expect(screen.getAllByText("Tokens --").length).toBeGreaterThan(0)
   })
 
+  it("renders compact policy snapshot badges from server-hydrated sessions", () => {
+    const state = useACPSessionsStore.getState()
+
+    state.upsertSessionsFromServerList([
+      {
+        session_id: "server-session-1",
+        user_id: 1,
+        agent_type: "codex",
+        name: "Server Session",
+        status: "active",
+        created_at: "2024-01-01T00:00:00.000Z",
+        last_activity_at: "2024-01-01T00:01:00.000Z",
+        message_count: 2,
+        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+        tags: [],
+        has_websocket: false,
+        policy_snapshot_version: "resolved-v1",
+        policy_snapshot_fingerprint: "snapshot-123",
+        policy_snapshot_refreshed_at: "2026-03-14T12:00:00+00:00",
+        policy_summary: { allowed_tool_count: 2, denied_tool_count: 1, approval_mode: "require_approval" },
+        policy_provenance_summary: { source_kinds: ["capability_mapping"] },
+        policy_refresh_error: null,
+      },
+    ])
+
+    render(<ACPSessionPanel />)
+
+    expect(screen.getByText("Policy require_approval")).toBeInTheDocument()
+    expect(screen.getByText("Allow 2")).toBeInTheDocument()
+    expect(screen.getByText("Deny 1")).toBeInTheDocument()
+  })
+
   it("copies session id from quick action", async () => {
     const { alphaId } = seedSessions()
     render(<ACPSessionPanel />)

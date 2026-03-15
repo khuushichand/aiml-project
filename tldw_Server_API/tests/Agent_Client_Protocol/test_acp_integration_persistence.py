@@ -14,6 +14,8 @@ from tldw_Server_API.app.core.DB_Management.Orchestration_DB import Orchestratio
 from tldw_Server_API.app.core.Agent_Orchestration.models import TaskStatus, RunStatus
 from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import AgentRegistry
 from tldw_Server_API.app.core.Agent_Client_Protocol.health_monitor import AgentHealthMonitor
+from tldw_Server_API.app.services.acp_runtime_policy_service import ACPRuntimePolicyService
+from tldw_Server_API.app.services.admin_acp_sessions_service import ACPSessionStore
 
 pytestmark = [pytest.mark.unit]
 
@@ -158,6 +160,37 @@ class TestSessionPersistenceFlow:
         assert evicted == 1
         session = session_db.get_session("expiring")
         assert session["status"] == "closed"
+
+    @pytest.mark.asyncio
+    async def test_runtime_policy_snapshot_persists_to_session_store(self, session_db):
+        store = ACPSessionStore(db=session_db)
+        await store.register_session(
+            session_id="runtime-policy",
+            user_id=42,
+            persona_id="persona-1",
+            workspace_id="workspace-1",
+        )
+        session = await store.get_session("runtime-policy")
+        assert session is not None
+
+        class _Resolver:
+            async def resolve_for_context(self, *, user_id, metadata):
+                return {
+                    "policy_document": {
+                        "allowed_tools": ["web.search"],
+                        "approval_mode": "require_approval",
+                    },
+                    "sources": [{"source_kind": "profile"}],
+                    "provenance": [{"source_kind": "profile"}],
+                }
+
+        service = ACPRuntimePolicyService(policy_resolver=_Resolver())
+        snapshot = await service.build_snapshot(session_record=session, user_id=42)
+        persisted = await service.persist_snapshot(session_store=store, snapshot=snapshot)
+
+        assert persisted is not None
+        assert persisted.policy_snapshot_fingerprint == snapshot.policy_snapshot_fingerprint
+        assert persisted.policy_summary == snapshot.policy_summary
 
 
 class TestOrchestrationPersistenceFlow:

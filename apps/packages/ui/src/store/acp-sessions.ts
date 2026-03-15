@@ -305,6 +305,12 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
               workspaceId: serverSession.workspace_id ?? null,
               workspaceGroupId: serverSession.workspace_group_id ?? null,
               scopeSnapshotId: serverSession.scope_snapshot_id ?? null,
+              policySnapshotVersion: serverSession.policy_snapshot_version ?? null,
+              policySnapshotFingerprint: serverSession.policy_snapshot_fingerprint ?? null,
+              policySnapshotRefreshedAt: toIsoDate(serverSession.policy_snapshot_refreshed_at),
+              policySummary: serverSession.policy_summary ?? null,
+              policyProvenanceSummary: serverSession.policy_provenance_summary ?? null,
+              policyRefreshError: serverSession.policy_refresh_error ?? null,
               state: fallbackState,
               capabilities: undefined,
               sandboxSessionId: null,
@@ -340,6 +346,21 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
               workspaceId: serverSession.workspace_id ?? baseSession.workspaceId ?? null,
               workspaceGroupId: serverSession.workspace_group_id ?? baseSession.workspaceGroupId ?? null,
               scopeSnapshotId: serverSession.scope_snapshot_id ?? baseSession.scopeSnapshotId ?? null,
+              policySnapshotVersion:
+                serverSession.policy_snapshot_version ?? baseSession.policySnapshotVersion ?? null,
+              policySnapshotFingerprint:
+                serverSession.policy_snapshot_fingerprint ?? baseSession.policySnapshotFingerprint ?? null,
+              policySnapshotRefreshedAt:
+                toIsoDate(serverSession.policy_snapshot_refreshed_at)
+                ?? baseSession.policySnapshotRefreshedAt
+                ?? null,
+              policySummary: serverSession.policy_summary ?? baseSession.policySummary ?? null,
+              policyProvenanceSummary:
+                serverSession.policy_provenance_summary
+                ?? baseSession.policyProvenanceSummary
+                ?? null,
+              policyRefreshError:
+                serverSession.policy_refresh_error ?? baseSession.policyRefreshError ?? null,
               backendStatus,
               messageCount: Math.max(baseSession.messageCount ?? 0, serverSession.message_count),
               usage: mergedUsage,
@@ -383,6 +404,12 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
             workspaceId: detail.workspace_id ?? null,
             workspaceGroupId: detail.workspace_group_id ?? null,
             scopeSnapshotId: detail.scope_snapshot_id ?? null,
+            policySnapshotVersion: detail.policy_snapshot_version ?? null,
+            policySnapshotFingerprint: detail.policy_snapshot_fingerprint ?? null,
+            policySnapshotRefreshedAt: toIsoDate(detail.policy_snapshot_refreshed_at),
+            policySummary: detail.policy_summary ?? null,
+            policyProvenanceSummary: detail.policy_provenance_summary ?? null,
+            policyRefreshError: detail.policy_refresh_error ?? null,
             state: nextState,
             capabilities: undefined,
             sandboxSessionId: null,
@@ -413,6 +440,21 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
                 workspaceId: detail.workspace_id ?? baseSession.workspaceId ?? null,
                 workspaceGroupId: detail.workspace_group_id ?? baseSession.workspaceGroupId ?? null,
                 scopeSnapshotId: detail.scope_snapshot_id ?? baseSession.scopeSnapshotId ?? null,
+                policySnapshotVersion:
+                  detail.policy_snapshot_version ?? baseSession.policySnapshotVersion ?? null,
+                policySnapshotFingerprint:
+                  detail.policy_snapshot_fingerprint ?? baseSession.policySnapshotFingerprint ?? null,
+                policySnapshotRefreshedAt:
+                  toIsoDate(detail.policy_snapshot_refreshed_at)
+                  ?? baseSession.policySnapshotRefreshedAt
+                  ?? null,
+                policySummary: detail.policy_summary ?? baseSession.policySummary ?? null,
+                policyProvenanceSummary:
+                  detail.policy_provenance_summary
+                  ?? baseSession.policyProvenanceSummary
+                  ?? null,
+                policyRefreshError:
+                  detail.policy_refresh_error ?? baseSession.policyRefreshError ?? null,
                 backendStatus,
                 messageCount: Math.max(baseSession.messageCount ?? 0, detail.message_count),
                 usage: mergeUsage(baseSession.usage, detail.usage),
@@ -477,6 +519,12 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
           workspaceId: options.workspaceId ?? null,
           workspaceGroupId: options.workspaceGroupId ?? null,
           scopeSnapshotId: options.scopeSnapshotId ?? null,
+          policySnapshotVersion: null,
+          policySnapshotFingerprint: null,
+          policySnapshotRefreshedAt: null,
+          policySummary: null,
+          policyProvenanceSummary: null,
+          policyRefreshError: null,
           state: "disconnected",
           capabilities: undefined,
           sandboxSessionId: null,
