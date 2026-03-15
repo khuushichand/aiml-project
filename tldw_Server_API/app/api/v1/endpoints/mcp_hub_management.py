@@ -43,6 +43,11 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     GovernancePackDryRunResponse,
     GovernancePackImportRequest,
     GovernancePackImportResponse,
+    GovernancePackUpgradeDryRunRequest,
+    GovernancePackUpgradeDryRunResponse,
+    GovernancePackUpgradeExecuteRequest,
+    GovernancePackUpgradeExecutionResponse,
+    GovernancePackUpgradeHistoryEntryResponse,
     GovernancePackSummaryResponse,
     GovernanceAuditFindingListResponse,
     MCPHubDeleteResponse,
@@ -85,6 +90,8 @@ from tldw_Server_API.app.services.mcp_hub_capability_adapter_service import (
 )
 from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
     GovernancePackAlreadyExistsError,
+    GovernancePackUpgradeConflictError,
+    GovernancePackUpgradeStaleError,
     McpHubGovernancePackService,
 )
 from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
@@ -1471,6 +1478,43 @@ async def dry_run_governance_pack(
     return GovernancePackDryRunResponse.model_validate({"report": report_payload})
 
 
+@router.post("/governance-packs/dry-run-upgrade", response_model=GovernancePackUpgradeDryRunResponse)
+async def dry_run_governance_pack_upgrade(
+    payload: GovernancePackUpgradeDryRunRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackUpgradeDryRunResponse:
+    """Validate a governance-pack upgrade plan for an installed pack in the same scope."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        plan = await svc.dry_run_upgrade_document(
+            source_governance_pack_id=payload.source_governance_pack_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack upgrade dry-run rejected for source {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    plan_payload = plan.model_dump() if hasattr(plan, "model_dump") else dict(plan)
+    return GovernancePackUpgradeDryRunResponse.model_validate({"plan": plan_payload})
+
+
 @router.post("/governance-packs/import", response_model=GovernancePackImportResponse, status_code=201)
 async def import_governance_pack(
     payload: GovernancePackImportRequest,
@@ -1517,6 +1561,58 @@ async def import_governance_pack(
     return GovernancePackImportResponse.model_validate(result)
 
 
+@router.post("/governance-packs/execute-upgrade", response_model=GovernancePackUpgradeExecutionResponse)
+async def execute_governance_pack_upgrade(
+    payload: GovernancePackUpgradeExecuteRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackUpgradeExecutionResponse:
+    """Execute a previously dry-run governance-pack upgrade when the planner state is unchanged."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        result = await svc.execute_upgrade_document(
+            source_governance_pack_id=payload.source_governance_pack_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            actor_id=principal.user_id,
+            planner_inputs_fingerprint=payload.planner_inputs_fingerprint,
+            adapter_state_fingerprint=payload.adapter_state_fingerprint,
+        )
+    except (GovernancePackAlreadyExistsError, GovernancePackUpgradeConflictError, GovernancePackUpgradeStaleError) as exc:
+        logger.warning(
+            "Governance pack upgrade execute conflict for source {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack upgrade execute rejected for source {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result_payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    return GovernancePackUpgradeExecutionResponse.model_validate(result_payload)
+
+
 @router.get("/governance-packs", response_model=list[GovernancePackSummaryResponse])
 async def list_governance_packs(
     owner_scope_type: str | None = None,
@@ -1540,6 +1636,28 @@ async def list_governance_packs(
         )
     rows = _dedupe_rows(rows)
     return [GovernancePackSummaryResponse.model_validate(row) for row in rows]
+
+
+@router.get(
+    "/governance-packs/{governance_pack_id}/upgrade-history",
+    response_model=list[GovernancePackUpgradeHistoryEntryResponse],
+)
+async def list_governance_pack_upgrade_history(
+    governance_pack_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> list[GovernancePackUpgradeHistoryEntryResponse]:
+    """List the recorded upgrade lineage for the governance-pack identity installed in this scope."""
+    row = await svc.get_governance_pack_detail(governance_pack_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"mcp_governance_pack '{governance_pack_id}' was not found")
+    _assert_principal_can_access_scope(
+        principal,
+        owner_scope_type=str(row.get("owner_scope_type") or "global"),
+        owner_scope_id=row.get("owner_scope_id"),
+    )
+    history = await svc.list_governance_pack_upgrade_history(governance_pack_id)
+    return [GovernancePackUpgradeHistoryEntryResponse.model_validate(item) for item in history]
 
 
 @router.get("/governance-packs/{governance_pack_id}", response_model=GovernancePackDetailResponse)

@@ -1244,6 +1244,19 @@ class McpHubGovernancePackService:
             "imported_objects": await self.repo.list_governance_pack_objects(governance_pack_id),
         }
 
+    async def list_governance_pack_upgrade_history(
+        self,
+        governance_pack_id: int,
+    ) -> list[dict[str, Any]]:
+        pack_row = await self.repo.get_governance_pack(governance_pack_id)
+        if pack_row is None:
+            return []
+        return await self.repo.list_governance_pack_upgrades(
+            pack_id=str(pack_row.get("pack_id") or ""),
+            owner_scope_type=str(pack_row.get("owner_scope_type") or "global"),
+            owner_scope_id=pack_row.get("owner_scope_id"),
+        )
+
     async def import_pack(
         self,
         *,

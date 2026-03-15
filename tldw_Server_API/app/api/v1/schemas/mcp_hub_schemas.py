@@ -828,6 +828,48 @@ class GovernancePackUpgradeDryRunResponse(BaseModel):
     plan: GovernancePackUpgradePlanResponse
 
 
+class GovernancePackUpgradeExecuteRequest(BaseModel):
+    source_governance_pack_id: int = Field(..., ge=1)
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    planner_inputs_fingerprint: str = Field(..., min_length=1)
+    adapter_state_fingerprint: str = Field(..., min_length=1)
+    pack: GovernancePackDocumentRequest
+
+
+class GovernancePackUpgradeExecutionResponse(BaseModel):
+    upgrade_id: int
+    source_governance_pack_id: int
+    target_governance_pack_id: int
+    from_pack_version: str
+    to_pack_version: str
+    planner_inputs_fingerprint: str
+    adapter_state_fingerprint: str
+    imported_object_ids: dict[str, list[int]] = Field(default_factory=dict)
+    imported_object_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class GovernancePackUpgradeHistoryEntryResponse(BaseModel):
+    id: int
+    pack_id: str
+    owner_scope_type: ScopeType
+    owner_scope_id: int | None = None
+    from_governance_pack_id: int
+    to_governance_pack_id: int
+    from_pack_version: str
+    to_pack_version: str
+    status: str
+    planned_by: int | None = None
+    executed_by: int | None = None
+    planner_inputs_fingerprint: str | None = None
+    adapter_state_fingerprint: str | None = None
+    plan_summary: dict[str, Any] = Field(default_factory=dict)
+    accepted_resolutions: dict[str, Any] = Field(default_factory=dict)
+    failure_summary: str | None = None
+    planned_at: datetime | str | None = None
+    executed_at: datetime | str | None = None
+
+
 class GovernancePackObjectProvenanceResponse(BaseModel):
     object_type: str
     object_id: str
@@ -844,6 +886,9 @@ class GovernancePackSummaryResponse(BaseModel):
     owner_scope_id: int | None = None
     bundle_digest: str
     manifest: dict[str, Any] = Field(default_factory=dict)
+    is_active_install: bool = True
+    superseded_by_governance_pack_id: int | None = None
+    installed_from_upgrade_id: int | None = None
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None
