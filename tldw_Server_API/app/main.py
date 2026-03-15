@@ -1386,6 +1386,21 @@ async def lifespan(app: FastAPI):
         pass
     # Fail fast if the assembled app contains duplicate method+path route registrations.
     _fail_on_duplicate_route_method_pairs(app, context="lifespan startup")
+    # Run environmental preflight checks before heavy initialization.
+    try:
+        from tldw_Server_API.app.core.startup_preflight import run_preflight_checks
+
+        preflight = run_preflight_checks()
+        logger.info(
+            "Preflight: {} checks, {} warnings, {} failures",
+            len(preflight.checks),
+            len(preflight.warnings),
+            len(preflight.failures),
+        )
+    except RuntimeError:
+        raise
+    except _STARTUP_GUARD_EXCEPTIONS as _preflight_err:
+        logger.debug(f"Preflight checks skipped: {_preflight_err}")
     # Determine if heavy (non-critical) startup should be deferred to background
     # Read environment knobs with precedence:
     # - DISABLE_HEAVY_STARTUP=true  => force synchronous (no deferral)
