@@ -49,6 +49,8 @@ from . import admin_billing as admin_billing_endpoints
 from . import admin_events_stream as admin_events_stream_endpoints
 from . import admin_storage_quotas as admin_storage_quotas_endpoints
 from . import admin_user as admin_user_endpoints
+from . import admin_tenant_provisioning as admin_tenant_provisioning_endpoints
+from . import admin_impersonation as admin_impersonation_endpoints
 
 _ADMIN_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -135,6 +137,8 @@ router.include_router(admin_acp_agents_endpoints.router)
 router.include_router(admin_billing_endpoints.router)
 router.include_router(admin_events_stream_endpoints.router)
 router.include_router(admin_storage_quotas_endpoints.router)
+router.include_router(admin_tenant_provisioning_endpoints.router)
+router.include_router(admin_impersonation_endpoints.router)
 
 
 # Backend detection now standardized via core AuthNZ database helper
