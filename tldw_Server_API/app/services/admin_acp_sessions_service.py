@@ -416,6 +416,7 @@ class ACPSessionStore:
         policy_summary: dict[str, Any] | None = None,
         policy_provenance_summary: dict[str, Any] | None = None,
         policy_refresh_error: str | None = None,
+        forked_from: str | None = None,
     ) -> SessionRecord:
         d = self._db.register_session(
             session_id=session_id,
@@ -435,6 +436,7 @@ class ACPSessionStore:
             policy_summary=policy_summary,
             policy_provenance_summary=policy_provenance_summary,
             policy_refresh_error=policy_refresh_error,
+            forked_from=forked_from,
         )
         logger.debug("Registered ACP session {} for user {}", session_id, user_id)
         return self._dict_to_record(d)
