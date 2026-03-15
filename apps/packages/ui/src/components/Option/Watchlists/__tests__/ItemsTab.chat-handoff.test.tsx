@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { ItemsTab } from "../ItemsTab/ItemsTab"
 import { useWatchlistsStore } from "@/store/watchlists"
-import { UNSAFE_NavigationContext } from "react-router-dom"
 
 const serviceMocks = vi.hoisted(() => ({
   createWatchlistOutput: vi.fn(),
@@ -214,27 +213,6 @@ const setupFetchScrapedItemsMock = (listItems = makeItems()) => {
 }
 
 describe("ItemsTab chat handoff", () => {
-  const renderWithNavigationContext = (ui: React.ReactElement) =>
-    render(
-      <UNSAFE_NavigationContext.Provider
-        value={{
-          basename: "",
-          navigator: {
-            createHref: (to) => String(typeof to === "string" ? to : to.pathname || "/"),
-            go: vi.fn(),
-            push: navigationMocks.navigate,
-            replace: vi.fn()
-          },
-          static: false,
-          future: {
-            v7_relativeSplatPath: true
-          }
-        }}
-      >
-        {ui}
-      </UNSAFE_NavigationContext.Provider>
-    )
-
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
@@ -399,7 +377,7 @@ describe("ItemsTab chat handoff", () => {
   })
 
   it("navigates to root on Chat click", async () => {
-    renderWithNavigationContext(<ItemsTab />)
+    render(<ItemsTab />)
 
     await waitFor(() => {
       expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()

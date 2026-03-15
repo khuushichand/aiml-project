@@ -6,7 +6,6 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { OutputPreviewDrawer } from "../OutputsTab/OutputPreviewDrawer"
 import type { WatchlistOutput } from "@/types/watchlists"
-import { UNSAFE_NavigationContext } from "react-router-dom"
 
 /* ------------------------------------------------------------------ */
 /*  Hoisted mocks                                                      */
@@ -23,6 +22,10 @@ const settingsMocks = vi.hoisted(() => ({
 
 const navigationMocks = vi.hoisted(() => ({
   navigate: vi.fn()
+}))
+
+const routerBehavior = vi.hoisted(() => ({
+  throwMissingContext: false
 }))
 
 /* ------------------------------------------------------------------ */
@@ -59,7 +62,15 @@ vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>(
     "react-router-dom"
   )
-  return actual
+  return {
+    ...actual,
+    useNavigate: () => {
+      if (routerBehavior.throwMissingContext) {
+        throw new Error("useNavigate() may be used only in the context of a <Router> component.")
+      }
+      return navigationMocks.navigate
+    }
+  }
 })
 
 vi.mock("@/services/watchlists", () => ({
@@ -101,32 +112,12 @@ const buildOutput = (overrides: Partial<WatchlistOutput> = {}): WatchlistOutput 
 /* ------------------------------------------------------------------ */
 
 describe("OutputPreviewDrawer chat handoff", () => {
-  const renderWithNavigationContext = (ui: React.ReactElement) =>
-    render(
-      <UNSAFE_NavigationContext.Provider
-        value={{
-          basename: "",
-          navigator: {
-            createHref: vi.fn((to: string | { pathname?: string }) =>
-              typeof to === "string" ? to : (to.pathname ?? "/")
-            ),
-            go: vi.fn(),
-            push: navigationMocks.navigate,
-            replace: vi.fn()
-          },
-          static: false,
-          future: { v7_relativeSplatPath: true }
-        }}
-      >
-        {ui}
-      </UNSAFE_NavigationContext.Provider>
-    )
-
   beforeEach(() => {
     vi.clearAllMocks()
     serviceMocks.downloadWatchlistOutput.mockResolvedValue("# Briefing content")
     serviceMocks.downloadWatchlistOutputBinary.mockResolvedValue(new ArrayBuffer(0))
     settingsMocks.setSetting.mockResolvedValue(undefined)
+    routerBehavior.throwMissingContext = false
     window.location.hash = ""
   })
 
@@ -167,7 +158,7 @@ describe("OutputPreviewDrawer chat handoff", () => {
   it("stores handoff payload and navigates to root on click", async () => {
     const output = buildOutput({ title: "My Report", media_item_id: 55 })
 
-    renderWithNavigationContext(
+    render(
       <OutputPreviewDrawer
         open
         onClose={vi.fn()}
@@ -205,6 +196,8 @@ describe("OutputPreviewDrawer chat handoff", () => {
   })
 
   it("falls back to hash navigation when rendered without a router", async () => {
+    routerBehavior.throwMissingContext = true
+
     render(
       <OutputPreviewDrawer
         open

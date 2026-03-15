@@ -12,7 +12,7 @@ import {
 import { Download, ExternalLink, MessageSquare } from "lucide-react"
 import DOMPurify from "dompurify"
 import { useTranslation } from "react-i18next"
-import { UNSAFE_NavigationContext } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { setSetting } from "@/services/settings"
 import { DISCUSS_WATCHLIST_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import type { WatchlistChatHandoffPayload } from "@/services/tldw/watchlist-chat-handoff"
@@ -39,13 +39,21 @@ interface OutputPreviewDrawerProps {
   onClose: () => void
 }
 
+const useSafeNavigate = () => {
+  try {
+    return useNavigate()
+  } catch {
+    return null
+  }
+}
+
 export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   output,
   open,
   onClose
 }) => {
   const { t } = useTranslation(["watchlists", "common"])
-  const navigationContext = React.useContext(UNSAFE_NavigationContext)
+  const navigate = useSafeNavigate()
 
   const [loading, setLoading] = useState(false)
   const [content, setContent] = useState<string | null>(null)
@@ -58,16 +66,15 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   const wasOpenRef = useRef(false)
 
   const navigateHome = useCallback(() => {
-    const navigator = navigationContext?.navigator
-    if (navigator) {
-      navigator.push("/")
+    if (navigate) {
+      navigate("/")
       return
     }
 
     if (typeof window !== "undefined") {
       window.location.hash = "#/"
     }
-  }, [navigationContext])
+  }, [navigate])
 
   const handleChatAboutOutput = useCallback(() => {
     if (!output) return

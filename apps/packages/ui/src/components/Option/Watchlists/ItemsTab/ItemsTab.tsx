@@ -65,7 +65,7 @@ import {
   getFocusableActiveElement,
   restoreFocusToElement
 } from "../shared/focus-management"
-import { UNSAFE_NavigationContext } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { setSetting } from "@/services/settings"
 import { DISCUSS_WATCHLIST_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import {
@@ -179,8 +179,16 @@ const isEditableTarget = (target: EventTarget | null): boolean => {
   return false
 }
 
+const useSafeNavigate = () => {
+  try {
+    return useNavigate()
+  } catch {
+    return null
+  }
+}
+
 export const ItemsTab: React.FC = () => {
-  const navigationContext = React.useContext(UNSAFE_NavigationContext)
+  const navigate = useSafeNavigate()
   const { t } = useTranslation(["watchlists", "common"])
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const openSourceForm = useWatchlistsStore((s) => s.openSourceForm)
@@ -1506,15 +1514,15 @@ export const ItemsTab: React.FC = () => {
   }, [selectedItem])
 
   const navigateHome = useCallback(() => {
-    if (navigationContext?.navigator) {
-      navigationContext.navigator.push("/")
+    if (navigate) {
+      navigate("/")
       return
     }
 
     if (typeof window !== "undefined") {
       window.location.hash = "#/"
     }
-  }, [navigationContext])
+  }, [navigate])
 
   const handleChatAboutItem = useCallback(
     (item: ScrapedItem) => {

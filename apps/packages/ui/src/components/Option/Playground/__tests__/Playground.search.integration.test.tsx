@@ -87,20 +87,25 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
 }))
 
 vi.mock("@/components/Option/Playground/PlaygroundChat", () => ({
-  PlaygroundChat: (props: {
-    searchQuery?: string
-    matchedMessageIndices?: Set<number>
-    activeSearchMessageIndex?: number | null
-  }) => (
-    <div
-      data-testid="playground-chat"
-      data-search-query={props.searchQuery || ""}
-      data-search-count={props.matchedMessageIndices?.size || 0}
-      data-search-active-index={
-        props.activeSearchMessageIndex == null ? "" : props.activeSearchMessageIndex
-      }
-    />
-  )
+  PlaygroundChat: React.forwardRef(function MockPlaygroundChat(
+    props: {
+      searchQuery?: string
+      matchedMessageIndices?: Set<number>
+      activeSearchMessageIndex?: number | null
+    },
+    _ref
+  ) {
+    return (
+      <div
+        data-testid="playground-chat"
+        data-search-query={props.searchQuery || ""}
+        data-search-count={props.matchedMessageIndices?.size || 0}
+        data-search-active-index={
+          props.activeSearchMessageIndex == null ? "" : props.activeSearchMessageIndex
+        }
+      />
+    )
+  })
 }))
 
 vi.mock("@/components/Sidepanel/Chat/ArtifactsPanel", () => ({
@@ -205,7 +210,7 @@ describe("Playground thread search integration", () => {
     storeOptionState.value.compareParentByHistory = {}
   })
 
-  it("opens in-thread search on Cmd/Ctrl+F and forwards query to PlaygroundChat", () => {
+  it("opens in-thread search on Cmd/Ctrl+F and forwards query to PlaygroundChat", async () => {
     render(<Playground />)
 
     fireEvent.keyDown(window, { key: "f", ctrlKey: true })
@@ -221,10 +226,12 @@ describe("Playground thread search integration", () => {
       "data-search-query",
       "beta"
     )
-    expect(screen.getByTestId("playground-chat")).toHaveAttribute(
-      "data-search-count",
-      "1"
-    )
+    await waitFor(() => {
+      expect(screen.getByTestId("playground-chat")).toHaveAttribute(
+        "data-search-count",
+        "1"
+      )
+    })
   })
 
   it("opens shortcut help from the header and closes with Escape", () => {
