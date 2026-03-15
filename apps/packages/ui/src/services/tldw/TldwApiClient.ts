@@ -2351,6 +2351,62 @@ export class TldwApiClient {
     })
   }
 
+  // ── Admin Billing ──
+
+  async getBillingOverview(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/billing/overview", method: "GET" })
+  }
+
+  async listAllSubscriptions(params?: { status?: string; limit?: number; offset?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/billing/subscriptions${query}`, method: "GET" })
+  }
+
+  async getUserSubscription(userId: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/admin/billing/subscriptions/${userId}`, method: "GET" })
+  }
+
+  async overrideUserPlan(userId: number, payload: { plan_id: string; reason?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/billing/subscriptions/${userId}/override`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async grantCredits(userId: number, payload: { amount: number; reason?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/billing/subscriptions/${userId}/credits`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listBillingEvents(params?: { limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/billing/events${query}`, method: "GET" })
+  }
+
+  // Storage Quotas
+  async getUserStorageQuota(userId: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/admin/storage-quotas/users/${userId}`, method: "GET" })
+  }
+
+  async updateUserStorageQuota(userId: number, payload: { quota_mb: number }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/storage-quotas/users/${userId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getStorageQuotaSummary(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/storage-quotas/summary", method: "GET" })
+  }
+
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
