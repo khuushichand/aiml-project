@@ -96,19 +96,22 @@ Optional add-on:
 
 ## Current Status
 
-Latest release: 0.1.21 (2026-02-21). Beta. Expect rough edges; please report issues. See `CHANGELOG.md` for release history.
+Latest release: 
+- 0.1.26 (2026-03-15) Beta status -  Expect rough edges; 
+  * please report issues. 
+- See `CHANGELOG.md` for release history.
 
 <details>
-<summary>Current focus and migration notes</summary>
+<summary>Current focus and migration notes from the old Gradio version</summary>
 
 ### Active Work-in-Progress (not in order)
+- Multi-User setup
 - Workflows
-- Browser extension ([tldw_Browser_Assistant](https://github.com/rmusser01/tldw_browser_assistant))
+- [Web App frontend & Browser Extension UIs](./apps/)
 - Unified Admin Dashboard ([admin-ui](./admin-ui))
-- frontend web app ([apps/tldw-frontend](./apps/tldw-frontend))
-- Watchlists
 - Collections (read-it-later)
-- Documentation
+- Better TTS support
+- Better Documentation
 
 ### Migrating From Gradio Version (pre-0.1.0)
 - Backup:
@@ -128,7 +131,7 @@ Latest release: 0.1.21 (2026-02-21). Beta. Expect rough edges; please report iss
     - Or integrate directly against the API
 </details>
 
-## What's New (compared to Gradio)
+## What's New (in the last few releases)
 
 - FastAPI-first backend with OpenAI-compatible Chat, Audio (STT/TTS + voice catalog), Embeddings, and Evals APIs
 - Unified RAG + Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
