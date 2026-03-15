@@ -8078,6 +8078,58 @@ export class TldwApiClient {
       method: "DELETE",
     })
   }
+
+  // ── Watchlists / Monitoring ──
+
+  async listWatchlists(): Promise<any[]> {
+    const res = await bgRequest<any>({ path: "/api/v1/monitoring/watchlists", method: "GET" })
+    return res?.watchlists ?? (Array.isArray(res) ? res : [])
+  }
+
+  async createWatchlist(payload: { name: string; description?: string; scope_type?: string; rules?: any[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/monitoring/watchlists",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteWatchlist(id: string): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/monitoring/watchlists/${id}`, method: "DELETE" })
+  }
+
+  async listMonitoringAlerts(params?: { rule_severity?: string; source?: string; limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/monitoring/alerts${query}`, method: "GET" })
+  }
+
+  async acknowledgeAlert(id: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/monitoring/alerts/${id}/acknowledge`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async dismissAlert(id: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/monitoring/alerts/${id}`, method: "DELETE" })
+  }
+
+  // ── Rate Limiting / Resource Governor ──
+
+  async getGovernorPolicy(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/resource-governor/policy", method: "GET" })
+  }
+
+  async getGovernorCoverage(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/diag/coverage", method: "GET" })
+  }
+
+  async listAdminRateLimits(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/rate-limits", method: "GET" })
+  }
 }
 
 // Singleton instance

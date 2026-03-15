@@ -1,13 +1,3 @@
-import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
+import dynamic from "next/dynamic"
 
-export default function AdminWatchlistsItemsRedirectPage() {
-  return (
-    <RoutePlaceholder
-      title="Watchlist Items Admin Is Coming Soon"
-      description="Administrative item-level review for watchlists will be available on this route."
-      plannedPath="/admin/watchlists-items"
-      primaryCtaHref="/watchlists"
-      primaryCtaLabel="Open Watchlists"
-    />
-  );
-}
+export default dynamic(() => import("@/routes/option-admin-watchlists"), { ssr: false })
