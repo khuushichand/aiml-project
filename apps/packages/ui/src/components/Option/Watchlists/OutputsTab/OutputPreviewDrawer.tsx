@@ -12,7 +12,7 @@ import {
 import { Download, ExternalLink, MessageSquare } from "lucide-react"
 import DOMPurify from "dompurify"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { UNSAFE_NavigationContext } from "react-router-dom"
 import { setSetting } from "@/services/settings"
 import { DISCUSS_WATCHLIST_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import type { WatchlistChatHandoffPayload } from "@/services/tldw/watchlist-chat-handoff"
@@ -45,7 +45,7 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   onClose
 }) => {
   const { t } = useTranslation(["watchlists", "common"])
-  const navigate = useNavigate()
+  const navigationContext = React.useContext(UNSAFE_NavigationContext)
 
   const [loading, setLoading] = useState(false)
   const [content, setContent] = useState<string | null>(null)
@@ -56,6 +56,18 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
   const outputIsAudio = useMemo(() => isAudioOutput(output), [output])
   const restoreFocusTargetRef = useRef<HTMLElement | null>(null)
   const wasOpenRef = useRef(false)
+
+  const navigateHome = useCallback(() => {
+    const navigator = navigationContext?.navigator
+    if (navigator) {
+      navigator.push("/")
+      return
+    }
+
+    if (typeof window !== "undefined") {
+      window.location.hash = "#/"
+    }
+  }, [navigationContext])
 
   const handleChatAboutOutput = useCallback(() => {
     if (!output) return
@@ -73,8 +85,8 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
     window.dispatchEvent(
       new CustomEvent("tldw:discuss-watchlist", { detail: payload })
     )
-    navigate("/")
-  }, [output, content, navigate])
+    navigateHome()
+  }, [output, content, navigateHome])
 
   useLayoutEffect(() => {
     if (open) {

@@ -6,6 +6,7 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { OutputPreviewDrawer } from "../OutputsTab/OutputPreviewDrawer"
 import type { WatchlistOutput } from "@/types/watchlists"
+import { UNSAFE_NavigationContext } from "react-router-dom"
 
 /* ------------------------------------------------------------------ */
 /*  Hoisted mocks                                                      */
@@ -20,7 +21,9 @@ const settingsMocks = vi.hoisted(() => ({
   setSetting: vi.fn()
 }))
 
-const navigateMock = vi.hoisted(() => vi.fn())
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
 
 /* ------------------------------------------------------------------ */
 /*  Module mocks                                                       */
@@ -52,9 +55,12 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
-vi.mock("react-router-dom", () => ({
-  useNavigate: () => navigateMock
-}))
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return actual
+})
 
 vi.mock("@/services/watchlists", () => ({
   downloadWatchlistOutput: (...args: unknown[]) =>
@@ -95,11 +101,33 @@ const buildOutput = (overrides: Partial<WatchlistOutput> = {}): WatchlistOutput 
 /* ------------------------------------------------------------------ */
 
 describe("OutputPreviewDrawer chat handoff", () => {
+  const renderWithNavigationContext = (ui: React.ReactElement) =>
+    render(
+      <UNSAFE_NavigationContext.Provider
+        value={{
+          basename: "",
+          navigator: {
+            createHref: vi.fn((to: string | { pathname?: string }) =>
+              typeof to === "string" ? to : (to.pathname ?? "/")
+            ),
+            go: vi.fn(),
+            push: navigationMocks.navigate,
+            replace: vi.fn()
+          },
+          static: false,
+          future: { v7_relativeSplatPath: true }
+        }}
+      >
+        {ui}
+      </UNSAFE_NavigationContext.Provider>
+    )
+
   beforeEach(() => {
     vi.clearAllMocks()
     serviceMocks.downloadWatchlistOutput.mockResolvedValue("# Briefing content")
     serviceMocks.downloadWatchlistOutputBinary.mockResolvedValue(new ArrayBuffer(0))
     settingsMocks.setSetting.mockResolvedValue(undefined)
+    window.location.hash = ""
   })
 
   it("shows Chat button in drawer header when content is loaded", async () => {
@@ -139,7 +167,7 @@ describe("OutputPreviewDrawer chat handoff", () => {
   it("stores handoff payload and navigates to root on click", async () => {
     const output = buildOutput({ title: "My Report", media_item_id: 55 })
 
-    render(
+    renderWithNavigationContext(
       <OutputPreviewDrawer
         open
         onClose={vi.fn()}
@@ -173,6 +201,28 @@ describe("OutputPreviewDrawer chat handoff", () => {
     })
 
     // Verify navigation to root
-    expect(navigateMock).toHaveBeenCalledWith("/")
+    expect(navigationMocks.navigate).toHaveBeenCalledWith("/")
+  })
+
+  it("falls back to hash navigation when rendered without a router", async () => {
+    render(
+      <OutputPreviewDrawer
+        open
+        onClose={vi.fn()}
+        output={buildOutput()}
+      />
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.downloadWatchlistOutput).toHaveBeenCalledWith(42)
+    })
+
+    const chatBtn = await screen.findByTestId("watchlists-output-chat-about")
+    expect(chatBtn).not.toBeDisabled()
+
+    await userEvent.click(chatBtn)
+
+    expect(window.location.hash).toBe("#/")
+    expect(navigationMocks.navigate).not.toHaveBeenCalled()
   })
 })

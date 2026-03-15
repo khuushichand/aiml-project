@@ -65,7 +65,7 @@ import {
   getFocusableActiveElement,
   restoreFocusToElement
 } from "../shared/focus-management"
-import { useNavigate } from "react-router-dom"
+import { UNSAFE_NavigationContext } from "react-router-dom"
 import { setSetting } from "@/services/settings"
 import { DISCUSS_WATCHLIST_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import {
@@ -180,7 +180,7 @@ const isEditableTarget = (target: EventTarget | null): boolean => {
 }
 
 export const ItemsTab: React.FC = () => {
-  const navigate = useNavigate()
+  const navigationContext = React.useContext(UNSAFE_NavigationContext)
   const { t } = useTranslation(["watchlists", "common"])
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const openSourceForm = useWatchlistsStore((s) => s.openSourceForm)
@@ -1505,6 +1505,17 @@ export const ItemsTab: React.FC = () => {
     window.open(selectedItem.url, "_blank", "noopener,noreferrer")
   }, [selectedItem])
 
+  const navigateHome = useCallback(() => {
+    if (navigationContext?.navigator) {
+      navigationContext.navigator.push("/")
+      return
+    }
+
+    if (typeof window !== "undefined") {
+      window.location.hash = "#/"
+    }
+  }, [navigationContext])
+
   const handleChatAboutItem = useCallback(
     (item: ScrapedItem) => {
       const article: WatchlistChatArticle = {
@@ -1519,9 +1530,9 @@ export const ItemsTab: React.FC = () => {
       window.dispatchEvent(
         new CustomEvent("tldw:discuss-watchlist", { detail: payload })
       )
-      navigate("/")
+      navigateHome()
     },
-    [navigate]
+    [navigateHome]
   )
 
   const handleChatAboutSelected = useCallback(() => {
@@ -1551,7 +1562,7 @@ export const ItemsTab: React.FC = () => {
           window.dispatchEvent(
             new CustomEvent("tldw:discuss-watchlist", { detail: payload })
           )
-          navigate("/")
+          navigateHome()
         }
       })
       return
@@ -1560,8 +1571,8 @@ export const ItemsTab: React.FC = () => {
     window.dispatchEvent(
       new CustomEvent("tldw:discuss-watchlist", { detail: payload })
     )
-    navigate("/")
-  }, [items, selectedItemIdSet, navigate, t])
+    navigateHome()
+  }, [items, navigateHome, selectedItemIdSet, t])
 
   const openSelectedItemMonitor = useCallback(() => {
     if (!selectedItem) return
