@@ -129,6 +129,8 @@ from tldw_Server_API.app.core.DB_Management.media_db.schema.migrations import (
     run_postgres_migrations,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import (
+    ChunksRepository,
+    DocumentVersionsRepository,
     KeywordsRepository,
     MediaFilesRepository,
 )
@@ -14845,183 +14847,13 @@ class MediaDatabase:
 
 
     def create_document_version(self, media_id: int, content: str, prompt: str | None = None, analysis_content: str | None = None, safe_metadata: str | None = None) -> dict[str, Any]:
-        """
-        Creates a new version entry in the DocumentVersions table.
-
-        Assigns the next available `version_number` for the given `media_id`.
-        Generates a UUID for the version, sets timestamps, and logs a 'create'
-        sync event for the `DocumentVersions` entity.
-
-        This method assumes it's called within an existing transaction context
-        (e.g., initiated by `add_media_with_keywords` or `rollback_to_version`).
-
-        Args:
-            media_id (int): The ID of the parent Media item.
-            content (str): The content for this document version. Required.
-            prompt (Optional[str]): The prompt associated with this version, if any.
-            analysis_content (Optional[str]): Analysis or summary for this version.
-
-        Returns:
-            Dict[str, Any]: A dictionary containing the new version's 'id', 'uuid',
-                            'media_id', and 'version_number'.
-
-        Raises:
-            InputError: If `content` is None or the parent `media_id` does not exist
-                        or is deleted.
-            DatabaseError: For database errors during insert or sync logging.
-        """
-        if content is None:
-            raise InputError("Content is required for a document version.")  # noqa: TRY003
-        current_time = self._get_current_utc_timestamp_str()   # Get time
-        client_id = self.client_id
-        new_uuid = self._generate_uuid()
-        new_version = 1  # Sync version for the DocumentVersion entity itself
-
-        # Assumes called within an existing transaction (e.g., from add_media_with_keywords)
-        conn = self.get_connection()
-        try:
-            def _exec(query: str, params: tuple | list | dict | None = None):
-                return self._execute_with_connection(conn, query, params)
-
-            def _fetchone(query: str, params: tuple | list | dict | None = None):
-                return self._fetchone_with_connection(conn, query, params)
-
-            media_info = _fetchone(
-                "SELECT uuid FROM Media WHERE id = ? AND deleted = 0",
-                (media_id,),
-            )
-            if not media_info:
-                raise InputError(f"Parent Media ID {media_id} not found or deleted.")  # noqa: TRY003, TRY301
-            media_uuid = media_info['uuid']
-
-            next_version_row = _fetchone(
-                'SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version FROM DocumentVersions WHERE media_id = ?',
-                (media_id,),
-            )
-            local_version_number = next_version_row['next_version'] if next_version_row else 1
-            logger.debug(f"Creating document version {local_version_number} for media ID {media_id}, UUID {new_uuid}")
-
-            insert_data = {  # Prepare dict for easier payload generation
-                'media_id': media_id, 'version_number': local_version_number, 'content': content, 'prompt': prompt,
-                'analysis_content': analysis_content,
-                'safe_metadata': safe_metadata,
-                'created_at': current_time,  # Set created_at
-                'uuid': new_uuid,
-                'last_modified': current_time,  # Set last_modified
-                'version': new_version, 'client_id': client_id, 'deleted': 0,
-                'media_uuid': media_uuid  # Add parent uuid for context in payload
-            }
-            try:
-                insert_sql = """
-                    INSERT INTO DocumentVersions (
-                        media_id, version_number, content, prompt, analysis_content, safe_metadata, created_at,
-                        uuid, last_modified, version, client_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                insert_params = (
-                    insert_data['media_id'],
-                    insert_data['version_number'],
-                    insert_data['content'],
-                    insert_data['prompt'],
-                    insert_data['analysis_content'],
-                    insert_data['safe_metadata'],
-                    insert_data['created_at'],
-                    insert_data['uuid'],
-                    insert_data['last_modified'],
-                    insert_data['version'],
-                    insert_data['client_id'],
-                )
-                if self.backend_type == BackendType.POSTGRESQL:
-                    insert_sql += " RETURNING id"
-                insert_cursor = _exec(insert_sql, insert_params)
-            except DatabaseError as oe:
-                message = str(oe).lower()
-                if "safe_metadata" in message and "no column" in message:
-                    insert_sql = """
-                        INSERT INTO DocumentVersions (
-                            media_id, version_number, content, prompt, analysis_content, created_at,
-                            uuid, last_modified, version, client_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """
-                    insert_params = (
-                        insert_data['media_id'],
-                        insert_data['version_number'],
-                        insert_data['content'],
-                        insert_data['prompt'],
-                        insert_data['analysis_content'],
-                        insert_data['created_at'],
-                        insert_data['uuid'],
-                        insert_data['last_modified'],
-                        insert_data['version'],
-                        insert_data['client_id'],
-                    )
-                    insert_data['safe_metadata'] = None
-                    if self.backend_type == BackendType.POSTGRESQL:
-                        insert_sql += " RETURNING id"
-                    insert_cursor = _exec(insert_sql, insert_params)
-                else:
-                    raise
-            if self.backend_type == BackendType.POSTGRESQL:
-                inserted_row = insert_cursor.fetchone()
-                version_id = inserted_row['id'] if inserted_row else None
-            else:
-                version_id = insert_cursor.lastrowid
-            if not version_id:
-                raise DatabaseError("Failed to get last row ID for new document version.")  # noqa: TRY003, TRY301
-
-            # Populate identifiers table if present
-            try:
-                if insert_data.get('safe_metadata'):
-                    import json as _json
-                    try:
-                        smd = _json.loads(insert_data['safe_metadata']) if isinstance(insert_data['safe_metadata'], str) else insert_data['safe_metadata']
-                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
-                        smd = None
-                    if isinstance(smd, dict):
-                        doi = smd.get('doi') or smd.get('DOI')
-                        pmid = smd.get('pmid') or smd.get('PMID')
-                        pmcid = smd.get('pmcid') or smd.get('PMCID')
-                        arxiv_id = smd.get('arxiv_id') or smd.get('arxiv') or smd.get('ArXiv')
-                        s2id = smd.get('s2_paper_id') or smd.get('paperId')
-                        try:
-                            if self.backend_type == BackendType.POSTGRESQL:
-                                ident_sql = (
-                                    "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                                    "VALUES (?, ?, ?, ?, ?, ?) "
-                                    "ON CONFLICT (dv_id) DO UPDATE SET "
-                                    "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
-                                    "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
-                                )
-                            else:
-                                ident_sql = (
-                                    "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                                    "VALUES (?, ?, ?, ?, ?, ?)"
-                                )
-                            _exec(
-                                ident_sql,
-                                (version_id, doi, pmid, pmcid, arxiv_id, s2id),
-                            )
-                        except DatabaseError:
-                            # Table may not exist; ignore
-                            pass
-            except _MEDIA_NONCRITICAL_EXCEPTIONS as _ident_ex:
-                logging.warning(f"Could not populate identifiers for version_id={version_id}: {_ident_ex}")
-
-            self._log_sync_event(conn, 'DocumentVersions', new_uuid, 'create', new_version, insert_data)
-        except (InputError, DatabaseError, sqlite3.Error) as e:
-            if "foreign key constraint failed" in str(e).lower():
-                logger.exception(f"Failed create document version: Media ID {media_id} not found.", exc_info=False)
-                raise InputError(f"Cannot create document version: Media ID {media_id} not found.") from e  # noqa: TRY003
-            logger.error(f"DB error creating document version media {media_id}: {e}", exc_info=True)
-            if isinstance(e, (InputError, DatabaseError)):
-                raise
-            else:
-                raise DatabaseError(f"Failed create document version: {e}") from e  # noqa: TRY003
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-            logger.error(f"Unexpected error creating document version media {media_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Unexpected error creating document version: {e}") from e  # noqa: TRY003
-        else:
-            return {'id': version_id, 'uuid': new_uuid, 'media_id': media_id, 'version_number': local_version_number}
+        return DocumentVersionsRepository.from_legacy_db(self).create(
+            media_id=media_id,
+            content=content,
+            prompt=prompt,
+            analysis_content=analysis_content,
+            safe_metadata=safe_metadata,
+        )
 
     def update_keywords_for_media(
         self,
@@ -15039,87 +14871,7 @@ class MediaDatabase:
         return KeywordsRepository.from_legacy_db(self).soft_delete(keyword)
 
     def soft_delete_document_version(self, version_uuid: str) -> bool:
-        """
-        Soft deletes a specific DocumentVersion by its UUID.
-
-        Prevents deletion if it's the last remaining active version for the media item.
-        Increments the sync version, updates `last_modified`, and logs a 'delete'
-        sync event for the `DocumentVersions` entity.
-
-        Args:
-            version_uuid (str): The UUID of the DocumentVersion to soft delete.
-
-        Returns:
-            bool: True if successfully soft-deleted, False if not found, already
-                  deleted, or if it's the last active version.
-
-        Raises:
-            InputError: If `version_uuid` is empty or None.
-            ConflictError: If the version's sync version has changed concurrently.
-            DatabaseError: For other database errors or sync logging failures.
-        """
-        if not version_uuid:
-            raise InputError("Version UUID required.")  # noqa: TRY003
-        current_time = self._get_current_utc_timestamp_str()  # Get time
-        client_id = self.client_id
-        logger.debug(f"Attempting soft delete DocVersion UUID: {version_uuid}")
-        try:
-            with self.transaction() as conn:
-                version_info = self._fetchone_with_connection(
-                    conn,
-                    "SELECT dv.id, dv.media_id, dv.version, m.uuid as media_uuid "
-                    "FROM DocumentVersions dv "
-                    "JOIN Media m ON dv.media_id = m.id "
-                    "WHERE dv.uuid = ? AND dv.deleted = 0",
-                    (version_uuid,),
-                )
-                if not version_info:
-                    logger.warning(f"DocVersion UUID {version_uuid} not found/deleted.")
-                    return False
-                version_id = version_info['id']
-                media_id = version_info['media_id']
-                current_sync_version = version_info['version']
-                media_uuid = version_info['media_uuid']
-                new_sync_version = current_sync_version + 1
-
-                active_row = self._fetchone_with_connection(
-                    conn,
-                    "SELECT COUNT(*) AS active_count FROM DocumentVersions WHERE media_id = ? AND deleted = 0",
-                    (media_id,),
-                )
-                active_count = int((active_row or {}).get('active_count', 0))
-                if active_count <= 1:
-                    logger.warning(f"Cannot delete DocVersion UUID {version_uuid} - last active.")
-                    return False
-
-                update_cursor = self._execute_with_connection(
-                    conn,
-                    "UPDATE DocumentVersions SET deleted=1, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                    (current_time, new_sync_version, client_id, version_id, current_sync_version),
-                )
-                if getattr(update_cursor, "rowcount", 0) == 0:
-                    raise ConflictError("DocumentVersions", version_id)  # noqa: TRY301
-
-                delete_payload = {
-                    'uuid': version_uuid,
-                    'media_uuid': media_uuid,
-                    'last_modified': current_time,
-                    'version': new_sync_version,
-                    'client_id': client_id,
-                    'deleted': 1,
-                }
-                self._log_sync_event(conn, 'DocumentVersions', version_uuid, 'delete', new_sync_version, delete_payload)
-                logger.info(f"Soft deleted DocVersion UUID {version_uuid}. New ver: {new_sync_version}")
-                return True
-        except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
-            logger.error(f"Error soft delete DocVersion UUID {version_uuid}: {e}", exc_info=True)
-            if isinstance(e, (InputError, ConflictError, DatabaseError)):
-                raise
-            else:
-                raise DatabaseError(f"Failed soft delete doc version: {e}") from e  # noqa: TRY003
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-            logger.error(f"Unexpected soft delete DocVersion error UUID {version_uuid}: {e}", exc_info=True)
-            raise DatabaseError(f"Unexpected version soft delete error: {e}") from e  # noqa: TRY003
+        return DocumentVersionsRepository.from_legacy_db(self).soft_delete(version_uuid)
 
     def mark_as_trash(self, media_id: int) -> bool:
         """
@@ -16823,105 +16575,13 @@ def get_distinct_media_types(self, include_deleted=False, include_trash=False) -
         return results
 
 def add_media_chunk(self, media_id: int, chunk_text: str, start_index: int, end_index: int, chunk_id: str) -> dict | None:
-    """
-    Adds a single chunk record to the MediaChunks table for an active media item.
-
-    Handles transaction, generates UUID, sets sync metadata, and logs a 'create' sync event.
-    This is an instance method operating on the specific user's database.
-
-    Args:
-        media_id (int): The ID of the parent Media item.
-        chunk_text (str): The text content of the chunk.
-        start_index (int): Starting character index within the original content.
-        end_index (int): Ending character index within the original content.
-        chunk_id (str): The application-specific unique ID for this chunk within the media item.
-
-    Returns:
-        Optional[Dict]: A dictionary containing the new chunk's database 'id' and 'uuid'
-                        on success, otherwise None or raises an exception.
-
-    Raises:
-        InputError: If media_id doesn't exist/is inactive, or chunk_text is empty.
-        DatabaseError: For database errors during insertion or sync logging, including IntegrityErrors.
-    """
-    if not chunk_text:
-        raise InputError("Chunk text cannot be empty.")  # noqa: TRY003
-
-    logger.debug(f"Adding chunk for media_id {media_id}, chunk_id {chunk_id} using client {self.client_id}")
-
-    # Prepare sync/metadata fields using instance attributes/methods
-    client_id = self.client_id
-    current_time = self._get_current_utc_timestamp_str()  # Use internal helper
-    new_uuid = self._generate_uuid()  # Use internal helper
-    new_sync_version = 1  # Initial version for a new chunk record
-
-    try:
-        # Use instance transaction method
-        with self.transaction() as conn:
-            media_info = self._fetchone_with_connection(
-                conn,
-                "SELECT uuid FROM Media WHERE id = ? AND deleted = 0",
-                (media_id,),
-            )
-            if not media_info:
-                raise InputError(f"Cannot add chunk: Parent Media ID {media_id} not found or deleted.")  # noqa: TRY003, TRY301
-            media_uuid = media_info['uuid']  # Get parent UUID for context if needed
-
-            # Prepare data for insert statement
-            insert_data = {
-                'media_id': media_id,
-                'chunk_text': chunk_text,
-                'start_index': start_index,
-                'end_index': end_index,
-                'chunk_id': chunk_id,  # Keep the original chunk_id column
-                'uuid': new_uuid,  # Add the new UUID column
-                'last_modified': current_time,
-                'version': new_sync_version,
-                'client_id': client_id,
-                'deleted': 0,
-                'media_uuid': media_uuid  # For sync payload context
-            }
-
-            # Execute INSERT
-            sql = """
-                  INSERT INTO MediaChunks
-                  (media_id, chunk_text, start_index, end_index, chunk_id, uuid, last_modified, version, client_id, \
-                   deleted)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                  """
-            if self.backend_type == BackendType.POSTGRESQL:
-                sql += " RETURNING id"
-            params = (
-                insert_data['media_id'], insert_data['chunk_text'], insert_data['start_index'],
-                insert_data['end_index'], insert_data['chunk_id'], insert_data['uuid'],
-                insert_data['last_modified'], insert_data['version'], insert_data['client_id'],
-                insert_data['deleted']
-            )
-            cursor_insert = self._execute_with_connection(conn, sql, params)
-            if self.backend_type == BackendType.POSTGRESQL:
-                inserted_row = cursor_insert.fetchone()
-                chunk_pk_id = inserted_row['id'] if inserted_row else None
-            else:
-                chunk_pk_id = cursor_insert.lastrowid
-
-            if not chunk_pk_id:
-                raise DatabaseError("Failed to get last row ID for new media chunk.")  # noqa: TRY003, TRY301
-
-            # Log sync event using instance method (passing connection)
-            self._log_sync_event(conn, 'MediaChunks', new_uuid, 'create', new_sync_version, insert_data)
-
-            logger.info(f"Successfully added chunk ID {chunk_pk_id} (UUID: {new_uuid}) for media {media_id}.")
-            return {'id': chunk_pk_id, 'uuid': new_uuid}
-
-    except sqlite3.IntegrityError as ie:
-        logger.error(f"Integrity error adding chunk for media {media_id}: {ie}", exc_info=True)
-        raise DatabaseError(f"Failed to add chunk due to constraint violation: {ie}") from ie  # noqa: TRY003
-    except (InputError, DatabaseError) as e:
-        logger.error(f"Error adding chunk for media {media_id}: {e}", exc_info=True)
-        raise
-    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-        logger.error(f"Unexpected error adding chunk for media {media_id}: {e}", exc_info=True)
-        raise DatabaseError(f"An unexpected error occurred while adding media chunk: {e}") from e  # noqa: TRY003
+    return ChunksRepository.from_legacy_db(self).add(
+        media_id=media_id,
+        chunk_text=chunk_text,
+        start_index=start_index,
+        end_index=end_index,
+        chunk_id=chunk_id,
+    )
 
 def add_media_chunks_in_batches(self, media_id: int, chunks_to_add: list[dict[str, Any]],
                                 batch_size: int = 100) -> int:
@@ -17048,139 +16708,7 @@ def add_media_chunks_in_batches(self, media_id: int, chunks_to_add: list[dict[st
         return successfully_processed_count
 
 def batch_insert_chunks(self, media_id: int, chunks: list[dict]) -> int:
-    """
-    Inserts a batch of chunk records into the MediaChunks table for an active media item.
-
-    Uses executemany for efficiency within a single transaction.
-    Generates UUIDs, sets sync metadata, and logs a 'create' sync event for EACH chunk.
-    This is an instance method operating on the specific user's database.
-
-    Args:
-        media_id (int): The ID of the parent Media item.
-        chunks (List[Dict]): A list of dictionaries, where each dictionary represents a chunk.
-                             Expected keys in each dict: 'text' (or 'chunk_text'), and
-                             'metadata' dict containing 'start_index', 'end_index'.
-
-    Returns:
-        int: The number of chunks successfully prepared for insertion.
-
-    Raises:
-        InputError: If media_id doesn't exist/is inactive, or the chunks list is empty or invalid.
-        DatabaseError: For database errors during insertion or sync logging, including IntegrityErrors.
-        KeyError: If expected keys ('text', 'metadata', 'start_index', 'end_index') are missing in chunk dicts.
-    """
-    if not chunks:
-        logger.warning(f"batch_insert_chunks called with empty list for media {media_id}.")
-        return 0
-
-    logger.info(f"Batch inserting {len(chunks)} chunks for media_id {media_id} using client {self.client_id}.")
-
-    client_id = self.client_id
-    current_time = self._get_current_utc_timestamp_str()
-
-    try:
-        with self.transaction() as conn:
-            parent_exists = self._fetchone_with_connection(
-                conn,
-                "SELECT 1 FROM Media WHERE id = ? AND deleted = 0",
-                (media_id,),
-            )
-            if not parent_exists:
-                raise InputError(f"Cannot batch insert chunks: Parent Media ID {media_id} not found or deleted.")  # noqa: TRY003, TRY301
-
-            base_index_row = self._fetchone_with_connection(
-                conn,
-                "SELECT COUNT(*) AS chunk_count FROM MediaChunks WHERE media_id = ?",
-                (media_id,),
-            )
-            base_index = int((base_index_row or {}).get('chunk_count', 0))
-
-            params_list: list[tuple] = []
-            sync_log_data: list[tuple] = []
-            running_index = 0
-
-            for chunk_dict in chunks:
-                chunk_text = chunk_dict.get('text', chunk_dict.get('chunk_text'))
-                metadata = chunk_dict.get('metadata') or {}
-                start_index = metadata.get('start_index')
-                end_index = metadata.get('end_index')
-                if chunk_text is None or start_index is None or end_index is None:
-                    logger.warning("Skipping chunk for media {} due to missing text/start/end metadata.", media_id)
-                    continue
-
-                provided_chunk_id = chunk_dict.get('chunk_id') or metadata.get('chunk_id')
-                if provided_chunk_id:
-                    chunk_id = str(provided_chunk_id)
-                else:
-                    running_index += 1
-                    chunk_id = f"{media_id}_chunk_{base_index + running_index}"
-
-                new_uuid = self._generate_uuid()
-                new_sync_version = 1
-
-                params_list.append(
-                    (
-                        media_id,
-                        chunk_text,
-                        start_index,
-                        end_index,
-                        chunk_id,
-                        new_uuid,
-                        current_time,
-                        new_sync_version,
-                        client_id,
-                        0,
-                    )
-                )
-
-                sync_log_data.append(
-                    (
-                        new_uuid,
-                        new_sync_version,
-                        {
-                            'media_id': media_id,
-                            'chunk_text': chunk_text,
-                            'start_index': start_index,
-                            'end_index': end_index,
-                            'chunk_id': chunk_id,
-                            'uuid': new_uuid,
-                            'last_modified': current_time,
-                            'version': new_sync_version,
-                            'client_id': client_id,
-                            'deleted': 0,
-                        },
-                    )
-                )
-
-            if not params_list:
-                logger.warning("No valid chunks prepared for batch insert media {}.", media_id)
-                return 0
-
-            self._executemany_with_connection(
-                conn,
-                """
-                INSERT INTO MediaChunks
-                (media_id, chunk_text, start_index, end_index, chunk_id, uuid, last_modified, version, client_id, deleted)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                params_list,
-            )
-
-            for chunk_uuid_log, version_log, payload_log in sync_log_data:
-                self._log_sync_event(conn, 'MediaChunks', chunk_uuid_log, 'create', version_log, payload_log)
-            inserted_count = len(params_list)
-        logger.info(f"Successfully batch inserted {inserted_count} chunks for media {media_id}.")
-    except sqlite3.IntegrityError as ie:
-        logger.error(f"Integrity error batch inserting chunks for media {media_id}: {ie}", exc_info=True)
-        raise DatabaseError(f"Failed to batch insert chunks due to constraint violation: {ie}") from ie  # noqa: TRY003
-    except (InputError, DatabaseError, KeyError) as e:
-        logger.error(f"Error batch inserting chunks for media {media_id}: {e}", exc_info=True)
-        raise
-    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-        logger.error(f"Unexpected error batch inserting chunks for media {media_id}: {e}", exc_info=True)
-        raise DatabaseError(f"An unexpected error occurred during batch chunk insertion: {e}") from e  # noqa: TRY003
-    else:
-        return inserted_count
+    return ChunksRepository.from_legacy_db(self).batch_insert(media_id=media_id, chunks=chunks)
 
 def process_chunks(self, media_id: int, chunks: list[dict[str, Any]], batch_size: int = 100):
     """
@@ -17376,66 +16904,13 @@ MediaDatabase.process_chunks = process_chunks
 
 
 def get_document_version(db_instance: MediaDatabase, media_id: int, version_number: int | None = None, include_content: bool = True) -> dict[str, Any] | None:
-    """
-    Gets a specific document version or the latest active one for an active media item.
-
-    Filters results to only include versions where both the DocumentVersion itself
-    and the parent Media item are not soft-deleted (`deleted = 0`).
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        media_id (int): The ID of the parent Media item.
-        version_number (Optional[int]): The specific `version_number` to retrieve.
-            If None, retrieves the latest (highest `version_number`) active version.
-            Must be a positive integer if provided. Defaults to None.
-        include_content (bool): Whether to include the 'content' field in the
-                                result. Defaults to True.
-
-    Returns:
-        Optional[Dict[str, Any]]: A dictionary representing the document version
-                                  if found and active, otherwise None.
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object or `media_id` is not int.
-        ValueError: If `version_number` is provided but is not a positive integer.
-        DatabaseError: For database query errors.
-    """
     if not isinstance(db_instance, MediaDatabase):
         raise TypeError("db_instance must be a Database object.")  # noqa: TRY003
-    if not isinstance(media_id, int):
-        raise TypeError("media_id must be an integer.")  # noqa: TRY003
-    if version_number is not None and (not isinstance(version_number, int) or version_number < 1):
-        raise ValueError("Version number must be a positive integer.")  # noqa: TRY003
-    log_msg = f"Getting {'latest' if version_number is None else f'version {version_number}'} for media_id={media_id}"
-    logger.debug(f"{log_msg} (active only) from DB: {db_instance.db_path_str}")
-    try:
-        select_cols_list = ["dv.id", "dv.uuid", "dv.media_id", "dv.version_number", "dv.created_at",
-                           "dv.prompt", "dv.analysis_content", "dv.safe_metadata", "dv.last_modified", "dv.version",
-                           "dv.client_id", "dv.deleted"]
-        if include_content:
-            select_cols_list.append("dv.content")
-        select_cols = ", ".join(select_cols_list)
-        params = [media_id]
-        query_base = "FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id WHERE dv.media_id = ? AND dv.deleted = 0 AND m.deleted = 0"
-        order_limit = ""
-        if version_number is None:
-            order_limit = "ORDER BY dv.version_number DESC LIMIT 1"
-        else:
-            query_base += " AND dv.version_number = ?"
-            params.append(version_number)
-        final_query = f"SELECT {select_cols} {query_base} {order_limit}"
-        cursor = db_instance.execute_query(final_query, tuple(params))
-        result = cursor.fetchone()
-        if not result:
-            logger.warning(f"Active doc version {version_number or 'latest'} not found for active media {media_id}")
-            return None
-        return dict(result)
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.error(f"Error retrieving {log_msg} DB '{db_instance.db_path_str}': {e}", exc_info=True)
-        raise DatabaseError(f"DB error retrieving version: {e}") from e  # noqa: TRY003
-    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-        logger.error(f"Unexpected error retrieving {log_msg} DB '{db_instance.db_path_str}': {e}", exc_info=True)
-        raise DatabaseError(f"Unexpected error retrieving version: {e}") from e  # noqa: TRY003
+    return DocumentVersionsRepository.from_legacy_db(db_instance).get(
+        media_id=media_id,
+        version_number=version_number,
+        include_content=include_content,
+    )
 
 
 # Backup functions remain placeholders or need proper implementation
