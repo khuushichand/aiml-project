@@ -1828,6 +1828,63 @@ export class TldwApiClient {
     })
   }
 
+  // ── Admin API Key Management ──
+
+  async listUserApiKeys(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({
+      path: `/api/v1/admin/users/${userId}/api-keys`,
+      method: "GET"
+    })
+  }
+
+  async createUserApiKey(userId: number, payload: { name?: string; rate_limit?: number; allowed_ips?: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/api-keys`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async revokeUserApiKey(userId: number, keyId: number): Promise<{ message: string }> {
+    return await bgRequest<{ message: string }>({
+      path: `/api/v1/admin/users/${userId}/api-keys/${keyId}`,
+      method: "DELETE"
+    })
+  }
+
+  async updateUserApiKey(userId: number, keyId: number, payload: { rate_limit?: number; allowed_ips?: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/api-keys/${keyId}`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async rotateUserApiKey(userId: number, keyId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/api-keys/${keyId}/rotate`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async listUserVirtualKeys(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({
+      path: `/api/v1/admin/users/${userId}/virtual-keys`,
+      method: "GET"
+    })
+  }
+
+  async getApiKeyAuditLog(keyId: number): Promise<any[]> {
+    return await bgRequest<any[]>({
+      path: `/api/v1/admin/api-keys/${keyId}/audit-log`,
+      method: "GET"
+    })
+  }
+
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
