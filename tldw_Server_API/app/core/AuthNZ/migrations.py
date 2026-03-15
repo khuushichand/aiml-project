@@ -2145,11 +2145,27 @@ def migration_071_add_governance_pack_upgrade_lineage(conn: sqlite3.Connection) 
             "ALTER TABLE mcp_governance_packs ADD COLUMN installed_from_upgrade_id INTEGER"
         )
 
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_active_scope "
-        "ON mcp_governance_packs(pack_id, owner_scope_type, IFNULL(owner_scope_id, -1)) "
-        "WHERE is_active_install = 1"
-    )
+    governance_pack_indexes = {
+        str(row[1]) for row in conn.execute("PRAGMA index_list(mcp_governance_packs)").fetchall()
+    }
+    if "uq_mcp_governance_packs_active_scope" not in governance_pack_indexes:
+        conn.execute("UPDATE mcp_governance_packs SET is_active_install = 0")
+        conn.execute(
+            """
+            UPDATE mcp_governance_packs
+            SET is_active_install = 1
+            WHERE id IN (
+                SELECT MAX(id)
+                FROM mcp_governance_packs
+                GROUP BY pack_id, owner_scope_type, IFNULL(owner_scope_id, -1)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_active_scope "
+            "ON mcp_governance_packs(pack_id, owner_scope_type, IFNULL(owner_scope_id, -1)) "
+            "WHERE is_active_install = 1"
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS mcp_governance_pack_upgrades (

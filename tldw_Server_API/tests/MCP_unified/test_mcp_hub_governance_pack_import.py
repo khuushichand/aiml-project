@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 
-async def _make_repo(tmp_path, monkeypatch):
+
+async def _make_repo(tmp_path, monkeypatch) -> McpHubRepo:
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
@@ -27,7 +31,11 @@ async def _make_repo(tmp_path, monkeypatch):
     return repo
 
 
-async def _seed_research_capability_mappings(repo, *, actor_id: int = 7) -> None:
+async def _seed_research_capability_mappings(
+    repo: McpHubRepo,
+    *,
+    actor_id: int = 7,
+) -> None:
     await repo.create_capability_adapter_mapping(
         mapping_id="filesystem.read.global",
         owner_scope_type="global",
@@ -683,6 +691,60 @@ async def test_dry_run_upgrade_blocks_semantic_profile_change_with_local_assignm
         item["object_type"] == "permission_profile"
         and item["source_object_id"] == "researcher.profile"
         and item["impact"] == "behavioral_conflict"
+        for item in plan.dependency_impact
+    )
+
+
+@pytest.mark.asyncio
+async def test_dry_run_upgrade_reports_workspace_rebind_for_modified_assignment(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    service = McpHubGovernancePackService(repo=repo)
+    source_pack = load_governance_pack_fixture("minimal_researcher_pack")
+    imported = await service.import_pack(
+        pack=source_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    await repo.add_policy_assignment_workspace(
+        int(imported.imported_object_ids["policy_assignments"][0]),
+        workspace_id="workspace-alpha",
+        actor_id=8,
+    )
+
+    target_pack = deepcopy(source_pack)
+    target_pack.manifest.pack_version = "1.0.1"
+    target_pack.assignments[0].approval_template_id = None
+
+    plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=target_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    assert plan.upgradeable is True
+    assert plan.structural_conflicts == []
+    assert plan.behavioral_conflicts == []
+    assert any(
+        item["object_type"] == "policy_assignment"
+        and item["source_object_id"] == "researcher.default"
+        and item["impact"] == "rebind_required"
+        and item["dependent_type"] == "policy_assignment_workspace"
+        and item["reference_field"] == "assignment_id"
+        and item["target_id"] == "workspace-alpha"
         for item in plan.dependency_impact
     )
 

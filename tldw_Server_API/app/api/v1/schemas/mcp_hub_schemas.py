@@ -760,6 +760,8 @@ class GovernancePackImportRequest(BaseModel):
 
 
 class GovernancePackUpgradeDryRunRequest(BaseModel):
+    """Request body for governance-pack upgrade planning."""
+
     source_governance_pack_id: int = Field(..., ge=1)
     owner_scope_type: ScopeType = Field(default="user")
     owner_scope_id: int | None = None
@@ -767,6 +769,8 @@ class GovernancePackUpgradeDryRunRequest(BaseModel):
 
 
 class GovernancePackReportManifestResponse(BaseModel):
+    """Manifest summary returned in governance-pack dry-run reports."""
+
     pack_id: str
     pack_version: str
     title: str
@@ -774,6 +778,8 @@ class GovernancePackReportManifestResponse(BaseModel):
 
 
 class GovernancePackDryRunReportResponse(BaseModel):
+    """Portable governance-pack dry-run validation report."""
+
     manifest: GovernancePackReportManifestResponse
     digest: str
     resolved_capabilities: list[str] = Field(default_factory=list)
@@ -787,10 +793,14 @@ class GovernancePackDryRunReportResponse(BaseModel):
 
 
 class GovernancePackDryRunResponse(BaseModel):
+    """Envelope for governance-pack import dry-run responses."""
+
     report: GovernancePackDryRunReportResponse
 
 
 class GovernancePackUpgradeObjectDiffResponse(BaseModel):
+    """Object-level diff entry produced by governance-pack upgrade planning."""
+
     object_type: str
     source_object_id: str
     change_type: str
@@ -799,6 +809,8 @@ class GovernancePackUpgradeObjectDiffResponse(BaseModel):
 
 
 class GovernancePackUpgradeDependencyImpactResponse(BaseModel):
+    """Dependency impact entry produced by governance-pack upgrade planning."""
+
     object_type: str
     source_object_id: str
     change_type: str
@@ -811,6 +823,8 @@ class GovernancePackUpgradeDependencyImpactResponse(BaseModel):
 
 
 class GovernancePackUpgradePlanResponse(BaseModel):
+    """Planner output for a governance-pack upgrade dry run."""
+
     source_governance_pack_id: int
     source_manifest: dict[str, Any] = Field(default_factory=dict)
     target_manifest: dict[str, Any] = Field(default_factory=dict)
@@ -825,10 +839,14 @@ class GovernancePackUpgradePlanResponse(BaseModel):
 
 
 class GovernancePackUpgradeDryRunResponse(BaseModel):
+    """Envelope for governance-pack upgrade dry-run responses."""
+
     plan: GovernancePackUpgradePlanResponse
 
 
 class GovernancePackUpgradeExecuteRequest(BaseModel):
+    """Request body for transactional governance-pack upgrade execution."""
+
     source_governance_pack_id: int = Field(..., ge=1)
     owner_scope_type: ScopeType = Field(default="user")
     owner_scope_id: int | None = None
@@ -838,6 +856,8 @@ class GovernancePackUpgradeExecuteRequest(BaseModel):
 
 
 class GovernancePackUpgradeExecutionResponse(BaseModel):
+    """Execution result for a completed governance-pack upgrade."""
+
     upgrade_id: int
     source_governance_pack_id: int
     target_governance_pack_id: int
@@ -850,6 +870,8 @@ class GovernancePackUpgradeExecutionResponse(BaseModel):
 
 
 class GovernancePackUpgradeHistoryEntryResponse(BaseModel):
+    """Lineage entry describing a past governance-pack upgrade."""
+
     id: int
     pack_id: str
     owner_scope_type: ScopeType

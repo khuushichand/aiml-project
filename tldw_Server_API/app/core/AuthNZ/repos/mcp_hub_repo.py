@@ -804,51 +804,23 @@ class McpHubRepo:
                 accepted_resolutions_json, failure_summary, planned_at, executed_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
+        row: dict[str, Any] | None = None
         if conn is None:
-            await self.db_pool.execute(query, params)
-            row = await self.db_pool.fetchone(
-                """
-                SELECT id
-                FROM mcp_governance_pack_upgrades
-                WHERE pack_id = ?
-                  AND owner_scope_type = ?
-                  AND (
-                    (owner_scope_id IS NULL AND ? IS NULL)
-                    OR owner_scope_id = ?
-                  )
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (
-                    str(pack_id or "").strip(),
-                    scope_type,
-                    owner_scope_id,
-                    owner_scope_id,
-                ),
-            )
+            if getattr(self.db_pool, "pool", None) is not None:
+                row = await self.db_pool.fetchone(f"{query} RETURNING id", params)
+            else:
+                cursor = await self.db_pool.execute(query, params)
+                inserted_id = getattr(cursor, "lastrowid", None)
+                if inserted_id is not None:
+                    row = {"id": inserted_id}
         else:
-            await self._conn_execute(conn, query, params)
-            row = await self._conn_fetchone(
-                conn,
-                """
-                SELECT id
-                FROM mcp_governance_pack_upgrades
-                WHERE pack_id = ?
-                  AND owner_scope_type = ?
-                  AND (
-                    (owner_scope_id IS NULL AND ? IS NULL)
-                    OR owner_scope_id = ?
-                  )
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (
-                    str(pack_id or "").strip(),
-                    scope_type,
-                    owner_scope_id,
-                    owner_scope_id,
-                ),
-            )
+            if getattr(self.db_pool, "pool", None) is not None:
+                row = await self._conn_fetchone(conn, f"{query} RETURNING id", params)
+            else:
+                cursor = await self._conn_execute(conn, query, params)
+                inserted_id = getattr(cursor, "lastrowid", None)
+                if inserted_id is not None:
+                    row = {"id": inserted_id}
         if not row:
             return {}
         created = await self.get_governance_pack_upgrade(int(row["id"]), conn=conn)

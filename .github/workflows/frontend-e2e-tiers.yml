@@ -60,6 +60,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
+
       - name: Setup Python and backend
         uses: ./.github/actions/setup-python-deps
         with:
@@ -69,9 +74,6 @@ jobs:
             pyproject.toml
             uv.lock
           extras: dev
-
-      - name: Install FFmpeg
-        uses: ./.github/actions/setup-ffmpeg
 
       - name: Start backend server
         run: |
@@ -148,6 +150,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
+
       - name: Setup Python and backend
         uses: ./.github/actions/setup-python-deps
         with:
@@ -157,9 +164,6 @@ jobs:
             pyproject.toml
             uv.lock
           extras: dev
-
-      - name: Install FFmpeg
-        uses: ./.github/actions/setup-ffmpeg
 
       - name: Start backend server
         run: |
@@ -228,6 +232,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
+
       - name: Setup Python and backend
         uses: ./.github/actions/setup-python-deps
         with:
@@ -237,9 +246,6 @@ jobs:
             pyproject.toml
             uv.lock
           extras: dev
-
-      - name: Install FFmpeg
-        uses: ./.github/actions/setup-ffmpeg
 
       - name: Start backend server
         run: |

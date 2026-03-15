@@ -549,6 +549,32 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE indexname = 'uq_mcp_governance_packs_active_scope'
+                  AND schemaname = ANY (current_schemas(false))
+            ) THEN
+                UPDATE mcp_governance_packs
+                SET is_active_install = FALSE;
+
+                WITH latest AS (
+                    SELECT MAX(id) AS id
+                    FROM mcp_governance_packs
+                    GROUP BY pack_id, owner_scope_type, COALESCE(owner_scope_id, -1)
+                )
+                UPDATE mcp_governance_packs
+                SET is_active_install = TRUE
+                WHERE id IN (SELECT id FROM latest);
+            END IF;
+        END $$;
+        """,
+        (),
+    ),
+    (
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_active_scope "
         "ON mcp_governance_packs(pack_id, owner_scope_type, COALESCE(owner_scope_id, -1)) "
         "WHERE is_active_install",

@@ -318,6 +318,8 @@ class McpHubGovernancePackService:
                             "reference_field": "profile_id",
                             "target_type": assignment.get("target_type"),
                             "target_id": assignment.get("target_id"),
+                            "conflict_on_removed": True,
+                            "conflict_on_modified": True,
                         }
                     )
             elif object_type == "approval_policy":
@@ -329,6 +331,8 @@ class McpHubGovernancePackService:
                             "reference_field": "approval_policy_id",
                             "target_type": assignment.get("target_type"),
                             "target_id": assignment.get("target_id"),
+                            "conflict_on_removed": True,
+                            "conflict_on_modified": True,
                         }
                     )
             elif object_type == "policy_assignment":
@@ -341,8 +345,23 @@ class McpHubGovernancePackService:
                             "reference_field": "assignment_id",
                             "target_type": assignment.get("target_type"),
                             "target_id": assignment.get("target_id"),
+                            "conflict_on_removed": True,
+                            "conflict_on_modified": True,
                         }
                     )
+                if object_id.isdigit():
+                    for workspace in await self.repo.list_policy_assignment_workspaces(int(object_id)):
+                        dependents.append(
+                            {
+                                "dependent_type": "policy_assignment_workspace",
+                                "dependent_id": int(object_id),
+                                "reference_field": "assignment_id",
+                                "target_type": assignment.get("target_type") if assignment else None,
+                                "target_id": workspace.get("workspace_id"),
+                                "conflict_on_removed": True,
+                                "conflict_on_modified": False,
+                            }
+                        )
             dependencies[(object_type, source_object_id)] = dependents
         return imported_objects, dependencies
 
@@ -706,23 +725,33 @@ class McpHubGovernancePackService:
                 if not dependents:
                     continue
                 for dependent in dependents:
-                    impact = "structural_conflict" if change_type == "removed" else "behavioral_conflict"
+                    public_dependent = {
+                        key: value
+                        for key, value in dependent.items()
+                        if key not in {"conflict_on_removed", "conflict_on_modified"}
+                    }
+                    conflict_on_removed = bool(dependent.get("conflict_on_removed", True))
+                    conflict_on_modified = bool(dependent.get("conflict_on_modified", True))
+                    if change_type == "removed":
+                        impact = "structural_conflict" if conflict_on_removed else "rebind_required"
+                    else:
+                        impact = "behavioral_conflict" if conflict_on_modified else "rebind_required"
                     dependency_impact.append(
                         {
                             "object_type": object_type,
                             "source_object_id": source_object_id,
                             "change_type": change_type,
                             "impact": impact,
-                            **dependent,
+                            **public_dependent,
                         }
                     )
-                    if change_type == "removed":
+                    if change_type == "removed" and conflict_on_removed:
                         structural_conflicts.append(
                             f"{object_type}:{source_object_id} is removed but dependent "
                             f"{dependent['dependent_type'].replace('_', ' ')} {dependent['dependent_id']} "
                             f"still references it via {dependent['reference_field']}"
                         )
-                    else:
+                    elif change_type != "removed" and conflict_on_modified:
                         behavioral_conflicts.append(
                             f"{object_type}:{source_object_id} materially changes while dependent "
                             f"{dependent['dependent_type'].replace('_', ' ')} {dependent['dependent_id']} "
