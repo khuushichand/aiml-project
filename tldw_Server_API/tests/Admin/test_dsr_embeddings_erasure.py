@@ -8,9 +8,6 @@ Covers:
 """
 from __future__ import annotations
 
-import asyncio
-from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -72,7 +69,8 @@ class TestCountEmbeddings:
         keys = [entry["key"] for entry in _CATEGORY_DEFS]
         assert "embeddings" in keys
 
-    def test_count_embeddings_with_mock(self, _mock_chroma_manager):
+    @pytest.mark.asyncio
+    async def test_count_embeddings_with_mock(self, _mock_chroma_manager):
         """_count_embeddings should sum counts across all collections."""
         with patch(
             "tldw_Server_API.app.services.admin_data_subject_requests_service._get_chroma_manager_for_user",
@@ -82,10 +80,11 @@ class TestCountEmbeddings:
                 _count_embeddings,
             )
 
-            result = asyncio.get_event_loop().run_until_complete(_count_embeddings(999))
+            result = await _count_embeddings(999)
             assert result == 10
 
-    def test_count_embeddings_multiple_collections(self, _mock_collection):
+    @pytest.mark.asyncio
+    async def test_count_embeddings_multiple_collections(self, _mock_collection):
         """_count_embeddings should sum across multiple collections."""
         manager = MagicMock()
         manager.list_collections.return_value = [
@@ -101,10 +100,11 @@ class TestCountEmbeddings:
                 _count_embeddings,
             )
 
-            result = asyncio.get_event_loop().run_until_complete(_count_embeddings(1))
+            result = await _count_embeddings(1)
             assert result == 50
 
-    def test_count_embeddings_returns_zero_on_failure(self):
+    @pytest.mark.asyncio
+    async def test_count_embeddings_returns_zero_on_failure(self):
         """_count_embeddings should return 0 when ChromaDBManager fails."""
         with patch(
             "tldw_Server_API.app.services.admin_data_subject_requests_service._get_chroma_manager_for_user",
@@ -114,7 +114,7 @@ class TestCountEmbeddings:
                 _count_embeddings,
             )
 
-            result = asyncio.get_event_loop().run_until_complete(_count_embeddings(1))
+            result = await _count_embeddings(1)
             assert result == 0
 
 
@@ -171,7 +171,8 @@ class TestExecuteDsrErasure:
 
         assert callable(execute_dsr_erasure)
 
-    def test_execute_dsr_erasure_calls_handlers(self, mock_dsr_repo):
+    @pytest.mark.asyncio
+    async def test_execute_dsr_erasure_calls_handlers(self, mock_dsr_repo):
         """execute_dsr_erasure should call the appropriate handler for each category."""
         from tldw_Server_API.app.services import admin_data_subject_requests_service as svc
 
@@ -181,13 +182,11 @@ class TestExecuteDsrErasure:
         svc._ERASURE_HANDLERS["media_records"] = mock_media
         svc._ERASURE_HANDLERS["embeddings"] = mock_emb
         try:
-            result = asyncio.get_event_loop().run_until_complete(
-                svc.execute_dsr_erasure(
-                    request_id=1,
-                    user_id=42,
-                    selected_categories=["media_records", "embeddings"],
-                    dsr_repo=mock_dsr_repo,
-                )
+            result = await svc.execute_dsr_erasure(
+                request_id=1,
+                user_id=42,
+                selected_categories=["media_records", "embeddings"],
+                dsr_repo=mock_dsr_repo,
             )
 
             mock_media.assert_awaited_once_with(42)
@@ -199,25 +198,25 @@ class TestExecuteDsrErasure:
         finally:
             svc._ERASURE_HANDLERS.update(original)
 
-    def test_execute_dsr_erasure_handles_unknown_category(self, mock_dsr_repo):
+    @pytest.mark.asyncio
+    async def test_execute_dsr_erasure_handles_unknown_category(self, mock_dsr_repo):
         """Unknown categories should be reported as errors."""
         from tldw_Server_API.app.services.admin_data_subject_requests_service import (
             execute_dsr_erasure,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
-            execute_dsr_erasure(
-                request_id=1,
-                user_id=42,
-                selected_categories=["nonexistent_category"],
-                dsr_repo=mock_dsr_repo,
-            )
+        result = await execute_dsr_erasure(
+            request_id=1,
+            user_id=42,
+            selected_categories=["nonexistent_category"],
+            dsr_repo=mock_dsr_repo,
         )
 
         assert result["status"] == "failed"
         assert "nonexistent_category" in result["errors"]
 
-    def test_execute_dsr_erasure_handles_handler_failure(self, mock_dsr_repo):
+    @pytest.mark.asyncio
+    async def test_execute_dsr_erasure_handles_handler_failure(self, mock_dsr_repo):
         """If a handler raises, the category should be marked as error."""
         from tldw_Server_API.app.services import admin_data_subject_requests_service as svc
 
@@ -225,13 +224,11 @@ class TestExecuteDsrErasure:
         original = dict(svc._ERASURE_HANDLERS)
         svc._ERASURE_HANDLERS["notes"] = mock_notes
         try:
-            result = asyncio.get_event_loop().run_until_complete(
-                svc.execute_dsr_erasure(
-                    request_id=1,
-                    user_id=42,
-                    selected_categories=["notes"],
-                    dsr_repo=mock_dsr_repo,
-                )
+            result = await svc.execute_dsr_erasure(
+                request_id=1,
+                user_id=42,
+                selected_categories=["notes"],
+                dsr_repo=mock_dsr_repo,
             )
 
             assert result["status"] == "failed"
@@ -240,7 +237,8 @@ class TestExecuteDsrErasure:
         finally:
             svc._ERASURE_HANDLERS.update(original)
 
-    def test_execute_dsr_erasure_status_transitions(self, mock_dsr_repo):
+    @pytest.mark.asyncio
+    async def test_execute_dsr_erasure_status_transitions(self, mock_dsr_repo):
         """The repo should be called with executing, then completed."""
         from tldw_Server_API.app.services import admin_data_subject_requests_service as svc
 
@@ -252,13 +250,11 @@ class TestExecuteDsrErasure:
                 execute_dsr_erasure,
             )
 
-            asyncio.get_event_loop().run_until_complete(
-                execute_dsr_erasure(
-                    request_id=7,
-                    user_id=1,
-                    selected_categories=["media_records"],
-                    dsr_repo=mock_dsr_repo,
-                )
+            await execute_dsr_erasure(
+                request_id=7,
+                user_id=1,
+                selected_categories=["media_records"],
+                dsr_repo=mock_dsr_repo,
             )
 
             calls = mock_dsr_repo.update_request_status.call_args_list

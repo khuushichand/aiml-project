@@ -475,27 +475,54 @@ async def _erase_notes(user_id: int) -> int:
 
 
 async def _erase_embeddings(user_id: int) -> int:
-    """Delete all ChromaDB collections for a user, returning count of deleted collections."""
+    """Delete all ChromaDB collections for a user, returning total embedding count erased.
+
+    Raises ``RuntimeError`` when ChromaDB is unavailable but data might exist,
+    so the category is marked as ``error`` and the overall DSR as ``failed``.
+    Returns 0 only when there is genuinely nothing to delete.
+    """
 
     def _erase_sync() -> int:
         try:
             manager = _get_chroma_manager_for_user(user_id)
         except Exception as exc:
-            logger.warning("ChromaDB not available for user {} during erasure: {}", user_id, exc)
+            # Check whether a chroma_storage directory exists for this user.
+            # If it does, data might be present and we must not silently succeed.
+            from tldw_Server_API.app.core.config import settings as app_settings
+
+            user_db_base = app_settings.get("USER_DB_BASE_DIR")
+            if not user_db_base:
+                project_root = Path(__file__).resolve().parents[3]
+                user_db_base = str(project_root / "Databases" / "user_databases")
+            chroma_dir = Path(user_db_base) / str(user_id) / "chroma_storage"
+            if chroma_dir.exists():
+                raise RuntimeError(
+                    f"ChromaDB unavailable for user {user_id} but chroma_storage "
+                    f"directory exists — cannot confirm erasure: {exc}"
+                ) from exc
+            # No storage directory → nothing to erase
             return 0
+
         try:
             collections = manager.list_collections()
-            count = 0
-            for col in collections:
-                try:
-                    manager.delete_collection(col.name)
-                    count += 1
-                except Exception as exc:
-                    logger.warning("Failed to delete collection '{}' for user {}: {}", col.name, user_id, exc)
-            return count
         except Exception as exc:
-            logger.warning("Failed to list/delete collections for user {}: {}", user_id, exc)
-            return 0
+            raise RuntimeError(
+                f"Failed to list ChromaDB collections for user {user_id}: {exc}"
+            ) from exc
+
+        total_embeddings = 0
+        for col in collections:
+            try:
+                total_embeddings += col.count()
+            except Exception:
+                pass  # count may fail; still attempt deletion
+            try:
+                manager.delete_collection(col.name)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to delete collection '{col.name}' for user {user_id}: {exc}"
+                ) from exc
+        return total_embeddings
 
     return await asyncio.to_thread(_erase_sync)
 
@@ -548,6 +575,16 @@ async def execute_dsr_erasure(
     """
     # Mark as executing
     await dsr_repo.update_request_status(request_id, "executing")
+
+    executed_by = (
+        getattr(principal, "principal_id", None) or getattr(principal, "user_id", None)
+        if principal is not None
+        else None
+    )
+    logger.info(
+        "DSR erasure started: request_id={} user_id={} executed_by={} categories={}",
+        request_id, user_id, executed_by, selected_categories,
+    )
 
     results: dict[str, Any] = {}
     errors: dict[str, str] = {}

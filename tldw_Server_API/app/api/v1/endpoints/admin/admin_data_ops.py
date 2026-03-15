@@ -730,6 +730,10 @@ async def execute_data_subject_request(
         if resolved_user_id is None:
             raise HTTPException(status_code=400, detail="resolved_user_id_missing")
 
+        await _enforce_admin_user_scope(
+            principal, int(resolved_user_id), require_hierarchy=True,
+        )
+
         selected_categories = record.get("selected_categories", [])
         if not selected_categories:
             raise HTTPException(status_code=400, detail="no_categories_selected")
