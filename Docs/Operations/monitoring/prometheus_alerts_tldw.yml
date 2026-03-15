@@ -54,3 +54,135 @@ groups:
         annotations:
           summary: "Gmail sync lag p95 is above threshold"
           description: "p95 email sync lag is above 10 minutes for at least 15m."
+
+  - name: tldw_server_api_latency
+    rules:
+      - alert: TLDWApiLatencyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "API p95 latency exceeds 5s"
+          description: "p95 request latency is {{ $value | humanize }}s over 10m."
+
+      - alert: TLDWApiLatencyP99Critical
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 30
+        for: 5m
+        labels:
+          severity: critical
+          service: tldw_server
+        annotations:
+          summary: "API p99 latency exceeds 30s"
+          description: "p99 request latency is {{ $value | humanize }}s — possible downstream failure."
+
+  - name: tldw_server_resources
+    rules:
+      - alert: TLDWHighMemoryUsage
+        expr: |
+          process_resident_memory_bytes / 1024 / 1024 > 2048
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "tldw_server memory usage > 2GB"
+          description: "Resident memory is {{ $value | humanize }}MB."
+
+      - alert: TLDWHighCpuUsage
+        expr: |
+          rate(process_cpu_seconds_total[5m]) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "tldw_server CPU usage > 90%"
+          description: "CPU utilization is {{ $value | humanizePercentage }}."
+
+      - alert: TLDWDiskSpaceLow
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: tldw_server
+        annotations:
+          summary: "Disk space below 10%"
+          description: "Available disk space is {{ $value | humanizePercentage }}."
+
+  - name: tldw_server_database
+    rules:
+      - alert: TLDWDatabaseErrors
+        expr: |
+          sum(rate(db_operation_errors_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+          service: tldw_server
+        annotations:
+          summary: "Database error rate elevated"
+          description: "DB errors at {{ $value }} errors/sec over 5m."
+
+  - name: tldw_server_workers
+    rules:
+      - alert: TLDWWorkerQueueBacklog
+        expr: |
+          tldw_worker_queue_depth > 100
+        for: 15m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "Worker queue backlog > 100 items"
+          description: "Queue depth is {{ $value }} items for 15m."
+
+  - name: tldw_server_llm
+    rules:
+      - alert: TLDWLlmErrorRateHigh
+        expr: |
+          (
+            sum(rate(llm_request_errors_total[5m]))
+            /
+            clamp_min(sum(rate(llm_requests_total[5m])), 0.001)
+          ) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "LLM provider error rate > 10%"
+          description: "LLM call failure rate is {{ $value | humanizePercentage }}."
+
+      - alert: TLDWLlmDailySpendHigh
+        expr: |
+          sum(increase(llm_cost_usd_total[24h])) > 100
+        for: 1h
+        labels:
+          severity: warning
+          service: tldw_server
+        annotations:
+          summary: "Daily LLM spend exceeds $100"
+          description: "24h LLM cost is ${{ $value | humanize }}."
+
+  - name: tldw_server_auth
+    rules:
+      - alert: TLDWAuthFailureBurst
+        expr: |
+          sum(rate(auth_failures_total[5m])) > 10
+        for: 5m
+        labels:
+          severity: critical
+          service: tldw_server
+        annotations:
+          summary: "Authentication failure burst detected"
+          description: "Auth failures at {{ $value }} failures/sec — possible brute force."
