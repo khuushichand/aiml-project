@@ -1885,6 +1885,83 @@ export class TldwApiClient {
     })
   }
 
+  // ── Admin Maintenance ──
+
+  async getMaintenanceState(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/maintenance", method: "GET" })
+  }
+
+  async updateMaintenanceState(payload: { enabled?: boolean; message?: string; allowlist?: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/maintenance",
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listFeatureFlags(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/feature-flags", method: "GET" })
+  }
+
+  async updateFeatureFlag(flagKey: string, payload: { enabled: boolean }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/feature-flags/${encodeURIComponent(flagKey)}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteFeatureFlag(flagKey: string): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/feature-flags/${encodeURIComponent(flagKey)}`,
+      method: "DELETE"
+    })
+  }
+
+  async listIncidents(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/incidents", method: "GET" })
+  }
+
+  async createIncident(payload: { title: string; severity?: string; description?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/incidents",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async updateIncident(incidentId: number, payload: { status?: string; severity?: string; description?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/incidents/${incidentId}`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteIncident(incidentId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/incidents/${incidentId}`,
+      method: "DELETE"
+    })
+  }
+
+  async listRotationRuns(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/maintenance/rotation-runs", method: "GET" })
+  }
+
+  async createRotationRun(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/maintenance/rotation-runs",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
