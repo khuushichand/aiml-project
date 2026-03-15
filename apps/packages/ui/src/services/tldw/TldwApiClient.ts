@@ -2027,6 +2027,51 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: `/api/v1/admin/activity${query}`, method: "GET" })
   }
 
+  // ── Admin Usage Analytics ──
+
+  async getDailyUsage(params?: { start_date?: string; end_date?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/usage/daily${query}`, method: "GET" })
+  }
+
+  async getTopUsage(params?: { metric?: string; limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/usage/top${query}`, method: "GET" })
+  }
+
+  async exportDailyUsageCsv(): Promise<string> {
+    return await bgRequest<string>({ path: "/api/v1/admin/usage/daily/export.csv", method: "GET" })
+  }
+
+  async exportTopUsageCsv(): Promise<string> {
+    return await bgRequest<string>({ path: "/api/v1/admin/usage/top/export.csv", method: "GET" })
+  }
+
+  async getLlmUsage(params?: { provider?: string; model?: string; limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/llm-usage${query}`, method: "GET" })
+  }
+
+  async getLlmUsageSummary(params?: { group_by?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/llm-usage/summary${query}`, method: "GET" })
+  }
+
+  async getLlmTopSpenders(params?: { limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/llm-usage/top-spenders${query}`, method: "GET" })
+  }
+
+  async getRouterAnalyticsStatus(params?: { range?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/router-analytics/status${query}`, method: "GET" })
+  }
+
+  async getRouterAnalyticsProviders(params?: { range?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/router-analytics/providers${query}`, method: "GET" })
+  }
+
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
