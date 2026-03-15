@@ -1,4 +1,5 @@
 import { tldwClient } from "./TldwApiClient"
+import { toAllowedPath } from "./path-utils"
 
 export type PersonaSetupAnalyticsEventType =
   | "setup_started"
@@ -79,7 +80,9 @@ export const postPersonaSetupEvent = async (
 
   try {
     const response = await tldwClient.fetchWithAuth(
-      `/api/v1/persona/profiles/${encodeURIComponent(normalizedPersonaId)}/setup-events` as any,
+      toAllowedPath(
+        `/api/v1/persona/profiles/${encodeURIComponent(normalizedPersonaId)}/setup-events`
+      ),
       {
         method: "POST",
         body: {

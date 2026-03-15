@@ -549,10 +549,10 @@ describe("SidepanelPersona", () => {
 
     expect(screen.getByTestId("persona-setup-analytics-card")).toHaveTextContent("75%")
     expect(
-      mocks.fetchWithAuth.mock.calls.some(([path]) =>
+      mocks.fetchWithAuth.mock.calls.filter(([path]) =>
         String(path).includes("/persona/profiles/garden-helper/setup-analytics")
       )
-    ).toBe(true)
+    ).toHaveLength(1)
   })
 
   it("hides setup analytics in profiles when the persona has no recorded runs", async () => {
@@ -706,6 +706,73 @@ describe("SidepanelPersona", () => {
         String(path).includes("/persona/profiles/garden-helper/setup-analytics")
       )
     ).toBe(false)
+  })
+
+  it("fails closed and warns when setup analytics loading fails in profiles", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      mocks.fetchWithAuth.mockImplementation((path: string) => {
+        if (path.includes("/persona/catalog")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+          })
+        }
+        if (path.includes("/persona/profiles/garden-helper/setup-analytics")) {
+          return Promise.reject(new Error("setup analytics offline"))
+        }
+        if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              persona_id: "garden-helper",
+              summary: { total_events: 0, direct_command_count: 0, planner_fallback_count: 0 }
+            })
+          })
+        }
+        if (path.includes("/persona/profiles/garden-helper")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: "garden-helper",
+              voice_defaults: {},
+              setup: {
+                status: "completed",
+                version: 1,
+                current_step: "test",
+                completed_steps: ["persona", "voice", "commands", "safety", "test"],
+                completed_at: "2026-03-14T10:00:00Z",
+                last_test_type: "dry_run"
+              },
+              use_persona_state_context_default: true
+            })
+          })
+        }
+        return Promise.resolve({
+          ok: false,
+          error: `unhandled path: ${path}`,
+          json: async () => ({})
+        })
+      })
+
+      render(<SidepanelPersona />)
+
+      await waitFor(() => {
+        expect(screen.getByText("Assistant Defaults")).toBeInTheDocument()
+      })
+
+      expect(screen.queryByTestId("persona-setup-analytics-card")).not.toBeInTheDocument()
+      expect(warnSpy).toHaveBeenCalledWith(
+        "tldw_server: failed to load persona setup analytics",
+        expect.objectContaining({
+          personaId: "garden-helper",
+          error: expect.any(Error)
+        })
+      )
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 
   it("captures starter command and safety choices into the setup handoff summary", async () => {
@@ -2369,7 +2436,7 @@ describe("SidepanelPersona", () => {
     })
   })
 
-  it("retargets the setup handoff and targets the command editor after a cross-tab handoff action", async () => {
+  it("retargets the setup handoff and opens the command form for the add-command CTA", async () => {
     mocks.location.search = "?persona_id=garden-helper&tab=connections"
 
     let profileVersion = 2
@@ -2502,7 +2569,7 @@ describe("SidepanelPersona", () => {
       expect(screen.getByTestId("persona-setup-handoff-card")).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByRole("button", { name: "Review commands" }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Commands" }))
 
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "Commands" })).toHaveAttribute(
@@ -2514,26 +2581,30 @@ describe("SidepanelPersona", () => {
     await waitFor(() => {
       expect(screen.getByTestId("persona-commands-name-input")).toHaveFocus()
     })
-    expect(
-      setupEventBodies.filter(
-        (body) =>
-          body.event_type === "handoff_target_reached" &&
-          body.action_target === "commands.command_list"
-      )
-    ).toHaveLength(1)
+    await waitFor(() => {
+      expect(
+        setupEventBodies.filter(
+          (body) =>
+            body.event_type === "handoff_target_reached" &&
+            body.action_target === "commands.command_form"
+        )
+      ).toHaveLength(1)
+    })
 
     fireEvent.click(screen.getByRole("button", { name: "Review commands" }))
 
     await waitFor(() => {
       expect(screen.getByTestId("persona-commands-name-input")).toHaveFocus()
     })
-    expect(
-      setupEventBodies.filter(
-        (body) =>
-          body.event_type === "handoff_target_reached" &&
-          body.action_target === "commands.command_list"
-      )
-    ).toHaveLength(1)
+    await waitFor(() => {
+      expect(
+        setupEventBodies.filter(
+          (body) =>
+            body.event_type === "handoff_target_reached" &&
+            body.action_target === "commands.command_list"
+        )
+      ).toHaveLength(1)
+    })
   })
 
   it("retargets the setup handoff and targets the saved connection action after a cross-tab handoff action", async () => {

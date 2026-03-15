@@ -67,6 +67,7 @@ import {
   type PersonaSetupAnalyticsEvent,
   type PersonaSetupAnalyticsEventType
 } from "@/services/tldw/persona-setup-analytics"
+import { toAllowedPath } from "@/services/tldw/path-utils"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { buildPersonaWebSocketUrl } from "@/services/persona-stream"
 import {
@@ -1675,7 +1676,9 @@ const SidepanelPersona = ({
     const loadSetupAnalytics = async () => {
       try {
         const response = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(normalizedPersonaId)}/setup-analytics?days=30&limit=5` as any,
+          toAllowedPath(
+            `/api/v1/persona/profiles/${encodeURIComponent(normalizedPersonaId)}/setup-analytics?days=30&limit=5`
+          ),
           { method: "GET" }
         )
         if (!response.ok) {
@@ -1685,7 +1688,11 @@ const SidepanelPersona = ({
         if (!cancelled) {
           setSetupAnalytics(payload)
         }
-      } catch {
+      } catch (fetchError) {
+        console.warn("tldw_server: failed to load persona setup analytics", {
+          personaId: normalizedPersonaId,
+          error: fetchError
+        })
         if (!cancelled) {
           setSetupAnalytics(null)
         }
@@ -1700,7 +1707,7 @@ const SidepanelPersona = ({
     return () => {
       cancelled = true
     }
-  }, [activeTab, selectedPersonaId, setupAnalytics?.persona_id])
+  }, [activeTab, selectedPersonaId])
 
   React.useEffect(() => {
     if (!isCompanionMode || capsLoading || !capabilities?.hasPersonalization) {
@@ -4492,19 +4499,20 @@ const SidepanelPersona = ({
   }, [emitSetupAnalyticsEvent])
 
   const handleSetupHandoffFocusConsumed = React.useCallback((token: number) => {
-    const currentRequest = setupHandoffFocusRequestRef.current
+    const currentRequest = setupHandoffFocusRequestRef.current || setupHandoffFocusRequest
     if (!currentRequest || currentRequest.token !== token) return
+    const currentHandoff = setupHandoffRef.current || setupHandoff
 
     const actionTarget = `${currentRequest.tab}.${currentRequest.section}`
     void emitSetupAnalyticsEvent({
-      runId: setupHandoffRef.current?.runId,
+      runId: currentHandoff?.runId,
       eventType: "handoff_target_reached",
       actionTarget,
       metadata: {
         connection_id: currentRequest.connectionId || undefined,
         connection_name: currentRequest.connectionName || undefined,
-        recommended_action: setupHandoffRef.current?.recommendedAction || undefined,
-        completion_type: setupHandoffRef.current?.completionType || undefined
+        recommended_action: currentHandoff?.recommendedAction || undefined,
+        completion_type: currentHandoff?.completionType || undefined
       }
     })
 
@@ -4513,7 +4521,7 @@ const SidepanelPersona = ({
       if (current.token !== token) return current
       return null
     })
-  }, [emitSetupAnalyticsEvent])
+  }, [emitSetupAnalyticsEvent, setupHandoff, setupHandoffFocusRequest])
 
   const handleProfileDefaultsSaved = React.useCallback(() => {
     consumeSetupHandoffAction("voice_defaults_saved")
@@ -4543,6 +4551,9 @@ const SidepanelPersona = ({
           recommendedAction={setupHandoff.recommendedAction}
           compact={setupHandoff.compact}
           onDismiss={dismissSetupHandoff}
+          onAddCommand={() =>
+            openSetupHandoffTarget({ tab: "commands", section: "command_form" })
+          }
           onOpenCommands={() =>
             openSetupHandoffTarget({ tab: "commands", section: "command_list" })
           }

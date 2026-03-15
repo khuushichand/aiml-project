@@ -19,6 +19,7 @@ describe("PersonaSetupHandoffCard", () => {
         reviewSummary={defaultReviewSummary}
         recommendedAction="try_live"
         onDismiss={vi.fn()}
+        onAddCommand={vi.fn()}
         onOpenProfiles={vi.fn()}
         onOpenTestLab={vi.fn()}
         onOpenLive={vi.fn()}
@@ -44,6 +45,7 @@ describe("PersonaSetupHandoffCard", () => {
         reviewSummary={defaultReviewSummary}
         recommendedAction="add_connection"
         onDismiss={onDismiss}
+        onAddCommand={vi.fn()}
         onOpenProfiles={onOpenProfiles}
         onOpenTestLab={vi.fn()}
         onOpenLive={vi.fn()}
@@ -71,6 +73,8 @@ describe("PersonaSetupHandoffCard", () => {
   })
 
   it("renders skipped starter pack items for live-session completion", () => {
+    const onAddCommand = vi.fn()
+
     render(
       <PersonaSetupHandoffCard
         targetTab="live"
@@ -82,6 +86,7 @@ describe("PersonaSetupHandoffCard", () => {
         }}
         recommendedAction="add_command"
         onDismiss={vi.fn()}
+        onAddCommand={onAddCommand}
         onOpenProfiles={vi.fn()}
         onOpenTestLab={vi.fn()}
         onOpenLive={vi.fn()}
@@ -95,6 +100,10 @@ describe("PersonaSetupHandoffCard", () => {
     expect(screen.getByText("Never ask")).toBeInTheDocument()
     expect(screen.getByText("No external connection yet")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Open Commands" })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Commands" }))
+
+    expect(onAddCommand).toHaveBeenCalledTimes(1)
   })
 
   it("renders a compact variant with the recommended next step", () => {
@@ -108,6 +117,7 @@ describe("PersonaSetupHandoffCard", () => {
         recommendedAction="review_commands"
         compact
         onDismiss={vi.fn()}
+        onAddCommand={vi.fn()}
         onOpenProfiles={vi.fn()}
         onOpenTestLab={vi.fn()}
         onOpenLive={vi.fn()}
