@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useRef } from 'react'
 import { useShortcutConfig } from './useShortcutConfig'
 
 export { isMac } from '../useKeyboardShortcuts'
@@ -20,6 +20,41 @@ export interface KeyboardShortcutConfig {
   description?: string
 }
 
+export const executeKeyboardShortcuts = (
+  event: KeyboardEvent,
+  shortcuts: KeyboardShortcutConfig[]
+) => {
+  shortcuts.forEach(({ shortcut, action, enabled = true }) => {
+    if (!enabled) return
+
+    const {
+      key,
+      ctrlKey = false,
+      altKey = false,
+      shiftKey = false,
+      metaKey = false,
+      preventDefault = true,
+      stopPropagation = true
+    } = shortcut
+
+    const keyMatches = event.key.toLowerCase() === key.toLowerCase()
+    const ctrlMatches = event.ctrlKey === ctrlKey
+    const altMatches = event.altKey === altKey
+    const shiftMatches = event.shiftKey === shiftKey
+    const metaMatches = event.metaKey === metaKey
+
+    if (keyMatches && ctrlMatches && altMatches && shiftMatches && metaMatches) {
+      if (preventDefault) {
+        event.preventDefault()
+      }
+      if (stopPropagation) {
+        event.stopPropagation()
+      }
+      action()
+    }
+  })
+}
+
 /**
  * Hook for managing configurable keyboard shortcuts
  * @param shortcuts Array of keyboard shortcut configurations
@@ -29,40 +64,16 @@ export const useKeyboardShortcuts = (
   shortcuts: KeyboardShortcutConfig[],
   target: Document | HTMLElement | null = document
 ) => {
+  const shortcutsRef = useRef(shortcuts)
+  useEffect(() => {
+    shortcutsRef.current = shortcuts
+  }, [shortcuts])
+
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
-      shortcuts.forEach(({ shortcut, action, enabled = true }) => {
-        if (!enabled) return
-
-        const {
-          key,
-          ctrlKey = false,
-          altKey = false,
-          shiftKey = false,
-          metaKey = false,
-          preventDefault = true,
-          stopPropagation = true
-        } = shortcut
-
-        // Check if the key combination matches
-        const keyMatches = event.key.toLowerCase() === key.toLowerCase()
-        const ctrlMatches = event.ctrlKey === ctrlKey
-        const altMatches = event.altKey === altKey
-        const shiftMatches = event.shiftKey === shiftKey
-        const metaMatches = event.metaKey === metaKey
-
-        if (keyMatches && ctrlMatches && altMatches && shiftMatches && metaMatches) {
-          if (preventDefault) {
-            event.preventDefault()
-          }
-          if (stopPropagation) {
-            event.stopPropagation()
-          }
-          action()
-        }
-      })
+      executeKeyboardShortcuts(event, shortcutsRef.current)
     },
-    [shortcuts]
+    []
   )
 
   useEffect(() => {

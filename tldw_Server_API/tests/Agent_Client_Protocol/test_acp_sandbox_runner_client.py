@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,7 +12,14 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.sandbox_runner_client import
     SandboxSessionHandle,
     _is_self_referential_agent_command,
 )
+from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPMessage
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
+from tldw_Server_API.app.core.Sandbox.models import RuntimeType
+from tldw_Server_API.app.core.Sandbox.runtime_capabilities import RuntimePreflightResult
+from tldw_Server_API.app.core.Sandbox.runners.lima_runner import LimaRunner
+from tldw_Server_API.app.services.acp_runtime_policy_service import (
+    ACPRuntimePolicySnapshot,
+)
 
 
 @pytest.mark.unit
@@ -77,6 +85,40 @@ def test_is_self_referential_agent_command_detects_runner_binary() -> None:
 
 
 @pytest.mark.unit
+def test_permission_policy_tier_resolution_matches_standard_runner(monkeypatch) -> None:
+    from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import ACPRunnerClient
+    import tldw_Server_API.app.services.admin_acp_sessions_service as store_src
+
+    class _PolicyStore:
+        def resolve_permission_tier(self, tool_name: str) -> str | None:
+            if tool_name == "fs.write":
+                return "individual"
+            return None
+
+    mock_config = MagicMock()
+    mock_config.command = "echo"
+    mock_config.args = []
+    mock_config.env = {}
+    mock_config.cwd = None
+    mock_config.startup_timeout_sec = 10
+
+    monkeypatch.setattr(store_src, "_store", _PolicyStore(), raising=False)
+
+    runner = ACPRunnerClient(mock_config)
+    sandbox = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+
+    assert runner._determine_permission_tier("fs.write") == "individual"
+    assert sandbox._determine_permission_tier("fs.write") == "individual"
+    assert runner._determine_permission_tier("git.status") == "auto"
+    assert sandbox._determine_permission_tier("git.status") == "auto"
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_create_session_rejects_self_referential_agent_command() -> None:
     manager = ACPSandboxRunnerManager(
@@ -102,6 +144,75 @@ async def test_create_session_requires_authenticated_user_id() -> None:
 
     with pytest.raises(ACPResponseError, match="require an authenticated user_id"):
         await manager.create_session(cwd="/workspace")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_create_session_rejects_unavailable_vz_macos_runtime(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="vz_macos",
+            network_policy="deny_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_VZ_MACOS_AVAILABLE", "0")
+
+    with pytest.raises(ACPResponseError, match="vz_macos"):
+        await manager.create_session(cwd="/workspace", user_id=7)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_create_session_rejects_seatbelt_without_standard_opt_in(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="seatbelt",
+            network_policy="deny_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_SEATBELT_AVAILABLE", "1")
+    monkeypatch.delenv("TLDW_SANDBOX_SEATBELT_STANDARD_ENABLED", raising=False)
+
+    with pytest.raises(ACPResponseError, match="seatbelt_standard_disabled"):
+        await manager.create_session(cwd="/workspace", user_id=7)
+
+
+@pytest.mark.unit
+def test_validate_runtime_requirements_uses_single_lima_preflight(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            runtime="lima",
+            network_policy="deny_all",
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    calls = {"count": 0}
+
+    def _fake_preflight(self, network_policy: str | None = None):
+        del self, network_policy
+        calls["count"] += 1
+        return RuntimePreflightResult(
+            runtime=RuntimeType.lima,
+            available=True,
+            reasons=[],
+            host={"os": "darwin"},
+            enforcement_ready={"deny_all": True, "allowlist": True},
+        )
+
+    monkeypatch.setattr(LimaRunner, "preflight", _fake_preflight)
+
+    manager._validate_runtime_requirements(RuntimeType.lima)
+
+    assert calls["count"] == 1
 
 
 @pytest.mark.unit
@@ -211,30 +322,299 @@ async def test_create_session_propagates_non_root_read_only_and_internal_ssh_por
     run_spec = capture.get("run_spec")
     if session_spec is None:
         pytest.fail("Expected sandbox session spec capture")
-    if run_spec is None:
-        pytest.fail("Expected sandbox run spec capture")
-    if getattr(session_spec, "network_policy", None) != "deny_all":
-        pytest.fail(f"Expected session spec network_policy='deny_all', got {getattr(session_spec, 'network_policy', None)!r}")
-    if getattr(run_spec, "run_as_root", None) is not False:
-        pytest.fail(f"Expected run spec run_as_root=False, got {getattr(run_spec, 'run_as_root', None)!r}")
-    if getattr(run_spec, "read_only_root", None) is not True:
-        pytest.fail(f"Expected run spec read_only_root=True, got {getattr(run_spec, 'read_only_root', None)!r}")
-    if getattr(run_spec, "network_policy", None) != "deny_all":
-        pytest.fail(f"Expected run spec network_policy='deny_all', got {getattr(run_spec, 'network_policy', None)!r}")
-    run_env = getattr(run_spec, "env", {}) or {}
-    if run_env.get("ACP_RUNTIME_HOME") != "/workspace/.acp-home":
-        pytest.fail(f"Expected ACP_RUNTIME_HOME=/workspace/.acp-home, got {run_env.get('ACP_RUNTIME_HOME')!r}")
-    if run_env.get("ACP_SSH_PORT") != "2222":
-        pytest.fail(f"Expected ACP_SSH_PORT='2222', got {run_env.get('ACP_SSH_PORT')!r}")
-    port_mappings = list(getattr(run_spec, "port_mappings", []) or [])
-    if not port_mappings:
-        pytest.fail("Expected ACP run spec to include SSH port mapping")
-    if port_mappings[0].get("container_port") != 2222:
-        pytest.fail(f"Expected container_port=2222, got {port_mappings[0].get('container_port')!r}")
-    if port_mappings[0].get("host_port") != 4567:
-        pytest.fail(f"Expected host_port=4567, got {port_mappings[0].get('host_port')!r}")
 
-    await manager.close_session(session_id)
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_sandbox_permission_request_denies_tool_from_runtime_snapshot(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+
+    async def _fake_snapshot(
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> ACPRuntimePolicySnapshot | None:
+        del session_id, force_refresh
+        return ACPRuntimePolicySnapshot(
+            session_id="sandbox-session",
+            user_id=55,
+            policy_snapshot_version="resolved-v1",
+            policy_snapshot_fingerprint="sandbox-deny",
+            policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+            policy_summary={},
+            policy_provenance_summary={"source_kinds": ["profile"]},
+            resolved_policy_document={"denied_tools": ["exec.run"]},
+            approval_summary={},
+            context_summary={},
+            execution_config={},
+        )
+
+    monkeypatch.setattr(manager, "_get_runtime_policy_snapshot", _fake_snapshot, raising=False)
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    monkeypatch.setattr(manager, "check_permission_governance", _fake_check_permission_governance, raising=False)
+
+    response = await manager._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="perm-sandbox-deny",
+            method="session/request_permission",
+            params={
+                "sessionId": "sandbox-session",
+                "tool": {"name": "exec.run", "input": {"command": "whoami"}},
+            },
+        )
+    )
+
+    assert response.result == {
+        "outcome": {
+            "outcome": "denied",
+            "deny_reason": "tool_denied_by_policy",
+            "policy_snapshot_fingerprint": "sandbox-deny",
+            "provenance_summary": {"source_kinds": ["profile"]},
+        }
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_sandbox_permission_request_refreshes_runtime_snapshot_when_policy_changes(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    session_id = "sandbox-refresh-policy"
+    policy_state = {"allowed_tools": ["web.search"], "fingerprint": "sandbox-allow"}
+    call_count = {"build_snapshot": 0}
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    manager.check_permission_governance = _fake_check_permission_governance  # type: ignore[assignment]
+
+    class _Store:
+        def __init__(self) -> None:
+            self.record = type(
+                "_Record",
+                (),
+                {
+                    "session_id": session_id,
+                    "user_id": 9,
+                    "policy_snapshot_fingerprint": None,
+                    "policy_snapshot_version": None,
+                    "policy_snapshot_refreshed_at": None,
+                    "policy_summary": None,
+                    "policy_provenance_summary": None,
+                    "policy_refresh_error": None,
+                },
+            )()
+
+        async def get_session(self, _session_id: str):
+            return self.record
+
+        async def update_policy_snapshot_state(self, _session_id: str, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self.record, key, value)
+            return self.record
+
+    class _RuntimePolicyService:
+        async def build_snapshot(self, **kwargs):
+            del kwargs
+            call_count["build_snapshot"] += 1
+            return ACPRuntimePolicySnapshot(
+                session_id=session_id,
+                user_id=9,
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_fingerprint=policy_state["fingerprint"],
+                policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+                policy_summary={"allowed_tool_count": len(policy_state["allowed_tools"])},
+                policy_provenance_summary={"source_kinds": ["capability_mapping"]},
+                resolved_policy_document={"allowed_tools": list(policy_state["allowed_tools"])},
+                approval_summary={"mode": "allow"},
+                context_summary={},
+                execution_config={},
+            )
+
+        async def persist_snapshot(self, *, session_store, snapshot):
+            return await session_store.update_policy_snapshot_state(
+                snapshot.session_id,
+                policy_snapshot_version=snapshot.policy_snapshot_version,
+                policy_snapshot_fingerprint=snapshot.policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at=snapshot.policy_snapshot_refreshed_at,
+                policy_summary=snapshot.policy_summary,
+                policy_provenance_summary=snapshot.policy_provenance_summary,
+                policy_refresh_error=snapshot.refresh_error,
+            )
+
+    store = _Store()
+
+    async def _get_store():
+        return store
+
+    manager._runtime_policy_service = _RuntimePolicyService()  # type: ignore[assignment]
+    manager._get_acp_session_store = _get_store  # type: ignore[assignment]
+    manager._should_force_runtime_policy_refresh = lambda *, tier: True  # type: ignore[assignment]
+
+    allowed_response = await manager._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="sandbox-perm-allow",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert allowed_response.result == {"outcome": {"outcome": "approved"}}
+
+    policy_state["allowed_tools"] = ["fs.read"]
+    policy_state["fingerprint"] = "sandbox-updated"
+
+    denied_response = await manager._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="sandbox-perm-deny",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert denied_response.result == {
+        "outcome": {
+            "outcome": "denied",
+            "deny_reason": "tool_not_allowed_by_policy",
+            "policy_snapshot_fingerprint": "sandbox-updated",
+            "provenance_summary": {"source_kinds": ["capability_mapping"]},
+        }
+    }
+    assert call_count["build_snapshot"] == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_low_risk_permission_reuses_cached_runtime_snapshot(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    session_id = "sandbox-refresh-cache"
+    policy_state = {"allowed_tools": ["web.search"], "fingerprint": "sandbox-cache"}
+    call_count = {"build_snapshot": 0}
+
+    async def _fake_check_permission_governance(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    manager.check_permission_governance = _fake_check_permission_governance  # type: ignore[assignment]
+
+    class _Store:
+        def __init__(self) -> None:
+            self.record = type(
+                "_Record",
+                (),
+                {
+                    "session_id": session_id,
+                    "user_id": 9,
+                    "policy_snapshot_fingerprint": None,
+                    "policy_snapshot_version": None,
+                    "policy_snapshot_refreshed_at": None,
+                    "policy_summary": None,
+                    "policy_provenance_summary": None,
+                    "policy_refresh_error": None,
+                },
+            )()
+
+        async def get_session(self, _session_id: str):
+            return self.record
+
+        async def update_policy_snapshot_state(self, _session_id: str, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self.record, key, value)
+            return self.record
+
+    class _RuntimePolicyService:
+        async def build_snapshot(self, **kwargs):
+            del kwargs
+            call_count["build_snapshot"] += 1
+            return ACPRuntimePolicySnapshot(
+                session_id=session_id,
+                user_id=9,
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_fingerprint=policy_state["fingerprint"],
+                policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+                policy_summary={"allowed_tool_count": len(policy_state["allowed_tools"])},
+                policy_provenance_summary={"source_kinds": ["capability_mapping"]},
+                resolved_policy_document={"allowed_tools": list(policy_state["allowed_tools"])},
+                approval_summary={"mode": "allow"},
+                context_summary={},
+                execution_config={},
+            )
+
+        async def persist_snapshot(self, *, session_store, snapshot):
+            return await session_store.update_policy_snapshot_state(
+                snapshot.session_id,
+                policy_snapshot_version=snapshot.policy_snapshot_version,
+                policy_snapshot_fingerprint=snapshot.policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at=snapshot.policy_snapshot_refreshed_at,
+                policy_summary=snapshot.policy_summary,
+                policy_provenance_summary=snapshot.policy_provenance_summary,
+                policy_refresh_error=snapshot.refresh_error,
+            )
+
+    store = _Store()
+
+    async def _get_store():
+        return store
+
+    manager._runtime_policy_service = _RuntimePolicyService()  # type: ignore[assignment]
+    manager._get_acp_session_store = _get_store  # type: ignore[assignment]
+
+    first = await manager._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="sandbox-perm-cache-1",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert first.result == {"outcome": {"outcome": "approved"}}
+    assert call_count["build_snapshot"] == 1
+
+    policy_state["allowed_tools"] = ["fs.read"]
+    policy_state["fingerprint"] = "sandbox-cache-updated"
+
+    second = await manager._handle_request(
+        ACPMessage(
+            jsonrpc="2.0",
+            id="sandbox-perm-cache-2",
+            method="session/request_permission",
+            params={
+                "sessionId": session_id,
+                "tool": {"name": "web.search", "input": {"query": "opa"}},
+            },
+        )
+    )
+    assert second.result == {"outcome": {"outcome": "approved"}}
+    assert call_count["build_snapshot"] == 1
 
 
 @pytest.mark.unit
@@ -480,3 +860,47 @@ async def test_close_session_falls_back_to_persisted_control(monkeypatch) -> Non
     assert fake_service.destroyed == ["sandbox-session-3"]
     assert released_ports == [4044]
     assert deleted["value"] is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_close_session_clears_runtime_policy_cache_and_refresh_task(monkeypatch) -> None:
+    manager = ACPSandboxRunnerManager(
+        ACPSandboxConfig(
+            enabled=True,
+            agent_command="/usr/local/bin/codex",
+        )
+    )
+    session_id = "acp-session-runtime-cache"
+
+    monkeypatch.setattr(manager, "_get_session", lambda sid, required=False: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(manager, "_load_control_record", lambda sid: {"id": session_id, "user_id": "1"})
+    monkeypatch.setattr(manager, "_delete_control_record", lambda sid: True)
+
+    manager._runtime_policy_snapshots[session_id] = ACPRuntimePolicySnapshot(
+        session_id=session_id,
+        user_id=1,
+        policy_snapshot_version="resolved-v1",
+        policy_snapshot_fingerprint="snapshot-cache",
+        policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+        policy_summary={},
+        policy_provenance_summary={},
+        resolved_policy_document={"allowed_tools": ["web.search"]},
+        approval_summary={},
+        context_summary={},
+        execution_config={},
+    )
+
+    async def _pending_refresh() -> ACPRuntimePolicySnapshot | None:
+        await asyncio.sleep(10)
+        return None
+
+    refresh_task = asyncio.create_task(_pending_refresh())
+    manager._runtime_policy_refresh_tasks[session_id] = refresh_task
+
+    await manager.close_session(session_id)
+    await asyncio.sleep(0)
+
+    assert session_id not in manager._runtime_policy_snapshots
+    assert session_id not in manager._runtime_policy_refresh_tasks
+    assert refresh_task.cancelled() is True

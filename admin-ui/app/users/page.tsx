@@ -30,41 +30,36 @@ import {
   UserX,
   BookmarkPlus,
   BookmarkX,
-  ShieldCheck,
-  ShieldOff,
 } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
+import { isSingleUserMode } from '@/lib/auth';
 import { Organization, User } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportUsers, ExportFormat } from '@/lib/export';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
-import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
+import { useUrlPagination } from '@/lib/use-url-state';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useResourceState } from '@/lib/use-resource-state';
+import { UserBulkActions } from './components/UserBulkActions';
+import {
+  useUserFilters,
+  type UserMfaFilter,
+  type UserStatusFilter,
+  type UserVerifiedFilter,
+} from './hooks/use-user-filters';
 
-type SavedUserView = {
-  id: string;
-  name: string;
-  query: string;
-};
-
-type UserStatusFilter = 'all' | 'active' | 'inactive';
-type UserVerifiedFilter = 'all' | 'verified' | 'unverified';
-type UserMfaFilter = 'all' | 'enabled' | 'disabled';
 type BulkActionType =
   | 'activate'
   | 'deactivate'
   | 'delete'
   | 'assign-role'
-  | 'reset-password'
   | 'mfa-require'
   | 'mfa-clear'
   | null;
-
-const SAVED_VIEWS_STORAGE_KEY = 'admin_users_saved_views';
 
 const createUserSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -163,9 +158,11 @@ const invitationStatusBadgeVariant = (status: InvitationStatus): 'default' | 'se
 function UsersPageContent() {
   const router = useRouter();
   const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
   const { user: currentUser } = usePermissions();
+  const requirePasswordReauth = !isSingleUserMode();
   const currentUserId = currentUser?.id;
   const [bulkAction, setBulkAction] = useState<BulkActionType>(null);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
@@ -174,10 +171,6 @@ function UsersPageContent() {
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
   const [deletingUserIds, setDeletingUserIds] = useState<Set<number>>(new Set());
-  const [savedViews, setSavedViews] = useState<SavedUserView[]>([]);
-  const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
-  const [saveViewName, setSaveViewName] = useState('');
-  const [saveViewError, setSaveViewError] = useState('');
   const [mfaByUserId, setMfaByUserId] = useState<Record<number, boolean>>({});
   const [mfaLoading, setMfaLoading] = useState(false);
   const [orgInvites, setOrgInvites] = useState<OrgInviteRecord[]>([]);
@@ -196,31 +189,31 @@ function UsersPageContent() {
   });
 
   // URL state for search + filters
-  const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
-  const [statusFilter, setStatusFilter] = useUrlState<UserStatusFilter>('status', { defaultValue: 'all' });
-  const [verifiedFilter, setVerifiedFilter] = useUrlState<UserVerifiedFilter>('verified', { defaultValue: 'all' });
-  const [mfaFilter, setMfaFilter] = useUrlState<UserMfaFilter>('mfa', { defaultValue: 'all' });
-  const activeViewId = useMemo(() => {
-    const match = savedViews.find((view) => view.query === (searchQuery || ''));
-    return match ? match.id : '';
-  }, [savedViews, searchQuery]);
-
   // URL state for pagination
   const { page: currentPage, pageSize, setPage: setCurrentPage, setPageSize, resetPagination } = useUrlPagination();
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const stored = window.localStorage.getItem(SAVED_VIEWS_STORAGE_KEY);
-      if (!stored) return;
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        setSavedViews(parsed as SavedUserView[]);
-      }
-    } catch (err) {
-      console.warn('Failed to load saved user views:', err);
-    }
-  }, []);
+  const {
+    savedViews,
+    showSaveViewDialog,
+    saveViewName,
+    saveViewError,
+    searchQuery,
+    statusFilter,
+    verifiedFilter,
+    mfaFilter,
+    activeViewId,
+    hasActiveFilters,
+    setShowSaveViewDialog,
+    setSaveViewName,
+    clearSaveViewForm,
+    handleSearchChange,
+    handleStatusFilterChange,
+    handleVerifiedFilterChange,
+    handleMfaFilterChange,
+    handleClearFilters,
+    handleApplySavedView,
+    saveCurrentView,
+    removeSavedView,
+  } = useUserFilters({ resetPagination });
 
   useEffect(() => {
     if (!showCreateUserDialog) {
@@ -228,16 +221,6 @@ function UsersPageContent() {
       setCreateUserError('');
     }
   }, [createUserForm, showCreateUserDialog]);
-
-  const persistSavedViews = useCallback((views: SavedUserView[]) => {
-    setSavedViews(views);
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(SAVED_VIEWS_STORAGE_KEY, JSON.stringify(views));
-    } catch (err) {
-      console.warn('Failed to persist saved user views:', err);
-    }
-  }, []);
 
   const loadUsersResource = useCallback(async () => {
     const params: Record<string, string> = { limit: '200' };
@@ -485,9 +468,6 @@ function UsersPageContent() {
     && selectableUsers.every((user) => selectedUserIds.has(user.id));
   const selectedCount = selectedUserIds.size;
   const bulkBusy = bulkAction !== null;
-  const hasActiveFilters = (statusFilter || 'all') !== 'all'
-    || (verifiedFilter || 'all') !== 'all'
-    || (mfaFilter || 'all') !== 'all';
   const bulkRoleOptions = useMemo(() => {
     const roleSet = new Set<string>(['user', 'admin', 'service']);
     users.forEach((user) => {
@@ -511,33 +491,6 @@ function UsersPageContent() {
 
   const handlePageSizeChange = (size: number) => {
     setPageSize(size);
-    resetPagination();
-  };
-
-  const handleSearchChange = (value: string) => {
-    setSearchQuery(value || undefined);
-    resetPagination();
-  };
-
-  const handleStatusFilterChange = (value: UserStatusFilter) => {
-    setStatusFilter(value === 'all' ? undefined : value);
-    resetPagination();
-  };
-
-  const handleVerifiedFilterChange = (value: UserVerifiedFilter) => {
-    setVerifiedFilter(value === 'all' ? undefined : value);
-    resetPagination();
-  };
-
-  const handleMfaFilterChange = (value: UserMfaFilter) => {
-    setMfaFilter(value === 'all' ? undefined : value);
-    resetPagination();
-  };
-
-  const handleClearFilters = () => {
-    setStatusFilter(undefined);
-    setVerifiedFilter(undefined);
-    setMfaFilter(undefined);
     resetPagination();
   };
 
@@ -579,19 +532,22 @@ function UsersPageContent() {
   const handleBulkToggleActive = async (nextState: boolean) => {
     const ids = Array.from(selectedUserIds);
     if (ids.length === 0) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: nextState ? 'Activate selected users' : 'Deactivate selected users',
-      message: `${nextState ? 'Activate' : 'Deactivate'} ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
+      message: `${nextState ? 'Activate' : 'Deactivate'} ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? Reauthentication is required.`,
       confirmText: nextState ? 'Activate' : 'Deactivate',
-      variant: nextState ? 'default' : 'warning',
-      icon: nextState ? 'check' : 'warning',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setBulkAction(nextState ? 'activate' : 'deactivate');
       const results = await Promise.allSettled(
-        ids.map((id) => api.updateUser(id.toString(), { is_active: nextState }))
+        ids.map((id) => api.updateUser(id.toString(), {
+          is_active: nextState,
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        }))
       );
       const failures = results.filter((result) => result.status === 'rejected').length;
       if (failures > 0) {
@@ -622,19 +578,21 @@ function UsersPageContent() {
       showError('Cannot delete yourself', 'Remove your account from the selection to continue.');
       return;
     }
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Delete selected users',
       message: `Delete ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? This cannot be undone.`,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setBulkAction('delete');
       const results = await Promise.allSettled(
-        ids.map((id) => api.deleteUser(id.toString()))
+        ids.map((id) => api.deleteUser(id.toString(), {
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        }))
       );
       const failures = results.filter((result) => result.status === 'rejected').length;
       if (failures > 0) {
@@ -661,19 +619,22 @@ function UsersPageContent() {
   const handleBulkAssignRole = async () => {
     const ids = Array.from(selectedUserIds);
     if (ids.length === 0 || !bulkRole) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Assign role to selected users',
-      message: `Assign "${bulkRole}" role to ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
+      message: `Assign "${bulkRole}" role to ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? Reauthentication is required.`,
       confirmText: 'Assign role',
-      variant: 'default',
-      icon: 'check',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setBulkAction('assign-role');
       const results = await Promise.allSettled(
-        ids.map((id) => api.updateUser(id.toString(), { role: bulkRole }))
+        ids.map((id) => api.updateUser(id.toString(), {
+          role: bulkRole,
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        }))
       );
       const failures = results.filter((result) => result.status === 'rejected').length;
       if (failures > 0) {
@@ -697,60 +658,25 @@ function UsersPageContent() {
     }
   };
 
-  const handleBulkResetPasswords = async () => {
-    const ids = Array.from(selectedUserIds);
-    if (ids.length === 0) return;
-    const confirmed = await confirm({
-      title: 'Reset selected user passwords',
-      message: `Reset passwords for ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
-      confirmText: 'Reset passwords',
-      variant: 'warning',
-      icon: 'warning',
-    });
-    if (!confirmed) return;
-
-    try {
-      setBulkAction('reset-password');
-      const results = await Promise.allSettled(
-        ids.map((id) => api.resetUserPassword(id.toString(), { force_password_change: true }))
-      );
-      const failures = results.filter((result) => result.status === 'rejected').length;
-      if (failures > 0) {
-        showError(
-          'Bulk password reset incomplete',
-          `${ids.length - failures} reset, ${failures} failed.`
-        );
-      } else {
-        success(
-          'Passwords reset',
-          `${ids.length} user${ids.length !== 1 ? 's' : ''} now require a password change on next login.`
-        );
-      }
-      handleClearSelection();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to reset passwords';
-      showError('Bulk password reset failed', message);
-    } finally {
-      setBulkAction(null);
-    }
-  };
-
   const handleBulkSetMfaRequirement = async (requireMfa: boolean) => {
     const ids = Array.from(selectedUserIds);
     if (ids.length === 0) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: requireMfa ? 'Require MFA for selected users' : 'Clear MFA requirement for selected users',
       message: `${requireMfa ? 'Require MFA for' : 'Clear MFA requirement for'} ${ids.length} selected user${ids.length !== 1 ? 's' : ''}?`,
       confirmText: requireMfa ? 'Require MFA' : 'Clear requirement',
-      variant: requireMfa ? 'default' : 'warning',
-      icon: requireMfa ? 'check' : 'warning',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setBulkAction(requireMfa ? 'mfa-require' : 'mfa-clear');
       const results = await Promise.allSettled(
-        ids.map((id) => api.setUserMfaRequirement(id.toString(), { require_mfa: requireMfa }))
+        ids.map((id) => api.setUserMfaRequirement(id.toString(), {
+          require_mfa: requireMfa,
+          reason: approval.reason,
+          admin_password: approval.adminPassword,
+        }))
       );
       const failures = results.filter((result) => result.status === 'rejected').length;
       const successIds: number[] = [];
@@ -812,35 +738,10 @@ function UsersPageContent() {
     exportUsers(filteredUsers, format);
   };
 
-  const handleApplySavedView = (viewId: string) => {
-    if (!viewId) {
-      setSearchQuery(undefined);
-      resetPagination();
-      return;
-    }
-    const view = savedViews.find((item) => item.id === viewId);
-    if (!view) return;
-    setSearchQuery(view.query || undefined);
-    resetPagination();
-  };
-
   const handleSaveView = () => {
-    const name = saveViewName.trim();
-    if (!name) {
-      setSaveViewError('Provide a name for this view.');
-      return;
-    }
-    const query = searchQuery || '';
-    const newView: SavedUserView = {
-      id: `${Date.now()}`,
-      name,
-      query,
-    };
-    persistSavedViews([newView, ...savedViews]);
-    setSaveViewName('');
-    setSaveViewError('');
-    setShowSaveViewDialog(false);
-    success('Saved view', `${name} has been added.`);
+    const result = saveCurrentView();
+    if (!result.ok) return;
+    success('Saved view', `${result.view.name} has been added.`);
   };
 
   const handleDeleteView = async () => {
@@ -855,9 +756,9 @@ function UsersPageContent() {
       icon: 'delete',
     });
     if (!confirmed) return;
-    const next = savedViews.filter((item) => item.id !== activeViewId);
-    persistSavedViews(next);
-    success('Saved view removed', `"${view.name}" deleted.`);
+    const removedView = removeSavedView(activeViewId);
+    if (!removedView) return;
+    success('Saved view removed', `"${removedView.name}" deleted.`);
   };
 
   const handleCreateUserSubmit = createUserForm.handleSubmit(async (data) => {
@@ -887,17 +788,20 @@ function UsersPageContent() {
 
   const handleToggleActive = async (user: User) => {
     const nextState = !user.is_active;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: nextState ? 'Activate User' : 'Deactivate User',
-      message: `${nextState ? 'Activate' : 'Deactivate'} ${user.username || user.email}?`,
+      message: `${nextState ? 'Activate' : 'Deactivate'} ${user.username || user.email}? Reauthentication is required.`,
       confirmText: nextState ? 'Activate' : 'Deactivate',
-      variant: nextState ? 'default' : 'warning',
-      icon: nextState ? 'check' : 'warning',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
-      await api.updateUser(user.id.toString(), { is_active: nextState });
+      await api.updateUser(user.id.toString(), {
+        is_active: nextState,
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       success('User updated', `${user.username || user.email} ${nextState ? 'activated' : 'deactivated'}.`);
       void loadUsers();
     } catch (err: unknown) {
@@ -913,14 +817,13 @@ function UsersPageContent() {
     }
     const userId = user.id;
     if (deletingUserIds.has(userId)) return;
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Delete User',
       message: `Delete ${user.username || user.email}? This cannot be undone.`,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: requirePasswordReauth,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setDeletingUserIds((prev) => {
@@ -928,7 +831,10 @@ function UsersPageContent() {
         next.add(userId);
         return next;
       });
-      await api.deleteUser(String(userId));
+      await api.deleteUser(String(userId), {
+        reason: approval.reason,
+        admin_password: approval.adminPassword,
+      });
       success('User deleted', `${user.username || user.email} removed.`);
       void loadUsers();
     } catch (err: unknown) {
@@ -1083,8 +989,7 @@ function UsersPageContent() {
                       <Dialog open={showSaveViewDialog} onOpenChange={(open) => {
                         setShowSaveViewDialog(open);
                         if (!open) {
-                          setSaveViewError('');
-                          setSaveViewName('');
+                          clearSaveViewForm();
                         }
                       }}>
                         <DialogTrigger asChild>
@@ -1276,115 +1181,21 @@ function UsersPageContent() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {selectedCount > 0 && (
-                  <div className="mb-4 flex flex-col gap-3 rounded-md border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline">{selectedCount} selected</Badge>
-                      <span className="text-sm text-muted-foreground">
-                        Bulk actions apply to selected users.
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Select
-                        value={bulkRole}
-                        onChange={(event) => setBulkRole(event.target.value)}
-                        className="min-w-[160px]"
-                        aria-label="Bulk role selection"
-                        disabled={bulkBusy}
-                      >
-                        {bulkRoleOptions.map((role) => (
-                          <option key={role} value={role}>
-                            {role}
-                          </option>
-                        ))}
-                      </Select>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBulkAssignRole}
-                        loading={bulkAction === 'assign-role'}
-                        loadingText="Assigning..."
-                        disabled={bulkBusy && bulkAction !== 'assign-role'}
-                      >
-                        Assign Role
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleBulkToggleActive(true)}
-                        loading={bulkAction === 'activate'}
-                        loadingText="Activating..."
-                        disabled={bulkBusy && bulkAction !== 'activate'}
-                      >
-                        <UserCheck className="mr-2 h-4 w-4" />
-                        Activate
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleBulkToggleActive(false)}
-                        loading={bulkAction === 'deactivate'}
-                        loadingText="Deactivating..."
-                        disabled={bulkBusy && bulkAction !== 'deactivate'}
-                      >
-                        <UserX className="mr-2 h-4 w-4" />
-                        Deactivate
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBulkResetPasswords}
-                        loading={bulkAction === 'reset-password'}
-                        loadingText="Resetting..."
-                        disabled={bulkBusy && bulkAction !== 'reset-password'}
-                      >
-                        <Key className="mr-2 h-4 w-4" />
-                        Reset Passwords
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleBulkSetMfaRequirement(true)}
-                        loading={bulkAction === 'mfa-require'}
-                        loadingText="Applying..."
-                        disabled={bulkBusy && bulkAction !== 'mfa-require'}
-                      >
-                        <ShieldCheck className="mr-2 h-4 w-4" />
-                        Require MFA
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleBulkSetMfaRequirement(false)}
-                        loading={bulkAction === 'mfa-clear'}
-                        loadingText="Clearing..."
-                        disabled={bulkBusy && bulkAction !== 'mfa-clear'}
-                      >
-                        <ShieldOff className="mr-2 h-4 w-4" />
-                        Clear MFA
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBulkDelete}
-                        loading={bulkAction === 'delete'}
-                        loadingText="Deleting..."
-                        disabled={bulkBusy && bulkAction !== 'delete'}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4 text-destructive" />
-                        Delete
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleClearSelection}
-                        disabled={bulkBusy}
-                      >
-                        Clear selection
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                <UserBulkActions
+                  selectedCount={selectedCount}
+                  bulkRole={bulkRole}
+                  bulkRoleOptions={bulkRoleOptions}
+                  bulkBusy={bulkBusy}
+                  bulkAction={bulkAction}
+                  onBulkRoleChange={setBulkRole}
+                  onAssignRole={handleBulkAssignRole}
+                  onActivate={() => handleBulkToggleActive(true)}
+                  onDeactivate={() => handleBulkToggleActive(false)}
+                  onRequireMfa={() => handleBulkSetMfaRequirement(true)}
+                  onClearMfa={() => handleBulkSetMfaRequirement(false)}
+                  onDelete={handleBulkDelete}
+                  onClearSelection={handleClearSelection}
+                />
                 {loading ? (
                   <div className="py-4">
                     <TableSkeleton rows={5} columns={9} />
@@ -1403,7 +1214,7 @@ function UsersPageContent() {
                         ? {
                             label: 'Clear filters',
                             onClick: () => {
-                              setSearchQuery(undefined);
+                              handleSearchChange('');
                               handleClearFilters();
                             },
                           }

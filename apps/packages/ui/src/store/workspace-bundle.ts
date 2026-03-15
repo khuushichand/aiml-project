@@ -3,7 +3,10 @@ import type {
   AudioGenerationSettings,
   GeneratedArtifact,
   WorkspaceBanner,
+  WorkspaceCollection,
   WorkspaceNote,
+  WorkspaceSourceFolder,
+  WorkspaceSourceFolderMembership,
   WorkspaceSource
 } from "@/types/workspace"
 
@@ -21,6 +24,10 @@ export interface WorkspaceBundleSnapshot {
   workspaceCreatedAt: ExportDateValue
   sources: WorkspaceSource[]
   selectedSourceIds: string[]
+  sourceFolders?: WorkspaceSourceFolder[]
+  sourceFolderMemberships?: WorkspaceSourceFolderMembership[]
+  selectedSourceFolderIds?: string[]
+  activeFolderId?: string | null
   generatedArtifacts: GeneratedArtifact[]
   notes: string
   currentNote: WorkspaceNote
@@ -45,6 +52,7 @@ export interface WorkspaceExportBundle {
     name: string
     tag: string
     createdAt: ExportDateValue
+    collectionId?: WorkspaceCollection["id"] | null
     snapshot: WorkspaceBundleSnapshot
     chatSession?: WorkspaceBundleChatSession
   }
@@ -217,6 +225,17 @@ const readFileAsArrayBuffer = async (file: File): Promise<ArrayBuffer> => {
 
   throw new Error("invalid-zip-bundle")
 }
+
+/**
+ * Strip serverChatId from an imported chat session to prevent
+ * accidental reconnection to a server chat from a different scope.
+ */
+export const sanitizeImportedChatSession = <T extends Record<string, any>>(
+  session: T
+): T & { serverChatId: null } => ({
+  ...session,
+  serverChatId: null,
+})
 
 export const parseWorkspaceImportFile = async (
   file: File

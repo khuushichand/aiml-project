@@ -49,6 +49,33 @@ if "transformers" not in sys.modules:
 
 
 @pytest.fixture(autouse=True)
+def _sandbox_clear_config_cache():
+    """Reset config cache before each sandbox test to prevent env var leaks."""
+    try:
+        from tldw_Server_API.app.core.config import clear_config_cache
+        clear_config_cache()
+    except Exception:
+        pass
+    yield
+    try:
+        from tldw_Server_API.app.core.config import clear_config_cache
+        clear_config_cache()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_reset_stream_hub():
+    """Clear stale event loop references from the stream hub between tests."""
+    yield
+    try:
+        from tldw_Server_API.app.core.Sandbox.streams import get_hub
+        get_hub().reset_loop()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def sandbox_auth_defaults(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     """Provide default auth settings and headers for sandbox tests.
 

@@ -80,6 +80,12 @@ export interface ACPWSPermissionRequestMessage {
   tool_name: string
   tool_arguments: Record<string, unknown>
   tier: ACPPermissionTier
+  approval_requirement?: string | null
+  governance_reason?: string | null
+  deny_reason?: string | null
+  provenance_summary?: Record<string, unknown> | null
+  runtime_narrowing_reason?: string | null
+  policy_snapshot_fingerprint?: string | null
   timeout_seconds: number
 }
 
@@ -96,6 +102,7 @@ export interface ACPWSPromptCompleteMessage {
   session_id: string
   stop_reason?: string
   raw_result: Record<string, unknown>
+  usage?: ACPTokenUsage | null
 }
 
 export interface ACPWSDoneMessage {
@@ -150,6 +157,10 @@ export interface ACPSessionNewRequest {
   agent_type?: ACPAgentType
   tags?: string[]
   mcp_servers?: ACPMCPServerConfig[]
+  persona_id?: string | null
+  workspace_id?: string | null
+  workspace_group_id?: string | null
+  scope_snapshot_id?: string | null
 }
 
 export interface ACPSessionNewResponse {
@@ -161,6 +172,16 @@ export interface ACPSessionNewResponse {
   sandbox_run_id?: string | null
   ssh_ws_url?: string | null
   ssh_user?: string | null
+  persona_id?: string | null
+  workspace_id?: string | null
+  workspace_group_id?: string | null
+  scope_snapshot_id?: string | null
+  policy_snapshot_version?: string | null
+  policy_snapshot_fingerprint?: string | null
+  policy_snapshot_refreshed_at?: string | null
+  policy_summary?: Record<string, unknown> | null
+  policy_provenance_summary?: Record<string, unknown> | null
+  policy_refresh_error?: string | null
 }
 
 export interface ACPSessionPromptRequest {
@@ -175,6 +196,18 @@ export interface ACPSessionPromptResponse {
   stop_reason?: string
   raw_result: Record<string, unknown>
   usage?: ACPTokenUsage | null
+}
+
+export interface ACPSessionCancelRequest {
+  session_id: string
+}
+
+export interface ACPSessionCloseRequest {
+  session_id: string
+}
+
+export interface ACPSessionUpdatesResponse {
+  updates: Array<Record<string, unknown>>
 }
 
 // -----------------------------------------------------------------------------
@@ -205,6 +238,13 @@ export interface ACPSessionListItem {
   workspace_id?: string | null
   workspace_group_id?: string | null
   scope_snapshot_id?: string | null
+  policy_snapshot_version?: string | null
+  policy_snapshot_fingerprint?: string | null
+  policy_snapshot_refreshed_at?: string | null
+  policy_summary?: Record<string, unknown> | null
+  policy_provenance_summary?: Record<string, unknown> | null
+  policy_refresh_error?: string | null
+  forked_from?: string | null
 }
 
 export interface ACPSessionListResponse {
@@ -215,6 +255,7 @@ export interface ACPSessionListResponse {
 export interface ACPSessionDetailResponse extends ACPSessionListItem {
   messages: Array<Record<string, unknown>>
   cwd?: string | null
+  fork_lineage: string[]
 }
 
 export interface ACPSessionUsageResponse {
@@ -247,6 +288,16 @@ export interface ACPSession {
   agentType?: ACPAgentType
   tags?: string[]
   mcpServers?: ACPMCPServerConfig[]
+  personaId?: string | null
+  workspaceId?: string | null
+  workspaceGroupId?: string | null
+  scopeSnapshotId?: string | null
+  policySnapshotVersion?: string | null
+  policySnapshotFingerprint?: string | null
+  policySnapshotRefreshedAt?: Date | null
+  policySummary?: Record<string, unknown> | null
+  policyProvenanceSummary?: Record<string, unknown> | null
+  policyRefreshError?: string | null
   state: ACPSessionState
   capabilities?: Record<string, unknown>
   sandboxSessionId?: string | null
@@ -274,6 +325,12 @@ export interface ACPPendingPermission {
   tool_name: string
   tool_arguments: Record<string, unknown>
   tier: ACPPermissionTier
+  approval_requirement?: string | null
+  governance_reason?: string | null
+  deny_reason?: string | null
+  provenance_summary?: Record<string, unknown> | null
+  runtime_narrowing_reason?: string | null
+  policy_snapshot_fingerprint?: string | null
   timeout_seconds: number
   requestedAt: Date
 }
@@ -319,6 +376,71 @@ export interface ACPStructuredError {
   message: string
   suggestions: ACPErrorSuggestion[]
   data?: Record<string, unknown>
+}
+
+// -----------------------------------------------------------------------------
+// ACP Health & Agent Registry
+// -----------------------------------------------------------------------------
+
+export interface ACPHealthResponse {
+  runner: "ok" | "missing" | "error"
+  agent: "ok" | "missing" | "error"
+  api_keys: "ok" | "missing"
+  details?: string
+}
+
+export interface ACPAgentRegistryEntry {
+  type: string
+  name: string
+  description: string
+  status: "available" | "unavailable" | "requires_setup"
+  reason?: string
+  is_default?: boolean
+}
+
+// -----------------------------------------------------------------------------
+// Orchestration Types
+// -----------------------------------------------------------------------------
+
+export type OrchestrationTaskStatus = "todo" | "inprogress" | "review" | "complete" | "triage"
+export type OrchestrationRunStatus = "running" | "completed" | "failed"
+
+export interface OrchestrationProject {
+  id: number
+  name: string
+  description?: string
+  user_id: number
+  created_at: string
+  task_summary?: {
+    total_tasks: number
+    status_counts: Record<string, number>
+  }
+}
+
+export interface OrchestrationTask {
+  id: number
+  project_id: number
+  title: string
+  description?: string
+  status: OrchestrationTaskStatus
+  agent_type?: string
+  dependency_id?: number | null
+  review_count: number
+  max_review_attempts: number
+  created_at: string
+  updated_at: string
+}
+
+export interface OrchestrationRun {
+  id: number
+  task_id: number
+  session_id?: string
+  agent_type?: string
+  status: OrchestrationRunStatus
+  result_summary?: string
+  error?: string
+  started_at: string
+  completed_at?: string
 }
 
 // -----------------------------------------------------------------------------

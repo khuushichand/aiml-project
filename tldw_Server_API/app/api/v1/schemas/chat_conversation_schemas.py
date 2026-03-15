@@ -3,14 +3,38 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable")
+
+
+class ConversationScopeParams(BaseModel):
+    """Scope parameters for filtering conversations by global or workspace scope."""
+
+    scope_type: Literal["global", "workspace"] = "global"
+    workspace_id: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_workspace_scope(self) -> "ConversationScopeParams":
+        if self.scope_type == "workspace" and not self.workspace_id:
+            raise ValueError("workspace_id is required when scope_type='workspace'")
+        if self.scope_type == "global":
+            self.workspace_id = None
+        return self
 
 
 class ConversationListItem(BaseModel):
     id: str = Field(..., description="Conversation ID")
     character_id: int | None = Field(None, description="Character ID associated with the conversation")
+    assistant_kind: Literal["character", "persona"] | None = Field(
+        None,
+        description="Normalized assistant identity kind for the conversation",
+    )
+    assistant_id: str | None = Field(None, description="Normalized assistant identity ID for the conversation")
+    persona_memory_mode: Literal["read_only", "read_write"] | None = Field(
+        None,
+        description="Persona durable memory behavior for the conversation",
+    )
     title: str | None = Field(None, description="Conversation title")
     state: str = Field("in-progress", description="Lifecycle state of the conversation")
     topic_label: str | None = Field(None, description="Primary topic label")
@@ -81,6 +105,16 @@ class ConversationUpdateRequest(BaseModel):
 
 class ConversationMetadata(BaseModel):
     id: str = Field(..., description="Conversation ID")
+    character_id: int | None = Field(None, description="Character ID associated with the conversation")
+    assistant_kind: Literal["character", "persona"] | None = Field(
+        None,
+        description="Normalized assistant identity kind for the conversation",
+    )
+    assistant_id: str | None = Field(None, description="Normalized assistant identity ID for the conversation")
+    persona_memory_mode: Literal["read_only", "read_write"] | None = Field(
+        None,
+        description="Persona durable memory behavior for the conversation",
+    )
     title: str | None = Field(None, description="Conversation title")
     state: str = Field("in-progress", description="Lifecycle state")
     topic_label: str | None = Field(None, description="Primary topic label")

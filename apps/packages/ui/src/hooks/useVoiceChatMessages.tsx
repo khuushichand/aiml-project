@@ -1,10 +1,10 @@
 import React from "react"
-import { useStorage } from "@plasmohq/storage/hook"
 import { useStoreMessageOption, type Message } from "@/store/option"
 import { generateID } from "@/db/dexie/helpers"
 import { createSaveMessageOnSuccess } from "@/hooks/utils/messageHelpers"
 import { updateActiveVariant } from "@/utils/message-variants"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
+import { useSelectedModel } from "@/hooks/chat/useSelectedModel"
 
 export const useVoiceChatMessages = () => {
   const {
@@ -17,7 +17,7 @@ export const useVoiceChatMessages = () => {
     temporaryChat
   } = useStoreMessageOption()
   const { voiceChatModel } = useVoiceChatSettings()
-  const [selectedModel] = useStorage("selectedModel")
+  const { selectedModel } = useSelectedModel()
 
   const saveMessageOnSuccess = React.useMemo(
     () => createSaveMessageOnSuccess(temporaryChat, setHistoryId),

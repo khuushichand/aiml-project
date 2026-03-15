@@ -20,16 +20,113 @@ const ERROR_LOG_THROTTLE_MS = 15_000
 const RATE_LIMIT_LOG_THROTTLE_MS = 60_000
 const ERROR_LOG_MAX_ENTRIES = 200
 const BACKEND_UNREACHABLE_EVENT_THROTTLE_MS = 5_000
+const STREAM_RUNTIME_PING_TIMEOUT_MS = 400
+const STREAM_RUNTIME_HEALTH_TTL_MS = 30_000
+const STREAM_QUEUE_DRAIN_BATCH_LIMIT = 32
+const STREAM_QUEUE_DRAIN_SLICE_MS = 12
+const ABSOLUTE_URL_BLOCK_ERROR =
+  "Direct stream fallback is allowed only for allowlisted absolute URLs."
 const BACKEND_UNREACHABLE_PATTERN =
   /(networkerror|failed to fetch|network error|load failed|err_connection|could not establish connection|receiving end does not exist)/i
 const errorLogHistory = new Map<string, number>()
 let lastBackendUnreachableEventAt = 0
+let lastStreamRuntimeHealthCheckAt = 0
+let streamRuntimePortUsable: boolean | null = null
 
 const normalizeKnownPathQuirks = <P extends PathOrUrl>(rawPath: P): P => {
   if (typeof rawPath !== "string") return rawPath
   return rawPath
     .replace("/api/v1/media/?", "/api/v1/media?")
     .replace("/api/v1/files/?", "/api/v1/files?") as P
+}
+
+const parseHttpOrigin = (value: unknown): string | null => {
+  const raw = String(value || "").trim()
+  if (!raw) return null
+  try {
+    const parsed = new URL(raw)
+    if (!/^https?:$/i.test(parsed.protocol)) return null
+    return parsed.origin.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+const toAllowlistEntries = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry || "").trim())
+      .filter((entry) => entry.length > 0)
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return []
+    if (!trimmed.includes(",")) return [trimmed]
+    return trimmed
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+  }
+  return []
+}
+
+const configuredServerOrigin = (cfg: Record<string, unknown> | null): string | null => {
+  return parseHttpOrigin(cfg?.serverUrl)
+}
+
+const absoluteOriginAllowlistFromConfig = (
+  cfg: Record<string, unknown> | null
+): Set<string> => {
+  const out = new Set<string>()
+  const serverOrigin = configuredServerOrigin(cfg)
+  if (serverOrigin) out.add(serverOrigin)
+  for (const entry of toAllowlistEntries(cfg?.absoluteUrlAllowlist)) {
+    const parsedOrigin = parseHttpOrigin(entry)
+    if (parsedOrigin) out.add(parsedOrigin)
+  }
+  return out
+}
+
+const isAbsoluteUrlAllowlisted = (
+  absoluteUrl: string,
+  cfg: Record<string, unknown> | null
+): boolean => {
+  try {
+    const target = new URL(absoluteUrl)
+    if (!/^https?:$/i.test(target.protocol)) return false
+    const allowlistedOrigins = absoluteOriginAllowlistFromConfig(cfg)
+    return allowlistedOrigins.has(target.origin.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+const isSameOriginAbsoluteUrlForConfiguredServer = (
+  absoluteUrl: string,
+  cfg: Record<string, unknown> | null
+): boolean => {
+  const serverOrigin = configuredServerOrigin(cfg)
+  if (!serverOrigin) return false
+  try {
+    const target = new URL(absoluteUrl)
+    if (!/^https?:$/i.test(target.protocol)) return false
+    return target.origin.toLowerCase() === serverOrigin
+  } catch {
+    return false
+  }
+}
+
+const extractHttpStatus = (value: unknown): number | null => {
+  const statusCandidate = (value as { status?: unknown } | null)?.status
+  if (typeof statusCandidate === "number" && Number.isFinite(statusCandidate)) {
+    const status = Math.trunc(statusCandidate)
+    if (status >= 100 && status <= 599) return status
+  }
+  const message = value instanceof Error ? value.message : String(value || "")
+  const match = message.match(/\bhttp\s+(\d{3})\b/i)
+  if (!match) return null
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 const isRateLimitEntry = (entry: { status?: number; error?: string }): boolean => {
@@ -160,7 +257,10 @@ const isExtensionTransportFailure = (error: unknown): boolean => {
     normalized.includes("could not establish connection") ||
     normalized.includes("receiving end does not exist") ||
     normalized.includes("message port closed before a response was received") ||
-    normalized.includes("extension context invalidated")
+    normalized.includes("extension context invalidated") ||
+    normalized.includes("stream disconnected") ||
+    normalized.includes("failed to fetch") ||
+    normalized.includes("network error")
   )
 }
 
@@ -247,7 +347,16 @@ export async function bgRequest<
   const path = normalizeKnownPathQuirks(rawPath)
   const isAbsoluteUrl = typeof path === "string" && /^https?:/i.test(path)
   const noAuthExplicit = Object.prototype.hasOwnProperty.call(init, "noAuth")
-  const resolvedNoAuth = noAuthExplicit ? noAuth : (noAuth || isAbsoluteUrl)
+  let resolvedNoAuth = noAuthExplicit ? noAuth : (noAuth || isAbsoluteUrl)
+  if (!noAuthExplicit && isAbsoluteUrl) {
+    const storage = createSafeStorage()
+    const cfg = (await storage.get<Record<string, unknown>>("tldwConfig").catch(() => null)) || null
+    const sameOriginAbsolute = isSameOriginAbsoluteUrlForConfiguredServer(
+      String(path),
+      cfg
+    )
+    resolvedNoAuth = noAuth || !sameOriginAbsolute
+  }
   const resolvedHeaders = headers
   const recordRequestError = async (entry: {
     method: string
@@ -656,6 +765,16 @@ const parseStreamError = async (resp: Response): Promise<string> => {
   return resp.statusText
 }
 
+const yieldToBrowser = async (): Promise<void> => {
+  if (typeof requestAnimationFrame === "function") {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+    return
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+}
+
 /**
  * Direct fetch streaming implementation - used as fallback when extension messaging is unavailable or times out
  */
@@ -666,22 +785,30 @@ async function* bgStreamDirect<
   { path, method = 'POST' as UpperLower<M>, headers = {}, body, streamIdleTimeoutMs, abortSignal }: BgStreamInit<P, M>
 ): AsyncGenerator<string> {
   const storage = createSafeStorage()
-  const cfg = await storage.get<any>("tldwConfig").catch(() => null)
+  const cfg = (await storage.get<Record<string, unknown>>("tldwConfig").catch(() => null)) || null
   const isAbsolute = typeof path === "string" && /^https?:/i.test(path)
+  const absolutePath = isAbsolute ? String(path) : ""
+  if (isAbsolute && !isAbsoluteUrlAllowlisted(absolutePath, cfg)) {
+    throw new Error(ABSOLUTE_URL_BLOCK_ERROR)
+  }
   if (!cfg?.serverUrl && !isAbsolute) {
     throw new Error("tldw server not configured")
   }
   const baseUrl = cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : ""
   const url = isAbsolute
-    ? String(path)
+    ? absolutePath
     : `${baseUrl}${String(path).startsWith("/") ? "" : "/"}${String(path)}`
+  const sameOriginAbsolute = isAbsolute
+    ? isSameOriginAbsoluteUrlForConfiguredServer(absolutePath, cfg)
+    : false
+  const shouldSkipAuth = isAbsolute && !sameOriginAbsolute
   const resolvedHeaders: Record<string, string> = { ...(headers || {}) }
   for (const k of Object.keys(resolvedHeaders)) {
     const kl = k.toLowerCase()
     if (kl === "x-api-key" || kl === "authorization") delete resolvedHeaders[k]
   }
 
-  if (cfg?.authMode === "single-user") {
+  if (!shouldSkipAuth && cfg?.authMode === "single-user") {
     const key = String(cfg?.apiKey || "").trim()
     if (!key) {
       throw new Error(
@@ -689,7 +816,7 @@ async function* bgStreamDirect<
       )
     }
     resolvedHeaders["X-API-KEY"] = key
-  } else if (cfg?.authMode === "multi-user") {
+  } else if (!shouldSkipAuth && cfg?.authMode === "multi-user") {
     const token = String(cfg?.accessToken || "").trim()
     if (token) {
       resolvedHeaders["Authorization"] = `Bearer ${token}`
@@ -746,7 +873,12 @@ async function* bgStreamDirect<
   }
 
   let resp = await fetchStream()
-  if (resp.status === 401 && cfg?.authMode === "multi-user" && cfg?.refreshToken) {
+  if (
+    !shouldSkipAuth &&
+    resp.status === 401 &&
+    cfg?.authMode === "multi-user" &&
+    cfg?.refreshToken
+  ) {
     try {
       const refreshResp = await fetch(`${baseUrl}/api/v1/auth/refresh`, {
         method: "POST",
@@ -838,14 +970,60 @@ export async function* bgStream<
 >(
   { path, method = 'POST' as UpperLower<M>, headers = {}, body, streamIdleTimeoutMs, abortSignal }: BgStreamInit<P, M>
 ): AsyncGenerator<string> {
-  const hasRuntimePort = Boolean(browser?.runtime?.connect && browser?.runtime?.id)
+  const hasHttpStatus = (value: unknown): boolean =>
+    extractHttpStatus(value) !== null
+
+  const canUseRuntimePortTransport = async (): Promise<boolean> => {
+    const hasRuntimePort = Boolean(browser?.runtime?.connect && browser?.runtime?.id)
+    if (!hasRuntimePort) return false
+
+    const now = Date.now()
+    if (
+      streamRuntimePortUsable !== null &&
+      now - lastStreamRuntimeHealthCheckAt < STREAM_RUNTIME_HEALTH_TTL_MS
+    ) {
+      return streamRuntimePortUsable
+    }
+
+    if (!browser?.runtime?.sendMessage) {
+      streamRuntimePortUsable = true
+      lastStreamRuntimeHealthCheckAt = now
+      return true
+    }
+
+    try {
+      const pingResult = await Promise.race([
+        browser.runtime.sendMessage({ type: "tldw:ping" }),
+        new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), STREAM_RUNTIME_PING_TIMEOUT_MS)
+        )
+      ])
+      streamRuntimePortUsable =
+        Boolean(pingResult) && Boolean((pingResult as any)?.ok)
+    } catch {
+      streamRuntimePortUsable = false
+    }
+    lastStreamRuntimeHealthCheckAt = now
+    return Boolean(streamRuntimePortUsable)
+  }
+
+  const hasRuntimePort = await canUseRuntimePortTransport()
   if (!hasRuntimePort) {
     yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
     return
   }
 
-  // Extension port-based streaming with connection timeout fallback
-  const port = browser.runtime.connect({ name: 'tldw:stream' })
+  // Extension port-based streaming with connection-time and connection-establish fallback.
+  let port: ReturnType<typeof browser.runtime.connect>
+  try {
+    port = browser.runtime.connect({ name: 'tldw:stream' })
+  } catch (connectError) {
+    if (!abortSignal?.aborted) {
+      yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
+      return
+    }
+    throw connectError
+  }
   const queue: string[] = []
   let done = false
   let error: any = null
@@ -863,16 +1041,22 @@ export async function* bgStream<
   }, CONNECTION_TIMEOUT_MS)
 
   const onMessage = (msg: any) => {
-    if (!firstDataReceived) {
-      firstDataReceived = true
-      clearTimeout(connectionTimer)
-    }
     if (msg?.event === 'data') {
+      if (!firstDataReceived) {
+        firstDataReceived = true
+        clearTimeout(connectionTimer)
+      }
       queue.push(msg.data as string)
     } else if (msg?.event === 'done') {
       done = true
     } else if (msg?.event === 'error') {
-      error = new Error(msg.message || 'Stream error')
+      const streamError = new Error(msg.message || 'Stream error') as Error & {
+        status?: number
+      }
+      if (typeof msg.status === "number" && Number.isFinite(msg.status)) {
+        streamError.status = Math.trunc(msg.status)
+      }
+      error = streamError
       done = true
     }
   }
@@ -906,16 +1090,56 @@ export async function* bgStream<
   }
 
   try {
+    let drainedSinceYield = 0
+    let sliceStartedAt = Date.now()
     while (!done || queue.length > 0) {
       if (queue.length > 0) {
         yield queue.shift() as string
+        drainedSinceYield += 1
+        const sliceElapsedMs = Date.now() - sliceStartedAt
+        if (
+          drainedSinceYield >= STREAM_QUEUE_DRAIN_BATCH_LIMIT ||
+          sliceElapsedMs >= STREAM_QUEUE_DRAIN_SLICE_MS
+        ) {
+          await yieldToBrowser()
+          drainedSinceYield = 0
+          sliceStartedAt = Date.now()
+        }
       } else {
         await new Promise((r) => setTimeout(r, 10))
+        drainedSinceYield = 0
+        sliceStartedAt = Date.now()
       }
     }
     // If connection timed out before receiving any data, fall back to direct fetch
     if (connectionTimedOut) {
       yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
+      return
+    }
+    const shouldFallbackAfterEarlyError =
+      !firstDataReceived &&
+      !abortSignal?.aborted &&
+      Boolean(error) &&
+      (isExtensionTransportFailure(error) || !hasHttpStatus(error))
+    if (shouldFallbackAfterEarlyError) {
+      yield* bgStreamDirect({ path, method, headers, body, streamIdleTimeoutMs, abortSignal })
+      return
+    }
+    const shouldGracefullyEndAfterPartialStreamError =
+      firstDataReceived &&
+      !abortSignal?.aborted &&
+      Boolean(error) &&
+      (isExtensionTransportFailure(error) || !hasHttpStatus(error))
+    if (shouldGracefullyEndAfterPartialStreamError) {
+      // We already delivered data to the caller; avoid replaying non-idempotent
+      // streamed requests after transport loss and let caller finalize partial output.
+      const interruptionDetail =
+        error instanceof Error ? error.message : String(error || "Stream transport interrupted")
+      yield JSON.stringify({
+        event: "stream_transport_interrupted",
+        detail: interruptionDetail,
+        partial_response_saved: true
+      })
       return
     }
     if (error) throw error

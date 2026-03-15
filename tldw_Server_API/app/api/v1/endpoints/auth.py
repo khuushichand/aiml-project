@@ -60,7 +60,7 @@ from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
 )
 from tldw_Server_API.app.core.AuthNZ.database import (
     get_db_pool,
-    is_postgres_backend as _is_postgres_backend_core,
+    is_postgres_backend,
 )
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
@@ -163,15 +163,6 @@ def _extract_bearer_token(auth_header: Optional[str]) -> str:
         return credential.strip()
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         return ""
-
-
-async def is_postgres_backend() -> bool:
-    """
-    Compatibility shim for tests that monkeypatch backend detection on auth endpoints.
-
-    Canonical backend routing lives in ``core.AuthNZ.database.is_postgres_backend``.
-    """
-    return await _is_postgres_backend_core()
 
 
 def _legacy_user_me_enabled() -> bool:
@@ -484,6 +475,11 @@ def _is_pytest_context() -> bool:
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         return False
     return False
+
+
+def _is_enterprise_admin_ui_mode() -> bool:
+    raw_value = os.getenv("ADMIN_UI_ENTERPRISE_MODE", "")
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _auth_request_client_ip(request: Request) -> str:
@@ -1209,6 +1205,11 @@ async def login(
 
         # Generate tokens based on auth mode
         if settings.AUTH_MODE == "single_user":
+            if _is_enterprise_admin_ui_mode():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Enterprise Admin UI requires multi-user authentication; single-user login is disabled.",
+                )
             # For single-user mode, return the configured API key as the access token.
             single_user_key = (
                 settings.SINGLE_USER_API_KEY

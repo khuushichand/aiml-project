@@ -20,17 +20,27 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.config import ACPSandboxConf
 from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     ACPGovernanceCoordinator,
     ACPGovernanceDeniedError,
+    ACPRuntimePolicySupportMixin,
     PERMISSION_TIMEOUT_SECONDS,
     PendingPermission,
     SessionWebSocketRegistry,
+    _merge_runtime_and_governance_permission_outcome,
+    _resolve_runtime_permission_outcome,
 )
+from tldw_Server_API.app.core.Agent_Client_Protocol.permission_tiers import determine_permission_tier
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPMessage, ACPResponseError
 from tldw_Server_API.app.core.Agent_Client_Protocol.stream_client import ACPStreamClient
 from tldw_Server_API.app.core.config import settings as app_settings
-from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType, SessionSpec
+from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType, SessionSpec, TrustLevel
+from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy
+from tldw_Server_API.app.core.Sandbox.runtime_capabilities import RuntimePreflightResult, collect_runtime_preflights
 from tldw_Server_API.app.core.Sandbox.runners.lima_runner import LimaRunner
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.testing import is_truthy
+from tldw_Server_API.app.services.acp_runtime_policy_service import (
+    ACPRuntimePolicyService,
+    ACPRuntimePolicySnapshot,
+)
 
 _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS = (
     ACPResponseError,
@@ -80,7 +90,7 @@ class SandboxSessionHandle:
     scope_snapshot_id: str | None = None
 
 
-class ACPSandboxRunnerManager:
+class ACPSandboxRunnerManager(ACPRuntimePolicySupportMixin):
     def __init__(self, config: ACPSandboxConfig | None = None) -> None:
         self.config = config or load_acp_sandbox_config()
         self._sessions: dict[str, SandboxSessionHandle] = {}
@@ -92,6 +102,11 @@ class ACPSandboxRunnerManager:
         self._ssh_ports_in_use: set[int] = set()
         self._ssh_ports_lock = asyncio.Lock()
         self._governance = ACPGovernanceCoordinator()
+        self._runtime_policy_log_label = "ACP sandbox runtime policy"
+        self._runtime_policy_service = ACPRuntimePolicyService()
+        self._runtime_policy_snapshots: dict[str, ACPRuntimePolicySnapshot] = {}
+        self._runtime_policy_refresh_tasks: dict[str, asyncio.Task[ACPRuntimePolicySnapshot | None]] = {}
+        self._runtime_policy_refresh_lock = asyncio.Lock()
 
     def _control_record_from_handle(self, sess: SandboxSessionHandle) -> dict[str, Any]:
         return {
@@ -367,7 +382,11 @@ class ACPSandboxRunnerManager:
         for sess in sessions:
             await self.close_session(sess.session_id)
 
-    def _validate_lima_strict_runtime_requirements(self) -> None:
+    def _validate_lima_strict_runtime_requirements(
+        self,
+        *,
+        preflight: RuntimePreflightResult | None = None,
+    ) -> None:
         runtime = str(self.config.runtime or "").strip().lower()
         if runtime != RuntimeType.lima.value:
             return
@@ -376,13 +395,47 @@ class ACPSandboxRunnerManager:
             raise ACPResponseError(
                 "ACP lima strict policy requires network_policy to be deny_all or allowlist"
             )
-        preflight = LimaRunner().preflight(network_policy=network_policy)
+        preflight = preflight or LimaRunner().preflight(network_policy=network_policy)
         if preflight.available:
             return
         reasons = list(preflight.reasons or [])
         raise ACPResponseError(
             f"ACP lima strict policy requirements not satisfied: {', '.join(reasons) if reasons else 'unknown'}"
         )
+
+    def _configured_runtime(self) -> RuntimeType:
+        runtime_raw = str(self.config.runtime or "").strip().lower()
+        try:
+            return RuntimeType(runtime_raw)
+        except ValueError as exc:
+            raise ACPResponseError(f"Unsupported ACP sandbox runtime: {runtime_raw or 'unknown'}") from exc
+
+    def _validate_runtime_requirements(self, runtime: RuntimeType) -> None:
+        network_policy = str(self.config.network_policy or "deny_all").strip().lower() or "deny_all"
+        runtime_preflights = collect_runtime_preflights(network_policy=network_policy)
+        preflight = runtime_preflights.get(runtime)
+        if runtime == RuntimeType.lima:
+            self._validate_lima_strict_runtime_requirements(preflight=preflight)
+        if preflight is None:
+            return
+        if not preflight.available:
+            reasons = list(preflight.reasons or [])
+            raise ACPResponseError(
+                f"ACP {runtime.value} runtime requirements not satisfied: "
+                f"{', '.join(reasons) if reasons else 'unknown'}"
+            )
+        try:
+            SandboxPolicy._require_trust_level_supported(
+                runtime,
+                TrustLevel.standard,
+                runtime_preflights={runtime: preflight},
+            )
+        except SandboxPolicy.PolicyUnsupported as exc:
+            reasons = list(getattr(exc, "reasons", []) or [])
+            detail = ", ".join(reasons) if reasons else getattr(exc, "requirement", "unsupported")
+            raise ACPResponseError(
+                f"ACP {runtime.value} runtime requirements not satisfied: {detail}"
+            ) from exc
 
     # -------------------------------------------------------------------------
     # Session lifecycle
@@ -433,7 +486,8 @@ class ACPSandboxRunnerManager:
             execute_enabled = False
         if not execute_enabled:
             raise ACPResponseError("SANDBOX_ENABLE_EXECUTION must be enabled for ACP sandbox sessions")
-        self._validate_lima_strict_runtime_requirements()
+        runtime = self._configured_runtime()
+        self._validate_runtime_requirements(runtime)
 
         sandbox_service = sandbox_ep._service  # type: ignore[attr-defined]
 
@@ -447,9 +501,10 @@ class ACPSandboxRunnerManager:
         try:
             # Create sandbox session
             sess_spec = SessionSpec(
-                runtime=RuntimeType(self.config.runtime),
+                runtime=runtime,
                 base_image=self.config.base_image,
                 network_policy=self.config.network_policy or "deny_all",
+                trust_level=TrustLevel.standard,
                 persona_id=persona_id,
                 workspace_id=workspace_id,
                 workspace_group_id=workspace_group_id,
@@ -496,7 +551,7 @@ class ACPSandboxRunnerManager:
 
             run_spec = RunSpec(
                 session_id=sandbox_session.id,
-                runtime=RuntimeType(self.config.runtime),
+                runtime=runtime,
                 base_image=self.config.base_image,
                 command=["/usr/local/bin/tldw-acp-entrypoint"],
                 env=env,
@@ -504,6 +559,7 @@ class ACPSandboxRunnerManager:
                 run_as_root=bool(self.config.run_as_root),
                 read_only_root=bool(self.config.read_only_root),
                 network_policy=self.config.network_policy or "deny_all",
+                trust_level=TrustLevel.standard,
                 port_mappings=port_mappings,
                 persona_id=persona_id,
                 workspace_id=workspace_id,
@@ -685,6 +741,7 @@ class ACPSandboxRunnerManager:
         async with self._sessions_lock:
             self._sessions.pop(session_id, None)
         self._updates.pop(session_id, None)
+        self._clear_runtime_policy_session_state(session_id)
         self._delete_control_record(session_id)
 
     def pop_updates(self, session_id: str, limit: int = 100) -> list[dict[str, Any]]:
@@ -830,14 +887,7 @@ class ACPSandboxRunnerManager:
         return True
 
     def _determine_permission_tier(self, tool_name: str) -> str:
-        tool_lower = tool_name.lower()
-        auto_patterns = ["read", "get", "list", "search", "find", "view", "show", "glob", "grep", "status"]
-        if any(p in tool_lower for p in auto_patterns):
-            return "auto"
-        individual_patterns = ["delete", "remove", "exec", "run", "shell", "bash", "terminal", "push", "force"]
-        if any(p in tool_lower for p in individual_patterns):
-            return "individual"
-        return "batch"
+        return determine_permission_tier(tool_name)
 
     async def _handle_notification(self, msg: ACPMessage) -> None:
         if msg.method != "session/update":
@@ -867,23 +917,33 @@ class ACPSandboxRunnerManager:
         tool_arguments = params.get("tool", {}).get("input", {})
 
         tier = self._determine_permission_tier(tool_name)
-
         registry = self._ws_registry.get(session_id)
         batch_tier_approved = bool(registry and tier in registry.batch_approved_tiers)
+        runtime_snapshot = await self._get_runtime_policy_snapshot(
+            session_id,
+            force_refresh=self._should_force_runtime_policy_refresh(tier=tier),
+        )
+        runtime_outcome = _resolve_runtime_permission_outcome(runtime_snapshot, tool_name)
         governance = await self.check_permission_governance(
             session_id,
             tool_name,
             tool_arguments,
             tier=tier,
         )
-        approval_outcome = self._governance.resolve_permission_outcome(
+        permission_outcome = _merge_runtime_and_governance_permission_outcome(
             tier=tier,
             batch_tier_approved=batch_tier_approved,
+            runtime_outcome=runtime_outcome,
             governance=governance,
         )
 
-        if approval_outcome == "deny":
-            outcome_payload: dict[str, Any] = {"outcome": "denied"}
+        if permission_outcome["action"] == "deny":
+            outcome_payload: dict[str, Any] = {
+                "outcome": "denied",
+                "deny_reason": permission_outcome.get("deny_reason"),
+                "policy_snapshot_fingerprint": permission_outcome.get("policy_snapshot_fingerprint"),
+                "provenance_summary": permission_outcome.get("provenance_summary"),
+            }
             if isinstance(governance, dict) and governance:
                 outcome_payload["governance"] = governance
             return ACPMessage(
@@ -892,11 +952,8 @@ class ACPSandboxRunnerManager:
                 result={"outcome": outcome_payload},
             )
 
-        if approval_outcome == "approve":
-            if batch_tier_approved:
-                logger.info("Auto-approving {} (tier {} is batch-approved)", tool_name, tier)
-            else:
-                logger.debug("Auto-approving {} (auto tier)", tool_name)
+        if permission_outcome["action"] == "approve":
+            logger.debug("Auto-approving {} (runtime policy)", tool_name)
             return ACPMessage(
                 jsonrpc="2.0",
                 id=msg.id,
@@ -918,6 +975,12 @@ class ACPSandboxRunnerManager:
             tool_name=tool_name,
             tool_arguments=tool_arguments,
             acp_message_id=msg.id,
+            approval_requirement=permission_outcome.get("approval_requirement"),
+            governance_reason=permission_outcome.get("governance_reason"),
+            deny_reason=permission_outcome.get("deny_reason"),
+            provenance_summary=dict(permission_outcome.get("provenance_summary") or {}),
+            runtime_narrowing_reason=permission_outcome.get("runtime_narrowing_reason"),
+            policy_snapshot_fingerprint=permission_outcome.get("policy_snapshot_fingerprint"),
             future=asyncio.get_running_loop().create_future(),
         )
 
@@ -933,6 +996,11 @@ class ACPSandboxRunnerManager:
             "tool_name": tool_name,
             "tool_arguments": tool_arguments,
             "tier": tier,
+            "approval_requirement": permission_outcome.get("approval_requirement"),
+            "governance_reason": permission_outcome.get("governance_reason"),
+            "provenance_summary": permission_outcome.get("provenance_summary"),
+            "runtime_narrowing_reason": permission_outcome.get("runtime_narrowing_reason"),
+            "policy_snapshot_fingerprint": permission_outcome.get("policy_snapshot_fingerprint"),
             "timeout_seconds": PERMISSION_TIMEOUT_SECONDS,
         }
         if isinstance(governance, dict) and governance:
@@ -1143,18 +1211,23 @@ class ACPSandboxRunnerManager:
             return priv, pub
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             try:
-                import subprocess
+                import shutil
+                import subprocess  # nosec B404 - controlled fallback to local ssh-keygen binary
                 import tempfile
                 from pathlib import Path
+
+                ssh_keygen = shutil.which("ssh-keygen")
+                if not ssh_keygen:
+                    raise ACPResponseError("ssh-keygen is unavailable")
 
                 with tempfile.TemporaryDirectory(prefix="acp_ssh_key_") as tmpdir:
                     key_path = Path(tmpdir) / "id_ed25519"
                     subprocess.run(
-                        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_path)],
+                        [ssh_keygen, "-q", "-t", "ed25519", "-N", "", "-f", str(key_path)],
                         check=True,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
-                    )
+                    )  # nosec B603 - fixed argv, no shell, temp path is generated by the server
                     priv = key_path.read_text(encoding="utf-8")
                     pub = key_path.with_suffix(".pub").read_text(encoding="utf-8").strip()
                     return priv, pub

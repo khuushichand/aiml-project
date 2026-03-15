@@ -6,13 +6,49 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useDemoMode } from "@/context/demo-mode"
 import { useScrollToServerCard } from "@/hooks/useScrollToServerCard"
-import { useConnectionActions } from "@/hooks/useConnectionState"
+import {
+  useConnectionActions,
+  useConnectionUxState
+} from "@/hooks/useConnectionState"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectionProblemBanner from "@/components/Common/ConnectionProblemBanner"
 import { StatusBadge } from "@/components/Common/StatusBadge"
 import { getDemoFlashcardDecks } from "@/utils/demo-content"
 const FlashcardsManager = React.lazy(() =>
   import("./FlashcardsManager").then((m) => ({ default: m.FlashcardsManager }))
+)
+
+const InlineConnectionWarning = ({
+  message,
+  retryActionLabel,
+  onRetry,
+  retryDisabled,
+  testId
+}: {
+  message: string
+  retryActionLabel?: string
+  onRetry?: () => void
+  retryDisabled?: boolean
+  testId: string
+}) => (
+  <div
+    data-testid={testId}
+    className="rounded-2xl border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-text"
+  >
+    <div className="font-medium">{message}</div>
+    {retryActionLabel && onRetry ? (
+      <div className="mt-2 flex justify-start text-xs">
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={retryDisabled}
+          className="inline-flex items-center gap-1 text-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:text-primary"
+        >
+          {retryActionLabel}
+        </button>
+      </div>
+    ) : null}
+  </div>
 )
 
 /**
@@ -24,6 +60,7 @@ export const FlashcardsWorkspace: React.FC = () => {
   const navigate = useNavigate()
   const isOnline = useServerOnline()
   const { demoEnabled } = useDemoMode()
+  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const scrollToServerCard = useScrollToServerCard("/flashcards")
   const { checkOnce } = useConnectionActions()
@@ -45,10 +82,149 @@ export const FlashcardsWorkspace: React.FC = () => {
       })
   }, [checkOnce, checkingConnection])
 
+  const offlineBannerProps = React.useMemo(() => {
+    if (uxState === "error_auth" || uxState === "configuring_auth") {
+      return {
+        badgeLabel: "Credentials required",
+        title: t("option:flashcards.authTitle", {
+          defaultValue: "Add your credentials to use Flashcards"
+        }),
+        description: t("option:flashcards.authDescription", {
+          defaultValue:
+            "Flashcards needs valid credentials before it can review or generate cards against your tldw server."
+        }),
+        examples: [
+          t("option:flashcards.authExample1", {
+            defaultValue:
+              "Use the connection card at the top of this page to repair your server URL or API key."
+          })
+        ],
+        primaryActionLabel: t("option:connectionCard.buttonGoToServerCard", {
+          defaultValue: "Go to server card"
+        }),
+        onPrimaryAction: scrollToServerCard
+      }
+    }
+    if (uxState === "unconfigured" || uxState === "configuring_url") {
+      return {
+        badgeLabel: "Setup required",
+        title: t("option:flashcards.setupTitle", {
+          defaultValue: "Finish setup to use Flashcards"
+        }),
+        description: hasCompletedFirstRun
+          ? t("option:flashcards.setupDescriptionReturning", {
+              defaultValue:
+                "Flashcards still needs a configured tldw server before it can load your real decks."
+            })
+          : t("option:flashcards.setupDescriptionFirstRun", {
+              defaultValue:
+                "Finish connecting your tldw server before Flashcards can load your real decks."
+            }),
+        examples: [
+          t("option:flashcards.setupExample1", {
+            defaultValue:
+              "Use the connection card at the top of this page to finish server setup."
+          })
+        ],
+        primaryActionLabel: t("option:connectionCard.buttonGoToServerCard", {
+          defaultValue: "Go to server card"
+        }),
+        onPrimaryAction: scrollToServerCard
+      }
+    }
+    if (uxState === "error_unreachable") {
+      return {
+        badgeLabel: "Server unreachable",
+        title: t("option:flashcards.unreachableTitle", {
+          defaultValue: "Can't reach your tldw server right now"
+        }),
+        description: t("option:flashcards.unreachableDescription", {
+          defaultValue:
+            "Flashcards depends on a reachable tldw server. Review the server card above, then retry the connection check."
+        }),
+        examples: [
+          t("option:flashcards.unreachableExample1", {
+            defaultValue:
+              "If your server is running, confirm the URL in the connection card still points to the right host."
+          })
+        ],
+        primaryActionLabel: t("option:connectionCard.buttonGoToServerCard", {
+          defaultValue: "Go to server card"
+        }),
+        onPrimaryAction: scrollToServerCard,
+        retryActionLabel: t("option:buttonRetry", "Retry connection"),
+        onRetry: handleRetryConnection,
+        retryDisabled: checkingConnection
+      }
+    }
+    return {
+      badgeLabel: "Not connected",
+      title: t("option:flashcards.emptyConnectTitle", {
+        defaultValue: "Connect to use Flashcards"
+      }),
+      description: t("option:flashcards.emptyConnectDescription", {
+        defaultValue:
+          "This view needs a connected server. Use the server connection card above to fix your connection, then return here to review and generate flashcards."
+      }),
+      examples: [
+        t("option:flashcards.emptyConnectExample1", {
+          defaultValue:
+            "Use the connection card at the top of this page to add your server URL and API key."
+        })
+      ],
+      primaryActionLabel: t("option:connectionCard.buttonGoToServerCard", {
+        defaultValue: "Go to server card"
+      }),
+      onPrimaryAction: scrollToServerCard,
+      retryActionLabel: t("option:buttonRetry", "Retry connection"),
+      onRetry: handleRetryConnection,
+      retryDisabled: checkingConnection
+    }
+  }, [
+    checkingConnection,
+    handleRetryConnection,
+    hasCompletedFirstRun,
+    scrollToServerCard,
+    t,
+    uxState
+  ])
+
+  const demoConnectionWarning = React.useMemo(() => {
+    if (uxState === "error_auth" || uxState === "configuring_auth") {
+      return {
+        message:
+          "Demo stays available, but your Flashcards credentials need attention."
+      }
+    }
+    if (uxState === "unconfigured" || uxState === "configuring_url") {
+      return {
+        message: "Demo stays available while you finish Flashcards setup."
+      }
+    }
+    if (uxState === "error_unreachable") {
+      return {
+        message: "Demo stays available, but your tldw server is unreachable.",
+        retryActionLabel: t("option:buttonRetry", "Retry connection"),
+        onRetry: handleRetryConnection,
+        retryDisabled: checkingConnection
+      }
+    }
+    return null
+  }, [checkingConnection, handleRetryConnection, t, uxState])
+
   // Offline state - show demo or connection banner
   if (!isOnline) {
     return demoEnabled ? (
       <div className="space-y-4">
+        {demoConnectionWarning ? (
+          <InlineConnectionWarning
+            testId="flashcards-demo-connection-warning"
+            message={demoConnectionWarning.message}
+            retryActionLabel={demoConnectionWarning.retryActionLabel}
+            onRetry={demoConnectionWarning.onRetry}
+            retryDisabled={demoConnectionWarning.retryDisabled}
+          />
+        ) : null}
         <FeatureEmptyState
           title={
             <span className="inline-flex items-center gap-2">
@@ -105,27 +281,15 @@ export const FlashcardsWorkspace: React.FC = () => {
       </div>
     ) : (
       <ConnectionProblemBanner
-        badgeLabel="Not connected"
-        title={t("option:flashcards.emptyConnectTitle", {
-          defaultValue: "Connect to use Flashcards"
-        })}
-        description={t("option:flashcards.emptyConnectDescription", {
-          defaultValue:
-            "This view needs a connected server. Use the server connection card above to fix your connection, then return here to review and generate flashcards."
-        })}
-        examples={[
-          t("option:flashcards.emptyConnectExample1", {
-            defaultValue:
-              "Use the connection card at the top of this page to add your server URL and API key."
-          })
-        ]}
-        primaryActionLabel={t("option:connectionCard.buttonGoToServerCard", {
-          defaultValue: "Go to server card"
-        })}
-        onPrimaryAction={scrollToServerCard}
-        retryActionLabel={t("option:buttonRetry", "Retry connection")}
-        onRetry={handleRetryConnection}
-        retryDisabled={checkingConnection}
+        badgeLabel={offlineBannerProps.badgeLabel}
+        title={offlineBannerProps.title}
+        description={offlineBannerProps.description}
+        examples={offlineBannerProps.examples}
+        primaryActionLabel={offlineBannerProps.primaryActionLabel}
+        onPrimaryAction={offlineBannerProps.onPrimaryAction}
+        retryActionLabel={offlineBannerProps.retryActionLabel}
+        onRetry={offlineBannerProps.onRetry}
+        retryDisabled={offlineBannerProps.retryDisabled}
       />
     )
   }

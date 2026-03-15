@@ -1,13 +1,16 @@
 import React from "react"
-import { describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import OptionIndex from "../option-index"
 import OptionSetup from "../option-setup"
 import OptionOnboardingTest from "../option-onboarding-test"
+import { ConnectionPhase } from "@/types/connection"
 
 const state = {
   hasCompletedFirstRun: false
 }
+let phase: ConnectionPhase | null = null
+const toggleDarkModeMock = vi.fn()
 
 const optionLayoutMock = vi.fn(
   ({
@@ -35,7 +38,7 @@ vi.mock("~/components/Layouts/Layout", () => ({
 
 vi.mock("@/hooks/useConnectionState", () => ({
   useConnectionState: () => ({
-    phase: null
+    phase
   }),
   useConnectionUxState: () => ({
     uxState: null,
@@ -52,12 +55,35 @@ vi.mock("@/hooks/useComposerFocus", () => ({
   useFocusComposerOnConnect: () => undefined
 }))
 
+vi.mock("@/hooks/useDarkmode", () => ({
+  useDarkMode: () => ({
+    mode: "dark",
+    toggleDarkMode: toggleDarkModeMock
+  })
+}))
+
 vi.mock("react-router-dom", () => ({
   useNavigate: () => navigateMock
 }))
 
 vi.mock("@/components/Option/Onboarding/OnboardingWizard", () => ({
-  OnboardingWizard: () => <div data-testid="onboarding-wizard">Wizard</div>
+  OnboardingWizard: ({
+    onFinish
+  }: {
+    onFinish?: () => void | Promise<void>
+  }) => (
+    <div>
+      <div data-testid="onboarding-wizard">Wizard</div>
+      <button
+        data-testid="onboarding-finish"
+        onClick={() => {
+          void onFinish?.()
+        }}
+      >
+        Finish onboarding
+      </button>
+    </div>
+  )
 }))
 
 vi.mock("~/components/Option/LandingHub", () => ({
@@ -65,10 +91,18 @@ vi.mock("~/components/Option/LandingHub", () => ({
 }))
 
 describe("core route identity guardrails", () => {
-  it("provides unique route-intent headings for home/setup/onboarding-test", () => {
+  beforeEach(() => {
     optionLayoutMock.mockClear()
+    navigateMock.mockClear()
+    checkOnceMock.mockReset().mockResolvedValue(undefined)
+    beginOnboardingMock.mockReset().mockResolvedValue(undefined)
+    markFirstRunCompleteMock.mockReset().mockResolvedValue(undefined)
+    toggleDarkModeMock.mockReset()
     state.hasCompletedFirstRun = false
+    phase = null
+  })
 
+  it("provides unique route-intent headings for home/setup/onboarding-test", () => {
     const firstRender = render(<OptionIndex />)
     expect(screen.getByText("Home Onboarding")).toBeInTheDocument()
     expect(screen.getByTestId("onboarding-wizard")).toBeInTheDocument()
@@ -101,5 +135,68 @@ describe("core route identity guardrails", () => {
         hideSidebar: true
       })
     )
+  })
+
+  it("completes onboarding immediately without waiting for connection recheck", async () => {
+    optionLayoutMock.mockClear()
+    state.hasCompletedFirstRun = false
+
+    let resolveCheck: (() => void) | null = null
+    checkOnceMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCheck = resolve
+        })
+    )
+
+    render(<OptionIndex />)
+    expect(screen.getByTestId("onboarding-wizard")).toBeInTheDocument()
+
+    checkOnceMock.mockClear()
+    markFirstRunCompleteMock.mockClear()
+
+    fireEvent.click(screen.getByTestId("onboarding-finish"))
+
+    await waitFor(() => {
+      expect(markFirstRunCompleteMock).toHaveBeenCalledTimes(1)
+    })
+    expect(checkOnceMock).toHaveBeenCalledTimes(1)
+
+    // Prevent unresolved Promise leakage in this test process.
+    resolveCheck?.()
+  })
+
+  it("does not auto-restart onboarding after hydration when the connection is already resolved", async () => {
+    phase = ConnectionPhase.CONNECTED
+
+    let resolveCheck: (() => void) | null = null
+    checkOnceMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCheck = resolve
+        })
+    )
+
+    render(<OptionIndex />)
+
+    await act(async () => {
+      resolveCheck?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(checkOnceMock).toHaveBeenCalledTimes(1)
+    expect(beginOnboardingMock).not.toHaveBeenCalled()
+  })
+
+  it("keeps an explicit theme toggle available on the home onboarding shell", () => {
+    render(<OptionIndex />)
+
+    const toggle = screen.getByTestId("chat-header-theme-toggle")
+    expect(toggle).toBeInTheDocument()
+
+    fireEvent.click(toggle)
+
+    expect(toggleDarkModeMock).toHaveBeenCalledTimes(1)
   })
 })

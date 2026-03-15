@@ -75,6 +75,12 @@ class _StubSessionRecord:
         self.workspace_id = "ws-1"
         self.workspace_group_id = "wsg-2"
         self.scope_snapshot_id = "scope-3"
+        self.forked_from = "session-root"
+        self.policy_snapshot_version = "resolved-v1"
+        self.policy_snapshot_fingerprint = "snapshot-123"
+        self.policy_snapshot_refreshed_at = "2026-03-14T12:00:00+00:00"
+        self.policy_summary = {"allowed_tool_count": 2, "approval_mode": "require_approval"}
+        self.policy_provenance_summary = {"source_kinds": ["governance_pack", "capability_mapping"]}
         self.cwd = "/tmp/test-project"
         self.messages = [
             {"role": "user", "content": {"text": "hi"}, "timestamp": "2026-02-26T00:00:01+00:00"},
@@ -108,12 +114,19 @@ class _StubSessionRecord:
             "workspace_id": self.workspace_id,
             "workspace_group_id": self.workspace_group_id,
             "scope_snapshot_id": self.scope_snapshot_id,
+            "forked_from": self.forked_from,
+            "policy_snapshot_version": self.policy_snapshot_version,
+            "policy_snapshot_fingerprint": self.policy_snapshot_fingerprint,
+            "policy_snapshot_refreshed_at": self.policy_snapshot_refreshed_at,
+            "policy_summary": self.policy_summary,
+            "policy_provenance_summary": self.policy_provenance_summary,
         }
 
-    def to_detail_dict(self, *, has_websocket: bool = False) -> dict:
+    def to_detail_dict(self, *, has_websocket: bool = False, fork_lineage: list[str] | None = None) -> dict:
         payload = self.to_info_dict(has_websocket=has_websocket)
         payload["messages"] = list(self.messages)
         payload["cwd"] = self.cwd
+        payload["fork_lineage"] = fork_lineage or []
         return payload
 
 
@@ -138,6 +151,9 @@ class _StubSessionStore:
         if session_id != self.record.session_id:
             return None
         return self.record
+
+    async def get_fork_lineage(self, session_id: str, *, max_depth: int = 50):
+        return []
 
 
 class _StubRunnerClient:
@@ -178,6 +194,14 @@ def test_acp_list_sessions_status_schema_includes_tenancy(client_user_only, stub
     assert session["workspace_id"] == "ws-1"
     assert session["workspace_group_id"] == "wsg-2"
     assert session["scope_snapshot_id"] == "scope-3"
+    assert session["forked_from"] == "session-root"
+    assert session["policy_snapshot_version"] == "resolved-v1"
+    assert session["policy_snapshot_fingerprint"] == "snapshot-123"
+    assert session["policy_snapshot_refreshed_at"] == "2026-03-14T12:00:00+00:00"
+    assert session["policy_summary"] == {"allowed_tool_count": 2, "approval_mode": "require_approval"}
+    assert session["policy_provenance_summary"] == {
+        "source_kinds": ["governance_pack", "capability_mapping"]
+    }
     assert session["usage"]["total_tokens"] == 30
 
 
@@ -193,6 +217,42 @@ def test_acp_session_detail_status_schema_includes_tenancy(client_user_only, stu
     assert payload["workspace_id"] == "ws-1"
     assert payload["workspace_group_id"] == "wsg-2"
     assert payload["scope_snapshot_id"] == "scope-3"
+    assert payload["forked_from"] == "session-root"
+    assert payload["policy_snapshot_version"] == "resolved-v1"
+    assert payload["policy_snapshot_fingerprint"] == "snapshot-123"
+    assert payload["policy_snapshot_refreshed_at"] == "2026-03-14T12:00:00+00:00"
+    assert payload["policy_summary"] == {"allowed_tool_count": 2, "approval_mode": "require_approval"}
+    assert payload["policy_provenance_summary"] == {
+        "source_kinds": ["governance_pack", "capability_mapping"]
+    }
+
+
+def test_permission_request_schema_keeps_tier_and_adds_policy_fields():
+    from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
+        ACPPermissionTier,
+        ACPWSPermissionRequestMessage,
+    )
+
+    payload = ACPWSPermissionRequestMessage(
+        request_id="perm-1",
+        session_id="session-123",
+        tool_name="web.search",
+        tool_arguments={"query": "opa acp"},
+        tier=ACPPermissionTier.INDIVIDUAL,
+        approval_requirement="approval_required",
+        governance_reason="policy_approval_required",
+        deny_reason=None,
+        provenance_summary={"source_kinds": ["capability_mapping"]},
+        runtime_narrowing_reason="workspace_trust_required",
+        policy_snapshot_fingerprint="snapshot-123",
+    )
+
+    assert payload.tier == ACPPermissionTier.INDIVIDUAL
+    assert payload.approval_requirement == "approval_required"
+    assert payload.governance_reason == "policy_approval_required"
+    assert payload.provenance_summary == {"source_kinds": ["capability_mapping"]}
+    assert payload.runtime_narrowing_reason == "workspace_trust_required"
+    assert payload.policy_snapshot_fingerprint == "snapshot-123"
 
 
 def test_acp_session_usage_schema(client_user_only, stub_acp_store):

@@ -5,7 +5,6 @@ import contextlib
 import inspect
 import json
 import time
-from types import ModuleType
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,6 +21,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.tts_service import _raise_for_tts_error
+from tldw_Server_API.app.core.Audio.tts_service import _sanitize_speech_request
 from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
@@ -39,6 +39,9 @@ from tldw_Server_API.app.core.TTS.utils import (
     tts_history_text_length,
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.Storage.generated_file_helpers import (
+    save_and_register_tts_audio,
+)
 
 _AUDIO_TTS_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -74,52 +77,20 @@ def get_job_manager() -> JobManager:
 
 
 def _audio_shim_attr(name: str):
-    def _is_override(value: Any) -> bool:
-        if value is None or isinstance(value, ModuleType):
-            return False
-        mod_name = getattr(value, "__module__", None)
-        if isinstance(mod_name, str) and mod_name:
-            return not mod_name.startswith("tldw_Server_API.")
-        return True
-
-    mod_has = False
-    mod_value: Any = None
+    defaults: dict[str, Any] = {
+        "_sanitize_speech_request": _sanitize_speech_request,
+        "save_and_register_tts_audio": save_and_register_tts_audio,
+    }
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
+        from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
 
-        if hasattr(audio_mod, name):
-            mod_has = True
-            mod_value = getattr(audio_mod, name)
-    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
-        mod_has = False
-        mod_value = None
-    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
-    pkg_dict = getattr(audio_shim, "__dict__", {})
-    pkg_has = name in pkg_dict
-    pkg_value = pkg_dict.get(name) if pkg_has else None
-
-    if pkg_has and mod_has and pkg_value is not mod_value:
-        pkg_override = _is_override(pkg_value)
-        mod_override = _is_override(mod_value)
-        if mod_override and not pkg_override:
-            return mod_value
-        if pkg_override and not mod_override:
-            return pkg_value
-        if mod_override and pkg_override:
-            return mod_value
-
-    if pkg_has:
-        return pkg_value
-    if mod_has:
-        return mod_value
-    try:
         if hasattr(audio_shim, name):
             return getattr(audio_shim, name)
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
         pass
-    if not hasattr(audio_shim, name):
-        raise NameError(name)
-    return getattr(audio_shim, name)
+    if name in defaults:
+        return defaults[name]
+    raise NameError(name)
 
 
 def _tts_history_config() -> dict[str, Any]:

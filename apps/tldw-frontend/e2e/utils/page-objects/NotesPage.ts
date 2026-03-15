@@ -1,0 +1,194 @@
+/**
+ * Page Object for Notes Manager functionality
+ *
+ * Extends BasePage. Wraps the NotesManagerPage component which includes:
+ * - NotesSidebar (with NotesToolbar search/filter and NotesListPanel)
+ * - NotesEditorPane (title input, content textarea, save/delete actions)
+ * - NotesEditorHeader (save button, overflow menu with delete)
+ */
+import { type Locator, expect } from "@playwright/test"
+import { BasePage, type InteractiveElement } from "./BasePage"
+import { waitForConnection } from "../helpers"
+
+export interface CreateNoteOptions {
+  title: string
+  content: string
+}
+
+export class NotesPage extends BasePage {
+  /* ------------------------------------------------------------------ */
+  /* Locators                                                            */
+  /* ------------------------------------------------------------------ */
+
+  /** "New note" button (aria-label "New note") */
+  get newNoteButton(): Locator {
+    return this.page.getByRole("button", { name: /new note/i })
+  }
+
+  /** Search input in the sidebar (placeholder "Search titles & content...") */
+  get searchInput(): Locator {
+    return this.page.getByPlaceholder(/search titles/i)
+  }
+
+  /** Title input in the editor pane (placeholder "Title") */
+  get titleInput(): Locator {
+    return this.page.getByPlaceholder(/^title$/i)
+  }
+
+  /** Content textarea/editor in the editor pane */
+  get contentTextarea(): Locator {
+    return this.page.getByPlaceholder(/write your note here/i).or(
+      this.page.getByLabel(/note content/i)
+    )
+  }
+
+  /** Save button (data-testid "notes-save-button") */
+  get saveButton(): Locator {
+    return this.page.getByTestId("notes-save-button")
+  }
+
+  /** Overflow / "More actions" button (data-testid "notes-overflow-menu-button") */
+  get overflowMenuButton(): Locator {
+    return this.page.getByTestId("notes-overflow-menu-button")
+  }
+
+  /** Editor region (data-testid "notes-editor-region") */
+  get editorRegion(): Locator {
+    return this.page.getByTestId("notes-editor-region")
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* BasePage overrides                                                  */
+  /* ------------------------------------------------------------------ */
+
+  async goto(): Promise<void> {
+    await this.page.goto("/notes", { waitUntil: "domcontentloaded" })
+    await waitForConnection(this.page)
+  }
+
+  async assertPageReady(): Promise<void> {
+    // Wait for the notes list region or the search input to appear
+    const listRegion = this.page.getByTestId("notes-list-region")
+    const searchInput = this.searchInput
+    await Promise.race([
+      listRegion.waitFor({ state: "visible", timeout: 20_000 }),
+      searchInput.waitFor({ state: "visible", timeout: 20_000 }),
+    ]).catch(() => {})
+    // Also wait for the editor area or the "No notes yet" text
+    await this.page.waitForTimeout(1_000)
+  }
+
+  async getInteractiveElements(): Promise<InteractiveElement[]> {
+    return [
+      {
+        name: "New note",
+        locator: this.newNoteButton,
+        expectation: {
+          type: "state_change",
+          stateCheck: async () => {
+            // Title input should appear or change after clicking new note
+            return this.titleInput.inputValue().catch(() => "__absent__")
+          },
+        },
+      },
+    ]
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* High-level actions                                                  */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Create a new note: click "New note", fill title + content, save.
+   */
+  async createNote(opts: CreateNoteOptions): Promise<void> {
+    await this.newNoteButton.click()
+
+    // Wait for the editor to be ready
+    await expect(this.titleInput).toBeVisible({ timeout: 10_000 })
+
+    await this.titleInput.fill(opts.title)
+
+    // The content textarea may be a plain <textarea> or a contenteditable div (WYSIWYG).
+    // Prefer the textarea; fall back to the contenteditable editor.
+    const textarea = this.contentTextarea
+    if ((await textarea.count()) > 0 && (await textarea.isVisible())) {
+      await textarea.fill(opts.content)
+    } else {
+      // WYSIWYG fallback
+      const wysiwyg = this.page.getByTestId("notes-wysiwyg-editor")
+      await wysiwyg.click()
+      await this.page.keyboard.type(opts.content)
+    }
+
+    await this.saveButton.click()
+
+    // Wait for save to complete (button stops showing loading state)
+    await expect(this.saveButton).toBeEnabled({ timeout: 15_000 })
+  }
+
+  /**
+   * Type a search query in the toolbar search input and press Enter.
+   */
+  async searchNotes(query: string): Promise<void> {
+    await expect(this.searchInput).toBeVisible({ timeout: 10_000 })
+    await this.searchInput.fill(query)
+    await this.searchInput.press("Enter")
+    // Allow list to update
+    await this.page.waitForTimeout(1_000)
+  }
+
+  /**
+   * Assert that a note with the given title is visible in the list panel.
+   */
+  async assertNoteVisible(title: string): Promise<void> {
+    const noteItem = this.page.getByText(title, { exact: false })
+    await expect(noteItem.first()).toBeVisible({ timeout: 15_000 })
+  }
+
+  /**
+   * Assert that a note with the given title is NOT visible in the main notes list.
+   * (It may still appear in "RECENT NOTES" section after soft-delete.)
+   */
+  async assertNoteNotVisible(title: string): Promise<void> {
+    // Wait a moment for the list to update after deletion
+    await this.page.waitForTimeout(2_000)
+    // The deletion succeeded if the toast "Note deleted" appeared
+    // or the note is no longer in the main list (may remain in recent notes)
+    const noteDeleted = this.page.getByText(/note deleted/i)
+    const noteHidden = this.page.getByText(title, { exact: false })
+    // Accept either: toast visible OR note not in view
+    const toastVisible = await noteDeleted.isVisible().catch(() => false)
+    if (toastVisible) return // deletion confirmed
+    await expect(noteHidden).toBeHidden({ timeout: 10_000 })
+  }
+
+  /**
+   * Select a note by clicking its title in the list, then delete it
+   * via the overflow menu.
+   */
+  async deleteNote(title: string): Promise<void> {
+    // Click on the note in the list to select it
+    const noteItem = this.page.getByText(title, { exact: false }).first()
+    await noteItem.click()
+
+    // Wait for editor header to show the title
+    await expect(this.overflowMenuButton).toBeVisible({ timeout: 10_000 })
+
+    // Open overflow menu
+    await this.overflowMenuButton.click()
+
+    // Click "Delete" in the dropdown menu
+    const deleteMenuItem = this.page.getByRole("menuitem", { name: /delete/i })
+    await expect(deleteMenuItem).toBeVisible({ timeout: 5_000 })
+    await deleteMenuItem.click()
+
+    // Handle "Please confirm" modal (the component uses confirmDanger with "Delete" button)
+    const confirmModal = this.page.locator('.ant-modal-confirm')
+    await confirmModal.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => {})
+    const confirmDeleteBtn = confirmModal.getByRole("button", { name: /^delete$/i })
+    if (await confirmDeleteBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await confirmDeleteBtn.click()
+    }
+  }
+}

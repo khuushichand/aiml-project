@@ -75,7 +75,7 @@ def test_tool_catalogs_postgres_auth_credential_path_diagnostics(monkeypatch, is
     )
 
     # Invalid JWT should fail with expected credential semantics.
-    bad_headers = {"Authorization": "Bearer not.a.valid.jwt"}
+    bad_headers = {"Authorization": "Bearer not.a.jwt"}
     r_bad = client.get("/api/v1/admin/roles", headers=bad_headers)
     assert r_bad.status_code == 401, (
         "Invalid JWT was not rejected with HTTP 401. "

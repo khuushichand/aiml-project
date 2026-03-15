@@ -29,6 +29,14 @@ const mocks = vi.hoisted(() => {
   }
 })
 
+const connectionMocks = vi.hoisted(() => ({
+  useConnectionUxState: vi.fn()
+}))
+
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (_key: string, defaultValue?: unknown, options?: Record<string, unknown>) => {
@@ -39,7 +47,8 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
-vi.mock("antd", () => {
+vi.mock("antd", async () => {
+  const actual = await vi.importActual<typeof import("antd")>("antd")
   const Alert = ({ title, description, action, closable, onClose }: any) => (
     <div>
       <div>{title}</div>
@@ -72,14 +81,31 @@ vi.mock("antd", () => {
         <div>{footer}</div>
       </div>
     ) : null
+  const Drawer = ({ open, title, children }: any) =>
+    open ? (
+      <div>
+        <h3>{title}</h3>
+        {children}
+      </div>
+    ) : null
 
   const Empty = ({ description }: any) => <div>{description}</div>
+  const Tooltip = ({ children }: any) => <>{children}</>
   const Button = ({ children, onClick, disabled, ...rest }: any) => (
     <button type="button" onClick={() => onClick?.()} disabled={Boolean(disabled)} {...rest}>
       {children}
     </button>
   )
-  return { Alert, Tabs, Empty, Button, Modal }
+  const Switch = ({ checked, onChange, ...rest }: any) => (
+    <button
+      type="button"
+      aria-label={rest["aria-label"] || "Toggle"}
+      aria-pressed={Boolean(checked)}
+      onClick={() => onChange?.(!checked)}
+      {...rest}
+    />
+  )
+  return { ...actual, Alert, Tabs, Empty, Button, Modal, Drawer, Tooltip, Switch }
 })
 
 vi.mock("@/hooks/useAntdNotification", () => ({
@@ -94,6 +120,20 @@ vi.mock("@/hooks/useAntdNotification", () => ({
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
 }))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => connectionMocks.useConnectionUxState()
+}))
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: () => navigationMocks.navigate
+  }
+})
 
 vi.mock("@/services/watchlists", () => ({
   fetchWatchlistRuns: (...args: any[]) => mocks.fetchWatchlistRunsMock(...args),
@@ -140,10 +180,17 @@ vi.mock("../SettingsTab/SettingsTab", () => ({
 vi.mock("../ItemsTab/ItemsTab", () => ({
   ItemsTab: () => <div>Items tab</div>
 }))
+vi.mock("../shared/WatchlistsHealthBar", () => ({
+  WatchlistsHealthBar: () => <div data-testid="watchlists-health-bar" />
+}))
 
 describe("WatchlistsPlaygroundPage orientation guidance", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "connected_ok",
+      hasCompletedFirstRun: true
+    })
     mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.recordWatchlistsIaExperimentTelemetryMock.mockResolvedValue({ accepted: true })
     mocks.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)

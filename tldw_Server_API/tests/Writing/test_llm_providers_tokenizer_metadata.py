@@ -32,6 +32,16 @@ def _fake_config() -> configparser.ConfigParser:
     return cfg
 
 
+def _fake_openai_only_config() -> configparser.ConfigParser:
+    cfg = configparser.ConfigParser()
+    cfg.add_section("API")
+    cfg.set("API", "openai_api_key", "sk-test")
+    cfg.set("API", "openai_model", "gpt-4o-mini")
+    cfg.set("API", "default_api", "openai")
+    cfg.add_section("Local-API")
+    return cfg
+
+
 def test_llm_providers_tokenizer_metadata_mirrors_strict_fields(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
 
@@ -244,3 +254,93 @@ def test_llm_providers_real_resolver_exact_for_anthropic_google_cohere_bedrock_g
     mistral_tok = providers["mistral"]["tokenizers"][mistral_model]
     assert mistral_tok["count_accuracy"] == "unavailable"
     assert mistral_tok["kind"] == "tiktoken"
+
+
+def test_llm_providers_skips_tokenizer_probe_for_non_text_models(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+
+    probe_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config)
+    monkeypatch.setattr(llm_endpoints, "apply_llm_provider_overrides_to_listing", lambda result: result)
+    monkeypatch.setattr(llm_endpoints, "get_api_keys", lambda: {})
+    monkeypatch.setattr(llm_endpoints, "list_image_models_for_catalog", lambda: [])
+    monkeypatch.setattr(llm_endpoints, "_llm_registry_capability_envelopes", lambda: {})
+
+    def _fake_list_provider_models(provider: str) -> list[str]:
+        if provider == "google":
+            return ["gemini-2.5-flash", "imagen-4.0-generate-001"]
+        return []
+
+    monkeypatch.setattr(llm_endpoints, "list_provider_models", _fake_list_provider_models)
+
+    def _fake_tokenizer_metadata(provider: str, model: str, **_kwargs):
+        probe_calls.append((provider, model))
+        return {
+            "available": True,
+            "tokenizer": "fake:remote-count",
+            "kind": "provider-native-count",
+            "source": "fake.google",
+            "detokenize": False,
+            "count_accuracy": "exact",
+            "strict_mode_effective": False,
+        }
+
+    monkeypatch.setattr(llm_endpoints, "resolve_tokenizer_metadata", _fake_tokenizer_metadata)
+
+    payload = llm_endpoints.get_configured_providers(include_deprecated=False)
+    providers = {p["name"]: p for p in payload["providers"]}
+
+    google = providers["google"]
+    assert "gemini-2.5-flash" in google["models"]
+    assert "imagen-4.0-generate-001" in google["models"]
+
+    assert ("google", "gemini-2.5-flash") in probe_calls
+    assert ("google", "imagen-4.0-generate-001") not in probe_calls
+
+    image_tok = google["tokenizers"]["imagen-4.0-generate-001"]
+    assert image_tok["available"] is False
+    assert "skipped" in str(image_tok.get("error") or "").lower()
+
+
+def test_llm_providers_probes_only_configured_commercial_models(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+
+    probe_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_openai_only_config)
+    monkeypatch.setattr(llm_endpoints, "apply_llm_provider_overrides_to_listing", lambda result: result)
+    monkeypatch.setattr(llm_endpoints, "get_api_keys", lambda: {})
+    monkeypatch.setattr(llm_endpoints, "list_image_models_for_catalog", lambda: [])
+    monkeypatch.setattr(llm_endpoints, "_llm_registry_capability_envelopes", lambda: {})
+    monkeypatch.setattr(
+        llm_endpoints,
+        "list_provider_models",
+        lambda provider: ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"] if provider == "openai" else [],
+    )
+
+    def _fake_tokenizer_metadata(provider: str, model: str, **_kwargs):
+        probe_calls.append((provider, model))
+        return {
+            "available": True,
+            "tokenizer": "fake:tiktoken",
+            "kind": "tiktoken",
+            "source": "tiktoken.fake",
+            "detokenize": True,
+            "count_accuracy": "exact",
+            "strict_mode_effective": False,
+        }
+
+    monkeypatch.setattr(llm_endpoints, "resolve_tokenizer_metadata", _fake_tokenizer_metadata)
+
+    payload = llm_endpoints.get_configured_providers(include_deprecated=False)
+    providers = {p["name"]: p for p in payload["providers"]}
+    openai = providers["openai"]
+
+    assert openai["models"] == ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+    openai_probe_calls = [model for provider, model in probe_calls if provider == "openai"]
+    assert openai_probe_calls == ["gpt-4o-mini"]
+
+    skipped_tok = openai["tokenizers"]["gpt-4o"]
+    assert skipped_tok["available"] is False
+    assert "configured" in str(skipped_tok.get("error") or "").lower()

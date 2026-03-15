@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react"
 import { act, renderHook } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useChatActions } from "../useChatActions"
 import {
@@ -13,18 +13,31 @@ import {
 
 const {
   addChatMessageMock,
+  createChatMock,
+  streamCharacterChatCompletionMock,
+  persistCharacterCompletionMock,
   normalChatModeMock,
   updateMessageMediaMock,
   chatSettingsState,
-  storageValues
+  storageValues,
+  storeOptionState
 } = vi.hoisted(() => ({
   addChatMessageMock: vi.fn(),
+  streamCharacterChatCompletionMock: vi.fn(),
+  persistCharacterCompletionMock: vi.fn(async () => ({
+    assistant_message_id: "assistant-server-1",
+    version: 1
+  })),
+  createChatMock: vi.fn(),
   normalChatModeMock: vi.fn(),
   updateMessageMediaMock: vi.fn(async (_messageId: string, _payload: any) => null),
   chatSettingsState: {
     value: { imageEventSyncMode: "off" as "off" | "on" }
   },
-  storageValues: new Map<string, unknown>()
+  storageValues: new Map<string, unknown>(),
+  storeOptionState: {
+    value: { selectedModel: "deepseek-chat" as string | null }
+  }
 }))
 
 vi.mock("@/hooks/chat-modes/normalChatMode", () => ({
@@ -124,9 +137,7 @@ vi.mock("@plasmohq/storage/hook", () => ({
 
 vi.mock("@/store/option", () => ({
   useStoreMessageOption: {
-    getState: () => ({
-      selectedModel: "deepseek-chat"
-    })
+    getState: () => storeOptionState.value
   }
 }))
 
@@ -137,36 +148,49 @@ vi.mock("@/services/tldw/server-capabilities", () => ({
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     addChatMessage: addChatMessageMock,
+    createChat: createChatMock,
+    streamCharacterChatCompletion: streamCharacterChatCompletionMock,
+    persistCharacterCompletion: persistCharacterCompletionMock,
     initialize: vi.fn(async () => null),
     getMessage: vi.fn(async () => ({ version: 1 })),
     editMessage: vi.fn(async () => null)
   }
 }))
 
-const createHookOptions = () => {
-  let currentMessages: any[] = [
-    {
-      id: "assistant-image-1",
-      role: "assistant",
-      name: "Image backend",
-      isBot: true,
-      message: "",
-      messageType: IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
-      images: ["data:image/png;base64,AAAA"],
-      generationInfo: {
-        image_generation: {
-          request: {
-            prompt: "sunlit city skyline",
-            backend: "comfyui"
-          },
-          source: "generate-modal",
-          variant_count: 1,
-          active_variant_index: 0,
-          createdAt: 1700000000000
-        }
+const defaultInitialMessages: any[] = [
+  {
+    id: "assistant-image-1",
+    role: "assistant",
+    name: "Image backend",
+    isBot: true,
+    message: "",
+    messageType: IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
+    images: ["data:image/png;base64,AAAA"],
+    generationInfo: {
+      image_generation: {
+        request: {
+          prompt: "sunlit city skyline",
+          backend: "comfyui"
+        },
+        source: "generate-modal",
+        variant_count: 1,
+        active_variant_index: 0,
+        createdAt: 1700000000000
       }
     }
-  ]
+  }
+]
+
+const createHookOptions = (
+  initialMessagesOrOverrides: any[] | Record<string, unknown> = defaultInitialMessages
+) => {
+  const initialMessages = Array.isArray(initialMessagesOrOverrides)
+    ? initialMessagesOrOverrides
+    : defaultInitialMessages
+  const overrides = Array.isArray(initialMessagesOrOverrides)
+    ? {}
+    : initialMessagesOrOverrides
+  let currentMessages: any[] = initialMessages
 
   const setMessages = vi.fn((next: any[] | ((prev: any[]) => any[])) => {
     currentMessages =
@@ -253,6 +277,8 @@ const createHookOptions = () => {
     clearMessageSteering: vi.fn()
   }
 
+  Object.assign(options, overrides)
+
   return {
     options,
     getCurrentMessages: () => currentMessages,
@@ -284,6 +310,7 @@ describe("useChatActions image event sync integration", () => {
     storageValues.clear()
     storageValues.set(PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY, "off")
     chatSettingsState.value = { imageEventSyncMode: "off" }
+    storeOptionState.value = { selectedModel: "deepseek-chat" }
 
     normalChatModeMock.mockImplementation(
       async (
@@ -319,6 +346,12 @@ describe("useChatActions image event sync integration", () => {
           },
           imageEventSyncPolicy: params.imageEventSyncPolicy
         })
+      }
+    )
+
+    streamCharacterChatCompletionMock.mockImplementation(
+      async function* () {
+        yield "Character reply"
       }
     )
   })
@@ -422,5 +455,115 @@ describe("useChatActions image event sync integration", () => {
     expect(getCurrentMessages()[0]?.generationInfo?.image_generation?.sync?.status).toBe(
       "synced"
     )
+  })
+
+  it("preserves the current explicit provider when selectedModel falls back from store state", async () => {
+    storeOptionState.value = {
+      selectedModel: "anthropic/claude-4.5-sonnet"
+    }
+    const { options } = createHookOptions({
+      selectedModel: null,
+      currentChatModelSettings: {
+        apiProvider: "openrouter",
+        setSystemPrompt: vi.fn()
+      },
+      selectedCharacter: {
+        id: 7,
+        name: "Guide"
+      },
+      serverChatCharacterId: 7
+    })
+    const { result } = renderHook(() => useChatActions(options))
+
+    await act(async () => {
+      await result.current.onSubmit({
+        message: "Stay in character",
+        image: "",
+        requestOverrides: {
+          selectedModel: "anthropic/claude-4.5-sonnet"
+        }
+      })
+    })
+
+    expect(streamCharacterChatCompletionMock).toHaveBeenCalledTimes(1)
+    expect(streamCharacterChatCompletionMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        model: "anthropic/claude-4.5-sonnet",
+        provider: "openrouter"
+      })
+    )
+  })
+})
+
+describe("useChatActions character stream throttling integration", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-03-07T00:00:00.000Z"))
+    vi.clearAllMocks()
+    storageValues.clear()
+    storageValues.set(PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY, "off")
+    chatSettingsState.value = { imageEventSyncMode: "off" }
+    normalChatModeMock.mockResolvedValue(undefined)
+    createChatMock.mockResolvedValue({
+      id: "chat-character-1",
+      title: "Character Chat",
+      version: 1,
+      state: "in-progress",
+      character_id: 101
+    })
+    addChatMessageMock.mockResolvedValue({ id: "chat-message-1", version: 1 })
+    persistCharacterCompletionMock.mockResolvedValue({
+      assistant_message_id: "assistant-message-1",
+      version: 1
+    })
+    streamCharacterChatCompletionMock.mockImplementation(async function* () {
+      for (let i = 0; i < 180; i += 1) {
+        yield {
+          choices: [
+            {
+              delta: {
+                content: "x"
+              }
+            }
+          ]
+        }
+      }
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("coalesces rapid tiny character chunks into bounded setMessages updates", async () => {
+    const { options, setMessages, getCurrentMessages } = createHookOptions([])
+    options.serverChatId = null
+    options.serverChatCharacterId = null
+    options.selectedCharacter = {
+      id: 101,
+      name: "Stream Character",
+      avatar_url: ""
+    }
+    options.selectedModel = "openrouter/openai/gpt-4.1-mini"
+    options.currentChatModelSettings.apiProvider = "openrouter"
+
+    const { result } = renderHook(() => useChatActions(options))
+
+    await act(async () => {
+      await result.current.onSubmit({
+        message: "hello there",
+        image: ""
+      })
+    })
+
+    // Fake timers freeze the throttle window so this bound stays deterministic in CI.
+    expect(setMessages.mock.calls.length).toBeLessThan(40)
+    expect(streamCharacterChatCompletionMock).toHaveBeenCalledTimes(1)
+    expect(normalChatModeMock).not.toHaveBeenCalled()
+
+    const finalAssistant = getCurrentMessages()
+      .filter((message: any) => message.isBot)
+      .at(-1)
+    expect(finalAssistant?.message).toBe("x".repeat(180))
   })
 })

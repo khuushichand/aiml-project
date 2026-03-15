@@ -62,3 +62,8 @@ def test_missing_config_file_env_raises(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError):
         config.get_config_section("Server")
+
+
+def test_legacy_config_accessors_still_resolve_values():
+    mode = config.legacy_get("APP_MODE_STR")
+    assert mode in {"single", "multi"}  # nosec B101

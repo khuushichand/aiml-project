@@ -50,7 +50,6 @@ const renderHeader = () =>
       isDirty={false}
       onOpenLinkedConversation={() => undefined}
       onOpenSourceLink={() => undefined}
-      onNewNote={() => undefined}
       onChangeEditorMode={() => undefined}
       onCopy={() => undefined}
       onGenerateFlashcards={() => undefined}
@@ -74,16 +73,12 @@ describe("NotesEditorHeader stage 2 touch layout", () => {
     expect(actions.className).toContain("flex-wrap")
 
     const saveButton = screen.getByTestId("notes-save-button")
-    const newButton = screen.getByTestId("notes-new-button")
-    const deleteButton = screen.getByTestId("notes-delete-button")
-    const copyButton = screen.getByTestId("notes-copy-button")
+    const overflowButton = screen.getByTestId("notes-overflow-menu-button")
 
     expect(saveButton.className).toContain("ant-btn-lg")
     expect(saveButton.className).toContain("min-h-[44px]")
-    expect(newButton.className).toContain("min-h-[44px]")
-    expect(deleteButton.className).toContain("min-h-[44px]")
-    expect(copyButton.className).toContain("min-h-[44px]")
-    expect(copyButton.className).toContain("min-w-[44px]")
+    expect(overflowButton.className).toContain("min-h-[44px]")
+    expect(overflowButton.className).toContain("min-w-[44px]")
   })
 
   it("preserves compact desktop toolbar density", () => {
@@ -95,10 +90,26 @@ describe("NotesEditorHeader stage 2 touch layout", () => {
     expect(actions.className).not.toContain("flex-wrap")
 
     const saveButton = screen.getByTestId("notes-save-button")
-    const newButton = screen.getByTestId("notes-new-button")
+    const overflowButton = screen.getByTestId("notes-overflow-menu-button")
 
     expect(saveButton.className).toContain("ant-btn-sm")
     expect(saveButton.className).not.toContain("min-h-[44px]")
-    expect(newButton.className).not.toContain("min-h-[44px]")
+    expect(overflowButton.className).not.toContain("min-h-[44px]")
+  })
+
+  it("shows editor mode toggle on desktop but not on mobile", () => {
+    responsiveState.isMobile = false
+    renderHeader()
+
+    // On desktop the editor mode toggle group is visible
+    expect(screen.getByRole("group", { name: "Editor mode" })).toBeInTheDocument()
+  })
+
+  it("hides editor mode toggle on mobile", () => {
+    responsiveState.isMobile = true
+    renderHeader()
+
+    // On mobile the editor mode toggle group is hidden
+    expect(screen.queryByRole("group", { name: "Editor mode" })).not.toBeInTheDocument()
   })
 })

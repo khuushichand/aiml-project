@@ -103,18 +103,6 @@ const createProps = (
       value: "deepseek-chat",
       tone: "active",
       onClick: vi.fn()
-    },
-    {
-      id: "providerStatus",
-      label: "Provider",
-      value: "Healthy",
-      tone: "active"
-    },
-    {
-      id: "routingPolicy",
-      label: "Routing",
-      value: "Auto fallback",
-      tone: "active"
     }
   ],
   ...overrides
@@ -134,19 +122,14 @@ describe("ComposerToolbar web search", () => {
     expect(
       screen.getByTestId("composer-casual-model-selector-chip")
     ).toBeInTheDocument()
-    expect(screen.getByTestId("composer-casual-runtime-context-chip")).toHaveTextContent(
-      "Runtime"
-    )
-    expect(screen.getByTestId("composer-casual-runtime-context-chip")).toHaveTextContent(
-      "Healthy + Auto fallback"
-    )
+    expect(screen.queryByTestId("composer-session-status-chip")).toBeNull()
     expect(screen.getByTestId("composer-casual-persistence-chip")).toHaveTextContent("Saved")
     expect(
       screen
         .getByTestId("composer-casual-advanced-chip")
         .closest('[data-testid="composer-context-strip"]')
     ).not.toBeNull()
-    expect(screen.queryByTestId("composer-casual-runtime-chip")).toBeNull()
+    expect(screen.queryByTestId("composer-casual-runtime-context-chip")).toBeNull()
     expect(screen.queryByTestId("web-search-toggle")).toBeNull()
     expect(screen.queryByText("MCP")).toBeNull()
     expect(screen.getByTestId("prompt-select")).toBeInTheDocument()
@@ -221,19 +204,10 @@ describe("ComposerToolbar web search", () => {
     ).toBeNull()
   })
 
-  it("renders the Generate control in the casual middle actions row", () => {
-    render(
-      <ComposerToolbar
-        {...createProps({
-          generateButton: <button type="button">Generate</button>
-        })}
-      />
-    )
+  it("does not render a standalone Generate control in the toolbar row", () => {
+    render(<ComposerToolbar {...createProps()} />)
 
-    const generateButton = screen.getByRole("button", { name: "Generate" })
-    expect(
-      generateButton.closest('[data-playground-toolbar-row="actions"]')
-    ).not.toBeNull()
+    expect(screen.queryByRole("button", { name: "Generate" })).toBeNull()
   })
 
   it("places current chat model settings control in the casual middle actions row", () => {
@@ -374,29 +348,20 @@ describe("ComposerToolbar web search", () => {
     expect(contextStrip).toBeInTheDocument()
   })
 
-  it("merges provider/routing into runtime chip and keeps other context actions", () => {
-    const onProviderClick = vi.fn()
-    const onRoutingClick = vi.fn()
+  it("renders session status chip when provided and keeps other context actions", () => {
+    const onSessionStatusClick = vi.fn()
     const onRiskClick = vi.fn()
-    const onCheckpointClick = vi.fn()
 
     render(
       <ComposerToolbar
         {...createProps({
           contextItems: [
             {
-              id: "providerStatus",
-              label: "Provider",
-              value: "Healthy",
-              tone: "active",
-              onClick: onProviderClick
-            },
-            {
-              id: "routingPolicy",
-              label: "Routing",
-              value: "Auto fallback",
-              tone: "active",
-              onClick: onRoutingClick
+              id: "sessionStatus",
+              label: "Session status",
+              value: "Degraded",
+              tone: "warning",
+              onClick: onSessionStatusClick
             },
             {
               id: "truncationRisk",
@@ -404,61 +369,83 @@ describe("ComposerToolbar web search", () => {
               value: "Medium risk",
               tone: "warning",
               onClick: onRiskClick
-            },
-            {
-              id: "summaryCheckpoint",
-              label: "Checkpoint",
-              value: "Suggested now",
-              tone: "warning",
-              onClick: onCheckpointClick
             }
           ]
         })}
       />
     )
 
-    fireEvent.click(screen.getByTestId("composer-casual-runtime-context-chip"))
+    fireEvent.click(screen.getByTestId("composer-session-status-chip"))
     fireEvent.click(screen.getByRole("button", { name: /Truncation/i }))
-    fireEvent.click(screen.getByRole("button", { name: /Checkpoint/i }))
 
-    expect(onProviderClick).toHaveBeenCalledTimes(1)
-    expect(onRoutingClick).not.toHaveBeenCalled()
+    expect(onSessionStatusClick).toHaveBeenCalledTimes(1)
     expect(onRiskClick).toHaveBeenCalledTimes(1)
-    expect(onCheckpointClick).toHaveBeenCalledTimes(1)
-    expect(screen.queryByRole("button", { name: /Routing/i })).toBeNull()
-    expect(screen.queryByRole("button", { name: /Provider/i })).toBeNull()
-    expect(screen.getByTestId("composer-casual-runtime-context-chip")).toHaveTextContent(
-      "Auto fallback"
+    expect(screen.getByTestId("composer-session-status-chip")).toHaveTextContent(
+      "Session status"
+    )
+    expect(screen.getByTestId("composer-session-status-chip")).toHaveTextContent(
+      "Degraded"
     )
     expect(screen.getByText("Medium risk")).toBeInTheDocument()
-    expect(screen.getByText("Suggested now")).toBeInTheDocument()
   })
 
-  it("surfaces degraded provider status in the runtime summary chip", () => {
+  it("applies warning styling for degraded session status", () => {
     render(
       <ComposerToolbar
         {...createProps({
           contextItems: [
             {
-              id: "providerStatus",
-              label: "Provider",
+              id: "sessionStatus",
+              label: "Session status",
               value: "Degraded",
               tone: "warning"
-            },
-            {
-              id: "routingPolicy",
-              label: "Routing",
-              value: "Auto fallback",
-              tone: "active"
             }
           ]
         })}
       />
     )
 
-    const runtimeChip = screen.getByTestId("composer-casual-runtime-context-chip")
-    expect(runtimeChip).toHaveTextContent("Degraded + Auto fallback")
-    expect(runtimeChip.className).toContain("border-warn/40")
+    const sessionChip = screen.getByTestId("composer-session-status-chip")
+    expect(sessionChip).toHaveTextContent("Session status")
+    expect(sessionChip).toHaveTextContent("Degraded")
+    expect(sessionChip.className).toContain("border-warn/40")
+  })
+
+  it("renders session status chip in pro and mobile context strips", () => {
+    const degradedItem = [
+      {
+        id: "sessionStatus",
+        label: "Session status",
+        value: "Offline",
+        tone: "warning"
+      } as const
+    ]
+
+    const { rerender } = render(
+      <ComposerToolbar
+        {...createProps({
+          isProMode: true,
+          contextItems: degradedItem
+        })}
+      />
+    )
+
+    expect(screen.getByTestId("composer-session-status-chip")).toHaveTextContent(
+      "Offline"
+    )
+
+    rerender(
+      <ComposerToolbar
+        {...createProps({
+          isMobile: true,
+          contextItems: degradedItem
+        })}
+      />
+    )
+
+    expect(screen.getByTestId("composer-session-status-chip")).toHaveTextContent(
+      "Offline"
+    )
   })
 
   it("uses a bottom persistence chip to toggle saved vs temporary", () => {

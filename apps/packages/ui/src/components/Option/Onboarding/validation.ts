@@ -18,6 +18,18 @@ export type ValidationResult = {
   errorKind?: ConnectionErrorKind
 }
 
+const isConnectivityErrorKind = (
+  kind: ConnectionErrorKind
+): kind is Exclude<ConnectionErrorKind, "auth_invalid" | "server_error" | null> => {
+  return (
+    kind === "dns_failed" ||
+    kind === "refused" ||
+    kind === "timeout" ||
+    kind === "cors_blocked" ||
+    kind === "ssl_error"
+  )
+}
+
 const extractStatusAndMessage = (
   error: unknown
 ): { status: number | null; message: string | null } => {
@@ -70,7 +82,9 @@ export const categorizeConnectionError = (
     normalized.includes("cors") ||
     normalized.includes("cross-origin") ||
     normalized.includes("disallowed origin") ||
-    normalized.includes("likely cors mismatch")
+    normalized.includes("likely cors mismatch") ||
+    normalized.includes("networkerror when attempting to fetch resource") ||
+    normalized.includes("failed to fetch")
   ) {
     return "cors_blocked"
   }
@@ -153,8 +167,17 @@ export const validateApiKey = async (
         "settings:onboarding.errors.apiKeyValidationFailed",
         "API key validation failed"
       )
-    const errorKind =
-      categorizeConnectionError(status, message) ?? "auth_invalid"
+    const categorized = categorizeConnectionError(status, message)
+    const errorKind = categorized ?? "auth_invalid"
+
+    // Connectivity/CORS failures should not be treated as invalid credentials.
+    // Allow onboarding to proceed to the health step, which provides clearer
+    // network diagnostics and supports "continue anyway" flows.
+    if (isConnectivityErrorKind(categorized)) {
+      return {
+        success: true
+      }
+    }
 
     return {
       success: false,

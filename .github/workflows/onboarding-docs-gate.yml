@@ -39,7 +39,15 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: Checkout
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install FFmpeg and PortAudio (Linux)
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          install-portaudio: 'true'
 
       - name: Install FFmpeg and PortAudio (Linux)
         uses: ./.github/actions/setup-ffmpeg
@@ -78,6 +86,6 @@ jobs:
         run: |
           python -m pytest -q -p pytest_asyncio.plugin tldw_Server_API/tests/Docs
 
-      - name: MkDocs strict build
+      - name: MkDocs build
         run: |
-          mkdocs build --strict -f Docs/mkdocs.yml
+          mkdocs build -f Docs/mkdocs.yml

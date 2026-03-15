@@ -4,6 +4,7 @@ import pytest
 from tldw_Server_API.app.core.Local_LLM.Ollama_Handler import OllamaHandler
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import OllamaConfig
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError, ServerError
+from tldw_Server_API.app.core.exceptions import NetworkError
 
 
 @pytest.mark.asyncio
@@ -26,11 +27,9 @@ async def test_ollama_inference_404_pull_then_retry(monkeypatch):
     async def fake_request_json(client, method, url, json=None, headers=None, retries=2, backoff=0.0):
         if calls["n"] == 0:
             calls["n"] += 1
-            import httpx
-
-            req = httpx.Request(method, url)
-            resp = httpx.Response(404, request=req, text="model not found")
-            raise httpx.HTTPStatusError("not found", request=req, response=resp)
+            exc = NetworkError("model not found")
+            setattr(exc, "status_code", 404)
+            raise exc
         return {"response": "ok"}
 
     monkeypatch.setattr(ol_mod, "request_json", fake_request_json)
@@ -55,7 +54,7 @@ async def test_ollama_inference_start_then_retry(monkeypatch):
     async def fake_request_json(client, method, url, json=None, headers=None, retries=2, backoff=0.0):
         if calls["n"] == 0:
             calls["n"] += 1
-            raise Exception("connection error")
+            raise NetworkError("connection error")
         return {"response": "ok"}
 
     monkeypatch.setattr(ol_mod, "request_json", fake_request_json)

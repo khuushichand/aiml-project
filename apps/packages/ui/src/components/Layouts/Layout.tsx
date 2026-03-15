@@ -35,10 +35,12 @@ import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { setSettingsReturnTo } from "@/utils/settings-return"
 import {
-  DOCUMENT_WORKSPACE_PATH,
+  VIEWPORT_CONSTRAINED_PATHS,
 } from "@/routes/route-paths"
 import { useSetting } from "@/hooks/useSetting"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
+import { useStoreMessageOption } from "@/store/option"
+import { usePromptPaletteCommands } from "@/components/Option/Prompt/usePromptPaletteCommands"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -88,12 +90,23 @@ const OptionLayoutEffects = () => {
   const isLayoutEffectsOwner = useLayoutEffectsOwner()
   useStorageMigrations(isLayoutEffectsOwner)
   const location = useLocation()
+  const { historyId, serverChatId } = useStoreMessageOption((state) => ({
+    historyId: state.historyId,
+    serverChatId: state.serverChatId
+  }))
 
   React.useEffect(() => {
     if (!isLayoutEffectsOwner) return
     const path = `${location.pathname}${location.search}${location.hash}`
-    setSettingsReturnTo(path)
-  }, [isLayoutEffectsOwner, location.pathname, location.search, location.hash])
+    setSettingsReturnTo(path, { historyId, serverChatId })
+  }, [
+    historyId,
+    isLayoutEffectsOwner,
+    location.hash,
+    location.pathname,
+    location.search,
+    serverChatId
+  ])
 
   return null
 }
@@ -122,15 +135,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const mobileSidebarPathRef = React.useRef(location.pathname)
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
-  const isMediaRoute = location.pathname === "/media"
-  const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
-  const isMediaMultiRoute = location.pathname === "/media-multi"
-  const isWorkspacePlaygroundRoute = location.pathname === "/workspace-playground"
-  const isViewportConstrainedRoute =
-    isDocumentWorkspace ||
-    isMediaRoute ||
-    isMediaMultiRoute ||
-    isWorkspacePlaygroundRoute
+  const isViewportConstrainedRoute = (VIEWPORT_CONSTRAINED_PATHS as readonly string[]).includes(location.pathname)
   const chatScreenBackgroundStyle =
     isChatScreen && chatBackgroundImage
       ? {
@@ -213,13 +218,16 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     }
   }
 
+  const promptPaletteCommands = usePromptPaletteCommands()
+
   const commandPaletteProps = {
     onNewChat: clearChat,
     onToggleRag: () => setChatMode(chatMode === "rag" ? "normal" : "rag"),
     onToggleWebSearch: () => setWebSearch(!webSearch),
     onIngestPage: handleIngestPage,
     onSwitchModel: () => setOpenModelSettings(true),
-    onToggleSidebar: toggleSidebar
+    onToggleSidebar: toggleSidebar,
+    additionalCommands: promptPaletteCommands,
   }
 
   // Quick Chat Helper toggle
@@ -343,7 +351,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         <ChatSidebar
           collapsed={chatSidebarCollapsed}
           onToggleCollapse={() => setChatSidebarCollapsed((prev) => !prev)}
-          className="sticky top-0 shrink-0 border-r border-border border-border"
+          className="sticky top-0 shrink-0 border-r border-border"
         />
       )}
       <main
@@ -357,13 +365,21 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
             {children}
             {shortcutLoading && renderShortcutOverlay()}
           </div>
+        ) : isViewportConstrainedRoute ? (
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <div className="relative z-20 w-full shrink-0">
+              <Header
+                onToggleSidebar={hideSidebar ? undefined : toggleSidebar}
+                sidebarCollapsed={showChatSidebar && isMobile ? !sidebarOpen : chatSidebarCollapsed}
+              />
+            </div>
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              {children}
+              {shortcutLoading && renderShortcutOverlay()}
+            </div>
+          </div>
         ) : (
-          <div
-            className={classNames(
-              "relative flex flex-col",
-              isViewportConstrainedRoute ? "min-h-0 flex-1" : "min-h-[135vh]"
-            )}
-          >
+          <div className="relative flex flex-col min-h-[135vh]">
             <div className="relative z-20 w-full">
               <Header
                 onToggleSidebar={hideSidebar ? undefined : toggleSidebar}

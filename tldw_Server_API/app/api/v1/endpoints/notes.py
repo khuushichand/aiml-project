@@ -97,6 +97,14 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (  # Corrected
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Personalization import (
+    build_note_bulk_import_activity,
+    record_companion_activity_events_bulk,
+    record_note_created,
+    record_note_deleted,
+    record_note_restored,
+    record_note_updated,
+)
 from tldw_Server_API.app.core.Writing.note_title import TitleGenOptions, generate_note_title
 
 #
@@ -703,6 +711,23 @@ def _attach_keywords_bulk(db: CharactersRAGDB, notes_data: list[dict[str, Any]])
     return notes_data
 
 
+def _attach_folders_bulk(db: CharactersRAGDB, notes_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    note_ids = [nd.get("id") for nd in notes_data if isinstance(nd, dict) and nd.get("id")]
+    if not note_ids:
+        return notes_data
+    try:
+        folder_map = db.get_note_folders_for_notes(note_ids)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        logger.warning(f"Bulk folder lookup failed: {e}")
+        return notes_data
+    for nd in notes_data:
+        if isinstance(nd, dict):
+            nid = nd.get("id")
+            if nid:
+                nd["folders"] = folder_map.get(nid, [])
+    return notes_data
+
+
 # --- Keyword attach helper ----------------------------------------------------
 def _attach_keywords_inline(db: CharactersRAGDB, note_dict: dict[str, Any]) -> dict[str, Any]:
     try:
@@ -710,6 +735,15 @@ def _attach_keywords_inline(db: CharactersRAGDB, note_dict: dict[str, Any]) -> d
             note_dict['keywords'] = db.get_keywords_for_note(note_id=note_dict['id'])
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to attach keywords to note {note_dict.get('id')}: {e}")
+    return note_dict
+
+
+def _attach_folders_inline(db: CharactersRAGDB, note_dict: dict[str, Any]) -> dict[str, Any]:
+    try:
+        if note_dict and note_dict.get("id"):
+            note_dict["folders"] = db.get_note_folders_for_note(note_id=note_dict["id"])
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        logger.warning(f"Failed to attach folders to note {note_dict.get('id')}: {e}")
     return note_dict
 
 
@@ -814,6 +848,30 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) 
         "requested_count": len(desired),
         "attached_count": attached_count,
     }
+
+
+def _build_import_note_companion_event(
+    *,
+    db: CharactersRAGDB,
+    note_id: str | int,
+    operation: str,
+    patch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reload an imported note and build a stable companion activity payload."""
+    reloaded_note = db.get_note_by_id(str(note_id))
+    if not reloaded_note:
+        raise CharactersRAGDBError(
+            f"Imported {str(operation).replace('_', ' ')} note could not be reloaded."
+        )
+    reloaded_note = _attach_keywords_inline(db, reloaded_note)
+    reloaded_note = _attach_folders_inline(db, reloaded_note)
+    return build_note_bulk_import_activity(
+        note=reloaded_note,
+        operation=operation,
+        route="/api/v1/notes/import",
+        surface="api.notes.import",
+        patch=patch,
+    )
 
 
 def _normalize_keyword_tokens(tokens: Optional[list[str]]) -> list[str]:
@@ -1170,12 +1228,14 @@ async def create_note(
                                 detail="Note created but could not be retrieved.")
         # Attach keywords inline
         created_note_data = _attach_keywords_inline(db, created_note_data)
+        created_note_data = _attach_folders_inline(db, created_note_data)
         if keyword_sync_summary and keyword_sync_summary.get("failed_count", 0) > 0:
             created_note_data["keyword_sync"] = {
                 "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
                 "failed_keywords": list(keyword_sync_summary.get("failed_keywords", [])),
             }
 
+        record_note_created(user_id=current_user.id, note=created_note_data)
         logger.info(f"Note '{note_id}' created successfully for user (DB client_id: {db.client_id}).")
         return created_note_data  # Pydantic will convert dict to NoteResponse (including keywords)
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
@@ -1210,6 +1270,7 @@ async def list_notes(
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.debug(f"User (DB client_id: {db.client_id}) listing notes: limit={limit}, offset={offset}")
         notes_data = db.list_notes(limit=limit, offset=offset)
+        _attach_folders_bulk(db, notes_data)
         # Attach keywords inline for each note (optional for performance)
         if include_keywords:
             try:
@@ -1265,6 +1326,7 @@ async def list_deleted_notes(
         logger.debug(
             f"User (DB client_id: {db.client_id}) listing deleted notes: limit={limit}, offset={offset}")
         notes_data = db.list_deleted_notes(limit=limit, offset=offset)
+        _attach_folders_bulk(db, notes_data)
         if include_keywords:
             try:
                 _attach_keywords_bulk(db, notes_data)
@@ -1338,6 +1400,7 @@ async def search_notes_endpoint(  # Renamed to avoid conflict with imported sear
             )
         else:
             notes_data = db.search_notes(search_term=query_term, limit=limit, offset=offset)
+        _attach_folders_bulk(db, notes_data)
         # Attach keywords inline (optional)
         if include_keywords:
             try:
@@ -1597,6 +1660,7 @@ async def import_notes(
             "skipped_count": 0,
             "failed_count": 0,
         }
+        companion_events: list[dict[str, Any]] = []
 
         for item in payload.items:
             file_result = NotesImportFileResult(
@@ -1637,13 +1701,14 @@ async def import_notes(
                         continue
 
                     if existing_note and payload.duplicate_strategy == "overwrite":
+                        update_patch = {
+                            "title": parsed_note["title"],
+                            "content": parsed_note["content"],
+                        }
                         expected_version = int(existing_note.get("version", 1))
                         db.update_note(
                             note_id=str(imported_id),
-                            update_data={
-                                "title": parsed_note["title"],
-                                "content": parsed_note["content"],
-                            },
+                            update_data=update_patch,
                             expected_version=expected_version,
                         )
                         if parsed_note.get("keywords_provided"):
@@ -1652,6 +1717,14 @@ async def import_notes(
                                 note_id=str(imported_id),
                                 keywords=parsed_note.get("keywords", []),
                             )
+                        companion_events.append(
+                            _build_import_note_companion_event(
+                                db=db,
+                                note_id=str(imported_id),
+                                operation="import_overwrite",
+                                patch=update_patch,
+                            )
+                        )
                         file_result.updated_count += 1
                         continue
 
@@ -1669,6 +1742,13 @@ async def import_notes(
                             note_id=str(created_note_id),
                             keywords=parsed_note.get("keywords", []),
                         )
+                    companion_events.append(
+                        _build_import_note_companion_event(
+                            db=db,
+                            note_id=str(created_note_id),
+                            operation="import_create",
+                        )
+                    )
                     file_result.created_count += 1
                 except ConflictError as conflict_err:
                     # If "create_copy" still conflicts (for example, stale imported ID edge case),
@@ -1688,6 +1768,13 @@ async def import_notes(
                                     note_id=str(created_note_id),
                                     keywords=parsed_note.get("keywords", []),
                                 )
+                            companion_events.append(
+                                _build_import_note_companion_event(
+                                    db=db,
+                                    note_id=str(created_note_id),
+                                    operation="import_create",
+                                )
+                            )
                             file_result.created_count += 1
                             continue
                         except _NOTES_NONCRITICAL_EXCEPTIONS as retry_err:
@@ -1707,6 +1794,11 @@ async def import_notes(
             totals["failed_count"] += file_result.failed_count
             files.append(file_result)
 
+        await _run_db_call(
+            record_companion_activity_events_bulk,
+            user_id=current_user.id,
+            events=companion_events,
+        )
         return NotesImportResponse(files=files, **totals)
     except HTTPException:
         raise
@@ -2705,12 +2797,8 @@ async def get_note(
 
     # If note_data is found, it's a dict from the DB. Pydantic will validate it on return.
     # No need for an explicit try-except for Pydantic here, FastAPI handles it.
-    # Attach keywords inline
-    try:
-        kw_rows = db.get_keywords_for_note(note_id=note_id)
-        note_data['keywords'] = kw_rows
-    except _NOTES_NONCRITICAL_EXCEPTIONS as kw_fetch_err:
-        logger.warning(f"Fetching keywords for note {note_id} failed: {kw_fetch_err}")
+    note_data = _attach_keywords_inline(db, note_data)
+    note_data = _attach_folders_inline(db, note_data)
     return note_data
 
 
@@ -2913,7 +3001,11 @@ async def delete_note_attachment(
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
 
-        metadata_path = _attachment_metadata_path(file_path)
+        metadata_path = _attachment_metadata_path(file_path).resolve(strict=False)
+        try:
+            metadata_path.relative_to(attachment_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment metadata path") from exc
         file_path.unlink(missing_ok=False)
         if metadata_path.exists():
             metadata_path.unlink(missing_ok=True)
@@ -3099,11 +3191,19 @@ async def update_note(
             logger.error(f"Note '{note_id}' not found after successful update for user (DB client_id: {db.client_id}).")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found after update.")
         updated_note_data = _attach_keywords_inline(db, updated_note_data)
+        updated_note_data = _attach_folders_inline(db, updated_note_data)
         if keyword_sync_summary and keyword_sync_summary.get("failed_count", 0) > 0:
             updated_note_data["keyword_sync"] = {
                 "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
                 "failed_keywords": list(keyword_sync_summary.get("failed_keywords", [])),
             }
+        record_note_updated(
+            user_id=current_user.id,
+            note=updated_note_data,
+            route=f"/api/v1/notes/{note_id}",
+            action="update",
+            patch=raw_data,
+        )
         logger.info(
             f"Note '{note_id}' updated successfully for user (DB client_id: {db.client_id}) to version {updated_note_data['version']}.")
         return updated_note_data
@@ -3229,11 +3329,19 @@ async def patch_note(
         if not updated_note_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found after update.")
         updated_note_data = _attach_keywords_inline(db, updated_note_data)
+        updated_note_data = _attach_folders_inline(db, updated_note_data)
         if keyword_sync_summary and keyword_sync_summary.get("failed_count", 0) > 0:
             updated_note_data["keyword_sync"] = {
                 "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
                 "failed_keywords": list(keyword_sync_summary.get("failed_keywords", [])),
             }
+        record_note_updated(
+            user_id=current_user.id,
+            note=updated_note_data,
+            route=f"/api/v1/notes/{note_id}",
+            action="patch",
+            patch=raw_data,
+        )
         return updated_note_data
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
@@ -3259,6 +3367,13 @@ async def delete_note(
         _: None = Depends(rbac_rate_limit("notes.delete")),
 ) -> Response:
     try:
+        existing_note = db.get_note_by_id(note_id=note_id, include_deleted=True)
+        was_active = bool(existing_note) and not bool(existing_note.get("deleted"))
+        note_for_activity = (
+            _attach_folders_inline(db, _attach_keywords_inline(db, dict(existing_note)))
+            if was_active and existing_note
+            else None
+        )
         # Rate limit: notes.delete
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.delete")
@@ -3276,6 +3391,12 @@ async def delete_note(
         )
         if not success:
             raise CharactersRAGDBError("Note soft delete reported non-success without specific exception.")
+        if note_for_activity is not None:
+            record_note_deleted(
+                user_id=current_user.id,
+                note=note_for_activity,
+                deleted_version=expected_version + 1,
+            )
         logger.info(
             f"Note '{note_id}' soft-deleted successfully (or was already deleted) for user (DB client_id: {db.client_id}).")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -3308,6 +3429,8 @@ async def restore_note(
     Returns the restored note on success.
     """
     try:
+        existing_note = db.get_note_by_id(note_id=note_id, include_deleted=True)
+        was_deleted = bool(existing_note) and bool(existing_note.get("deleted"))
         # Rate limit: notes.restore
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.restore")
@@ -3337,8 +3460,13 @@ async def restore_note(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail=f"Note '{note_id}' not found after restore.")
 
-        # Fetch keywords for the note
         keywords = db.get_keywords_for_note(note_id)
+        folders = db.get_note_folders_for_note(note_id)
+        if was_deleted:
+            restored_note_for_activity = dict(restored_note)
+            restored_note_for_activity["keywords"] = list(keywords or [])
+            restored_note_for_activity["folders"] = list(folders or [])
+            record_note_restored(user_id=current_user.id, note=restored_note_for_activity)
         keyword_responses = [
             KeywordResponse(
                 id=kw['id'],
@@ -3361,7 +3489,8 @@ async def restore_note(
             version=restored_note.get('version', 1),
             client_id=restored_note.get('client_id', ''),
             deleted=bool(restored_note.get('deleted', False)),
-            keywords=keyword_responses
+            keywords=keyword_responses,
+            folders=list(folders or []),
         )
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
@@ -3413,6 +3542,7 @@ async def bulk_create_notes(
         current_user: User = Depends(get_request_user)
 ):
     results: list[NoteBulkCreateItemResult] = []
+    companion_events: list[dict[str, Any]] = []
     created = 0
     failed = 0
     # Enforce centralized per-request rate limit (notes.bulk_create)
@@ -3504,6 +3634,15 @@ async def bulk_create_notes(
             if not nd:
                 raise CharactersRAGDBError("Created note could not be retrieved.")
             nd = _attach_keywords_inline(db, nd)
+            nd = _attach_folders_inline(db, nd)
+            companion_events.append(
+                build_note_bulk_import_activity(
+                    note=nd,
+                    operation="bulk_create",
+                    route="/api/v1/notes/bulk",
+                    surface="api.notes.bulk",
+                )
+            )
             results.append(NoteBulkCreateItemResult(success=True, note=nd))
             created += 1
         except _NOTES_NONCRITICAL_EXCEPTIONS as e:
@@ -3511,6 +3650,11 @@ async def bulk_create_notes(
             results.append(NoteBulkCreateItemResult(success=False, error=str(e)))
             failed += 1
 
+    await _run_db_call(
+        record_companion_activity_events_bulk,
+        user_id=current_user.id,
+        events=companion_events,
+    )
     response_payload = NoteBulkCreateResponse(results=results, created_count=created, failed_count=failed)
     response_status = status.HTTP_200_OK if failed == 0 else status.HTTP_207_MULTI_STATUS
     return JSONResponse(content=jsonable_encoder(response_payload), status_code=response_status)

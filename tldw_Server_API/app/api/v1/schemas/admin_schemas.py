@@ -11,6 +11,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, NonNegativeInt, field_validator
 
+
+def _blank_string_to_none(value: Any) -> Any:
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
 #######################################################################################################################
 #
 # User Management Schemas
@@ -23,36 +29,52 @@ class UserUpdateRequest(BaseModel):
     is_verified: bool | None = None
     is_locked: bool | None = None
     storage_quota_mb: int | None = Field(None, ge=100)
+    reason: str | None = Field(default=None, min_length=8, max_length=500)
+    admin_password: str | None = Field(default=None, max_length=128)
+
+    @field_validator("admin_password", mode="before")
+    @classmethod
+    def normalize_blank_admin_password(cls, value: Any) -> Any:
+        return _blank_string_to_none(value)
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class AdminPasswordResetRequest(BaseModel):
+class AdminPrivilegedActionRequest(BaseModel):
+    """Request payload for privileged admin actions."""
+
+    reason: str = Field(..., min_length=8, max_length=500)
+    admin_password: str | None = Field(default=None, max_length=128)
+
+    @field_validator("admin_password", mode="before")
+    @classmethod
+    def normalize_blank_admin_password(cls, value: Any) -> Any:
+        return _blank_string_to_none(value)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminPasswordResetRequest(AdminPrivilegedActionRequest):
     """Request payload for admin-initiated user password reset."""
 
-    temporary_password: str | None = Field(default=None, min_length=10, max_length=128)
+    temporary_password: str = Field(..., min_length=10, max_length=128)
     force_password_change: bool = True
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class AdminPasswordResetResponse(BaseModel):
     """Response payload for admin-initiated user password reset."""
 
     user_id: int
-    temporary_password: str
     force_password_change: bool
     message: str
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class AdminMfaRequirementRequest(BaseModel):
+class AdminMfaRequirementRequest(AdminPrivilegedActionRequest):
     """Request payload for admin-managed MFA requirement flag."""
 
     require_mfa: bool = True
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class AdminMfaRequirementResponse(BaseModel):
@@ -452,6 +474,76 @@ class BackupCreateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class BackupScheduleItem(BaseModel):
+    """Authoritative backup schedule record for admin surfaces."""
+
+    id: str
+    dataset: str
+    target_user_id: int | None = None
+    frequency: Literal["daily", "weekly", "monthly"]
+    time_of_day: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    timezone: str
+    anchor_day_of_week: int | None = Field(default=None, ge=0, le=6)
+    anchor_day_of_month: int | None = Field(default=None, ge=1, le=31)
+    retention_count: int = Field(..., ge=1, le=1000)
+    is_paused: bool = False
+    schedule_description: str
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    last_status: str | None = None
+    last_job_id: str | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleListResponse(BaseModel):
+    """Response for backup schedule listing."""
+
+    items: list[BackupScheduleItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleCreateRequest(BaseModel):
+    """Request to create a platform-owned backup schedule."""
+
+    dataset: str
+    target_user_id: int | None = Field(default=None, ge=1)
+    frequency: Literal["daily", "weekly", "monthly"]
+    time_of_day: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    timezone: str | None = None
+    retention_count: int = Field(..., ge=1, le=1000)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleUpdateRequest(BaseModel):
+    """Request to update mutable backup schedule fields."""
+
+    frequency: Literal["daily", "weekly", "monthly"] | None = None
+    time_of_day: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    timezone: str | None = None
+    retention_count: int | None = Field(default=None, ge=1, le=1000)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupScheduleMutationResponse(BaseModel):
+    """Response for backup schedule create/update/pause/resume/delete operations."""
+
+    status: str
+    item: BackupScheduleItem
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class BackupRestoreRequest(BaseModel):
     """Request to restore a backup snapshot."""
     dataset: str
@@ -465,6 +557,91 @@ class BackupRestoreResponse(BaseModel):
     """Response for backup restore."""
     status: str
     message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MaintenanceRotationRunItem(BaseModel):
+    """Authoritative maintenance rotation run record."""
+
+    id: str
+    mode: Literal["dry_run", "execute"]
+    status: Literal["queued", "running", "complete", "failed"]
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
+    fields_json: str
+    limit: int | None = Field(default=None, ge=1, le=100000)
+    affected_count: int | None = None
+    requested_by_user_id: int | None = None
+    requested_by_label: str | None = None
+    confirmation_recorded: bool = False
+    job_id: str | None = None
+    scope_summary: str
+    key_source: str
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MaintenanceRotationRunListResponse(BaseModel):
+    """Response for maintenance rotation run listing."""
+
+    items: list[MaintenanceRotationRunItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MaintenanceRotationRunCreateRequest(BaseModel):
+    """Request to create an authoritative maintenance rotation run."""
+
+    mode: Literal["dry_run", "execute"]
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
+    fields: list[str] = Field(default_factory=lambda: ["payload", "result"])
+    limit: int = Field(default=1000, ge=1, le=100000)
+    confirmed: bool = False
+
+    @field_validator("domain", "queue", "job_type", mode="before")
+    @classmethod
+    def normalize_optional_scope_text(cls, value: Any) -> Any:
+        return _blank_string_to_none(value)
+
+    @field_validator("fields", mode="before")
+    @classmethod
+    def normalize_fields(cls, value: Any) -> Any:
+        if value is None:
+            return ["payload", "result"]
+        if not isinstance(value, list):
+            raise ValueError("fields must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("fields must contain strings")
+            item = entry.strip().lower()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        if not normalized:
+            raise ValueError("fields must contain at least one value")
+        return normalized
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MaintenanceRotationRunCreateResponse(BaseModel):
+    """Response for maintenance rotation run creation."""
+
+    item: MaintenanceRotationRunItem
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -488,6 +665,305 @@ class RetentionPoliciesResponse(BaseModel):
 class RetentionPolicyUpdateRequest(BaseModel):
     """Request to update a retention policy."""
     days: int = Field(..., ge=1, le=3650)
+    preview_signature: str | None = Field(default=None, min_length=1, max_length=2048)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyPreviewRequest(BaseModel):
+    """Request to preview the impact of a retention policy change."""
+
+    current_days: int = Field(..., ge=1, le=3650)
+    days: int = Field(..., ge=1, le=3650)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyPreviewCounts(BaseModel):
+    """Authoritative count summary for a retention policy preview."""
+
+    audit_log_entries: NonNegativeInt = 0
+    job_records: NonNegativeInt = 0
+    backup_files: NonNegativeInt = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyPreviewResponse(BaseModel):
+    """Response for an authoritative retention policy preview."""
+
+    key: str
+    current_days: int = Field(..., ge=1, le=3650)
+    new_days: int = Field(..., ge=1, le=3650)
+    counts: RetentionPolicyPreviewCounts
+    preview_signature: str = Field(..., min_length=1, max_length=2048)
+    notes: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestSummaryItem(BaseModel):
+    """Authoritative per-category summary entry for a DSR preview/request."""
+
+    key: str
+    label: str
+    count: NonNegativeInt
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestPreviewRequest(BaseModel):
+    """Request payload for authoritative DSR preview."""
+
+    requester_identifier: str = Field(..., min_length=1, max_length=255)
+    request_type: Literal["access", "export", "erasure"] | None = None
+    categories: list[str] | None = None
+
+    @field_validator("requester_identifier")
+    @classmethod
+    def normalize_requester_identifier(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("requester_identifier is required")
+        return normalized
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def normalize_categories(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("categories must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("categories must contain strings")
+            item = entry.strip().lower()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        return normalized
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestPreviewResponse(BaseModel):
+    """Response payload for authoritative DSR preview."""
+
+    requester_identifier: str
+    resolved_user_id: int
+    request_type: Literal["access", "export", "erasure"] | None = None
+    selected_categories: list[str]
+    summary: list[DataSubjectRequestSummaryItem]
+    counts: dict[str, NonNegativeInt]
+    coverage_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestCreateRequest(BaseModel):
+    """Request payload to record a DSR for review."""
+
+    client_request_id: str = Field(..., min_length=3, max_length=128)
+    requester_identifier: str = Field(..., min_length=1, max_length=255)
+    request_type: Literal["access", "export", "erasure"]
+    categories: list[str] | None = None
+    notes: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("client_request_id", "requester_identifier")
+    @classmethod
+    def normalize_nonempty_string(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def normalize_categories(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("categories must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("categories must contain strings")
+            item = entry.strip().lower()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        return normalized
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestItem(BaseModel):
+    """Persisted DSR record returned by admin endpoints."""
+
+    id: int
+    client_request_id: str
+    requester_identifier: str
+    resolved_user_id: int | None = None
+    request_type: Literal["access", "export", "erasure"]
+    status: str
+    selected_categories: list[str]
+    preview_summary: list[DataSubjectRequestSummaryItem]
+    coverage_metadata: dict[str, Any] = Field(default_factory=dict)
+    requested_by_user_id: int | None = None
+    requested_at: datetime
+    notes: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestCreateResponse(BaseModel):
+    """Response payload for DSR record creation."""
+
+    item: DataSubjectRequestItem
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataSubjectRequestListResponse(BaseModel):
+    """Response payload for DSR request log listing."""
+
+    items: list[DataSubjectRequestItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Admin Monitoring Schemas
+
+class AdminAlertRuleResponse(BaseModel):
+    """Admin alert-rule response payload."""
+
+    id: int
+    metric: str
+    operator: str
+    threshold: float
+    duration_minutes: int
+    severity: str
+    enabled: bool = True
+    created_by_user_id: int | None = None
+    updated_by_user_id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleListResponse(BaseModel):
+    """List response for admin alert rules."""
+
+    items: list[AdminAlertRuleResponse]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleCreateRequest(BaseModel):
+    """Create request for an admin alert rule."""
+
+    metric: str = Field(..., min_length=1, max_length=100)
+    operator: str = Field(..., min_length=1, max_length=32)
+    threshold: float
+    duration_minutes: int = Field(..., ge=1, le=1440)
+    severity: str = Field(..., min_length=1, max_length=32)
+    enabled: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleCreateResponse(BaseModel):
+    """Create response for an admin alert rule."""
+
+    item: AdminAlertRuleResponse
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertRuleDeleteResponse(BaseModel):
+    """Delete response for an admin alert rule."""
+
+    status: str
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertStateResponse(BaseModel):
+    """Authoritative admin overlay state for a runtime alert."""
+
+    alert_identity: str
+    assigned_to_user_id: int | None = None
+    snoozed_until: datetime | None = None
+    escalated_severity: str | None = None
+    acknowledged_at: datetime | None = None
+    dismissed_at: datetime | None = None
+    updated_by_user_id: int | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertStateMutationResponse(BaseModel):
+    """Mutation response for admin alert overlay changes."""
+
+    item: AdminAlertStateResponse
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertAssignRequest(BaseModel):
+    """Assign request for a monitoring alert."""
+
+    assigned_to_user_id: int | None = Field(default=None, ge=1)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertSnoozeRequest(BaseModel):
+    """Snooze request for a monitoring alert."""
+
+    snoozed_until: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertEscalateRequest(BaseModel):
+    """Escalate request for a monitoring alert."""
+
+    severity: Literal["warning", "critical"] = "critical"
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertEventResponse(BaseModel):
+    """History item for admin monitoring alert actions."""
+
+    id: int
+    alert_identity: str
+    action: str
+    actor_user_id: int | None = None
+    details: dict[str, Any] | None = None
+    created_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminAlertHistoryListResponse(BaseModel):
+    """List response for admin monitoring alert history."""
+
+    items: list[AdminAlertEventResponse]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -649,6 +1125,15 @@ class IncidentEvent(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class IncidentActionItem(BaseModel):
+    """Structured incident action item."""
+    id: str
+    text: str
+    done: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class IncidentItem(BaseModel):
     """Incident summary with timeline."""
     id: str
@@ -663,6 +1148,11 @@ class IncidentItem(BaseModel):
     created_by: str | None = None
     updated_by: str | None = None
     timeline: list[IncidentEvent] = []
+    assigned_to_user_id: int | None = None
+    assigned_to_label: str | None = None
+    root_cause: str | None = None
+    impact: str | None = None
+    action_items: list[IncidentActionItem] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -689,12 +1179,24 @@ class IncidentCreateRequest(BaseModel):
 
 
 class IncidentUpdateRequest(BaseModel):
-    """Request to update an incident."""
+    """Request to update an incident.
+
+    Partial-update contract for workflow fields:
+    - omitted means unchanged
+    - explicit ``null`` means clear
+
+    Callers must preserve that distinction via ``model_fields_set`` or
+    ``model_dump(exclude_unset=True)`` when invoking the service layer.
+    """
     title: str | None = None
     status: Literal["open", "investigating", "mitigating", "resolved"] | None = None
     severity: Literal["low", "medium", "high", "critical"] | None = None
     summary: str | None = None
     tags: list[str] | None = None
+    assigned_to_user_id: int | None = None
+    root_cause: str | None = None
+    impact: str | None = None
+    action_items: list[IncidentActionItem] | None = None
     update_message: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -1020,6 +1522,420 @@ class LLMTopSpenderRow(BaseModel):
 
 class LLMTopSpendersResponse(BaseModel):
     items: list[LLMTopSpenderRow]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Router Analytics Schemas
+
+RouterAnalyticsRange = Literal["realtime", "1h", "8h", "24h", "7d", "30d"]
+RouterAnalyticsGranularity = Literal["1m", "5m", "15m", "1h"]
+
+
+class RouterAnalyticsRangeQuery(BaseModel):
+    """Shared query parameters for router analytics endpoints."""
+
+    range: RouterAnalyticsRange = "8h"
+    org_id: int | None = Field(None, ge=1)
+    provider: str | None = None
+    model: str | None = None
+    token_id: int | None = Field(None, ge=1)
+    granularity: RouterAnalyticsGranularity | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsDataWindow(BaseModel):
+    """Effective data window used for an analytics response."""
+
+    start: datetime
+    end: datetime
+    range: RouterAnalyticsRange
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsSeriesPoint(BaseModel):
+    """Single timeseries point for status chart rendering."""
+
+    ts: datetime
+    provider: str | None = None
+    model: str | None = None
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    avg_latency_ms: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsBreakdownRow(BaseModel):
+    """Shared row shape for breakdown tables."""
+
+    key: str
+    label: str | None = None
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    errors: int = 0
+    avg_latency_ms: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsStatusKpis(BaseModel):
+    """KPI cards displayed in the router analytics status tab."""
+
+    requests: int = 0
+    prompt_tokens: int = 0
+    generated_tokens: int = 0
+    total_tokens: int = 0
+    avg_latency_ms: float | None = None
+    avg_gen_toks_per_s: float | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsStatusResponse(BaseModel):
+    """Payload for /admin/router-analytics/status."""
+
+    kpis: RouterAnalyticsStatusKpis
+    series: list[RouterAnalyticsSeriesPoint] = Field(default_factory=list)
+    providers_available: int = 0
+    providers_online: int = 0
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsBreakdownsResponse(BaseModel):
+    """Payload for /admin/router-analytics/status/breakdowns."""
+
+    providers: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    models: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    token_names: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    remote_ips: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    user_agents: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsMetaOption(BaseModel):
+    """Reusable metadata option entry."""
+
+    value: str
+    label: str
+    key_id: int | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsMetaResponse(BaseModel):
+    """Payload for /admin/router-analytics/meta."""
+
+    providers: list[RouterAnalyticsMetaOption] = Field(default_factory=list)
+    models: list[RouterAnalyticsMetaOption] = Field(default_factory=list)
+    tokens: list[RouterAnalyticsMetaOption] = Field(default_factory=list)
+    ranges: list[RouterAnalyticsRange] = Field(default_factory=lambda: ["realtime", "1h", "8h", "24h", "7d", "30d"])
+    granularities: list[RouterAnalyticsGranularity] = Field(default_factory=lambda: ["1m", "5m", "15m", "1h"])
+    generated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsQuotaMetric(BaseModel):
+    """Budget metric usage versus configured limit."""
+
+    used: float = 0.0
+    limit: float = 0.0
+    utilization_pct: float | None = None
+    exceeded: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsQuotaRow(BaseModel):
+    """Quota row for a key/token entity."""
+
+    key_id: int
+    token_name: str
+    requests: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    day_tokens: RouterAnalyticsQuotaMetric | None = None
+    month_tokens: RouterAnalyticsQuotaMetric | None = None
+    day_usd: RouterAnalyticsQuotaMetric | None = None
+    month_usd: RouterAnalyticsQuotaMetric | None = None
+    over_budget: bool = False
+    reasons: list[str] = Field(default_factory=list)
+    last_seen_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsQuotaSummary(BaseModel):
+    """Quota overview summary counters."""
+
+    keys_total: int = 0
+    keys_over_budget: int = 0
+    budgeted_keys: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsQuotaResponse(BaseModel):
+    """Payload for /admin/router-analytics/quota."""
+
+    summary: RouterAnalyticsQuotaSummary
+    items: list[RouterAnalyticsQuotaRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsProviderRow(BaseModel):
+    """Provider-level aggregate row for router analytics providers tab."""
+
+    provider: str
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    avg_latency_ms: float | None = None
+    errors: int = 0
+    success_rate_pct: float | None = None
+    online: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsProvidersSummary(BaseModel):
+    """Providers overview summary counters."""
+
+    providers_total: int = 0
+    providers_online: int = 0
+    failover_events: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsProvidersResponse(BaseModel):
+    """Payload for /admin/router-analytics/providers."""
+
+    summary: RouterAnalyticsProvidersSummary
+    items: list[RouterAnalyticsProviderRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsAccessSummary(BaseModel):
+    """Access tab overview summary counters."""
+
+    token_names_total: int = 0
+    remote_ips_total: int = 0
+    user_agents_total: int = 0
+    anonymous_requests: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsAccessResponse(BaseModel):
+    """Payload for /admin/router-analytics/access."""
+
+    summary: RouterAnalyticsAccessSummary
+    token_names: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    remote_ips: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    user_agents: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsNetworkSummary(BaseModel):
+    """Network tab overview summary counters."""
+
+    remote_ips_total: int = 0
+    endpoints_total: int = 0
+    operations_total: int = 0
+    error_requests: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsNetworkResponse(BaseModel):
+    """Payload for /admin/router-analytics/network."""
+
+    summary: RouterAnalyticsNetworkSummary
+    remote_ips: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    endpoints: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    operations: list[RouterAnalyticsBreakdownRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsModelRow(BaseModel):
+    """Model-level aggregate row for router analytics models tab."""
+
+    model: str
+    provider: str
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    avg_latency_ms: float | None = None
+    errors: int = 0
+    success_rate_pct: float | None = None
+    online: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsModelsSummary(BaseModel):
+    """Models overview summary counters."""
+
+    models_total: int = 0
+    models_online: int = 0
+    providers_total: int = 0
+    error_requests: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsModelsResponse(BaseModel):
+    """Payload for /admin/router-analytics/models."""
+
+    summary: RouterAnalyticsModelsSummary
+    items: list[RouterAnalyticsModelRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsConversationRow(BaseModel):
+    """Conversation-level aggregate row for router analytics conversations tab."""
+
+    conversation_id: str
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    avg_latency_ms: float | None = None
+    errors: int = 0
+    success_rate_pct: float | None = None
+    last_seen_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsConversationsSummary(BaseModel):
+    """Conversations overview summary counters."""
+
+    conversations_total: int = 0
+    active_conversations: int = 0
+    avg_requests_per_conversation: float | None = None
+    error_requests: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsConversationsResponse(BaseModel):
+    """Payload for /admin/router-analytics/conversations."""
+
+    summary: RouterAnalyticsConversationsSummary
+    items: list[RouterAnalyticsConversationRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsLogRow(BaseModel):
+    """Row entry for router analytics log tab."""
+
+    ts: datetime
+    request_id: str | None = None
+    conversation_id: str = "unknown"
+    provider: str = "unknown"
+    model: str = "unknown"
+    token_name: str = "unknown"
+    endpoint: str = "unknown"
+    operation: str = "unknown"
+    status: int | None = None
+    latency_ms: float | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    remote_ip: str = "unknown"
+    user_agent: str = "unknown"
+    estimated: bool = False
+    error: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsLogSummary(BaseModel):
+    """Log tab summary counters."""
+
+    requests_total: int = 0
+    error_requests: int = 0
+    estimated_requests: int = 0
+    request_ids_total: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RouterAnalyticsLogResponse(BaseModel):
+    """Payload for /admin/router-analytics/log."""
+
+    summary: RouterAnalyticsLogSummary
+    items: list[RouterAnalyticsLogRow] = Field(default_factory=list)
+    generated_at: datetime
+    data_window: RouterAnalyticsDataWindow
+    stale_seconds: int | None = None
+    partial: bool = False
+    warnings: list[str] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

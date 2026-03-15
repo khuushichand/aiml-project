@@ -113,6 +113,7 @@ _SQLITE_PRAGMA_TABLES = {
     "audiobook_chapters",
     "audiobook_projects",
     "collection_tags",
+    "content_item_note_links",
     "content_item_tags",
     "content_items",
     "file_artifacts",
@@ -122,6 +123,7 @@ _SQLITE_PRAGMA_TABLES = {
     "outputs",
     "reminder_task_runs",
     "reminder_tasks",
+    "saved_searches",
     "reading_digest_schedules",
     "reading_highlights",
     "user_notifications",
@@ -202,6 +204,25 @@ class ContentItemRow:
     tags: list[str]
     is_new: bool = False
     content_changed: bool = False
+
+
+@dataclass
+class SavedSearchRow:
+    id: int
+    user_id: str
+    name: str
+    query_json: str
+    sort: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class ContentItemNoteLinkRow:
+    user_id: str
+    item_id: int
+    note_id: str
+    created_at: str
 
 
 @dataclass
@@ -1396,6 +1417,28 @@ class CollectionsDatabase:
                 tag_id BIGINT NOT NULL,
                 UNIQUE (item_id, tag_id)
             );
+
+            CREATE TABLE IF NOT EXISTS saved_searches (
+                id BIGSERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                query_json TEXT NOT NULL,
+                sort TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_saved_searches_user_name ON saved_searches(user_id, name);
+            CREATE INDEX IF NOT EXISTS idx_saved_searches_user_updated ON saved_searches(user_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS content_item_note_links (
+                user_id TEXT NOT NULL,
+                item_id BIGINT NOT NULL,
+                note_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, item_id, note_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_content_item_note_links_user_item
+                ON content_item_note_links(user_id, item_id, created_at DESC);
             """
         else:
             content_ddl = """
@@ -1445,6 +1488,28 @@ class CollectionsDatabase:
                 tag_id INTEGER NOT NULL,
                 UNIQUE (item_id, tag_id)
             );
+
+            CREATE TABLE IF NOT EXISTS saved_searches (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                query_json TEXT NOT NULL,
+                sort TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (user_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_saved_searches_user_updated ON saved_searches(user_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS content_item_note_links (
+                user_id TEXT NOT NULL,
+                item_id INTEGER NOT NULL,
+                note_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, item_id, note_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_content_item_note_links_user_item
+                ON content_item_note_links(user_id, item_id, created_at DESC);
             """
         try:
             self.backend.create_tables(content_ddl)
@@ -2579,6 +2644,10 @@ class CollectionsDatabase:
             (item_id,),
         )
         self.backend.execute(
+            "DELETE FROM content_item_note_links WHERE user_id = ? AND item_id = ?",
+            (self.user_id, item_id),
+        )
+        self.backend.execute(
             "DELETE FROM content_items WHERE id = ? AND user_id = ?",
             (item_id, self.user_id),
         )
@@ -2640,6 +2709,155 @@ class CollectionsDatabase:
                         self.delete_content_item(item_id)
                         deleted += 1
         return deleted
+
+    # ------------------------
+    # Reading Saved Searches API
+    # ------------------------
+    @staticmethod
+    def _saved_search_row_from_db(row: dict[str, Any]) -> SavedSearchRow:
+        return SavedSearchRow(
+            id=int(row.get("id")),
+            user_id=str(row.get("user_id") or ""),
+            name=str(row.get("name") or ""),
+            query_json=str(row.get("query_json") or "{}"),
+            sort=row.get("sort"),
+            created_at=str(row.get("created_at") or ""),
+            updated_at=str(row.get("updated_at") or ""),
+        )
+
+    def create_saved_search(
+        self,
+        *,
+        name: str,
+        query_json: str,
+        sort: str | None = None,
+    ) -> SavedSearchRow:
+        now = _utcnow_iso()
+        q = (
+            "INSERT INTO saved_searches (user_id, name, query_json, sort, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        params = (self.user_id, name, query_json, sort, now, now)
+        try:
+            res = self._execute_insert(q, params)
+            new_id = self._extract_lastrowid(res)
+            if not new_id:
+                raise DatabaseError("Failed to create saved search")
+            return self.get_saved_search(int(new_id))
+        except DatabaseError as exc:
+            if not self._is_unique_violation(exc):
+                raise
+            existing = self.get_saved_search_by_name(name)
+            if existing is None:
+                raise
+            return existing
+
+    def get_saved_search(self, search_id: int) -> SavedSearchRow:
+        row = self.backend.execute(
+            "SELECT id, user_id, name, query_json, sort, created_at, updated_at "
+            "FROM saved_searches WHERE id = ? AND user_id = ?",
+            (search_id, self.user_id),
+        ).first
+        if not row:
+            raise KeyError("saved_search_not_found")
+        return self._saved_search_row_from_db(row)
+
+    def get_saved_search_by_name(self, name: str) -> SavedSearchRow | None:
+        row = self.backend.execute(
+            "SELECT id, user_id, name, query_json, sort, created_at, updated_at "
+            "FROM saved_searches WHERE user_id = ? AND name = ?",
+            (self.user_id, name),
+        ).first
+        if not row:
+            return None
+        return self._saved_search_row_from_db(row)
+
+    def list_saved_searches(self, *, limit: int = 50, offset: int = 0) -> tuple[list[SavedSearchRow], int]:
+        count = int(
+            self.backend.execute(
+                "SELECT COUNT(*) AS cnt FROM saved_searches WHERE user_id = ?",
+                (self.user_id,),
+            ).scalar or 0
+        )
+        rows = self.backend.execute(
+            "SELECT id, user_id, name, query_json, sort, created_at, updated_at "
+            "FROM saved_searches WHERE user_id = ? "
+            "ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+            (self.user_id, limit, offset),
+        ).rows
+        return [self._saved_search_row_from_db(row) for row in rows], count
+
+    def update_saved_search(self, search_id: int, patch: dict[str, Any]) -> SavedSearchRow:
+        if not patch:
+            return self.get_saved_search(search_id)
+        fields: list[str] = []
+        params: list[Any] = []
+        for key in ("name", "query_json", "sort"):
+            if key in patch:
+                fields.append(f"{key} = ?")
+                params.append(patch.get(key))
+        if not fields:
+            return self.get_saved_search(search_id)
+        fields.append("updated_at = ?")
+        params.append(_utcnow_iso())
+        params.extend([search_id, self.user_id])
+        q = f"UPDATE saved_searches SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
+        res = self.backend.execute(q, tuple(params))
+        if res.rowcount <= 0:
+            raise KeyError("saved_search_not_found")
+        return self.get_saved_search(search_id)
+
+    def delete_saved_search(self, search_id: int) -> bool:
+        res = self.backend.execute(
+            "DELETE FROM saved_searches WHERE id = ? AND user_id = ?",
+            (search_id, self.user_id),
+        )
+        return bool(res.rowcount and res.rowcount > 0)
+
+    # ------------------------
+    # Reading ↔ Notes Link API
+    # ------------------------
+    @staticmethod
+    def _content_item_note_link_row_from_db(row: dict[str, Any]) -> ContentItemNoteLinkRow:
+        return ContentItemNoteLinkRow(
+            user_id=str(row.get("user_id") or ""),
+            item_id=int(row.get("item_id")),
+            note_id=str(row.get("note_id") or ""),
+            created_at=str(row.get("created_at") or ""),
+        )
+
+    def link_note_to_content_item(self, *, item_id: int, note_id: str) -> ContentItemNoteLinkRow:
+        self.get_content_item(item_id)
+        now = _utcnow_iso()
+        self.backend.execute(
+            "INSERT INTO content_item_note_links (user_id, item_id, note_id, created_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(user_id, item_id, note_id) DO NOTHING",
+            (self.user_id, item_id, note_id, now),
+        )
+        row = self.backend.execute(
+            "SELECT user_id, item_id, note_id, created_at FROM content_item_note_links "
+            "WHERE user_id = ? AND item_id = ? AND note_id = ?",
+            (self.user_id, item_id, note_id),
+        ).first
+        if not row:
+            raise DatabaseError("Failed to link note to content item")
+        return self._content_item_note_link_row_from_db(row)
+
+    def list_note_links_for_content_item(self, item_id: int) -> list[ContentItemNoteLinkRow]:
+        self.get_content_item(item_id)
+        rows = self.backend.execute(
+            "SELECT user_id, item_id, note_id, created_at FROM content_item_note_links "
+            "WHERE user_id = ? AND item_id = ? ORDER BY created_at DESC, note_id DESC",
+            (self.user_id, item_id),
+        ).rows
+        return [self._content_item_note_link_row_from_db(row) for row in rows]
+
+    def unlink_note_from_content_item(self, *, item_id: int, note_id: str) -> bool:
+        res = self.backend.execute(
+            "DELETE FROM content_item_note_links WHERE user_id = ? AND item_id = ? AND note_id = ?",
+            (self.user_id, item_id, note_id),
+        )
+        return bool(res.rowcount and res.rowcount > 0)
 
     # ------------------------
     # Output Templates API
@@ -3112,6 +3330,7 @@ class CollectionsDatabase:
         type_: str | None = None,
         workspace_tag: str | None = None,
         metadata_origin: str | None = None,
+        metadata_presentation_id: str | None = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
     ) -> tuple[list[CollectionsDatabase.OutputArtifactRow], int]:
@@ -3140,6 +3359,14 @@ class CollectionsDatabase:
                 params.extend([
                     f'%\"origin\":\"{origin}\"%',
                     f'%\"origin\": \"{origin}\"%',
+                ])
+        if metadata_presentation_id:
+            presentation_id = str(metadata_presentation_id).strip()
+            if presentation_id:
+                where.append("(metadata_json LIKE ? OR metadata_json LIKE ?)")
+                params.extend([
+                    f'%\"presentation_id\":\"{presentation_id}\"%',
+                    f'%\"presentation_id\": \"{presentation_id}\"%',
                 ])
         where_sql = " AND ".join(where)
 
@@ -4319,6 +4546,23 @@ class CollectionsDatabase:
         )
         res = self.backend.execute(q, (_utcnow_iso(), notification_id, self.user_id))
         return bool(res.rowcount and res.rowcount > 0)
+
+    def delete_user_notifications_by_link(
+        self,
+        *,
+        link_type: str,
+        link_ids: list[str],
+    ) -> int:
+        """Hard-delete notifications matching one link type and a bounded list of link ids."""
+        if not link_ids:
+            return 0
+        placeholders = ",".join(["?"] * len(link_ids))
+        q = (
+            f"DELETE FROM user_notifications WHERE user_id = ? AND link_type = ? AND link_id IN ({placeholders})"  # nosec B608
+        )
+        params: list[Any] = [self.user_id, str(link_type), *[str(link_id) for link_id in link_ids]]
+        res = self.backend.execute(q, tuple(params))
+        return int(res.rowcount or 0)
 
     def count_unread_user_notifications(self) -> int:
         q = (

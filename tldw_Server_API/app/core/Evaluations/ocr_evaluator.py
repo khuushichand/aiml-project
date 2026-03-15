@@ -64,6 +64,79 @@ class OCREvalItem:
     ground_truth_text: str | None = None
 
 
+def _build_process_pdf_kwargs(
+    *,
+    item: OCREvalItem,
+    lang: str,
+    dpi: int,
+    output_format: str | None,
+    prompt_preset: str | None,
+    ocr_options: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Assemble consistent ``process_pdf`` kwargs for evaluator fallback paths."""
+    return {
+        "file_input": item.pdf_bytes if item.pdf_bytes is not None else item.pdf_path,
+        "filename": item.id + (".pdf" if not str(item.id).endswith(".pdf") else ""),
+        "parser": "pymupdf4llm",
+        "enable_ocr": True,
+        "ocr_backend": (ocr_options or {}).get("ocr_backend"),
+        "ocr_lang": lang,
+        "ocr_dpi": dpi,
+        "ocr_mode": (ocr_options or {}).get("ocr_mode", "fallback"),
+        "ocr_min_page_text_chars": int((ocr_options or {}).get("ocr_min_page_text_chars", 40)),
+        "ocr_output_format": output_format,
+        "ocr_prompt_preset": prompt_preset,
+        "perform_chunking": False,
+        "perform_analysis": False,
+        "keywords": [],
+    }
+
+
+async def _run_process_pdf_fallback(
+    *,
+    process_pdf: Any,
+    item: OCREvalItem,
+    lang: str,
+    dpi: int,
+    output_format: str | None,
+    prompt_preset: str | None,
+    ocr_options: dict[str, Any] | None,
+    require_page_slices: bool = False,
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Run ``process_pdf`` off-thread and normalize OCR details for evaluation."""
+    out = await _asyncio.to_thread(
+        process_pdf,
+        **_build_process_pdf_kwargs(
+            item=item,
+            lang=lang,
+            dpi=dpi,
+            output_format=output_format,
+            prompt_preset=prompt_preset,
+            ocr_options=ocr_options,
+        ),
+    )
+    hyp_text = str((out or {}).get("content") or "")
+    ocr_details = (out or {}).get("analysis_details", {}).get("ocr") or {}
+    normalized_ocr_details = dict(ocr_details) if isinstance(ocr_details, dict) else {}
+    page_texts: list[str] = []
+    structured = normalized_ocr_details.get("structured")
+    pages = structured.get("pages") if isinstance(structured, dict) else None
+
+    if isinstance(pages, list) and pages:
+        page_texts = [
+            str(page.get("text") or "")
+            for page in pages
+            if isinstance(page, dict)
+        ]
+    elif require_page_slices:
+        normalized_ocr_details["supports_per_page_metrics"] = False
+        warnings = list(normalized_ocr_details.get("warnings") or [])
+        warnings.append("MinerU output did not include page slices")
+        normalized_ocr_details["warnings"] = warnings
+
+    return hyp_text, normalized_ocr_details, page_texts
+
+
 class OCREvaluator:
     """
     Evaluate OCR effectiveness by comparing extracted text to ground-truth.
@@ -143,105 +216,110 @@ class OCREvaluator:
                         dpi = int((ocr_options or {}).get("ocr_dpi", 300))
                         output_format = (ocr_options or {}).get("ocr_output_format")
                         prompt_preset = (ocr_options or {}).get("ocr_prompt_preset")
-                        backend = get_ocr_backend((ocr_options or {}).get("ocr_backend"))
-                        if backend is None:
-                            logger.warning("No OCR backend available; falling back to PDF processor content")
-                            # Fallback: use process_pdf
-                            out = process_pdf(
-                                file_input=item.pdf_bytes if item.pdf_bytes is not None else item.pdf_path,
-                                filename=item.id + (".pdf" if not str(item.id).endswith(".pdf") else ""),
-                                parser="pymupdf4llm",
-                                enable_ocr=True,
-                                ocr_backend=(ocr_options or {}).get("ocr_backend"),
-                                ocr_lang=lang,
-                                ocr_dpi=dpi,
-                                ocr_mode=(ocr_options or {}).get("ocr_mode", "fallback"),
-                                ocr_min_page_text_chars=int((ocr_options or {}).get("ocr_min_page_text_chars", 40)),
-                                ocr_output_format=output_format,
-                                ocr_prompt_preset=prompt_preset,
-                                perform_chunking=False,
-                                perform_analysis=False,
-                                keywords=[],
+                        requested_backend = str((ocr_options or {}).get("ocr_backend") or "").strip().lower()
+                        if requested_backend == "mineru":
+                            hyp_text, ocr_details, page_texts = await _run_process_pdf_fallback(
+                                process_pdf=process_pdf,
+                                item=item,
+                                lang=lang,
+                                dpi=dpi,
+                                output_format=output_format,
+                                prompt_preset=prompt_preset,
+                                ocr_options=ocr_options,
+                                require_page_slices=True,
                             )
-                            hyp_text = (out or {}).get("content") or ""
-                            ocr_details = (out or {}).get("analysis_details", {}).get("ocr") or {}
                             if ocr_details:
                                 ocr_info.update(ocr_details)
                         else:
-                            scale = max(dpi, 72) / 72.0
-                            # Open PDF
-                            doc = None
-                            if item.pdf_bytes is not None:
-                                doc = pymupdf.open(stream=item.pdf_bytes, filetype="pdf")
+                            backend = get_ocr_backend((ocr_options or {}).get("ocr_backend"))
+                            if backend is None:
+                                logger.warning("No OCR backend available; falling back to PDF processor content")
+                                hyp_text, ocr_details, _ = await _run_process_pdf_fallback(
+                                    process_pdf=process_pdf,
+                                    item=item,
+                                    lang=lang,
+                                    dpi=dpi,
+                                    output_format=output_format,
+                                    prompt_preset=prompt_preset,
+                                    ocr_options=ocr_options,
+                                )
+                                if ocr_details:
+                                    ocr_info.update(ocr_details)
                             else:
-                                doc = pymupdf.open(item.pdf_path)
-                            with doc:
-                                total_pages = len(doc)
-                                ocr_pages = 0
-                                # Small concurrency
-                                import os as _os
-                                from concurrent.futures import ThreadPoolExecutor, as_completed
-                                try:
-                                    concurrency_env = int(_os.getenv("OCR_PAGE_CONCURRENCY") or "1")
-                                except Exception:
-                                    concurrency_env = 1
-                                futures = []
-                                idx_map = {}
-                                with ThreadPoolExecutor(max_workers=max(1, concurrency_env)) as pool:
-                                    for i, page in enumerate(doc, start=1):
-                                        mat = pymupdf.Matrix(scale, scale)
-                                        pix = page.get_pixmap(matrix=mat, alpha=False)
-                                        img_bytes = pix.tobytes("png")
-                                        if output_format or prompt_preset:
-                                            def _call_structured(b: bytes, _backend=backend, _lang=lang, _output_format=output_format, _prompt_preset=prompt_preset) -> Any:
-                                                try:
-                                                    return _backend.ocr_image_structured(b, _lang, _output_format, _prompt_preset)
-                                                except TypeError:
-                                                    return _backend.ocr_image_structured(b, _lang)
+                                scale = max(dpi, 72) / 72.0
+                                # Open PDF
+                                doc = None
+                                if item.pdf_bytes is not None:
+                                    doc = pymupdf.open(stream=item.pdf_bytes, filetype="pdf")
+                                else:
+                                    doc = pymupdf.open(item.pdf_path)
+                                with doc:
+                                    total_pages = len(doc)
+                                    ocr_pages = 0
+                                    # Small concurrency
+                                    import os as _os
+                                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                                    try:
+                                        concurrency_env = int(_os.getenv("OCR_PAGE_CONCURRENCY") or "1")
+                                    except Exception:
+                                        concurrency_env = 1
+                                    futures = []
+                                    idx_map = {}
+                                    with ThreadPoolExecutor(max_workers=max(1, concurrency_env)) as pool:
+                                        for i, page in enumerate(doc, start=1):
+                                            mat = pymupdf.Matrix(scale, scale)
+                                            pix = page.get_pixmap(matrix=mat, alpha=False)
+                                            img_bytes = pix.tobytes("png")
+                                            if output_format or prompt_preset:
+                                                def _call_structured(b: bytes, _backend=backend, _lang=lang, _output_format=output_format, _prompt_preset=prompt_preset) -> Any:
+                                                    try:
+                                                        return _backend.ocr_image_structured(b, _lang, _output_format, _prompt_preset)
+                                                    except TypeError:
+                                                        return _backend.ocr_image_structured(b, _lang)
 
-                                            fut = pool.submit(_call_structured, img_bytes)
-                                        else:
-                                            fut = pool.submit(backend.ocr_image, img_bytes, lang)
-                                        futures.append(fut)
-                                        idx_map[fut] = i
-                                    ordered = [""] * total_pages
-                                    for fut in as_completed(futures):
-                                        res = fut.result()
-                                        if output_format or prompt_preset:
-                                            try:
-                                                text = getattr(res, "text", None) if res is not None else None
-                                                if text is None and isinstance(res, dict):
-                                                    text = res.get("text")
-                                                if text is None and isinstance(res, tuple) and len(res) == 2:
-                                                    text = res[0]
-                                                if text is None:
+                                                fut = pool.submit(_call_structured, img_bytes)
+                                            else:
+                                                fut = pool.submit(backend.ocr_image, img_bytes, lang)
+                                            futures.append(fut)
+                                            idx_map[fut] = i
+                                        ordered = [""] * total_pages
+                                        for fut in as_completed(futures):
+                                            res = fut.result()
+                                            if output_format or prompt_preset:
+                                                try:
+                                                    text = getattr(res, "text", None) if res is not None else None
+                                                    if text is None and isinstance(res, dict):
+                                                        text = res.get("text")
+                                                    if text is None and isinstance(res, tuple) and len(res) == 2:
+                                                        text = res[0]
+                                                    if text is None:
+                                                        text = res or ""
+                                                except Exception:
                                                     text = res or ""
-                                            except Exception:
+                                            else:
                                                 text = res or ""
-                                        else:
-                                            text = res or ""
-                                        i = idx_map[fut]
-                                        if text.strip():
-                                            ocr_pages += 1
-                                        ordered[i - 1] = text
-                                page_texts.extend(ordered)
-                                hyp_text = "\n".join(page_texts)
-                                details = {
-                                    "backend": getattr(backend, "name", type(backend).__name__),
-                                    "dpi": dpi,
-                                    "lang": lang,
-                                    "total_pages": total_pages,
-                                    "ocr_pages": ocr_pages,
-                                    "page_concurrency": max(1, concurrency_env),
-                                }
-                                try:
-                                    if hasattr(backend, "describe") and callable(backend.describe):
-                                        extra = backend.describe() or {}
-                                        if isinstance(extra, dict):
-                                            details.update(extra)
-                                except Exception as backend_describe_error:
-                                    logger.debug("OCR evaluator backend describe() failed; continuing", exc_info=backend_describe_error)
-                                ocr_info.update(details)
+                                            i = idx_map[fut]
+                                            if text.strip():
+                                                ocr_pages += 1
+                                            ordered[i - 1] = text
+                                    page_texts.extend(ordered)
+                                    hyp_text = "\n".join(page_texts)
+                                    details = {
+                                        "backend": getattr(backend, "name", type(backend).__name__),
+                                        "dpi": dpi,
+                                        "lang": lang,
+                                        "total_pages": total_pages,
+                                        "ocr_pages": ocr_pages,
+                                        "page_concurrency": max(1, concurrency_env),
+                                    }
+                                    try:
+                                        if hasattr(backend, "describe") and callable(backend.describe):
+                                            extra = backend.describe() or {}
+                                            if isinstance(extra, dict):
+                                                details.update(extra)
+                                    except Exception as backend_describe_error:
+                                        logger.debug("OCR evaluator backend describe() failed; continuing", exc_info=backend_describe_error)
+                                    ocr_info.update(details)
                     except Exception as e:
                         logger.error(f"OCR eval PDF per-page processing failed for {item.id}: {e}")
                         hyp_text = ""

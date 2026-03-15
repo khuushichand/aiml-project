@@ -8,16 +8,20 @@ import base64
 import json
 import time
 from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import pytest
 
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.VoiceAssistant import (
     VoiceCommandRegistry,
     VoiceCommandRouter,
     VoiceSessionManager,
     IntentParser,
 )
+from tldw_Server_API.app.core.VoiceAssistant.db_helpers import save_voice_command
 from tldw_Server_API.app.core.VoiceAssistant.schemas import (
     ActionResult,
     ActionType,
@@ -28,6 +32,64 @@ from tldw_Server_API.app.core.VoiceAssistant.schemas import (
 
 
 pytestmark = pytest.mark.integration
+
+
+class _MockHTTPResponse:
+    def __init__(
+        self,
+        *,
+        status_code: int = 200,
+        json_body: dict[str, Any] | list[Any] | None = None,
+        text: str | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self._json_body = json_body
+        self.headers = {"content-type": "application/json"} if json_body is not None else {}
+        self.text = text if text is not None else json.dumps(json_body or {})
+
+    def json(self) -> Any:
+        if self._json_body is None:
+            raise ValueError("Response does not contain JSON")
+        return self._json_body
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _create_persona_profile(
+    db: CharactersRAGDB,
+    *,
+    user_id: int,
+    persona_id: str,
+    name: str = "Runtime Persona",
+) -> str:
+    return db.create_persona_profile(
+        {
+            "id": persona_id,
+            "user_id": str(user_id),
+            "name": name,
+            "mode": "persistent_scoped",
+        }
+    )
+
+
+def _add_persona_connection(
+    db: CharactersRAGDB,
+    *,
+    user_id: int,
+    persona_id: str,
+    connection_id: str,
+    content: dict[str, Any],
+) -> str:
+    return db.add_persona_memory_entry(
+        {
+            "id": connection_id,
+            "persona_id": persona_id,
+            "user_id": str(user_id),
+            "memory_type": "persona_connection",
+            "content": json.dumps(content),
+        }
+    )
 
 
 # Fixtures
@@ -300,6 +362,414 @@ class TestPipelineConversationContext:
         session2 = await session_manager.create_session(user_id=1)
         s2 = await session_manager.get_session(session2.session_id)
         assert len(s2.conversation_history) == 0
+
+
+class TestPipelineExternalConnections:
+    """Tests for persona connection-backed external command execution."""
+
+    @pytest.mark.asyncio
+    async def test_connection_backed_custom_command_executes_external_request(
+        self,
+        command_router,
+        session_manager,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        db = CharactersRAGDB(
+            tmp_path / "voice_external_runtime.sqlite",
+            "voice-external-runtime-tests",
+        )
+        try:
+            persona_id = _create_persona_profile(
+                db,
+                user_id=1,
+                persona_id="persona-runtime",
+            )
+            _add_persona_connection(
+                db,
+                user_id=1,
+                persona_id=persona_id,
+                connection_id="conn-search",
+                content={
+                    "name": "Search API",
+                    "base_url": "https://api.example.com/v1",
+                    "auth_type": "bearer",
+                    "headers_template": {"X-Client": "voice-builder"},
+                    "timeout_ms": 12000,
+                    "allowed_hosts": ["api.example.com"],
+                    "secret_envelope": "opaque-secret-envelope",
+                    "secret_configured": True,
+                },
+            )
+            save_voice_command(
+                db,
+                VoiceCommand(
+                    id="cmd-search-external",
+                    user_id=1,
+                    persona_id=persona_id,
+                    connection_id="conn-search",
+                    name="Search External",
+                    phrases=["search external for {topic}"],
+                    action_type=ActionType.CUSTOM,
+                    action_config={
+                        "action": "external_search",
+                        "method": "POST",
+                        "path": "search",
+                        "slot_to_param_map": {"query": "topic"},
+                        "default_payload": {"limit": 3},
+                    },
+                ),
+            )
+
+            captured: dict[str, Any] = {}
+
+            async def fake_afetch(**kwargs):
+                captured.update(kwargs)
+                return _MockHTTPResponse(json_body={"message": "Queued external search"})
+
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.VoiceAssistant.router.afetch",
+                fake_afetch,
+            )
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
+                lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
+            )
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.Persona.connections.loads_envelope",
+                lambda encrypted_blob: {"encrypted_blob": encrypted_blob},
+            )
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.Persona.connections.decrypt_byok_payload",
+                lambda envelope: {"api_key": "secret-token"},
+            )
+
+            session = await session_manager.create_session(user_id=1)
+            result, _ = await command_router.process_command(
+                text="search external for whales",
+                user_id=1,
+                session_id=session.session_id,
+                db=db,
+                persona_id=persona_id,
+            )
+
+            assert result.success is True
+            assert result.action_type == ActionType.CUSTOM
+            assert result.response_text == "Queued external search"
+            assert captured["method"] == "POST"
+            assert captured["url"] == "https://api.example.com/v1/search"
+            assert captured["json"] == {"query": "whales", "limit": 3}
+            assert captured["headers"]["Authorization"] == "Bearer secret-token"
+            assert captured["headers"]["X-Client"] == "voice-builder"
+            assert captured["timeout"] == 12.0
+        finally:
+            db.close_connection()
+
+    @pytest.mark.asyncio
+    async def test_connection_backed_command_blocks_host_escape(
+        self,
+        command_router,
+        session_manager,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        db = CharactersRAGDB(
+            tmp_path / "voice_external_runtime_host_escape.sqlite",
+            "voice-external-host-escape-tests",
+        )
+        try:
+            persona_id = _create_persona_profile(
+                db,
+                user_id=1,
+                persona_id="persona-runtime-host-escape",
+            )
+            _add_persona_connection(
+                db,
+                user_id=1,
+                persona_id=persona_id,
+                connection_id="conn-safe-host",
+                content={
+                    "name": "Safe Host API",
+                    "base_url": "https://api.example.com/v1",
+                    "auth_type": "none",
+                    "headers_template": {},
+                    "timeout_ms": 9000,
+                    "allowed_hosts": ["api.example.com"],
+                    "secret_configured": False,
+                },
+            )
+            save_voice_command(
+                db,
+                VoiceCommand(
+                    id="cmd-host-escape",
+                    user_id=1,
+                    persona_id=persona_id,
+                    connection_id="conn-safe-host",
+                    name="Unsafe Redirect",
+                    phrases=["unsafe external {topic}"],
+                    action_type=ActionType.CUSTOM,
+                    action_config={
+                        "action": "unsafe_external",
+                        "method": "POST",
+                        "path": "https://evil.example.net/collect",
+                        "slot_to_param_map": {"query": "topic"},
+                    },
+                ),
+            )
+
+            called = {"value": False}
+
+            async def fake_afetch(**kwargs):
+                called["value"] = True
+                return _MockHTTPResponse(json_body={"ok": True})
+
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.VoiceAssistant.router.afetch",
+                fake_afetch,
+            )
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
+                lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
+            )
+
+            session = await session_manager.create_session(user_id=1)
+            result, _ = await command_router.process_command(
+                text="unsafe external whales",
+                user_id=1,
+                session_id=session.session_id,
+                db=db,
+                persona_id=persona_id,
+            )
+
+            assert result.success is False
+            assert "not allowed" in (result.error_message or "").lower()
+            assert called["value"] is False
+        finally:
+            db.close_connection()
+
+    @pytest.mark.asyncio
+    async def test_connection_backed_command_returns_error_when_connection_missing(
+        self,
+        command_router,
+        session_manager,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        db = CharactersRAGDB(
+            tmp_path / "voice_external_runtime_missing.sqlite",
+            "voice-external-missing-connection-tests",
+        )
+        try:
+            persona_id = _create_persona_profile(
+                db,
+                user_id=1,
+                persona_id="persona-runtime-missing-connection",
+            )
+            save_voice_command(
+                db,
+                VoiceCommand(
+                    id="cmd-missing-connection",
+                    user_id=1,
+                    persona_id=persona_id,
+                    connection_id="conn-missing",
+                    name="Missing Connection",
+                    phrases=["call missing connection"],
+                    action_type=ActionType.CUSTOM,
+                    action_config={"action": "missing_connection"},
+                ),
+            )
+
+            async def fail_if_called(**kwargs):
+                raise AssertionError("Outbound HTTP should not be called when connection lookup fails")
+
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.VoiceAssistant.router.afetch",
+                fail_if_called,
+            )
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
+                lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
+            )
+
+            session = await session_manager.create_session(user_id=1)
+            result, _ = await command_router.process_command(
+                text="call missing connection",
+                user_id=1,
+                session_id=session.session_id,
+                db=db,
+                persona_id=persona_id,
+            )
+
+            assert result.success is False
+            assert "connection" in (result.error_message or "").lower()
+        finally:
+            db.close_connection()
+
+    @pytest.mark.asyncio
+    async def test_connection_backed_command_derives_allowlist_from_base_url_when_missing(
+        self,
+        command_router,
+        session_manager,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        db = CharactersRAGDB(
+            tmp_path / "voice_external_runtime_derived_allowlist.sqlite",
+            "voice-external-derived-allowlist-tests",
+        )
+        try:
+            persona_id = _create_persona_profile(
+                db,
+                user_id=1,
+                persona_id="persona-runtime-derived-allowlist",
+            )
+            _add_persona_connection(
+                db,
+                user_id=1,
+                persona_id=persona_id,
+                connection_id="conn-derived-host",
+                content={
+                    "name": "Derived Host API",
+                    "base_url": "https://api.example.com/v1",
+                    "auth_type": "none",
+                    "headers_template": {},
+                    "timeout_ms": 9000,
+                    "secret_configured": False,
+                },
+            )
+            save_voice_command(
+                db,
+                VoiceCommand(
+                    id="cmd-derived-host",
+                    user_id=1,
+                    persona_id=persona_id,
+                    connection_id="conn-derived-host",
+                    name="Derived Host Request",
+                    phrases=["derived host {topic}"],
+                    action_type=ActionType.CUSTOM,
+                    action_config={
+                        "action": "derived_host_external",
+                        "method": "POST",
+                        "path": "search",
+                        "slot_to_param_map": {"query": "topic"},
+                    },
+                ),
+            )
+
+            captured_policy: dict[str, Any] = {}
+
+            async def fake_afetch(**kwargs):
+                return _MockHTTPResponse(json_body={"message": "Queued external search"})
+
+            def fake_evaluate_url_policy(url, **kwargs):
+                captured_policy["url"] = url
+                captured_policy["allowlist"] = kwargs.get("allowlist")
+                return SimpleNamespace(allowed=True, reason=None)
+
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.VoiceAssistant.router.afetch",
+                fake_afetch,
+            )
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
+                fake_evaluate_url_policy,
+            )
+
+            session = await session_manager.create_session(user_id=1)
+            result, _ = await command_router.process_command(
+                text="derived host whales",
+                user_id=1,
+                session_id=session.session_id,
+                db=db,
+                persona_id=persona_id,
+            )
+
+            assert result.success is True
+            assert captured_policy == {
+                "url": "https://api.example.com/v1/search",
+                "allowlist": ["api.example.com"],
+            }
+        finally:
+            db.close_connection()
+
+    @pytest.mark.asyncio
+    async def test_connection_backed_command_returns_error_for_invalid_stored_secret(
+        self,
+        command_router,
+        session_manager,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        db = CharactersRAGDB(
+            tmp_path / "voice_external_runtime_invalid_secret.sqlite",
+            "voice-external-invalid-secret-tests",
+        )
+        try:
+            persona_id = _create_persona_profile(
+                db,
+                user_id=1,
+                persona_id="persona-runtime-invalid-secret",
+            )
+            _add_persona_connection(
+                db,
+                user_id=1,
+                persona_id=persona_id,
+                connection_id="conn-invalid-secret",
+                content={
+                    "name": "Broken Secret API",
+                    "base_url": "https://api.example.com/v1",
+                    "auth_type": "bearer",
+                    "headers_template": {},
+                    "timeout_ms": 9000,
+                    "allowed_hosts": ["api.example.com"],
+                    "secret_envelope": "{not-json",
+                    "secret_configured": True,
+                },
+            )
+            save_voice_command(
+                db,
+                VoiceCommand(
+                    id="cmd-invalid-secret",
+                    user_id=1,
+                    persona_id=persona_id,
+                    connection_id="conn-invalid-secret",
+                    name="Invalid Secret Request",
+                    phrases=["invalid secret {topic}"],
+                    action_type=ActionType.CUSTOM,
+                    action_config={
+                        "action": "invalid_secret_external",
+                        "method": "POST",
+                        "path": "search",
+                        "slot_to_param_map": {"query": "topic"},
+                    },
+                ),
+            )
+
+            async def fail_if_called(**kwargs):
+                raise AssertionError("Outbound HTTP should not run when the stored secret is invalid")
+
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.VoiceAssistant.router.afetch",
+                fail_if_called,
+            )
+            monkeypatch.setattr(
+                "tldw_Server_API.app.core.Persona.connections.evaluate_url_policy",
+                lambda url, **kwargs: SimpleNamespace(allowed=True, reason=None),
+            )
+
+            session = await session_manager.create_session(user_id=1)
+            result, _ = await command_router.process_command(
+                text="invalid secret whales",
+                user_id=1,
+                session_id=session.session_id,
+                db=db,
+                persona_id=persona_id,
+            )
+
+            assert result.success is False
+            assert "invalid stored secret" in (result.error_message or "").lower()
+        finally:
+            db.close_connection()
 
 
 class TestPipelineErrorHandling:

@@ -10,6 +10,10 @@ import {
   normalizeMediaChatHandoffPayload,
   type MediaChatHandoffPayload
 } from "@/services/tldw/media-chat-handoff"
+import {
+  normalizeWatchlistChatHandoffPayload,
+  type WatchlistChatHandoffPayload
+} from "@/services/tldw/watchlist-chat-handoff"
 import type { ThemeDefinition } from "@/themes/types"
 import { validateThemeDefinition } from "@/themes/validation"
 
@@ -331,8 +335,8 @@ export const HEADER_SHORTCUT_IDS = [
   "knowledge-qa",
   "media",
   "document-workspace",
+  "repo2txt",
   "multi-item-review",
-  "content-review",
   "flashcards",
   "notes",
   "watchlists",
@@ -349,6 +353,7 @@ export const HEADER_SHORTCUT_IDS = [
   "kanban-playground",
   "data-tables",
   "audiobook-studio",
+  "presentation-studio",
   "acp-playground",
   "workflows",
   "admin-server",
@@ -404,10 +409,38 @@ export const SIDEBAR_SHORTCUT_IDS = [
 ] as const
 export type SidebarShortcutId = (typeof SIDEBAR_SHORTCUT_IDS)[number]
 
-export const DEFAULT_SIDEBAR_SHORTCUT_SELECTION = SIDEBAR_SHORTCUT_IDS.slice(
-  0,
-  SIDEBAR_SHORTCUT_MAX_COUNT
-) as SidebarShortcutId[]
+const LEGACY_DEFAULT_SIDEBAR_SHORTCUT_SELECTION: SidebarShortcutId[] = [
+  "quick-ingest",
+  "chat",
+  "prompts",
+  "prompt-studio",
+  "characters",
+  "chat-dictionaries",
+  "world-books",
+  "knowledge-qa",
+  "media",
+  "document-workspace"
+]
+
+export const DEFAULT_SIDEBAR_SHORTCUT_SELECTION: SidebarShortcutId[] = [
+  "quick-ingest",
+  "chat",
+  "prompts",
+  "characters",
+  "chat-dictionaries",
+  "world-books",
+  "knowledge-qa",
+  "media",
+  "document-workspace",
+  "moderation-playground"
+]
+
+const areShortcutSelectionsEqual = (
+  first: SidebarShortcutId[],
+  second: SidebarShortcutId[]
+): boolean =>
+  first.length === second.length &&
+  first.every((entry, index) => entry === second[index])
 
 const coerceSidebarShortcutSelection = (
   value: unknown,
@@ -431,6 +464,11 @@ const coerceSidebarShortcutSelection = (
     0,
     SIDEBAR_SHORTCUT_MAX_COUNT
   )
+  if (
+    areShortcutSelectionsEqual(normalized, LEGACY_DEFAULT_SIDEBAR_SHORTCUT_SELECTION)
+  ) {
+    return DEFAULT_SIDEBAR_SHORTCUT_SELECTION
+  }
   if (normalized.length === 0 && value.length > 0) {
     return fallback
   }
@@ -648,6 +686,19 @@ export const DISCUSS_MEDIA_PROMPT_SETTING = defineSetting(
   {
     area: "local",
     localStorageKey: "tldw:discussMediaPrompt",
+    mirrorToLocalStorage: true
+  }
+)
+
+export type DiscussWatchlistPrompt = WatchlistChatHandoffPayload
+
+export const DISCUSS_WATCHLIST_PROMPT_SETTING = defineSetting(
+  "tldw:discussWatchlistPrompt",
+  undefined as DiscussWatchlistPrompt | undefined,
+  (value) => normalizeWatchlistChatHandoffPayload(value),
+  {
+    area: "local",
+    localStorageKey: "tldw:discussWatchlistPrompt",
     mirrorToLocalStorage: true
   }
 )

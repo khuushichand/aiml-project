@@ -12,6 +12,14 @@ const state = {
   resetWizard: vi.fn()
 }
 
+const connectionMocks = vi.hoisted(() => ({
+  useConnectionUxState: vi.fn()
+}))
+
+const routerMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
@@ -29,8 +37,16 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("react-router-dom", () => ({
+  useNavigate: () => routerMocks.navigate
+}))
+
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
+}))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => connectionMocks.useConnectionUxState()
 }))
 
 vi.mock("@/components/Common/PageShell", () => ({
@@ -99,6 +115,10 @@ describe("DataTablesPage golden path guardrails", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     state.activeTab = "tables"
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "connected_ok",
+      hasCompletedFirstRun: true
+    })
   })
 
   it("renders the studio shell with expected tab affordances", () => {
@@ -122,4 +142,3 @@ describe("DataTablesPage golden path guardrails", () => {
     expect(state.setActiveTab).toHaveBeenCalledWith("create")
   })
 })
-

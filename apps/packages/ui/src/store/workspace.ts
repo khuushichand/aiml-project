@@ -30,12 +30,18 @@ import type {
   ArtifactStatus,
   ArtifactType,
   AudioGenerationSettings,
+  AudioTtsProvider,
   GeneratedArtifact,
   SavedWorkspace,
   WorkspaceBanner,
+  WorkspaceBannerImage,
+  WorkspaceBannerImageMimeType,
+  WorkspaceCollection,
   WorkspaceConfig,
   WorkspaceNote,
   WorkspaceSource,
+  WorkspaceSourceFolder,
+  WorkspaceSourceFolderMembership,
   WorkspaceSourceStatus,
   WorkspaceSourceType
 } from "@/types/workspace"
@@ -44,6 +50,11 @@ import {
   DEFAULT_WORKSPACE_BANNER,
   DEFAULT_WORKSPACE_NOTE
 } from "@/types/workspace"
+import {
+  collectDescendantFolderIds,
+  createWorkspaceOrganizationIndex,
+  deriveEffectiveSelectedSourceIds
+} from "@/store/workspace-organization"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -130,6 +141,22 @@ type WorkspaceStorageRecoveryAttempt = {
 
 const WORKSPACE_STORAGE_RECOVERY_MIN_RECLAIM_BYTES = 64 * 1024
 const WORKSPACE_STORAGE_OVERSIZED_ARTIFACT_MIN_BYTES = 12 * 1024
+const AUDIO_TTS_PROVIDERS = new Set<AudioTtsProvider>([
+  "browser",
+  "elevenlabs",
+  "openai",
+  "tldw"
+])
+const AUDIO_OUTPUT_FORMATS = new Set<AudioGenerationSettings["format"]>([
+  "mp3",
+  "wav",
+  "opus",
+  "aac",
+  "flac"
+])
+const WORKSPACE_BANNER_IMAGE_MIME_TYPES = new Set<WorkspaceBannerImageMimeType>(
+  ["image/jpeg", "image/png", "image/webp"]
+)
 const WORKSPACE_SPLIT_INDEX_SCHEMA = "workspace_split_v1"
 const WORKSPACE_SPLIT_INDEX_VERSION = 1
 export const WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY =
@@ -220,6 +247,7 @@ type WorkspaceSplitIndexState = {
   workspaceId: string
   savedWorkspaces: SavedWorkspace[]
   archivedWorkspaces: SavedWorkspace[]
+  workspaceCollections: WorkspaceCollection[]
   workspaceIds: string[]
   workspaceSnapshots: Record<string, WorkspaceSnapshot>
   workspaceChatSessions: Record<string, PersistedWorkspaceChatSessionReference>
@@ -545,8 +573,24 @@ const readWorkspaceSnapshotFromStorage = (
 ): WorkspaceSnapshot | null => {
   const raw = localStorage.getItem(buildWorkspaceSnapshotStorageKey(workspaceId))
   const parsed = safeParseJson(raw)
-  return isRecord(parsed) ? (parsed as WorkspaceSnapshot) : null
+  return isRecord(parsed) ? (parsed as unknown as WorkspaceSnapshot) : null
 }
+
+const isAudioTtsProvider = (value: unknown): value is AudioTtsProvider =>
+  typeof value === "string" &&
+  AUDIO_TTS_PROVIDERS.has(value as AudioTtsProvider)
+
+const isAudioOutputFormat = (
+  value: unknown
+): value is AudioGenerationSettings["format"] =>
+  typeof value === "string" &&
+  AUDIO_OUTPUT_FORMATS.has(value as AudioGenerationSettings["format"])
+
+const isWorkspaceBannerImageMimeType = (
+  value: unknown
+): value is WorkspaceBannerImageMimeType =>
+  typeof value === "string" &&
+  WORKSPACE_BANNER_IMAGE_MIME_TYPES.has(value as WorkspaceBannerImageMimeType)
 
 const parseWorkspaceTimestamp = (value: unknown): number => {
   if (value instanceof Date) return value.getTime()
@@ -1158,6 +1202,7 @@ const buildWorkspaceSplitIndexEnvelope = (
       workspaceId: persistedState.workspaceId,
       savedWorkspaces: persistedState.savedWorkspaces,
       archivedWorkspaces: persistedState.archivedWorkspaces,
+      workspaceCollections: persistedState.workspaceCollections,
       workspaceIds,
       workspaceSnapshots: activeSnapshot,
       workspaceChatSessions: activeChatSession
@@ -1180,6 +1225,9 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
   const archivedWorkspaces = Array.isArray(stateCandidate.archivedWorkspaces)
     ? stateCandidate.archivedWorkspaces
     : []
+  const workspaceCollections = Array.isArray(stateCandidate.workspaceCollections)
+    ? (stateCandidate.workspaceCollections as WorkspaceCollection[])
+    : []
   const workspaceIds = Array.isArray(stateCandidate.workspaceIds)
     ? stateCandidate.workspaceIds.filter(
         (workspaceStorageId): workspaceStorageId is string =>
@@ -1200,7 +1248,8 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
     )
     const parsedSnapshot = safeParseJson(snapshotRaw)
     if (isRecord(parsedSnapshot)) {
-      snapshots[workspaceStorageId] = parsedSnapshot as WorkspaceSnapshot
+      snapshots[workspaceStorageId] =
+        parsedSnapshot as unknown as WorkspaceSnapshot
       if (hasWorkspaceArtifactPayloadPointers(parsedSnapshot)) {
         requiresIndexedDbHydration = true
       }
@@ -1226,7 +1275,7 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
     isRecord(stateCandidate.workspaceSnapshots[workspaceId])
   ) {
     snapshots[workspaceId] =
-      stateCandidate.workspaceSnapshots[workspaceId] as WorkspaceSnapshot
+      stateCandidate.workspaceSnapshots[workspaceId] as unknown as WorkspaceSnapshot
     if (hasWorkspaceArtifactPayloadPointers(snapshots[workspaceId])) {
       requiresIndexedDbHydration = true
     }
@@ -1253,7 +1302,8 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
   const baseState = {
     workspaceId,
     savedWorkspaces: savedWorkspaces as SavedWorkspace[],
-    archivedWorkspaces: archivedWorkspaces as SavedWorkspace[]
+    archivedWorkspaces: archivedWorkspaces as SavedWorkspace[],
+    workspaceCollections
   }
 
   if (!requiresIndexedDbHydration) {
@@ -1763,6 +1813,10 @@ interface WorkspaceIdentityState {
 interface SourcesState {
   sources: WorkspaceSource[]
   selectedSourceIds: string[]
+  sourceFolders: WorkspaceSourceFolder[]
+  sourceFolderMemberships: WorkspaceSourceFolderMembership[]
+  selectedSourceFolderIds: string[]
+  activeFolderId: string | null
   sourceSearchQuery: string
   sourceFocusTarget: { sourceId: string; token: number } | null
   sourcesLoading: boolean
@@ -1797,6 +1851,7 @@ interface AudioSettingsState {
 interface WorkspaceListState {
   savedWorkspaces: SavedWorkspace[]
   archivedWorkspaces: SavedWorkspace[]
+  workspaceCollections: WorkspaceCollection[]
 }
 
 interface WorkspaceSnapshot {
@@ -1807,6 +1862,10 @@ interface WorkspaceSnapshot {
   workspaceChatReferenceId: string
   sources: WorkspaceSource[]
   selectedSourceIds: string[]
+  sourceFolders: WorkspaceSourceFolder[]
+  sourceFolderMemberships: WorkspaceSourceFolderMembership[]
+  selectedSourceFolderIds: string[]
+  activeFolderId: string | null
   generatedArtifacts: GeneratedArtifact[]
   notes: string
   currentNote: WorkspaceNote
@@ -1847,6 +1906,10 @@ export interface WorkspaceUndoSnapshot {
   workspaceChatReferenceId: string
   sources: WorkspaceSource[]
   selectedSourceIds: string[]
+  sourceFolders: WorkspaceSourceFolder[]
+  sourceFolderMemberships: WorkspaceSourceFolderMembership[]
+  selectedSourceFolderIds: string[]
+  activeFolderId: string | null
   generatedArtifacts: GeneratedArtifact[]
   notes: string
   currentNote: WorkspaceNote
@@ -1856,6 +1919,7 @@ export interface WorkspaceUndoSnapshot {
   audioSettings: AudioGenerationSettings
   savedWorkspaces: SavedWorkspace[]
   archivedWorkspaces: SavedWorkspace[]
+  workspaceCollections: WorkspaceCollection[]
   workspaceSnapshots: Record<string, WorkspaceSnapshot>
   workspaceChatSessions: Record<string, WorkspaceChatSession>
 }
@@ -1879,6 +1943,17 @@ interface WorkspaceIdentityActions {
 }
 
 interface SourcesActions {
+  createSourceFolder: (
+    name: string,
+    parentFolderId?: string | null
+  ) => WorkspaceSourceFolder
+  renameSourceFolder: (folderId: string, name: string) => void
+  moveSourceFolder: (folderId: string, parentFolderId: string | null) => void
+  deleteSourceFolder: (folderId: string) => void
+  assignSourceToFolders: (sourceId: string, folderIds: string[]) => void
+  removeSourceFromFolder: (sourceId: string, folderId: string) => void
+  toggleSourceFolderSelection: (folderId: string) => void
+  setActiveFolder: (folderId: string | null) => void
   addSource: (
     source: Omit<WorkspaceSource, "id" | "addedAt">
   ) => WorkspaceSource
@@ -1914,6 +1989,8 @@ interface SourcesActions {
   ) => void
   getSelectedSources: () => WorkspaceSource[]
   getSelectedMediaIds: () => number[]
+  getEffectiveSelectedSources: () => WorkspaceSource[]
+  getEffectiveSelectedMediaIds: () => number[]
 }
 
 interface StudioActions {
@@ -1971,6 +2048,20 @@ interface AudioSettingsActions {
 }
 
 interface WorkspaceListActions {
+  createWorkspaceCollection: (
+    name: string,
+    description?: string | null
+  ) => WorkspaceCollection
+  renameWorkspaceCollection: (
+    collectionId: string,
+    name: string,
+    description?: string | null
+  ) => void
+  deleteWorkspaceCollection: (collectionId: string) => void
+  assignWorkspaceToCollection: (
+    workspaceId: string,
+    collectionId: string | null
+  ) => void
   /** Save current workspace state to the saved workspaces list */
   saveCurrentWorkspace: () => void
   /** Export a workspace snapshot bundle (defaults to current workspace) */
@@ -2059,6 +2150,10 @@ const initialIdentityState: WorkspaceIdentityState = {
 const initialSourcesState: SourcesState = {
   sources: [],
   selectedSourceIds: [],
+  sourceFolders: [],
+  sourceFolderMemberships: [],
+  selectedSourceFolderIds: [],
+  activeFolderId: null,
   sourceSearchQuery: "",
   sourceFocusTarget: null,
   sourcesLoading: false,
@@ -2092,7 +2187,8 @@ const initialAudioSettingsState: AudioSettingsState = {
 
 const initialWorkspaceListState: WorkspaceListState = {
   savedWorkspaces: [],
-  archivedWorkspaces: []
+  archivedWorkspaces: [],
+  workspaceCollections: []
 }
 
 const initialWorkspaceSnapshotsState: WorkspaceSnapshotsState = {
@@ -2125,6 +2221,7 @@ interface PersistedWorkspaceState {
   // Saved workspaces list
   savedWorkspaces: SavedWorkspace[]
   archivedWorkspaces: SavedWorkspace[]
+  workspaceCollections: WorkspaceCollection[]
 
   // Workspace snapshots keyed by workspace ID
   workspaceSnapshots: Record<string, WorkspaceSnapshot>
@@ -2139,6 +2236,10 @@ interface PersistedWorkspaceState {
   workspaceChatReferenceId?: string
   sources?: WorkspaceSource[]
   selectedSourceIds?: string[]
+  sourceFolders?: WorkspaceSourceFolder[]
+  sourceFolderMemberships?: WorkspaceSourceFolderMembership[]
+  selectedSourceFolderIds?: string[]
+  activeFolderId?: string | null
   generatedArtifacts?: GeneratedArtifact[]
   notes?: string
   currentNote?: WorkspaceNote
@@ -2191,7 +2292,6 @@ declare global {
   }
 }
 
-const MAX_SAVED_WORKSPACES = 10
 const MAX_ARCHIVED_WORKSPACES = 50
 const INTERRUPTED_GENERATION_ERROR_MESSAGE =
   "Generation was interrupted. Click regenerate to try again."
@@ -2247,8 +2347,8 @@ export const estimateWorkspacePersistenceMetrics = (
   const rawWorkspaceSnapshotsBytes = estimateSerializedByteLength(
     payload.workspaceSnapshots
   )
-  const workspaceBannerBytes = isRecord(payload.workspaceSnapshots)
-    ? Object.values(payload.workspaceSnapshots as Record<string, unknown>).reduce(
+  const workspaceBannerBytes: number = isRecord(payload.workspaceSnapshots)
+    ? Object.values(payload.workspaceSnapshots as Record<string, unknown>).reduce<number>(
         (accumulator, snapshot) => {
           if (!isRecord(snapshot)) return accumulator
           return (
@@ -2425,9 +2525,116 @@ const reviveSources = (sources: WorkspaceSource[]): WorkspaceSource[] =>
     sourceCreatedAt: reviveDateOrUndefined(source.sourceCreatedAt)
   }))
 
+const reviveSourceFolders = (
+  folders: WorkspaceSourceFolder[],
+  workspaceId: string
+): WorkspaceSourceFolder[] =>
+  folders.map((folder) => ({
+    ...folder,
+    workspaceId: folder.workspaceId || workspaceId,
+    parentFolderId: folder.parentFolderId || null,
+    createdAt: reviveDateOrNull(folder.createdAt) || new Date(),
+    updatedAt: reviveDateOrNull(folder.updatedAt) || new Date()
+  }))
+
+const reviveSourceFolderMemberships = (
+  memberships: WorkspaceSourceFolderMembership[],
+  sourceIds: Set<string>,
+  folderIds: Set<string>
+): WorkspaceSourceFolderMembership[] =>
+  memberships.filter(
+    (membership) =>
+      sourceIds.has(membership.sourceId) && folderIds.has(membership.folderId)
+  )
+
+const reviveWorkspaceCollections = (
+  collections: WorkspaceCollection[]
+): WorkspaceCollection[] =>
+  collections.map((collection) => ({
+    ...collection,
+    description: collection.description || null,
+    createdAt: reviveDateOrNull(collection.createdAt) || new Date(),
+    updatedAt: reviveDateOrNull(collection.updatedAt) || new Date()
+  }))
+
 const getWorkspaceSourceStatus = (
   source: WorkspaceSource
 ): WorkspaceSourceStatus => source.status || "ready"
+
+const normalizeSourceFolderName = (name: string): string => {
+  const trimmedName = name.trim()
+  return trimmedName || "Untitled Folder"
+}
+
+const getUniqueSourceFolderName = (
+  folders: WorkspaceSourceFolder[],
+  name: string,
+  parentFolderId: string | null,
+  excludeFolderId?: string
+): string => {
+  const normalizedName = normalizeSourceFolderName(name)
+  const siblingNames = new Set(
+    folders
+      .filter(
+        (folder) =>
+          folder.parentFolderId === parentFolderId &&
+          folder.id !== excludeFolderId
+      )
+      .map((folder) => folder.name.trim().toLowerCase())
+  )
+  if (!siblingNames.has(normalizedName.toLowerCase())) {
+    return normalizedName
+  }
+
+  let suffix = 2
+  let candidate = `${normalizedName} (${suffix})`
+  while (siblingNames.has(candidate.toLowerCase())) {
+    suffix += 1
+    candidate = `${normalizedName} (${suffix})`
+  }
+  return candidate
+}
+
+const createWorkspaceOrganizationStateIndex = (
+  state: Pick<
+    WorkspaceState,
+    "sources" | "sourceFolders" | "sourceFolderMemberships"
+  >
+) =>
+  createWorkspaceOrganizationIndex({
+    sources: state.sources,
+    sourceFolders: state.sourceFolders,
+    sourceFolderMemberships: state.sourceFolderMemberships
+  })
+
+const normalizeWorkspaceCollectionName = (name: string): string => {
+  const trimmedName = name.trim()
+  return trimmedName || "Untitled Collection"
+}
+
+const getUniqueWorkspaceCollectionName = (
+  collections: WorkspaceCollection[],
+  name: string,
+  excludeCollectionId?: string
+): string => {
+  const normalizedName = normalizeWorkspaceCollectionName(name)
+  const existingNames = new Set(
+    collections
+      .filter((collection) => collection.id !== excludeCollectionId)
+      .map((collection) => collection.name.trim().toLowerCase())
+  )
+  if (!existingNames.has(normalizedName.toLowerCase())) {
+    return normalizedName
+  }
+
+  let suffix = 2
+  let candidate = `${normalizedName} (${suffix})`
+  while (existingNames.has(candidate.toLowerCase())) {
+    suffix += 1
+    candidate = `${normalizedName} (${suffix})`
+  }
+  return candidate
+}
 
 const reviveArtifacts = (artifacts: GeneratedArtifact[]): GeneratedArtifact[] =>
   artifacts.map((artifact) => {
@@ -2452,6 +2659,7 @@ const reviveArtifacts = (artifacts: GeneratedArtifact[]): GeneratedArtifact[] =>
 
 const reviveSavedWorkspace = (workspace: SavedWorkspace): SavedWorkspace => ({
   ...workspace,
+  collectionId: workspace.collectionId || null,
   createdAt: reviveDateOrNull(workspace.createdAt) || new Date(),
   lastAccessedAt: reviveDateOrNull(workspace.lastAccessedAt) || new Date()
 })
@@ -2461,6 +2669,18 @@ const reviveWorkspaceSnapshot = (
   snapshot: WorkspaceSnapshot
 ): WorkspaceSnapshot => {
   const createdAt = reviveDateOrNull(snapshot.workspaceCreatedAt)
+  const sources = reviveSources(snapshot.sources || [])
+  const sourceIdSet = new Set(sources.map((source) => source.id))
+  const sourceFolders = reviveSourceFolders(
+    snapshot.sourceFolders || [],
+    snapshot.workspaceId || workspaceId
+  )
+  const folderIdSet = new Set(sourceFolders.map((folder) => folder.id))
+  const sourceFolderMemberships = reviveSourceFolderMemberships(
+    snapshot.sourceFolderMemberships || [],
+    sourceIdSet,
+    folderIdSet
+  )
   return {
     ...snapshot,
     workspaceId: snapshot.workspaceId || workspaceId,
@@ -2469,8 +2689,17 @@ const reviveWorkspaceSnapshot = (
       snapshot.workspaceChatReferenceId ||
       snapshot.workspaceId ||
       workspaceId,
-    sources: reviveSources(snapshot.sources || []),
+    sources,
     selectedSourceIds: snapshot.selectedSourceIds || [],
+    sourceFolders,
+    sourceFolderMemberships,
+    selectedSourceFolderIds: (snapshot.selectedSourceFolderIds || []).filter((id) =>
+      folderIdSet.has(id)
+    ),
+    activeFolderId:
+      snapshot.activeFolderId && folderIdSet.has(snapshot.activeFolderId)
+        ? snapshot.activeFolderId
+        : null,
     generatedArtifacts: reviveArtifacts(snapshot.generatedArtifacts || []),
     currentNote: snapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
     workspaceBanner: coerceWorkspaceBannerForRehydrate(snapshot.workspaceBanner),
@@ -2620,7 +2849,7 @@ const normalizeWorkspaceSnapshotsForRehydrate = (
       if (!workspaceId) continue
       normalized[workspaceId] = reviveWorkspaceSnapshot(
         workspaceId,
-        entry as WorkspaceSnapshot
+        entry as unknown as WorkspaceSnapshot
       )
     }
     return normalized
@@ -2632,7 +2861,7 @@ const normalizeWorkspaceSnapshotsForRehydrate = (
     if (!isRecord(snapshot)) continue
     normalized[workspaceId] = reviveWorkspaceSnapshot(
       workspaceId,
-      snapshot as WorkspaceSnapshot
+      snapshot as unknown as WorkspaceSnapshot
     )
   }
 
@@ -2667,7 +2896,7 @@ const coerceAudioSettingsForRehydrate = (
 
   return {
     provider:
-      typeof candidate.provider === "string"
+      isAudioTtsProvider(candidate.provider)
         ? candidate.provider
         : DEFAULT_AUDIO_SETTINGS.provider,
     model:
@@ -2683,7 +2912,7 @@ const coerceAudioSettingsForRehydrate = (
         ? candidate.speed
         : DEFAULT_AUDIO_SETTINGS.speed,
     format:
-      typeof candidate.format === "string"
+      isAudioOutputFormat(candidate.format)
         ? candidate.format
         : DEFAULT_AUDIO_SETTINGS.format
   }
@@ -2697,16 +2926,14 @@ const coerceWorkspaceBannerForRehydrate = (
   }
 
   const imageCandidate = isRecord(candidate.image) ? candidate.image : null
-  const imageMimeType = imageCandidate?.mimeType
-  const isSupportedImageMimeType =
-    imageMimeType === "image/jpeg" ||
-    imageMimeType === "image/png" ||
-    imageMimeType === "image/webp"
+  const imageMimeType = isWorkspaceBannerImageMimeType(imageCandidate?.mimeType)
+    ? imageCandidate.mimeType
+    : null
 
-  const image =
+  const image: WorkspaceBannerImage | null =
     imageCandidate &&
     typeof imageCandidate.dataUrl === "string" &&
-    isSupportedImageMimeType &&
+    imageMimeType &&
     typeof imageCandidate.width === "number" &&
     Number.isFinite(imageCandidate.width) &&
     imageCandidate.width > 0 &&
@@ -2806,6 +3033,15 @@ const buildLegacyTopLevelSnapshotForMigration = (
         : workspaceId,
     sources,
     selectedSourceIds,
+    sourceFolders: reviveSourceFolders(
+      Array.isArray(persisted.sourceFolders)
+        ? (persisted.sourceFolders as WorkspaceSourceFolder[])
+        : [],
+      workspaceId
+    ),
+    sourceFolderMemberships: [],
+    selectedSourceFolderIds: [],
+    activeFolderId: null,
     generatedArtifacts,
     notes: typeof persisted.notes === "string" ? persisted.notes : "",
     currentNote: coerceWorkspaceNoteForRehydrate(persisted.currentNote),
@@ -2855,6 +3091,9 @@ const migratePersistedWorkspaceState = (
     archivedWorkspaces: Array.isArray(persisted.archivedWorkspaces)
       ? (persisted.archivedWorkspaces as SavedWorkspace[])
       : [],
+    workspaceCollections: Array.isArray(persisted.workspaceCollections)
+      ? (persisted.workspaceCollections as WorkspaceCollection[])
+      : [],
     workspaceSnapshots: normalizedSnapshots,
     workspaceChatSessions: buildPersistedWorkspaceChatSessions(
       normalizeWorkspaceChatSessionsForRehydrate(persisted.workspaceChatSessions)
@@ -2880,6 +3119,10 @@ const createEmptyWorkspaceSnapshot = ({
   workspaceChatReferenceId: id,
   sources: [],
   selectedSourceIds: [],
+  sourceFolders: [],
+  sourceFolderMemberships: [],
+  selectedSourceFolderIds: [],
+  activeFolderId: null,
   generatedArtifacts: [],
   notes: "",
   currentNote: { ...DEFAULT_WORKSPACE_NOTE },
@@ -2900,6 +3143,10 @@ const applyWorkspaceSnapshot = (
   | "workspaceChatReferenceId"
   | "sources"
   | "selectedSourceIds"
+  | "sourceFolders"
+  | "sourceFolderMemberships"
+  | "selectedSourceFolderIds"
+  | "activeFolderId"
   | "generatedArtifacts"
   | "notes"
   | "currentNote"
@@ -2915,6 +3162,12 @@ const applyWorkspaceSnapshot = (
   workspaceChatReferenceId: snapshot.workspaceChatReferenceId,
   sources: snapshot.sources.map((source) => ({ ...source })),
   selectedSourceIds: [...snapshot.selectedSourceIds],
+  sourceFolders: snapshot.sourceFolders.map((folder) => ({ ...folder })),
+  sourceFolderMemberships: snapshot.sourceFolderMemberships.map((membership) => ({
+    ...membership
+  })),
+  selectedSourceFolderIds: [...snapshot.selectedSourceFolderIds],
+  activeFolderId: snapshot.activeFolderId,
   generatedArtifacts: snapshot.generatedArtifacts.map((artifact) => ({
     ...artifact
   })),
@@ -2934,6 +3187,12 @@ const buildWorkspaceSnapshot = (state: WorkspaceState): WorkspaceSnapshot => ({
   workspaceChatReferenceId: state.workspaceChatReferenceId || state.workspaceId,
   sources: state.sources.map((source) => ({ ...source })),
   selectedSourceIds: [...state.selectedSourceIds],
+  sourceFolders: state.sourceFolders.map((folder) => ({ ...folder })),
+  sourceFolderMemberships: state.sourceFolderMemberships.map((membership) => ({
+    ...membership
+  })),
+  selectedSourceFolderIds: [...state.selectedSourceFolderIds],
+  activeFolderId: state.activeFolderId,
   generatedArtifacts: state.generatedArtifacts.map((artifact) => ({
     ...artifact
   })),
@@ -2953,6 +3212,12 @@ const buildWorkspaceBundleSnapshot = (
   workspaceCreatedAt: snapshot.workspaceCreatedAt,
   sources: snapshot.sources.map((source) => ({ ...source })),
   selectedSourceIds: [...snapshot.selectedSourceIds],
+  sourceFolders: snapshot.sourceFolders.map((folder) => ({ ...folder })),
+  sourceFolderMemberships: snapshot.sourceFolderMemberships.map((membership) => ({
+    ...membership
+  })),
+  selectedSourceFolderIds: [...snapshot.selectedSourceFolderIds],
+  activeFolderId: snapshot.activeFolderId,
   generatedArtifacts: snapshot.generatedArtifacts.map((artifact) => ({
     ...artifact
   })),
@@ -2989,6 +3254,19 @@ const hydrateWorkspaceBundleSnapshot = (
   const selectedSourceIds = (snapshot.selectedSourceIds || []).filter((id) =>
     sourceIdSet.has(id)
   )
+  const revivedSourceFolders = reviveSourceFolders(
+    snapshot.sourceFolders || [],
+    workspaceId
+  ).map((folder) => ({
+    ...folder,
+    workspaceId
+  }))
+  const folderIdSet = new Set(revivedSourceFolders.map((folder) => folder.id))
+  const sourceFolderMemberships = reviveSourceFolderMemberships(
+    snapshot.sourceFolderMemberships || [],
+    sourceIdSet,
+    folderIdSet
+  )
 
   return {
     workspaceId,
@@ -2998,6 +3276,15 @@ const hydrateWorkspaceBundleSnapshot = (
     workspaceChatReferenceId: workspaceId,
     sources: revivedSources,
     selectedSourceIds,
+    sourceFolders: revivedSourceFolders,
+    sourceFolderMemberships,
+    selectedSourceFolderIds: (snapshot.selectedSourceFolderIds || []).filter((id) =>
+      folderIdSet.has(id)
+    ),
+    activeFolderId:
+      snapshot.activeFolderId && folderIdSet.has(snapshot.activeFolderId)
+        ? snapshot.activeFolderId
+        : null,
     generatedArtifacts: reviveArtifacts(snapshot.generatedArtifacts || []),
     notes: typeof snapshot.notes === "string" ? snapshot.notes : "",
     currentNote: snapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
@@ -3027,6 +3314,10 @@ const buildWorkspaceUndoSnapshot = (
       state.workspaceChatReferenceId || state.workspaceId,
     sources: state.sources,
     selectedSourceIds: state.selectedSourceIds,
+    sourceFolders: state.sourceFolders,
+    sourceFolderMemberships: state.sourceFolderMemberships,
+    selectedSourceFolderIds: state.selectedSourceFolderIds,
+    activeFolderId: state.activeFolderId,
     generatedArtifacts: state.generatedArtifacts,
     notes: state.notes,
     currentNote: state.currentNote,
@@ -3036,6 +3327,7 @@ const buildWorkspaceUndoSnapshot = (
     audioSettings: state.audioSettings,
     savedWorkspaces: state.savedWorkspaces,
     archivedWorkspaces: state.archivedWorkspaces,
+    workspaceCollections: state.workspaceCollections,
     workspaceSnapshots: nextSnapshots,
     workspaceChatSessions: state.workspaceChatSessions
   }
@@ -3045,24 +3337,39 @@ const buildWorkspaceUndoSnapshot = (
 
 const createSavedWorkspaceEntry = (
   snapshot: WorkspaceSnapshot,
-  lastAccessedAt: Date = new Date()
+  lastAccessedAt: Date = new Date(),
+  collectionId: string | null = null
 ): SavedWorkspace => ({
   id: snapshot.workspaceId,
   name: snapshot.workspaceName || "Untitled Workspace",
   tag: snapshot.workspaceTag,
+  collectionId,
   createdAt: snapshot.workspaceCreatedAt || new Date(),
   lastAccessedAt,
   sourceCount: snapshot.sources.length
 })
 
+const findSavedWorkspaceById = (
+  savedWorkspaces: SavedWorkspace[],
+  archivedWorkspaces: SavedWorkspace[],
+  workspaceId: string
+): SavedWorkspace | null =>
+  savedWorkspaces.find((workspace) => workspace.id === workspaceId) ||
+  archivedWorkspaces.find((workspace) => workspace.id === workspaceId) ||
+  null
+
+const getSavedWorkspaceCollectionId = (
+  savedWorkspaces: SavedWorkspace[],
+  archivedWorkspaces: SavedWorkspace[],
+  workspaceId: string
+): string | null =>
+  findSavedWorkspaceById(savedWorkspaces, archivedWorkspaces, workspaceId)
+    ?.collectionId || null
+
 const upsertSavedWorkspace = (
   workspaces: SavedWorkspace[],
   workspace: SavedWorkspace
-): SavedWorkspace[] =>
-  [workspace, ...workspaces.filter((w) => w.id !== workspace.id)].slice(
-    0,
-    MAX_SAVED_WORKSPACES
-  )
+): SavedWorkspace[] => [workspace, ...workspaces.filter((w) => w.id !== workspace.id)]
 
 const upsertArchivedWorkspace = (
   workspaces: SavedWorkspace[],
@@ -3132,6 +3439,7 @@ const duplicateWorkspaceSnapshot = (
   const duplicateName = `${snapshot.workspaceName} (Copy)`
   const duplicateTag = `workspace:${createSlug(duplicateName) || duplicateId.slice(0, 8)}`
   const sourceIdMap = new Map<string, string>()
+  const folderIdMap = new Map<string, string>()
 
   const duplicatedSources = snapshot.sources.map((source) => {
     const nextSourceId = generateWorkspaceId()
@@ -3146,6 +3454,43 @@ const duplicateWorkspaceSnapshot = (
   const duplicatedSelectedSourceIds = snapshot.selectedSourceIds
     .map((sourceId) => sourceIdMap.get(sourceId))
     .filter((sourceId): sourceId is string => Boolean(sourceId))
+
+  for (const folder of snapshot.sourceFolders) {
+    folderIdMap.set(folder.id, generateWorkspaceId())
+  }
+
+  const duplicatedSourceFolders = snapshot.sourceFolders.map((folder) => ({
+    ...folder,
+    id: folderIdMap.get(folder.id) || generateWorkspaceId(),
+    workspaceId: duplicateId,
+    parentFolderId: folder.parentFolderId
+      ? folderIdMap.get(folder.parentFolderId) || null
+      : null,
+    createdAt: reviveDateOrNull(folder.createdAt) || new Date(),
+    updatedAt: reviveDateOrNull(folder.updatedAt) || new Date()
+  }))
+
+  const duplicatedSourceFolderMemberships = snapshot.sourceFolderMemberships
+    .map((membership) => {
+      const nextFolderId = folderIdMap.get(membership.folderId)
+      const nextSourceId = sourceIdMap.get(membership.sourceId)
+      if (!nextFolderId || !nextSourceId) {
+        return null
+      }
+      return {
+        folderId: nextFolderId,
+        sourceId: nextSourceId
+      }
+    })
+    .filter(
+      (
+        membership
+      ): membership is WorkspaceSourceFolderMembership => Boolean(membership)
+    )
+
+  const duplicatedSelectedSourceFolderIds = snapshot.selectedSourceFolderIds
+    .map((folderId) => folderIdMap.get(folderId))
+    .filter((folderId): folderId is string => Boolean(folderId))
 
   const duplicatedArtifacts = snapshot.generatedArtifacts.map((artifact) => ({
     ...artifact,
@@ -3162,6 +3507,12 @@ const duplicateWorkspaceSnapshot = (
     workspaceChatReferenceId: duplicateId,
     sources: duplicatedSources,
     selectedSourceIds: duplicatedSelectedSourceIds,
+    sourceFolders: duplicatedSourceFolders,
+    sourceFolderMemberships: duplicatedSourceFolderMemberships,
+    selectedSourceFolderIds: duplicatedSelectedSourceFolderIds,
+    activeFolderId: snapshot.activeFolderId
+      ? folderIdMap.get(snapshot.activeFolderId) || null
+      : null,
     generatedArtifacts: duplicatedArtifacts,
     notes: snapshot.notes,
     currentNote: {
@@ -3279,7 +3630,15 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           ...applyWorkspaceSnapshot(hydratedSnapshot),
           savedWorkspaces: upsertSavedWorkspace(
             state.savedWorkspaces,
-            createSavedWorkspaceEntry(hydratedSnapshot)
+            createSavedWorkspaceEntry(
+              hydratedSnapshot,
+              new Date(),
+              getSavedWorkspaceCollectionId(
+                state.savedWorkspaces,
+                state.archivedWorkspaces,
+                hydratedSnapshot.workspaceId
+              )
+            )
           ),
           archivedWorkspaces: state.archivedWorkspaces.filter(
             (workspace) => workspace.id !== config.id
@@ -3295,6 +3654,206 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     // ─────────────────────────────────────────────────────────────────────────
     // Sources Actions
     // ─────────────────────────────────────────────────────────────────────────
+
+    createSourceFolder: (name, parentFolderId = null) => {
+      const state = get()
+      if (parentFolderId && !state.sourceFolders.some((folder) => folder.id === parentFolderId)) {
+        throw new Error(`Cannot create folder under missing parent "${parentFolderId}"`)
+      }
+
+      const folder: WorkspaceSourceFolder = {
+        id: generateWorkspaceId(),
+        workspaceId: state.workspaceId,
+        name: getUniqueSourceFolderName(
+          state.sourceFolders,
+          name,
+          parentFolderId
+        ),
+        parentFolderId,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+
+      set((current) => ({
+        sourceFolders: [...current.sourceFolders, folder]
+      }))
+      return folder
+    },
+
+    renameSourceFolder: (folderId, name) =>
+      set((state) => {
+        const folder = state.sourceFolders.find((entry) => entry.id === folderId)
+        if (!folder) {
+          return state
+        }
+
+        return {
+          sourceFolders: state.sourceFolders.map((entry) =>
+            entry.id === folderId
+              ? {
+                  ...entry,
+                  name: getUniqueSourceFolderName(
+                    state.sourceFolders,
+                    name,
+                    entry.parentFolderId,
+                    entry.id
+                  ),
+                  updatedAt: new Date()
+                }
+              : entry
+          )
+        }
+      }),
+
+    moveSourceFolder: (folderId, parentFolderId) =>
+      set((state) => {
+        const folder = state.sourceFolders.find((entry) => entry.id === folderId)
+        if (!folder) {
+          return state
+        }
+
+        if (parentFolderId === folderId) {
+          throw new Error("A folder cannot be moved under itself.")
+        }
+
+        if (
+          parentFolderId &&
+          !state.sourceFolders.some((entry) => entry.id === parentFolderId)
+        ) {
+          throw new Error(`Cannot move folder under missing parent "${parentFolderId}".`)
+        }
+
+        const organizationIndex = createWorkspaceOrganizationStateIndex(state)
+        const descendantFolderIds = new Set(
+          collectDescendantFolderIds(organizationIndex, folderId)
+        )
+        if (parentFolderId && descendantFolderIds.has(parentFolderId)) {
+          throw new Error("A folder cannot be moved under one of its descendants.")
+        }
+
+        return {
+          sourceFolders: state.sourceFolders.map((entry) =>
+            entry.id === folderId
+              ? {
+                  ...entry,
+                  parentFolderId,
+                  name: getUniqueSourceFolderName(
+                    state.sourceFolders,
+                    entry.name,
+                    parentFolderId,
+                    entry.id
+                  ),
+                  updatedAt: new Date()
+                }
+              : entry
+          )
+        }
+      }),
+
+    deleteSourceFolder: (folderId) =>
+      set((state) => {
+        const folderToDelete = state.sourceFolders.find(
+          (folder) => folder.id === folderId
+        )
+        if (!folderToDelete) {
+          return state
+        }
+
+        const reparentedSourceFolders = state.sourceFolders
+          .filter((folder) => folder.id !== folderId)
+          .reduce<WorkspaceSourceFolder[]>((accumulator, folder) => {
+            if (folder.parentFolderId !== folderId) {
+              accumulator.push(folder)
+              return accumulator
+            }
+
+            accumulator.push({
+              ...folder,
+              parentFolderId: folderToDelete.parentFolderId,
+              name: getUniqueSourceFolderName(
+                accumulator,
+                folder.name,
+                folderToDelete.parentFolderId,
+                folder.id
+              ),
+              updatedAt: new Date()
+            })
+            return accumulator
+          }, [])
+
+        return {
+          sourceFolders: reparentedSourceFolders,
+          sourceFolderMemberships: state.sourceFolderMemberships.filter(
+            (membership) => membership.folderId !== folderId
+          ),
+          selectedSourceFolderIds: state.selectedSourceFolderIds.filter(
+            (selectedFolderId) => selectedFolderId !== folderId
+          ),
+          activeFolderId:
+            state.activeFolderId === folderId
+              ? folderToDelete.parentFolderId
+              : state.activeFolderId
+        }
+      }),
+
+    assignSourceToFolders: (sourceId, folderIds) =>
+      set((state) => {
+        if (!state.sources.some((source) => source.id === sourceId)) {
+          return state
+        }
+
+        const validFolderIds = [...new Set(folderIds)].filter((folderId) =>
+          state.sourceFolders.some((folder) => folder.id === folderId)
+        )
+
+        return {
+          sourceFolderMemberships: [
+            ...state.sourceFolderMemberships.filter(
+              (membership) => membership.sourceId !== sourceId
+            ),
+            ...validFolderIds.map((folderId) => ({
+              folderId,
+              sourceId
+            }))
+          ]
+        }
+      }),
+
+    removeSourceFromFolder: (sourceId, folderId) =>
+      set((state) => ({
+        sourceFolderMemberships: state.sourceFolderMemberships.filter(
+          (membership) =>
+            !(
+              membership.sourceId === sourceId &&
+              membership.folderId === folderId
+            )
+        )
+      })),
+
+    toggleSourceFolderSelection: (folderId) =>
+      set((state) => {
+        if (!state.sourceFolders.some((folder) => folder.id === folderId)) {
+          return state
+        }
+
+        const isSelected = state.selectedSourceFolderIds.includes(folderId)
+        return {
+          selectedSourceFolderIds: isSelected
+            ? state.selectedSourceFolderIds.filter(
+                (selectedFolderId) => selectedFolderId !== folderId
+              )
+            : [...state.selectedSourceFolderIds, folderId]
+        }
+      }),
+
+    setActiveFolder: (folderId) =>
+      set((state) => ({
+        activeFolderId:
+          folderId === null ||
+          state.sourceFolders.some((folder) => folder.id === folderId)
+            ? folderId
+            : null
+      })),
 
     addSource: (sourceData) => {
       const source: WorkspaceSource = {
@@ -3336,7 +3895,10 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     removeSource: (id) =>
       set((state) => ({
         sources: state.sources.filter((s) => s.id !== id),
-        selectedSourceIds: state.selectedSourceIds.filter((sid) => sid !== id)
+        selectedSourceIds: state.selectedSourceIds.filter((sid) => sid !== id),
+        sourceFolderMemberships: state.sourceFolderMemberships.filter(
+          (membership) => membership.sourceId !== id
+        )
       })),
 
     removeSources: (ids) =>
@@ -3346,6 +3908,9 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           sources: state.sources.filter((s) => !idsSet.has(s.id)),
           selectedSourceIds: state.selectedSourceIds.filter(
             (sid) => !idsSet.has(sid)
+          ),
+          sourceFolderMemberships: state.sourceFolderMemberships.filter(
+            (membership) => !idsSet.has(membership.sourceId)
           )
         }
       }),
@@ -3539,6 +4104,25 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         )
         .map((s) => s.mediaId)
     },
+
+    getEffectiveSelectedSources: () => {
+      const state = get()
+      const organizationIndex = createWorkspaceOrganizationStateIndex(state)
+      const effectiveSelectedIds = new Set(
+        deriveEffectiveSelectedSourceIds(
+          organizationIndex,
+          state.selectedSourceIds,
+          state.selectedSourceFolderIds
+        )
+      )
+
+      return state.sources.filter((source) => effectiveSelectedIds.has(source.id))
+    },
+
+    getEffectiveSelectedMediaIds: () =>
+      get()
+        .getEffectiveSelectedSources()
+        .map((source) => source.mediaId),
 
     // ─────────────────────────────────────────────────────────────────────────
     // Studio Actions
@@ -3779,13 +4363,104 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     // Workspace List Actions
     // ─────────────────────────────────────────────────────────────────────────
 
+    createWorkspaceCollection: (name, description = null) => {
+      const collection: WorkspaceCollection = {
+        id: generateWorkspaceId(),
+        name: "",
+        description: description || null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+
+      set((state) => {
+        collection.name = getUniqueWorkspaceCollectionName(
+          state.workspaceCollections,
+          name
+        )
+
+        return {
+          workspaceCollections: [...state.workspaceCollections, collection]
+        }
+      })
+
+      return collection
+    },
+
+    renameWorkspaceCollection: (collectionId, name, description = null) =>
+      set((state) => ({
+        workspaceCollections: state.workspaceCollections.map((collection) =>
+          collection.id === collectionId
+            ? {
+                ...collection,
+                name: getUniqueWorkspaceCollectionName(
+                  state.workspaceCollections,
+                  name,
+                  collection.id
+                ),
+                description: description || null,
+                updatedAt: new Date()
+              }
+            : collection
+        )
+      })),
+
+    deleteWorkspaceCollection: (collectionId) =>
+      set((state) => ({
+        workspaceCollections: state.workspaceCollections.filter(
+          (collection) => collection.id !== collectionId
+        ),
+        savedWorkspaces: state.savedWorkspaces.map((workspace) =>
+          workspace.collectionId === collectionId
+            ? { ...workspace, collectionId: null }
+            : workspace
+        ),
+        archivedWorkspaces: state.archivedWorkspaces.map((workspace) =>
+          workspace.collectionId === collectionId
+            ? { ...workspace, collectionId: null }
+            : workspace
+        )
+      })),
+
+    assignWorkspaceToCollection: (workspaceId, collectionId) =>
+      set((state) => {
+        if (
+          collectionId !== null &&
+          !state.workspaceCollections.some(
+            (collection) => collection.id === collectionId
+          )
+        ) {
+          throw new Error(`Cannot assign workspace to missing collection "${collectionId}".`)
+        }
+
+        return {
+          savedWorkspaces: state.savedWorkspaces.map((workspace) =>
+            workspace.id === workspaceId
+              ? { ...workspace, collectionId }
+              : workspace
+          ),
+          archivedWorkspaces: state.archivedWorkspaces.map((workspace) =>
+            workspace.id === workspaceId
+              ? { ...workspace, collectionId }
+              : workspace
+          )
+        }
+      }),
+
     saveCurrentWorkspace: () => {
       const state = get()
       // Don't save if workspace has no ID (uninitialized)
       if (!state.workspaceId) return
 
       const snapshot = buildWorkspaceSnapshot(state)
-      const savedWorkspace = createSavedWorkspaceEntry(snapshot)
+      const savedWorkspace = createSavedWorkspaceEntry(
+        snapshot,
+        new Date(),
+        getSavedWorkspaceCollectionId(
+          state.savedWorkspaces,
+          state.archivedWorkspaces,
+          snapshot.workspaceId
+        )
+      )
 
       set((s) => {
         return {
@@ -3896,13 +4571,21 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
         nextSavedWorkspaces = upsertSavedWorkspace(
           nextSavedWorkspaces,
-          createSavedWorkspaceEntry(currentSnapshot, now)
+          createSavedWorkspaceEntry(
+            currentSnapshot,
+            now,
+            getSavedWorkspaceCollectionId(
+              state.savedWorkspaces,
+              state.archivedWorkspaces,
+              currentSnapshot.workspaceId
+            )
+          )
         )
       }
 
       nextSavedWorkspaces = upsertSavedWorkspace(
         nextSavedWorkspaces,
-        createSavedWorkspaceEntry(importedSnapshot, now)
+        createSavedWorkspaceEntry(importedSnapshot, now, null)
       )
 
       const importedChatSession =
@@ -3963,13 +4646,29 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
         nextSavedWorkspaces = upsertSavedWorkspace(
           nextSavedWorkspaces,
-          createSavedWorkspaceEntry(currentSnapshot, now)
+          createSavedWorkspaceEntry(
+            currentSnapshot,
+            now,
+            getSavedWorkspaceCollectionId(
+              state.savedWorkspaces,
+              state.archivedWorkspaces,
+              currentSnapshot.workspaceId
+            )
+          )
         )
       }
 
       nextSavedWorkspaces = upsertSavedWorkspace(
         nextSavedWorkspaces,
-        createSavedWorkspaceEntry(targetSnapshot, now)
+        createSavedWorkspaceEntry(
+          targetSnapshot,
+          now,
+          getSavedWorkspaceCollectionId(
+            state.savedWorkspaces,
+            state.archivedWorkspaces,
+            targetSnapshot.workspaceId
+          )
+        )
       )
 
       set({
@@ -4009,7 +4708,15 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
         nextSavedWorkspaces = upsertSavedWorkspace(
           nextSavedWorkspaces,
-          createSavedWorkspaceEntry(currentSnapshot, createdAt)
+          createSavedWorkspaceEntry(
+            currentSnapshot,
+            createdAt,
+            getSavedWorkspaceCollectionId(
+              state.savedWorkspaces,
+              state.archivedWorkspaces,
+              currentSnapshot.workspaceId
+            )
+          )
         )
       }
 
@@ -4056,13 +4763,29 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
         nextSavedWorkspaces = upsertSavedWorkspace(
           nextSavedWorkspaces,
-          createSavedWorkspaceEntry(currentSnapshot, now)
+          createSavedWorkspaceEntry(
+            currentSnapshot,
+            now,
+            getSavedWorkspaceCollectionId(
+              state.savedWorkspaces,
+              state.archivedWorkspaces,
+              currentSnapshot.workspaceId
+            )
+          )
         )
       }
 
       nextSavedWorkspaces = upsertSavedWorkspace(
         nextSavedWorkspaces,
-        createSavedWorkspaceEntry(duplicatedSnapshot, now)
+        createSavedWorkspaceEntry(
+          duplicatedSnapshot,
+          now,
+          getSavedWorkspaceCollectionId(
+            state.savedWorkspaces,
+            state.archivedWorkspaces,
+            sourceWorkspaceId
+          )
+        )
       )
 
       set({
@@ -4091,7 +4814,15 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           state.savedWorkspaces.find((workspace) => workspace.id === id) ||
           state.archivedWorkspaces.find((workspace) => workspace.id === id) ||
           (snapshotToArchive
-            ? createSavedWorkspaceEntry(snapshotToArchive, now)
+            ? createSavedWorkspaceEntry(
+                snapshotToArchive,
+                now,
+                getSavedWorkspaceCollectionId(
+                  state.savedWorkspaces,
+                  state.archivedWorkspaces,
+                  id
+                )
+              )
             : null)
 
         if (!savedEntry) {
@@ -4140,7 +4871,11 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
             ...applyWorkspaceSnapshot(fallbackSnapshot),
             savedWorkspaces: upsertSavedWorkspace(
               nextSavedWorkspaces,
-              createSavedWorkspaceEntry(fallbackSnapshot, now)
+              createSavedWorkspaceEntry(
+                fallbackSnapshot,
+                now,
+                fallbackWorkspace.collectionId
+              )
             ),
             archivedWorkspaces: nextArchivedWorkspaces,
             workspaceSnapshots: {
@@ -4153,7 +4888,9 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         const replacementSnapshot = createFallbackWorkspaceSnapshot()
         return {
           ...applyWorkspaceSnapshot(replacementSnapshot),
-          savedWorkspaces: [createSavedWorkspaceEntry(replacementSnapshot, now)],
+          savedWorkspaces: [
+            createSavedWorkspaceEntry(replacementSnapshot, now, null)
+          ],
           archivedWorkspaces: nextArchivedWorkspaces,
           workspaceSnapshots: {
             ...nextSnapshots,
@@ -4185,7 +4922,11 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         return {
           savedWorkspaces: upsertSavedWorkspace(
             state.savedWorkspaces,
-            createSavedWorkspaceEntry(snapshot, now)
+            createSavedWorkspaceEntry(
+              snapshot,
+              now,
+              archivedWorkspace.collectionId
+            )
           ),
           archivedWorkspaces: state.archivedWorkspaces.filter(
             (workspace) => workspace.id !== id
@@ -4235,7 +4976,11 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
             ...applyWorkspaceSnapshot(fallbackSnapshot),
             savedWorkspaces: upsertSavedWorkspace(
               nextSavedWorkspaces,
-              createSavedWorkspaceEntry(fallbackSnapshot, new Date())
+              createSavedWorkspaceEntry(
+                fallbackSnapshot,
+                new Date(),
+                fallbackWorkspace.collectionId
+              )
             ),
             archivedWorkspaces: nextArchivedWorkspaces,
             workspaceSnapshots: {
@@ -4250,7 +4995,7 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
         return {
           ...applyWorkspaceSnapshot(replacementSnapshot),
-          savedWorkspaces: [createSavedWorkspaceEntry(replacementSnapshot)],
+          savedWorkspaces: [createSavedWorkspaceEntry(replacementSnapshot, new Date(), null)],
           archivedWorkspaces: nextArchivedWorkspaces,
           workspaceSnapshots: {
             ...remainingSnapshots,
@@ -4305,6 +5050,17 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
     restoreUndoSnapshot: (snapshot) => {
       const clonedSnapshot = cloneWorkspaceValue(snapshot)
+      const restoredSources = reviveSources(clonedSnapshot.sources || [])
+      const restoredSourceIdSet = new Set(
+        restoredSources.map((source) => source.id)
+      )
+      const restoredSourceFolders = reviveSourceFolders(
+        clonedSnapshot.sourceFolders || [],
+        clonedSnapshot.workspaceId
+      )
+      const restoredFolderIdSet = new Set(
+        restoredSourceFolders.map((folder) => folder.id)
+      )
       set({
         workspaceId: clonedSnapshot.workspaceId,
         workspaceName: clonedSnapshot.workspaceName,
@@ -4313,8 +5069,22 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         workspaceChatReferenceId:
           clonedSnapshot.workspaceChatReferenceId ||
           clonedSnapshot.workspaceId,
-        sources: reviveSources(clonedSnapshot.sources || []),
+        sources: restoredSources,
         selectedSourceIds: clonedSnapshot.selectedSourceIds || [],
+        sourceFolders: restoredSourceFolders,
+        sourceFolderMemberships: reviveSourceFolderMemberships(
+          clonedSnapshot.sourceFolderMemberships || [],
+          restoredSourceIdSet,
+          restoredFolderIdSet
+        ),
+        selectedSourceFolderIds: (
+          clonedSnapshot.selectedSourceFolderIds || []
+        ).filter((id) => restoredFolderIdSet.has(id)),
+        activeFolderId:
+          clonedSnapshot.activeFolderId &&
+          restoredFolderIdSet.has(clonedSnapshot.activeFolderId)
+            ? clonedSnapshot.activeFolderId
+            : null,
         generatedArtifacts: reviveArtifacts(clonedSnapshot.generatedArtifacts || []),
         notes: clonedSnapshot.notes || "",
         currentNote: clonedSnapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
@@ -4330,6 +5100,9 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         ),
         archivedWorkspaces: (clonedSnapshot.archivedWorkspaces || []).map(
           reviveSavedWorkspace
+        ),
+        workspaceCollections: reviveWorkspaceCollections(
+          clonedSnapshot.workspaceCollections || []
         ),
         workspaceSnapshots: Object.fromEntries(
           Object.entries(clonedSnapshot.workspaceSnapshots || {}).map(
@@ -4388,6 +5161,7 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           // Workspace lists
           savedWorkspaces: state.savedWorkspaces,
           archivedWorkspaces: state.archivedWorkspaces,
+          workspaceCollections: state.workspaceCollections,
 
           // Workspace snapshots
           workspaceSnapshots: persistedSnapshots,
@@ -4455,6 +5229,11 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           state.archivedWorkspaces = (
             Array.isArray(state.archivedWorkspaces) ? state.archivedWorkspaces : []
           ).map(reviveSavedWorkspace)
+          state.workspaceCollections = reviveWorkspaceCollections(
+            Array.isArray(state.workspaceCollections)
+              ? state.workspaceCollections
+              : []
+          )
 
           // Migration: ensure workspace snapshots exist and are hydrated
           state.workspaceSnapshots = normalizeWorkspaceSnapshotsForRehydrate(
@@ -4483,7 +5262,15 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
             state.savedWorkspaces = upsertSavedWorkspace(
               state.savedWorkspaces,
-              createSavedWorkspaceEntry(activeSnapshot)
+              createSavedWorkspaceEntry(
+                activeSnapshot,
+                new Date(),
+                getSavedWorkspaceCollectionId(
+                  state.savedWorkspaces,
+                  state.archivedWorkspaces,
+                  activeSnapshot.workspaceId
+                )
+              )
             )
           }
 

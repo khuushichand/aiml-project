@@ -11,6 +11,11 @@ from loguru import logger
 
 from .schemas import ActionType, VoiceCommand, VoiceSessionContext, VoiceSessionState
 
+VOICE_EVENT_RESOLUTION_DIRECT = "direct_command"
+VOICE_EVENT_RESOLUTION_FALLBACK = "planner_fallback"
+PERSONA_LIVE_VOICE_EVENT_COMMIT = "commit"
+PERSONA_LIVE_VOICE_EVENT_MANUAL_MODE_REQUIRED = "manual_mode_required"
+
 
 def save_voice_command(
     db,
@@ -27,41 +32,26 @@ def save_voice_command(
         The command ID
     """
     command_id = command.id or str(uuid.uuid4())
-
-    with db.transaction():
-        db.execute_query(
-            """
-            INSERT INTO voice_commands (
-                id, user_id, name, phrases, action_type, action_config,
-                priority, enabled, requires_confirmation, description,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                phrases = excluded.phrases,
-                action_type = excluded.action_type,
-                action_config = excluded.action_config,
-                priority = excluded.priority,
-                enabled = excluded.enabled,
-                requires_confirmation = excluded.requires_confirmation,
-                description = excluded.description,
-                updated_at = excluded.updated_at
-            """,
-            (
-                command_id,
-                command.user_id,
-                command.name,
-                json.dumps(command.phrases),
-                command.action_type.value,
-                json.dumps(command.action_config),
-                command.priority,
-                1 if command.enabled else 0,
-                1 if command.requires_confirmation else 0,
-                command.description,
-                datetime.utcnow().isoformat(),
-                datetime.utcnow().isoformat(),
-            ),
-        )
+    db.upsert_voice_command(
+        command_id=command_id,
+        user_id=command.user_id,
+        persona_id=command.persona_id,
+        connection_id=command.connection_id,
+        name=command.name,
+        phrases=command.phrases,
+        action_type=command.action_type.value,
+        action_config=command.action_config,
+        priority=command.priority,
+        enabled=command.enabled,
+        requires_confirmation=command.requires_confirmation,
+        description=command.description,
+        created_at=(
+            command.created_at.isoformat()
+            if command.created_at is not None
+            else datetime.utcnow().isoformat()
+        ),
+        updated_at=datetime.utcnow().isoformat(),
+    )
 
     logger.debug(f"Saved voice command: {command.name} (id={command_id})")
     return command_id
@@ -71,6 +61,7 @@ def get_voice_command(
     db,
     command_id: str,
     user_id: Optional[int] = None,
+    persona_id: Optional[str] = None,
 ) -> Optional[VoiceCommand]:
     """
     Get a voice command by ID.
@@ -90,6 +81,10 @@ def get_voice_command(
         query += " AND user_id = ?"
         params.append(user_id)
 
+    if persona_id is not None:
+        query += " AND persona_id = ?"
+        params.append(persona_id)
+
     result = db.execute_query(query, tuple(params))
     rows = result.fetchall() if hasattr(result, 'fetchall') else list(result)
 
@@ -104,6 +99,7 @@ def get_user_voice_commands(
     user_id: int,
     include_system: bool = True,
     enabled_only: bool = True,
+    persona_id: Optional[str] = None,
 ) -> list[VoiceCommand]:
     """
     Get all voice commands for a user.
@@ -121,11 +117,18 @@ def get_user_voice_commands(
     params = []
 
     if include_system:
-        conditions.append("(user_id = ? OR user_id = 0)")
-        params.append(user_id)
+        if persona_id is not None:
+            conditions.append("((user_id = ? AND persona_id = ?) OR user_id = 0)")
+            params.extend([user_id, persona_id])
+        else:
+            conditions.append("(user_id = ? OR user_id = 0)")
+            params.append(user_id)
     else:
         conditions.append("user_id = ?")
         params.append(user_id)
+        if persona_id is not None:
+            conditions.append("persona_id = ?")
+            params.append(persona_id)
 
     if enabled_only:
         conditions.append("enabled = 1")
@@ -358,6 +361,8 @@ def record_voice_command_event(
     success: bool,
     response_time_ms: Optional[float] = None,
     session_id: Optional[str] = None,
+    persona_id: Optional[str] = None,
+    resolution_type: str = VOICE_EVENT_RESOLUTION_DIRECT,
 ) -> None:
     """
     Record a voice command execution event for analytics.
@@ -376,20 +381,81 @@ def record_voice_command_event(
         db.execute_query(
             """
             INSERT INTO voice_command_events (
-                command_id, command_name, user_id, action_type,
-                success, response_time_ms, session_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                command_id, command_name, user_id, persona_id, action_type,
+                success, response_time_ms, session_id, resolution_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 command_id,
                 command_name,
                 user_id,
+                persona_id,
                 action_type.value,
                 1 if success else 0,
                 response_time_ms,
                 session_id,
+                resolution_type,
             ),
         )
+
+
+def record_persona_live_voice_event(
+    db,
+    *,
+    user_id: int,
+    persona_id: Optional[str],
+    session_id: Optional[str],
+    event_type: str,
+    commit_source: Optional[str] = None,
+) -> None:
+    """Persist a persona live-voice analytics event for the active session."""
+    with db.transaction():
+        db.execute_query(
+            """
+            INSERT INTO persona_live_voice_events (
+                user_id, persona_id, session_id, event_type, commit_source
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                persona_id,
+                session_id,
+                event_type,
+                commit_source,
+            ),
+        )
+
+
+def _build_voice_event_filters(
+    *,
+    user_id: Optional[int] = None,
+    command_id: Optional[str] = None,
+    days: Optional[int] = None,
+    persona_id: Optional[str] = None,
+    resolution_type: Optional[str] = None,
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if command_id is not None:
+        clauses.append("command_id = ?")
+        params.append(command_id)
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if days is not None:
+        clauses.append("created_at >= datetime('now', ?)")
+        params.append(f"-{days} days")
+    if persona_id is not None:
+        clauses.append("persona_id = ?")
+        params.append(persona_id)
+    if resolution_type is not None:
+        clauses.append("resolution_type = ?")
+        params.append(resolution_type)
+
+    if not clauses:
+        return "", params
+    return " WHERE " + " AND ".join(clauses), params
 
 
 def get_voice_command_usage_stats(
@@ -460,6 +526,8 @@ def get_voice_top_commands(
     user_id: int,
     days: Optional[int] = None,
     limit: int = 10,
+    persona_id: Optional[str] = None,
+    resolution_type: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """
     Get top voice commands by usage.
@@ -473,12 +541,12 @@ def get_voice_top_commands(
     Returns:
         List of usage stats for top commands
     """
-    params: list[Any] = [user_id]
-    date_filter = ""
-    if days is not None:
-        date_filter = " AND created_at >= datetime('now', ?)"
-        params.append(f"-{days} days")
-
+    where_clause, params = _build_voice_event_filters(
+        user_id=user_id,
+        days=days,
+        persona_id=persona_id,
+        resolution_type=resolution_type,
+    )
     params.append(limit)
 
     top_commands_sql_template = """
@@ -491,7 +559,7 @@ def get_voice_top_commands(
             AVG(response_time_ms) AS avg_response_time_ms,
             MAX(created_at) AS last_used
         FROM voice_command_events
-        WHERE user_id = ?{date_filter}
+        {where_clause}
         GROUP BY command_id
         ORDER BY total_invocations DESC
         LIMIT ?
@@ -584,6 +652,8 @@ def get_voice_analytics_summary_stats(
     *,
     user_id: Optional[int] = None,
     days: int = 7,
+    persona_id: Optional[str] = None,
+    resolution_type: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Get aggregate voice analytics stats.
@@ -596,11 +666,12 @@ def get_voice_analytics_summary_stats(
     Returns:
         Dict with total, success_rate, avg_response_time_ms
     """
-    params: list[Any] = [f"-{days} days"]
-    user_filter = ""
-    if user_id is not None:
-        user_filter = " AND user_id = ?"
-        params.append(user_id)
+    where_clause, params = _build_voice_event_filters(
+        user_id=user_id,
+        days=days,
+        persona_id=persona_id,
+        resolution_type=resolution_type,
+    )
 
     aggregate_stats_sql_template = """
         SELECT
@@ -608,7 +679,7 @@ def get_voice_analytics_summary_stats(
             COALESCE(SUM(success) * 1.0 / NULLIF(COUNT(*), 0), 0.0) AS success_rate,
             AVG(response_time_ms) AS avg_response_time_ms
         FROM voice_command_events
-        WHERE created_at >= datetime('now', ?){user_filter}
+        {where_clause}
         """
     aggregate_stats_sql = aggregate_stats_sql_template.format_map(locals())  # nosec B608
     result = db.execute_query(
@@ -626,6 +697,127 @@ def get_voice_analytics_summary_stats(
         "total_commands": row.get("total_commands") or 0,
         "success_rate": row.get("success_rate") or 0.0,
         "avg_response_time_ms": row.get("avg_response_time_ms") or 0.0,
+    }
+
+
+def get_voice_resolution_stats(
+    db,
+    *,
+    user_id: Optional[int] = None,
+    days: int = 7,
+    persona_id: Optional[str] = None,
+    resolution_type: str,
+) -> dict[str, Any]:
+    where_clause, params = _build_voice_event_filters(
+        user_id=user_id,
+        days=days,
+        persona_id=persona_id,
+        resolution_type=resolution_type,
+    )
+    resolution_stats_sql_template = """
+        SELECT
+            COUNT(*) AS total_invocations,
+            SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS success_count,
+            SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS error_count,
+            AVG(response_time_ms) AS avg_response_time_ms,
+            MAX(created_at) AS last_used
+        FROM voice_command_events
+        {where_clause}
+        """
+    resolution_stats_sql = resolution_stats_sql_template.format_map(locals())  # nosec B608
+    result = db.execute_query(
+        resolution_stats_sql,
+        tuple(params),
+    )
+    rows = result.fetchall() if hasattr(result, 'fetchall') else list(result)
+    if not rows:
+        return {
+            "total_invocations": 0,
+            "success_count": 0,
+            "error_count": 0,
+            "avg_response_time_ms": 0.0,
+            "last_used": None,
+        }
+
+    row = rows[0]
+    if not isinstance(row, dict):
+        row = dict(row)
+    return {
+        "total_invocations": row.get("total_invocations") or 0,
+        "success_count": row.get("success_count") or 0,
+        "error_count": row.get("error_count") or 0,
+        "avg_response_time_ms": row.get("avg_response_time_ms") or 0.0,
+        "last_used": row.get("last_used"),
+    }
+
+
+def get_persona_live_voice_summary(
+    db,
+    *,
+    user_id: Optional[int] = None,
+    days: int = 7,
+    persona_id: Optional[str] = None,
+) -> dict[str, Any]:
+    clauses = ["created_at >= datetime('now', ?)"]
+    params: list[Any] = [f"-{days} days"]
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if persona_id is not None:
+        clauses.append("persona_id = ?")
+        params.append(persona_id)
+
+    where_clause = " WHERE " + " AND ".join(clauses)
+
+    commit_sql_template = """
+        SELECT
+            COUNT(*) AS total_committed_turns,
+            SUM(CASE WHEN commit_source = 'vad_auto' THEN 1 ELSE 0 END) AS vad_auto_commit_count,
+            SUM(CASE WHEN commit_source = 'manual' THEN 1 ELSE 0 END) AS manual_commit_count
+        FROM persona_live_voice_events
+        {where_clause}
+          AND event_type = ?
+        """
+    commit_sql = commit_sql_template.format_map(locals())  # nosec B608
+    commit_rows = db.execute_query(
+        commit_sql,
+        tuple([*params, PERSONA_LIVE_VOICE_EVENT_COMMIT]),
+    ).fetchall()
+    commit_row = dict(commit_rows[0]) if commit_rows else {}
+
+    degraded_sql_template = """
+        SELECT
+            COUNT(DISTINCT session_id) AS degraded_session_count
+        FROM persona_live_voice_events
+        {where_clause}
+          AND event_type = ?
+        """
+    degraded_sql = degraded_sql_template.format_map(locals())  # nosec B608
+    degraded_rows = db.execute_query(
+        degraded_sql,
+        tuple([*params, PERSONA_LIVE_VOICE_EVENT_MANUAL_MODE_REQUIRED]),
+    ).fetchall()
+    degraded_row = dict(degraded_rows[0]) if degraded_rows else {}
+
+    total_committed_turns = int(commit_row.get("total_committed_turns") or 0)
+    vad_auto_commit_count = int(commit_row.get("vad_auto_commit_count") or 0)
+    manual_commit_count = int(commit_row.get("manual_commit_count") or 0)
+
+    return {
+        "total_committed_turns": total_committed_turns,
+        "vad_auto_commit_count": vad_auto_commit_count,
+        "manual_commit_count": manual_commit_count,
+        "vad_auto_rate": (
+            float(vad_auto_commit_count) / float(total_committed_turns)
+            if total_committed_turns
+            else 0.0
+        ),
+        "manual_commit_rate": (
+            float(manual_commit_count) / float(total_committed_turns)
+            if total_committed_turns
+            else 0.0
+        ),
+        "degraded_session_count": int(degraded_row.get("degraded_session_count") or 0),
     }
 
 
@@ -721,6 +913,8 @@ def _row_to_voice_command(row: dict[str, Any]) -> VoiceCommand:
     return VoiceCommand(
         id=row["id"],
         user_id=row["user_id"],
+        persona_id=row.get("persona_id"),
+        connection_id=row.get("connection_id"),
         name=row["name"],
         phrases=phrases,
         action_type=ActionType(row["action_type"]),

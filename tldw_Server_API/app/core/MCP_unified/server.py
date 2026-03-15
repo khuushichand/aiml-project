@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenE
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.feature_flags import is_mcp_hub_policy_enforcement_enabled
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _env_flag_enabled,
     is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
@@ -100,6 +101,11 @@ def _extract_api_key_permissions(info: Optional[dict[str, Any]]) -> list[str]:
     return sorted(scopes) if scopes else []
 
 
+def _normalize_optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
 class _JWTManagerProxy:
     """Proxy for JWT manager to allow per-server monkeypatching without global side effects."""
 
@@ -119,13 +125,19 @@ class WebSocketConnection:
         connection_id: str,
         client_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        cwd: Optional[str] = None,
     ):
         self.websocket = websocket
         self.connection_id = connection_id
         self.client_id = client_id
         self.user_id = user_id
         self.metadata = metadata or {}
+        self.session_id = session_id or connection_id
+        self.workspace_id = workspace_id
+        self.cwd = cwd
         self.connected_at = datetime.now(timezone.utc)
         self.last_activity = self.connected_at
         self.message_count = 0
@@ -173,6 +185,8 @@ class SessionData:
     uris_index: set[str] = field(default_factory=set)
     client_info: dict[str, Any] = field(default_factory=dict)
     safe_config: dict[str, Any] = field(default_factory=dict)
+    workspace_id: Optional[str] = None
+    cwd: Optional[str] = None
 
     def touch(self):
         self.last_activity = datetime.now(timezone.utc)
@@ -583,7 +597,15 @@ class MCPServer:
             for sid in to_delete:
                 self.sessions.pop(sid, None)
 
-    async def _get_or_create_session(self, session_id: str, user_id: Optional[str] = None) -> SessionData:
+    async def _get_or_create_session(
+        self,
+        session_id: str,
+        user_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        cwd: Optional[str] = None,
+    ) -> SessionData:
+        workspace_key = _normalize_optional_text(workspace_id)
+        cwd_key = _normalize_optional_text(cwd)
         async with self.session_lock:
             s = self.sessions.get(session_id)
             if s is None:
@@ -592,7 +614,12 @@ class MCPServer:
                     # Evict oldest
                     oldest_id = min(self.sessions, key=lambda k: self.sessions[k].last_activity)
                     self.sessions.pop(oldest_id, None)
-                s = SessionData(session_id=session_id, user_id=user_id)
+                s = SessionData(
+                    session_id=session_id,
+                    user_id=user_id,
+                    workspace_id=workspace_key,
+                    cwd=cwd_key,
+                )
                 # Respect configured max URIs per session
                 s.uris_seen = deque(maxlen=max(1, int(self.config.max_session_uris)))
                 self.sessions[session_id] = s
@@ -604,6 +631,14 @@ class MCPServer:
                 else:
                     if user_id is None or str(s.user_id) != str(user_id):
                         raise PermissionError("Session is bound to a different user")
+                existing_context_bound = s.workspace_id is not None or s.cwd is not None
+                incoming_context_bound = workspace_key is not None or cwd_key is not None
+                if not existing_context_bound and incoming_context_bound:
+                    s.workspace_id = workspace_key
+                    s.cwd = cwd_key
+                elif existing_context_bound:
+                    if s.workspace_id != workspace_key or s.cwd != cwd_key:
+                        raise PermissionError("Workspace context mismatch")
             s.touch()
             return s
 
@@ -635,7 +670,10 @@ class MCPServer:
         websocket: WebSocket,
         client_id: Optional[str] = None,
         auth_token: Optional[str] = None,
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        mcp_session_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        cwd: Optional[str] = None,
     ):
         """
         Handle a WebSocket connection.
@@ -647,6 +685,9 @@ class MCPServer:
         """
         connection_id = f"ws_{client_id or 'anonymous'}_{datetime.now().timestamp()}"
         user_id = None
+        stable_session_id = _normalize_optional_text(mcp_session_id)
+        workspace_key = _normalize_optional_text(workspace_id)
+        cwd_key = _normalize_optional_text(cwd)
 
         controller = get_ip_access_controller()
         metadata: dict[str, Any] = {}
@@ -855,6 +896,25 @@ class MCPServer:
             await websocket.close(code=1008, reason="Authentication required")
             return
 
+        try:
+            if stable_session_id:
+                await self._get_or_create_session(
+                    stable_session_id,
+                    user_id=user_id,
+                    workspace_id=workspace_key,
+                    cwd=cwd_key,
+                )
+        except PermissionError as exc:
+            await websocket.close(code=1008, reason=str(exc))
+            return
+
+        if stable_session_id:
+            metadata["session_id"] = stable_session_id
+        if workspace_key:
+            metadata["workspace_id"] = workspace_key
+        if cwd_key:
+            metadata["cwd"] = cwd_key
+
         # Check connection limits (global and per-IP)
         async with self.connection_lock:
             if len(self.connections) >= self.config.ws_max_connections:
@@ -883,7 +943,10 @@ class MCPServer:
                 connection_id=connection_id,
                 client_id=client_id,
                 user_id=user_id,
-                metadata=metadata
+                metadata=metadata,
+                session_id=stable_session_id or connection_id,
+                workspace_id=workspace_key,
+                cwd=cwd_key,
             )
 
             self.connections[connection_id] = connection
@@ -1011,7 +1074,12 @@ class MCPServer:
 
             # Ensure session exists and update with client/safe config if applicable
             try:
-                sess = await self._get_or_create_session(connection.connection_id, connection.user_id)
+                sess = await self._get_or_create_session(
+                    connection.session_id,
+                    connection.user_id,
+                    workspace_id=connection.workspace_id,
+                    cwd=connection.cwd,
+                )
                 # If this is initialize, capture clientInfo and optional config
                 if isinstance(data, dict) and data.get("method") == "initialize":
                     try:
@@ -1057,6 +1125,11 @@ class MCPServer:
             # Create request context
             context_metadata = dict(connection.metadata)
             try:
+                if sess and sess.workspace_id:
+                    context_metadata["workspace_id"] = sess.workspace_id
+                if sess and sess.cwd:
+                    context_metadata["cwd"] = sess.cwd
+                context_metadata["mcp_policy_context_enabled"] = is_mcp_hub_policy_enforcement_enabled()
                 if sess and sess.safe_config:
                     context_metadata["safe_config"] = dict(sess.safe_config)
                 if sess:
@@ -1067,7 +1140,7 @@ class MCPServer:
                 request_id=data.get("id", "unknown") if isinstance(data, dict) else "unknown",
                 user_id=connection.user_id,
                 client_id=connection.client_id,
-                session_id=connection.connection_id,
+                session_id=connection.session_id,
                 metadata=context_metadata
             )
 

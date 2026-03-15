@@ -291,10 +291,10 @@ describe("KnowledgeQAProvider streaming search", () => {
 
     act(() => {
       latestContext!.updateSetting("include_media_ids", [7])
-      latestContext!.updateSetting("include_note_ids", ["note-base"])
+      latestContext!.updateSetting("include_note_ids", [101])
       latestContext!.setPinnedSourceFilters({
         mediaIds: [42],
-        noteIds: ["note-pinned"],
+        noteIds: [202],
       })
       latestContext!.setQuery("pinned filters query")
     })

@@ -89,7 +89,7 @@ def migrate_sqlite_to_postgres(
     if not sqlite_path.exists():
         raise FileNotFoundError(f'SQLite database not found: {sqlite_path}')
 
-    logger.info('Starting migration of %s database from file %s', label, sqlite_path.name)
+    logger.info("Starting migration of {} database from file {}", label, sqlite_path.name)
     sqlite_conn = sqlite3.connect(str(sqlite_path))
     sqlite_conn.row_factory = sqlite3.Row
     try:
@@ -116,7 +116,7 @@ def migrate_sqlite_to_postgres(
                 pass
     finally:
         sqlite_conn.close()
-    logger.info('Completed migration of %s database from file %s', label, sqlite_path.name)
+    logger.info("Completed migration of {} database from file {}", label, sqlite_path.name)
 
 
 def migrate_workflows_sqlite_to_postgres(

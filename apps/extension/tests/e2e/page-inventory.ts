@@ -31,6 +31,8 @@ export const EXTENSION_ROUTES: ExtensionRouteEntry[] = [
   { kind: "options", path: "/settings/health", name: "Health Settings" },
   { kind: "options", path: "/settings/prompt-studio", name: "Prompt Studio Settings" },
   { kind: "options", path: "/settings/knowledge", name: "Knowledge Settings" },
+  { kind: "options", path: "/settings/family-guardrails", name: "Family Guardrails Wizard" },
+  { kind: "options", path: "/settings/guardian", name: "Guardian Settings" },
   { kind: "options", path: "/settings/chatbooks", name: "Chatbooks Settings" },
   { kind: "options", path: "/settings/characters", name: "Characters Settings" },
   { kind: "options", path: "/settings/world-books", name: "World Books Settings" },
@@ -65,6 +67,7 @@ export const EXTENSION_ROUTES: ExtensionRouteEntry[] = [
   { kind: "options", path: "/speech", name: "Speech" },
   { kind: "options", path: "/evaluations", name: "Evaluations" },
   { kind: "options", path: "/audiobook-studio", name: "Audiobook Studio" },
+  { kind: "options", path: "/presentation-studio/start", name: "Presentation Studio Quick Start" },
   { kind: "options", path: "/workflow-editor", name: "Workflow Editor" },
   { kind: "options", path: "/workspace-playground", name: "Workspace Playground" },
   { kind: "options", path: "/moderation-playground", name: "Moderation Playground" },
@@ -76,6 +79,7 @@ export const EXTENSION_ROUTES: ExtensionRouteEntry[] = [
   // Sidepanel routes
   { kind: "sidepanel", path: "/", name: "Sidepanel Chat" },
   { kind: "sidepanel", path: "/agent", name: "Sidepanel Agent" },
+  { kind: "sidepanel", path: "/companion", name: "Sidepanel Companion" },
   { kind: "sidepanel", path: "/persona", name: "Sidepanel Persona" },
   { kind: "sidepanel", path: "/settings", name: "Sidepanel Settings" },
   { kind: "sidepanel", path: "/error-boundary-test", name: "Sidepanel Error Boundary Test" }

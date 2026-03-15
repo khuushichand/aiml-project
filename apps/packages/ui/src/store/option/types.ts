@@ -5,6 +5,10 @@ import type { RagPinnedResult } from "@/utils/rag-format"
 import type { ToolCall, ToolCallResult } from "@/types/tool-calls"
 import type { DiscoSkillComment } from "@/types/disco-skills"
 import type { MessageSteeringMode } from "@/types/message-steering"
+import type {
+  QueuedRequest,
+  QueuedRequestInput
+} from "@/utils/chat-request-queue"
 
 // Knowledge type is now server-side only; this is a placeholder for legacy compatibility
 export type Knowledge = {
@@ -140,9 +144,13 @@ export type State = {
   messageSteeringForceNarrate: boolean
   setMessageSteeringForceNarrate: (enabled: boolean) => void
   clearMessageSteering: () => void
-  queuedMessages: { message: string; image: string }[]
-  addQueuedMessage: (payload: { message: string; image: string }) => void
-  setQueuedMessages: (messages: { message: string; image: string }[]) => void
+  queuedMessages: QueuedRequest[]
+  addQueuedMessage: (payload: QueuedRequestInput) => void
+  setQueuedMessages: (
+    messagesOrUpdater:
+      | QueuedRequestInput[]
+      | ((prev: QueuedRequest[]) => QueuedRequestInput[])
+  ) => void
   clearQueuedMessages: () => void
   selectedKnowledge: Knowledge | null
   setSelectedKnowledge: (selectedKnowledge: Knowledge) => void
@@ -189,8 +197,24 @@ export type State = {
   setServerChatTitle: (title: string | null) => void
   serverChatCharacterId: string | number | null
   setServerChatCharacterId: (id: string | number | null) => void
+  serverChatAssistantKind: "character" | "persona" | null
+  setServerChatAssistantKind: (
+    kind: "character" | "persona" | null
+  ) => void
+  serverChatAssistantId: string | null
+  setServerChatAssistantId: (id: string | null) => void
+  serverChatPersonaMemoryMode: "read_only" | "read_write" | null
+  setServerChatPersonaMemoryMode: (
+    mode: "read_only" | "read_write" | null
+  ) => void
   serverChatMetaLoaded: boolean
   setServerChatMetaLoaded: (loaded: boolean) => void
+  serverChatLoadState: "idle" | "loading" | "loaded" | "failed"
+  setServerChatLoadState: (
+    state: "idle" | "loading" | "loaded" | "failed"
+  ) => void
+  serverChatLoadError: string | null
+  setServerChatLoadError: (error: string | null) => void
   serverChatState: ConversationState | null
   setServerChatState: (state: ConversationState | null) => void
   serverChatVersion: number | null

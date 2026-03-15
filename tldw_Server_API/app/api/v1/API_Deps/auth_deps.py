@@ -1653,22 +1653,33 @@ def _consume_auth_deps_fallback_rate_token(
         return True, 0
 
 
-async def check_rate_limit(request: Request, rate_limiter=None) -> None:
-    """General ingress compatibility shim with fail-closed fallback enforcement."""
-    _ = rate_limiter
-    if _rg_enabled_for_request(request):
-        return
-
-    endpoint = request.url.path if getattr(request, "url", None) else "unknown"
-
-    principal = None
+def _auth_deps_request_principal(request: Request) -> AuthPrincipal | None:
+    """Best-effort principal lookup from request state."""
     try:
         ctx = getattr(request.state, "auth", None)
         if isinstance(ctx, AuthContext):
-            principal = ctx.principal
+            return ctx.principal
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-        principal = None
+        return None
+    return None
 
+
+async def _enforce_auth_deps_ingress_guard(
+    *,
+    request: Request,
+    dependency: str,
+    endpoint: str,
+    fallback_limit_env: str,
+    fallback_window_env: str,
+    fallback_limit_default: int,
+    fallback_window_default: float,
+    limit_exceeded_detail: str,
+) -> None:
+    """Apply fail-closed ingress fallback limits when RG policy metadata is absent."""
+    if _rg_enabled_for_request(request):
+        return
+
+    principal = _auth_deps_request_principal(request)
     if is_single_user_principal(principal):
         return
 
@@ -1680,18 +1691,19 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     try:
-        fallback_limit = _read_non_negative_int_env("AUTH_DEPS_FALLBACK_RATE_LIMIT", 120)
-        fallback_window = _read_non_negative_float_env("AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS", 60.0)
+        fallback_limit = _read_non_negative_int_env(fallback_limit_env, fallback_limit_default)
+        fallback_window = _read_non_negative_float_env(fallback_window_env, fallback_window_default)
         identifier = _auth_deps_rate_limit_identifier(request, endpoint)
         allowed, retry_after = _consume_auth_deps_fallback_rate_token(
-            dependency="check_rate_limit",
+            dependency=dependency,
             identifier=identifier,
             limit=fallback_limit,
             window_seconds=fallback_window,
         )
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
-            "Auth dependency check_rate_limit fallback enforcement failed (endpoint={}): {}",
+            "Auth dependency {} fallback enforcement failed (endpoint={}): {}",
+            dependency,
             endpoint,
             exc,
         )
@@ -1703,64 +1715,41 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded for endpoint: {endpoint}",
+            detail=limit_exceeded_detail,
             headers={"Retry-After": str(retry_after)},
         )
+
+
+async def check_rate_limit(request: Request, rate_limiter=None) -> None:
+    """General ingress rate-limit guard with fail-closed fallback enforcement."""
+    _ = rate_limiter
+    endpoint = request.url.path if getattr(request, "url", None) else "unknown"
+    await _enforce_auth_deps_ingress_guard(
+        request=request,
+        dependency="check_rate_limit",
+        endpoint=endpoint,
+        fallback_limit_env="AUTH_DEPS_FALLBACK_RATE_LIMIT",
+        fallback_window_env="AUTH_DEPS_FALLBACK_RATE_WINDOW_SECONDS",
+        fallback_limit_default=120,
+        fallback_window_default=60.0,
+        limit_exceeded_detail=f"Rate limit exceeded for endpoint: {endpoint}",
+    )
 
 
 async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
-    """Auth ingress compatibility shim with fail-closed fallback enforcement."""
+    """Auth endpoint ingress rate-limit guard with fail-closed fallback enforcement."""
     _ = rate_limiter
-    if _rg_enabled_for_request(request):
-        return
-
     endpoint = request.url.path if getattr(request, "url", None) else "auth"
-
-    principal = None
-    try:
-        ctx = getattr(request.state, "auth", None)
-        if isinstance(ctx, AuthContext):
-            principal = ctx.principal
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-        principal = None
-
-    if is_single_user_principal(principal):
-        return
-
-    # Claim-first governor hook (primarily for test invariants)
-    await get_auth_governor()
-
-    # In test mode, bypass rate limiting entirely for deterministic tests.
-    if _is_test_mode():
-        return
-
-    try:
-        fallback_limit = _read_non_negative_int_env("AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT", 30)
-        fallback_window = _read_non_negative_float_env("AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS", 60.0)
-        identifier = _auth_deps_rate_limit_identifier(request, endpoint)
-        allowed, retry_after = _consume_auth_deps_fallback_rate_token(
-            dependency="check_auth_rate_limit",
-            identifier=identifier,
-            limit=fallback_limit,
-            window_seconds=fallback_window,
-        )
-    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(
-            "Auth dependency check_auth_rate_limit fallback enforcement failed (endpoint={}): {}",
-            endpoint,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Rate limiting temporarily unavailable",
-        ) from exc
-
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Auth rate limit exceeded for endpoint: {endpoint}",
-            headers={"Retry-After": str(retry_after)},
-        )
+    await _enforce_auth_deps_ingress_guard(
+        request=request,
+        dependency="check_auth_rate_limit",
+        endpoint=endpoint,
+        fallback_limit_env="AUTH_DEPS_AUTH_FALLBACK_RATE_LIMIT",
+        fallback_window_env="AUTH_DEPS_AUTH_FALLBACK_RATE_WINDOW_SECONDS",
+        fallback_limit_default=30,
+        fallback_window_default=60.0,
+        limit_exceeded_detail=f"Auth rate limit exceeded for endpoint: {endpoint}",
+    )
 
 
 # ---------------------------------------------------------------------------------

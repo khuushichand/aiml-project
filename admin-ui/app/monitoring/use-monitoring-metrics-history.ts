@@ -1,17 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  buildSyntheticMonitoringMetricsHistory,
-  extractAdditionalMetricSnapshot,
   normalizeMonitoringMetricsPayload,
   resolveMonitoringRangeParams,
   type MonitoringTimeRangeOption,
 } from '@/lib/monitoring-metrics';
 import type { MetricsHistoryPoint } from './types';
-
-interface HealthMetricsResponse {
-  cpu?: { percent?: number };
-  memory?: { percent?: number };
-}
 
 export type MonitoringMetricsApiClient = {
   getMonitoringMetrics: (params: {
@@ -19,8 +12,6 @@ export type MonitoringMetricsApiClient = {
     end: string;
     granularity: string;
   }) => Promise<unknown>;
-  getHealthMetrics: () => Promise<unknown>;
-  getMetrics: () => Promise<unknown>;
 };
 
 type UseMonitoringMetricsHistoryArgs = {
@@ -62,8 +53,8 @@ export const useMonitoringMetricsHistory = ({
 
   const loadMetricsHistoryForRange = useCallback(async (
     selectedRange: MonitoringTimeRangeOption,
-    customStart: string,
-    customEnd: string
+    customStart = customRangeStart,
+    customEnd = customRangeEnd
   ): Promise<boolean> => {
     const resolvedRange = resolveMonitoringRangeParams(selectedRange, customStart, customEnd);
     if (!resolvedRange.ok) {
@@ -88,38 +79,11 @@ export const useMonitoringMetricsHistory = ({
       }
       throw new Error('No monitoring metrics history returned');
     } catch (historyErr: unknown) {
-      console.warn('Failed to load monitoring metrics history endpoint, using fallback sample.', historyErr);
-      try {
-        const [healthResult, metricsResult] = await Promise.allSettled([
-          apiClient.getHealthMetrics(),
-          apiClient.getMetrics(),
-        ]);
-        const healthPayload = healthResult.status === 'fulfilled'
-          ? (healthResult.value as HealthMetricsResponse)
-          : {};
-        const metricsPayload = metricsResult.status === 'fulfilled' ? metricsResult.value : {};
-        const additional = extractAdditionalMetricSnapshot(metricsPayload);
-        const cpu = Number(healthPayload?.cpu?.percent ?? 0);
-        const memory = Number(healthPayload?.memory?.percent ?? 0);
-        const fallbackHistory = buildSyntheticMonitoringMetricsHistory(
-          {
-            cpu,
-            memory,
-            diskUsage: additional.diskUsage,
-            throughput: additional.throughput,
-            activeConnections: additional.activeConnections,
-            queueDepth: additional.queueDepth,
-          },
-          rangeParams
-        );
-        setMetricsHistory(fallbackHistory);
-      } catch (fallbackErr: unknown) {
-        console.warn('Failed to load fallback metrics history:', fallbackErr);
-        setMetricsHistory([]);
-      }
+      console.warn('Failed to load monitoring metrics history endpoint.', historyErr);
+      setMetricsHistory([]);
       return false;
     }
-  }, [apiClient]);
+  }, [apiClient, customRangeEnd, customRangeStart]);
 
   useEffect(() => {
     void loadMetricsHistoryForRange(timeRange, customRangeStart, customRangeEnd);

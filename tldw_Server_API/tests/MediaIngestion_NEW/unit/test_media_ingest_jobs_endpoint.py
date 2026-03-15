@@ -52,12 +52,14 @@ def test_submit_media_ingest_jobs_creates_one_job_per_item(
         payload,
         owner_user_id,
         project_id=None,
+        batch_group=None,
         priority=5,
         max_retries=3,
         available_at=None,
         idempotency_key=None,
         request_id=None,
         trace_id=None,
+        **_kwargs,
     ):
         captured.append(
             {
@@ -66,6 +68,7 @@ def test_submit_media_ingest_jobs_creates_one_job_per_item(
                 "job_type": job_type,
                 "payload": payload,
                 "owner_user_id": owner_user_id,
+                "batch_group": batch_group,
                 "request_id": request_id,
                 "trace_id": trace_id,
             }

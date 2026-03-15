@@ -108,6 +108,9 @@ from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     sanitize_sender_name,
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
+from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
+    assemble_persona_exemplar_prompt,
+)
 
 # Chat helpers and utilities
 # For chat completions
@@ -399,9 +402,17 @@ def _convert_db_conversation_to_response(
     settings: Optional[dict[str, Any]] = None,
 ) -> ChatSessionResponse:
     """Convert database conversation to response model."""
+    character_id = conv_data.get('character_id')
+    assistant_kind = conv_data.get('assistant_kind') or ("character" if character_id is not None else None)
+    assistant_id = conv_data.get('assistant_id')
+    if assistant_id is None and character_id is not None:
+        assistant_id = str(character_id)
     return ChatSessionResponse(
         id=conv_data.get('id', ''),
-        character_id=conv_data.get('character_id', 0),
+        character_id=character_id,
+        assistant_kind=assistant_kind,
+        assistant_id=assistant_id,
+        persona_memory_mode=conv_data.get('persona_memory_mode'),
         title=conv_data.get('title'),
         rating=conv_data.get('rating'),
         state=conv_data.get('state', 'in-progress'),
@@ -2041,7 +2052,7 @@ async def create_chat_session(
     alternate_index: Optional[int] = Query(None, ge=0, description="Index for alternate greeting when greeting_strategy=alternate_index"),
 ):
     """
-    Create a new chat session with a character.
+    Create a new chat session with a character or persona assistant identity.
 
     Args:
         session_data: Chat session creation data
@@ -2081,13 +2092,26 @@ async def create_chat_session(
                 detail="Quota enforcement unavailable. Please try again later."
             ) from e
 
-        # Verify character exists
-        character = db.get_character_card_by_id(session_data.character_id)
-        if not character:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Character with ID {session_data.character_id} not found"
-            )
+        character: dict[str, Any] | None = None
+        persona_profile: dict[str, Any] | None = None
+        assistant_display_name = "Assistant"
+
+        if session_data.assistant_kind == "persona":
+            persona_profile = db.get_persona_profile(session_data.assistant_id or "", user_id=str(current_user.id))
+            if not persona_profile:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Persona with ID {session_data.assistant_id} not found",
+                )
+            assistant_display_name = persona_profile.get("name") or assistant_display_name
+        else:
+            character = db.get_character_card_by_id(session_data.character_id)
+            if not character:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Character with ID {session_data.character_id} not found"
+                )
+            assistant_display_name = character.get("name") or assistant_display_name
 
         # Validate parent conversation (if any) for ownership and root lineage
         parent_conversation = None
@@ -2121,12 +2145,15 @@ async def create_chat_session(
         # Generate chat ID and title
         chat_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        title = session_data.title or f"{character['name']} Chat ({timestamp})"
+        title = session_data.title or f"{assistant_display_name} Chat ({timestamp})"
 
         # Create conversation data
         conv_data = {
             'id': chat_id,
             'character_id': session_data.character_id,
+            'assistant_kind': session_data.assistant_kind,
+            'assistant_id': session_data.assistant_id,
+            'persona_memory_mode': session_data.persona_memory_mode,
             'title': title,
             'root_id': parent_root_id or chat_id,  # Inherit root for forks
             'parent_conversation_id': validated_parent_id,
@@ -2138,6 +2165,8 @@ async def create_chat_session(
             'cluster_id': session_data.cluster_id,
             'source': session_data.source,
             'external_ref': session_data.external_ref,
+            'scope_type': session_data.scope_type or 'global',
+            'workspace_id': session_data.workspace_id,
         }
 
         # Add to database
@@ -2158,7 +2187,7 @@ async def create_chat_session(
 
         # Optionally seed the chat with a greeting (first_message or alternate)
         seed_status: Optional[str] = None
-        if seed_first_message:
+        if seed_first_message and character is not None:
             try:
                 raw_name = character.get('name') or 'Assistant'
                 choice_text: Optional[str] = None
@@ -2191,21 +2220,24 @@ async def create_chat_session(
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as _seed_err:
                 seed_status = "failed"
                 logger.warning(f"Failed to seed first message for chat {created_id}: {_seed_err}")
+        elif seed_first_message:
+            seed_status = "no_greeting"
 
         # Persist a greetings checksum so staleness can be detected later.
-        try:
-            checksum = _compute_greetings_checksum(character)
-            updated_settings = db.upsert_conversation_settings(
-                created_id,
-                {"greetingsChecksum": checksum},
-            )
-            # Keep optimistic-locking version in response in sync with DB.
-            if updated_settings:
-                latest_conv = db.get_conversation_by_id(created_id)
-                if isinstance(latest_conv, dict):
-                    created_conv = latest_conv
-        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-            pass  # best-effort; staleness detection degrades gracefully
+        if character is not None:
+            try:
+                checksum = _compute_greetings_checksum(character)
+                updated_settings = db.upsert_conversation_settings(
+                    created_id,
+                    {"greetingsChecksum": checksum},
+                )
+                # Keep optimistic-locking version in response in sync with DB.
+                if updated_settings:
+                    latest_conv = db.get_conversation_by_id(created_id)
+                    if isinstance(latest_conv, dict):
+                        created_conv = latest_conv
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                pass  # best-effort; staleness detection degrades gracefully
 
         if response is not None and seed_status is not None:
             try:
@@ -2214,7 +2246,13 @@ async def create_chat_session(
                 logger.debug("Failed to set X-Chat-Seed-Status header: {}", exc)
 
         # Log creation
-        logger.info(f"Created chat session {created_id} for character {session_data.character_id} by user {current_user.id}")
+        logger.info(
+            "Created chat session {} for {} {} by user {}",
+            created_id,
+            session_data.assistant_kind,
+            session_data.assistant_id,
+            current_user.id,
+        )
 
         return _convert_db_conversation_to_response(created_conv)
 
@@ -2826,6 +2864,34 @@ _CONTRADICTORY_DIRECTIVE_PAIRS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def _build_persona_preview_sections(
+    *,
+    conversation: dict[str, Any],
+    exemplars: list[dict[str, Any]],
+    requested_scenario_tags: list[str] | None = None,
+    requested_tone: str | None = None,
+    current_turn_text: str | None = None,
+    conflicting_capability_tags: list[str] | None = None,
+) -> list[tuple[str, str, int]]:
+    """Build persona exemplar preview sections using the shared assembly helper."""
+    if conversation.get("assistant_kind") != "persona":
+        return []
+
+    persona_id = str(conversation.get("assistant_id") or "").strip()
+    if not persona_id:
+        return []
+
+    assembly = assemble_persona_exemplar_prompt(
+        persona_id=persona_id,
+        exemplars=exemplars,
+        requested_scenario_tags=requested_scenario_tags,
+        requested_tone=requested_tone,
+        current_turn_text=current_turn_text,
+        conflicting_capability_tags=conflicting_capability_tags,
+    )
+    return assembly.sections
+
+
 def _estimate_tokens(text: str) -> int:
     """Rough token estimate: ~4 chars per token for English text."""
     if not text:
@@ -3075,6 +3141,29 @@ async def prompt_assembly_preview(
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             pass
 
+        persona_preview_sections: list[tuple[str, str, int]] = []
+        if conversation.get("assistant_kind") == "persona" and conversation.get("assistant_id"):
+            persona_preview_sections = _build_persona_preview_sections(
+                conversation=conversation,
+                exemplars=db.list_persona_exemplars(
+                    user_id=str(current_user.id),
+                    persona_id=str(conversation.get("assistant_id")),
+                    include_disabled=False,
+                    include_deleted=False,
+                    limit=50,
+                    offset=0,
+                ),
+                current_turn_text=body.append_user_message or next(
+                    (
+                        str(message.get("content") or "").strip()
+                        for message in reversed(formatted)
+                        if str(message.get("role") or "").strip().lower() == "user"
+                        and str(message.get("content") or "").strip()
+                    ),
+                    "",
+                ),
+            )
+
         sections_raw: list[tuple[str, str, int]] = [
             ("preset", sys_text, _TOKEN_BUDGET_PRESET),
             ("author_note", author_note_text, _TOKEN_BUDGET_AUTHOR_NOTE),
@@ -3082,6 +3171,7 @@ async def prompt_assembly_preview(
             ("greeting", greeting_text, _TOKEN_BUDGET_GREETING),
             ("lorebook", lorebook_text, _TOKEN_BUDGET_LOREBOOK),
         ]
+        sections_raw.extend(persona_preview_sections)
         sections: list[dict[str, Any]] = []
         total_supplemental_tokens = 0
         total_supplemental_effective_tokens = 0
@@ -3975,6 +4065,10 @@ async def character_chat_completion(
             summary="List user's chat sessions", tags=["Chat Sessions"])
 async def list_chat_sessions(
     character_id: Optional[int] = Query(None, description="Filter by character ID"),
+    character_scope: Literal["all", "character", "non_character"] = Query(
+        "all",
+        description="Filter chats by whether they are character-backed or not",
+    ),
     limit: int = Query(50, ge=1, le=200, description="Number of items to return"),
     offset: int = Query(0, ge=0, description="Number of items to skip"),
     include_deleted: bool = Query(False, description="Include soft-deleted chats"),
@@ -3982,6 +4076,12 @@ async def list_chat_sessions(
     include_settings: bool = Query(
         False,
         description="Include per-chat settings payload for each returned chat.",
+    ),
+    scope_type: Optional[Literal["global", "workspace"]] = Query(None, description="Scope filter: 'global' or 'workspace'"),
+    workspace_id: Optional[str] = Query(None, description="Workspace ID (required when scope_type='workspace')"),
+    include_message_counts: bool = Query(
+        True,
+        description="Include message counts for each returned chat.",
     ),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
@@ -4002,7 +4102,13 @@ async def list_chat_sessions(
     try:
         user_id_str = str(current_user.id)
         include_deleted_effective = include_deleted or deleted_only
-        if character_id:
+        if character_id is not None and character_scope == "non_character":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="character_scope=non_character cannot be combined with character_id",
+            )
+
+        if character_id is not None:
             # Get conversations for specific character scoped to current user
             conversations = db.get_conversations_for_user_and_character(
                 user_id_str,
@@ -4012,6 +4118,13 @@ async def list_chat_sessions(
                 include_deleted=include_deleted_effective,
                 deleted_only=deleted_only,
             )
+            # Post-filter by scope when character-scoped query is used
+            if scope_type:
+                conversations = [
+                    c for c in conversations
+                    if c.get("scope_type") == scope_type
+                    and (scope_type != "workspace" or c.get("workspace_id") == workspace_id)
+                ]
             try:
                 total_count = db.count_conversations_for_user_by_character(
                     user_id_str,
@@ -4019,6 +4132,8 @@ async def list_chat_sessions(
                     include_deleted=include_deleted_effective,
                     deleted_only=deleted_only,
                 )
+                if scope_type:
+                    total_count = len(conversations)
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fallback: filter by client_id in-memory if efficient count isn't available
                 total_count = len([c for c in conversations if c.get('client_id') == user_id_str])
@@ -4030,13 +4145,21 @@ async def list_chat_sessions(
                 offset=offset,
                 include_deleted=include_deleted_effective,
                 deleted_only=deleted_only,
+                scope_type=scope_type,
+                workspace_id=workspace_id,
+                character_scope=character_scope,
             )
             try:
                 total_count = db.count_conversations_for_user(
                     user_id_str,
                     include_deleted=include_deleted_effective,
                     deleted_only=deleted_only,
+                    character_scope=character_scope,
+                    scope_type=scope_type,
+                    workspace_id=workspace_id,
                 )
+                if scope_type:
+                    total_count = len(conversations)
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 total_count = len(conversations)
 
@@ -4048,17 +4171,34 @@ async def list_chat_sessions(
 
         # Note: pagination was already applied at DB level, no need to slice again
 
-        # Add message counts using efficient counter
-        for conv in user_conversations:
-            try:
-                # Deleted chats don't need message counts for listing performance.
+        if include_message_counts:
+            message_counts: dict[str, int] = {}
+            countable_conversation_ids = [
+                str(conv["id"])
+                for conv in user_conversations
+                if conv.get("id") and not conv.get("deleted")
+            ]
+            if countable_conversation_ids:
+                try:
+                    message_counts = db.count_messages_for_conversations(countable_conversation_ids)
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                    message_counts = {}
+
+            for conv in user_conversations:
                 if conv.get("deleted"):
-                    conv['message_count'] = 0
-                else:
-                    conv['message_count'] = db.count_messages_for_conversation(conv['id'])
-            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-                messages = db.get_messages_for_conversation(conv['id'], limit=1000)
-                conv['message_count'] = len(messages) if messages else 0
+                    conv["message_count"] = 0
+                    continue
+
+                conv_id = conv.get("id")
+                if conv_id in message_counts:
+                    conv["message_count"] = message_counts.get(conv_id, 0)
+                    continue
+
+                messages = db.get_messages_for_conversation(conv["id"], limit=1000)
+                conv["message_count"] = len(messages) if messages else 0
+        else:
+            for conv in user_conversations:
+                conv["message_count"] = None
 
         chats: list[ChatSessionResponse] = []
         for conv in user_conversations:
@@ -4080,6 +4220,8 @@ async def list_chat_sessions(
             offset=offset
         )
 
+    except HTTPException:
+        raise
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error listing chat sessions: {e}", exc_info=True)
         raise HTTPException(

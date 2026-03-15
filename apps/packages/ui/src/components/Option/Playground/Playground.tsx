@@ -1,6 +1,7 @@
 import React from "react"
 import { PlaygroundForm } from "./PlaygroundForm"
-import { PlaygroundChat } from "./PlaygroundChat"
+import { PlaygroundChat, type PlaygroundChatHandle } from "./PlaygroundChat"
+import { ChatErrorBoundary } from "@/components/Common/Playground/ChatErrorBoundary"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { usePlaygroundSessionPersistence } from "@/hooks/usePlaygroundSessionPersistence"
 import { shouldRestorePersistedPlaygroundSession } from "@/hooks/playground-session-restore"
@@ -8,12 +9,13 @@ import { webUIResumeLastChat } from "@/services/app"
 import {
   formatToChatHistory,
   formatToMessage,
+  getHistoryByServerChatId,
   getPromptById,
   getRecentChatFromWebUI
 } from "@/db/dexie/helpers"
 import { useStoreChatModelSettings } from "@/store/model"
 import { useSmartScroll } from "@/hooks/useSmartScroll"
-import { ChevronDown, Keyboard, Search, X } from "lucide-react"
+import { ChevronDown, ClipboardList, Keyboard, Search, X } from "lucide-react"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { useTranslation } from "react-i18next"
@@ -38,6 +40,16 @@ import {
   collectThreadSearchMatches,
   getWrappedMatchIndex
 } from "./playground-thread-search"
+import {
+  SETTINGS_HISTORY_ID_PARAM,
+  SETTINGS_SERVER_CHAT_ID_PARAM
+} from "@/utils/settings-return"
+import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
+import { useNavigate } from "react-router-dom"
+
+const toText = (value: unknown): string =>
+  typeof value === "string" ? value : String(value)
+
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
   const artifactsTriggerRef = React.useRef<HTMLButtonElement>(null)
@@ -46,6 +58,7 @@ export const Playground = () => {
   const shortcutsCloseRef = React.useRef<HTMLButtonElement>(null)
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([])
   const { t } = useTranslation(["playground", "common"])
+  const navigate = useNavigate()
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const [stickyChatInput] = useStorage(
     "stickyChatInput",
@@ -75,12 +88,14 @@ export const Playground = () => {
   const { setSystemPrompt } = useStoreChatModelSettings()
   const { containerRef, isAutoScrollToBottom, autoScrollToBottom } =
     useSmartScroll(messages, streaming, 120)
+  const playgroundChatRef = React.useRef<PlaygroundChatHandle>(null)
 
   const [dropState, setDropState] = React.useState<
     "idle" | "dragging" | "error"
   >("idle")
   const [threadSearchOpen, setThreadSearchOpen] = React.useState(false)
   const [threadSearchQuery, setThreadSearchQuery] = React.useState("")
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = React.useState("")
   const [threadSearchActiveIndex, setThreadSearchActiveIndex] = React.useState(0)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = React.useState(false)
   const [dropFeedback, setDropFeedback] = React.useState<
@@ -94,6 +109,19 @@ export const Playground = () => {
     ReturnType<typeof setTimeout> | null
   >(null)
   const initializePlaygroundRef = React.useRef(false)
+  const setRouteContext = useChatSurfaceCoordinatorStore(
+    (state) => state.setRouteContext
+  )
+
+  React.useEffect(() => {
+    setRouteContext({ routeId: "chat", surface: "webui" })
+  }, [setRouteContext])
+
+  // Debounce search query to avoid running collectThreadSearchMatches on every keystroke
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchQuery(threadSearchQuery), 200)
+    return () => clearTimeout(timer)
+  }, [threadSearchQuery])
 
   const showDropFeedback = React.useCallback(
     (feedback: { type: "info" | "error" | "warning"; message: string }) => {
@@ -226,6 +254,7 @@ export const Playground = () => {
   // Session persistence for draft restoration
   const {
     restoreSession,
+    sessionScopeReady,
     hasPersistedSession,
     persistedHistoryId,
     persistedServerChatId
@@ -294,7 +323,7 @@ export const Playground = () => {
   ])
 
   React.useEffect(() => {
-    if (initializePlaygroundRef.current) {
+    if (!sessionScopeReady || initializePlaygroundRef.current) {
       return
     }
     initializePlaygroundRef.current = true
@@ -309,7 +338,7 @@ export const Playground = () => {
     return () => {
       cancelled = true
     }
-  }, [initializePlayground])
+  }, [initializePlayground, sessionScopeReady])
 
   useCharacterGreeting({
     playgroundReady,
@@ -350,10 +379,87 @@ export const Playground = () => {
     }
   )
 
+  const settingsReturnContext = React.useMemo(() => {
+    if (typeof window === "undefined") {
+      return { historyId: null as string | null, serverChatId: null as string | null }
+    }
+    const params = new URLSearchParams(window.location.search)
+    const historyId = params.get(SETTINGS_HISTORY_ID_PARAM)?.trim() || null
+    const serverChatId =
+      params.get(SETTINGS_SERVER_CHAT_ID_PARAM)?.trim() || null
+    return { historyId, serverChatId }
+  }, [])
+
+  const returnHistoryIdFromSettings = settingsReturnContext.historyId
+  const returnServerChatIdFromSettings = settingsReturnContext.serverChatId
+
+  React.useEffect(() => {
+    if (!playgroundReady) return
+    if (!returnHistoryIdFromSettings && !returnServerChatIdFromSettings) return
+
+    let cancelled = false
+
+    const restoreFromSettingsReturnTarget = async () => {
+      if (
+        returnHistoryIdFromSettings &&
+        returnHistoryIdFromSettings !== historyId
+      ) {
+        await loadLocalConversation(returnHistoryIdFromSettings)
+      } else if (
+        !returnHistoryIdFromSettings &&
+        returnServerChatIdFromSettings &&
+        returnServerChatIdFromSettings !== serverChatId
+      ) {
+        const existingHistory = await getHistoryByServerChatId(
+          returnServerChatIdFromSettings
+        )
+        const fallbackHistoryId =
+          existingHistory?.id && existingHistory.id.trim().length > 0
+            ? existingHistory.id
+            : null
+        if (fallbackHistoryId) {
+          await loadLocalConversation(fallbackHistoryId)
+        }
+      }
+
+      if (cancelled) return
+
+      if (
+        returnServerChatIdFromSettings &&
+        returnServerChatIdFromSettings !== serverChatId
+      ) {
+        setServerChatId(returnServerChatIdFromSettings)
+      }
+
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href)
+        url.searchParams.delete(SETTINGS_HISTORY_ID_PARAM)
+        url.searchParams.delete(SETTINGS_SERVER_CHAT_ID_PARAM)
+        const nextQuery = url.searchParams.toString()
+        const nextPath = `${url.pathname}${nextQuery ? `?${nextQuery}` : ""}${url.hash}`
+        window.history.replaceState(window.history.state, "", nextPath)
+      }
+    }
+
+    void restoreFromSettingsReturnTarget()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    historyId,
+    loadLocalConversation,
+    playgroundReady,
+    returnHistoryIdFromSettings,
+    returnServerChatIdFromSettings,
+    serverChatId,
+    setServerChatId
+  ])
+
   const pendingTimelineActionRef = React.useRef<TimelineActionDetail | null>(null)
   const threadSearchMatches = React.useMemo(
-    () => collectThreadSearchMatches(messages, threadSearchQuery),
-    [messages, threadSearchQuery]
+    () => collectThreadSearchMatches(messages, debouncedSearchQuery),
+    [messages, debouncedSearchQuery]
   )
   const threadSearchMatchSet = React.useMemo(
     () => new Set(threadSearchMatches),
@@ -393,6 +499,9 @@ export const Playground = () => {
   )
   const scrollToMessageIndex = React.useCallback(
     (index: number) => {
+      // Prefer imperative handle — works with virtualized off-screen messages
+      if (playgroundChatRef.current?.scrollToBlockByMessageIndex(index)) return true
+      // Fallback to DOM query
       const container = containerRef.current
       if (!container) return false
       const target = container.querySelector<HTMLElement>(`[data-index="${index}"]`)
@@ -553,19 +662,25 @@ export const Playground = () => {
   const branchForkPointLabel = React.useMemo(() => {
     if (!parentMeta?.parentHistoryId) return null
     if (parentMeta.clusterId) {
-      return t("playground:branching.forkPointCluster", "Fork point: {{cluster}}", {
-        cluster: parentMeta.clusterId
-      } as any)
+      return toText(
+        t("playground:branching.forkPointCluster", "Fork point: {{cluster}}", {
+          cluster: parentMeta.clusterId
+        } as any)
+      )
     }
-    return t("playground:branching.forkPointParent", "Fork point: {{historyId}}", {
-      historyId: parentMeta.parentHistoryId
-    } as any)
+    return toText(
+      t("playground:branching.forkPointParent", "Fork point: {{historyId}}", {
+        historyId: parentMeta.parentHistoryId
+      } as any)
+    )
   }, [parentMeta?.clusterId, parentMeta?.parentHistoryId, t])
   const branchDepthLabel = React.useMemo(() => {
     if (branchDepth <= 0) return null
-    return t("playground:branching.depth", "Depth {{depth}}", {
-      depth: branchDepth
-    } as any)
+    return toText(
+      t("playground:branching.depth", "Depth {{depth}}", {
+        depth: branchDepth
+      } as any)
+    )
   }, [branchDepth, t])
   const compareActive = compareFeatureEnabled && compareMode
   const compactFeatureNoticeVisible =
@@ -575,10 +690,10 @@ export const Playground = () => {
     activeArtifact && artifactsPinned ? 1 : 0
   const artifactHistoryCount = artifactHistory.length
   const artifactBadgeLabel = artifactsOpen
-    ? t("playground:regions.artifactsOpen", "Artifacts panel open")
+    ? toText(t("playground:regions.artifactsOpen", "Artifacts panel open"))
     : activeArtifact
-      ? t("playground:regions.artifactsAvailable", "Artifacts ready")
-      : t("playground:regions.artifactsClosed", "Artifacts panel closed")
+      ? toText(t("playground:regions.artifactsAvailable", "Artifacts ready"))
+      : toText(t("playground:regions.artifactsClosed", "Artifacts panel closed"))
   const closeArtifactsWithFocusReturn = React.useCallback(() => {
     closeArtifacts()
     requestAnimationFrame(() => {
@@ -853,11 +968,26 @@ export const Playground = () => {
             </div>
           )}
           <div className="px-4 pt-2">
-            <div className="mx-auto flex w-full max-w-[52rem] items-center justify-between text-[11px] text-text-muted">
+            <div className="mx-auto flex w-full max-w-[64rem] items-center justify-between text-[11px] text-text-muted">
               <span className="inline-flex items-center rounded-full border border-border bg-surface2 px-2 py-0.5">
                 {t("playground:regions.timeline", "Conversation timeline")}
               </span>
               <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  data-testid="playground-chat-workflows-trigger"
+                  onClick={() => navigate("/chat-workflows")}
+                  title={
+                    t(
+                      "playground:shortcuts.openChatWorkflows",
+                      "Open structured chat workflows"
+                    ) as string
+                  }
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface2 px-2 py-0.5 text-text hover:bg-surface"
+                >
+                  <ClipboardList className="h-3 w-3" aria-hidden="true" />
+                  {t("playground:toolbar.chatWorkflows", "Chat Workflows")}
+                </button>
                 <button
                   ref={shortcutsTriggerRef}
                   type="button"
@@ -903,9 +1033,11 @@ export const Playground = () => {
                       data-testid="playground-artifacts-unread"
                       className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-white"
                     >
-                      {t("playground:regions.artifactsNew", "New {{count}}", {
-                        count: artifactUnreadCount
-                      } as any)}
+                      {toText(
+                        t("playground:regions.artifactsNew", "New {{count}}", {
+                          count: artifactUnreadCount
+                        } as any)
+                      )}
                     </span>
                   )}
                   {artifactPinnedCount > 0 && (
@@ -913,9 +1045,15 @@ export const Playground = () => {
                       data-testid="playground-artifacts-pinned"
                       className="rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] font-medium text-text-subtle"
                     >
-                      {t("playground:regions.artifactsPinned", "Pinned {{count}}", {
-                        count: artifactPinnedCount
-                      } as any)}
+                      {toText(
+                        t(
+                          "playground:regions.artifactsPinned",
+                          "Pinned {{count}}",
+                          {
+                            count: artifactPinnedCount
+                          } as any
+                        )
+                      )}
                     </span>
                   )}
                   {artifactHistoryCount > 0 && (
@@ -923,9 +1061,11 @@ export const Playground = () => {
                       data-testid="playground-artifacts-count"
                       className="rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] text-text-subtle"
                     >
-                      {t("playground:regions.artifactsCount", "{{count}} total", {
-                        count: artifactHistoryCount
-                      } as any)}
+                      {toText(
+                        t("playground:regions.artifactsCount", "{{count}} total", {
+                          count: artifactHistoryCount
+                        } as any)
+                      )}
                     </span>
                   )}
                 </button>
@@ -937,7 +1077,7 @@ export const Playground = () => {
                 role="dialog"
                 aria-modal="false"
                 aria-label={t("playground:shortcuts.title", "Shortcuts")}
-                className="mx-auto mt-1 w-full max-w-[52rem] rounded-md border border-border bg-surface2 px-2 py-1.5 text-[11px] text-text"
+                className="mx-auto mt-1 w-full max-w-[64rem] rounded-md border border-border bg-surface2 px-2 py-1.5 text-[11px] text-text"
               >
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <span className="font-semibold">
@@ -971,7 +1111,7 @@ export const Playground = () => {
               </div>
             )}
             {threadSearchOpen && (
-              <div className="mx-auto mt-1 flex w-full max-w-[52rem] flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 px-2 py-1">
+              <div className="mx-auto mt-1 flex w-full max-w-[64rem] flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 px-2 py-1">
                 <div className="relative min-w-[200px] flex-1">
                   <Search
                     className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-subtle"
@@ -1002,18 +1142,20 @@ export const Playground = () => {
                   aria-live="polite"
                 >
                   {threadSearchMatches.length > 0
-                    ? t(
-                        "playground:search.matchCount",
-                        "{{current}} / {{total}}",
-                        {
-                          current: Math.min(
-                            threadSearchActiveIndex + 1,
-                            threadSearchMatches.length
-                          ),
-                          total: threadSearchMatches.length
-                        } as any
+                    ? toText(
+                        t(
+                          "playground:search.matchCount",
+                          "{{current}} / {{total}}",
+                          {
+                            current: Math.min(
+                              threadSearchActiveIndex + 1,
+                              threadSearchMatches.length
+                            ),
+                            total: threadSearchMatches.length
+                          } as any
+                        )
                       )
-                    : t("playground:search.noMatches", "No matches")}
+                    : toText(t("playground:search.noMatches", "No matches"))}
                 </span>
                 <button
                   type="button"
@@ -1053,7 +1195,7 @@ export const Playground = () => {
             {compactFeatureNoticeVisible && (
               <div
                 data-testid="playground-mobile-parity-notice"
-                className="mx-auto mt-1 w-full max-w-[52rem] rounded-md border border-warn/30 bg-warn/10 px-2 py-1 text-[10px] text-warn"
+                className="mx-auto mt-1 w-full max-w-[64rem] rounded-md border border-warn/30 bg-warn/10 px-2 py-1 text-[10px] text-warn"
               >
                 {t(
                   "playground:regions.compactFeatureNotice",
@@ -1069,12 +1211,16 @@ export const Playground = () => {
             aria-relevant="additions"
             aria-label={t("playground:aria.chatTranscript", "Chat messages")}
             className="custom-scrollbar flex-1 min-h-0 w-full overflow-x-hidden overflow-y-auto px-4">
-            <div className="mx-auto w-full max-w-[52rem] pb-6">
-              <PlaygroundChat
-                searchQuery={threadSearchQuery.trim()}
-                matchedMessageIndices={threadSearchMatchSet}
-                activeSearchMessageIndex={threadSearchActiveMessageIndex}
-              />
+            <div className="mx-auto w-full max-w-[64rem] pb-6">
+              <ChatErrorBoundary>
+                <PlaygroundChat
+                  ref={playgroundChatRef}
+                  searchQuery={threadSearchQuery.trim()}
+                  matchedMessageIndices={threadSearchMatchSet}
+                  activeSearchMessageIndex={threadSearchActiveMessageIndex}
+                  scrollParentRef={containerRef}
+                />
+              </ChatErrorBoundary>
             </div>
           </div>
           <div
@@ -1084,7 +1230,7 @@ export const Playground = () => {
                 : ""
             }`}
           >
-            <div className="mx-auto w-full max-w-[52rem] px-4 pt-2 text-[11px] text-text-muted">
+            <div className="mx-auto w-full max-w-[64rem] px-4 pt-2 text-[11px] text-text-muted">
               <span className="inline-flex items-center rounded-full border border-border bg-surface2 px-2 py-0.5">
                 {t("playground:regions.composer", "Composer")}
               </span>

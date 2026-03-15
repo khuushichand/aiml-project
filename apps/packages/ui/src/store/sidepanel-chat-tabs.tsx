@@ -1,6 +1,7 @@
 import { createWithEqualityFn } from "zustand/traditional"
 import type { ChatHistory, Message as ChatMessage, ToolChoice } from "@/store/option"
 import type { ConversationState } from "@/services/tldw/TldwApiClient"
+import type { QueuedRequest } from "@/utils/chat-request-queue"
 
 export type ChatModelSettingsSnapshot = {
   f16KV?: boolean
@@ -43,6 +44,11 @@ export type ChatModelSettingsSnapshot = {
   apiProvider?: string
   extraHeaders?: string
   extraBody?: string
+  llamaThinkingBudgetTokens?: number
+  llamaGrammarMode?: "none" | "library" | "inline"
+  llamaGrammarId?: string
+  llamaGrammarInline?: string
+  llamaGrammarOverride?: string
 }
 
 export type SidepanelChatSnapshot = {
@@ -63,7 +69,7 @@ export type SidepanelChatSnapshot = {
   serverChatClusterId: string | null
   serverChatSource: string | null
   serverChatExternalRef: string | null
-  queuedMessages: { message: string; image: string }[]
+  queuedMessages: QueuedRequest[]
   modelSettings: ChatModelSettingsSnapshot
 }
 
@@ -139,12 +145,15 @@ export const useSidepanelChatTabsStore = createWithEqualityFn<State>((set, get) 
       }
     }),
   setSnapshot: (tabId, snapshot) =>
-    set((state) => ({
-      snapshotsById: {
-        ...state.snapshotsById,
-        [tabId]: snapshot
+    set((state) => {
+      if (!state.tabs.some((tab) => tab.id === tabId)) return state
+      return {
+        snapshotsById: {
+          ...state.snapshotsById,
+          [tabId]: snapshot
+        }
       }
-    })),
+    }),
   getSnapshot: (tabId) => get().snapshotsById[tabId],
   togglePinned: (id) =>
     set((state) => ({

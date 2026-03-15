@@ -16,6 +16,7 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
 from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     ABTEST_JOBS_CLEANUP_TYPE,
@@ -92,6 +93,32 @@ def _load_abtest_quota(name: str) -> int | None:
         except _ABTEST_NONCRITICAL_EXCEPTIONS:
             raw = None
     return _parse_abtest_quota(raw)
+
+
+def _resolve_abtest_embedding_config(app_settings: dict[str, Any]) -> dict[str, Any]:
+    """Build embedding config for A/B runs with test-safe Chroma defaults."""
+    raw = app_settings.get("EMBEDDING_CONFIG", {})
+    embedding_config = raw.copy() if isinstance(raw, dict) else {}
+
+    base_dir = app_settings.get("USER_DB_BASE_DIR")
+    if not base_dir:
+        with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
+            base_dir = str(DatabasePaths.get_user_db_base_dir(allow_legacy_alias=True))
+    if not base_dir:
+        base_dir = "Databases/user_databases"
+    embedding_config["USER_DB_BASE_DIR"] = str(base_dir)
+
+    chroma_settings = embedding_config.get("chroma_client_settings")
+    if not isinstance(chroma_settings, dict):
+        chroma_settings = {}
+    try:
+        testing_mode = env_flag_enabled("TESTING")
+    except _ABTEST_NONCRITICAL_EXCEPTIONS:
+        testing_mode = False
+    if testing_mode:
+        chroma_settings["use_in_memory_stub"] = True
+    embedding_config["chroma_client_settings"] = chroma_settings
+    return embedding_config
 
 
 def _model_allowed(model: str, allowed_models: list[str]) -> bool:
@@ -264,8 +291,7 @@ async def build_collections_vector_only(
     Returns list of {arm_id, collection_name} for each arm.
     """
     from tldw_Server_API.app.core.config import settings as app_settings
-    embedding_config = app_settings.get("EMBEDDING_CONFIG", {}).copy()
-    embedding_config["USER_DB_BASE_DIR"] = app_settings.get("USER_DB_BASE_DIR")
+    embedding_config = _resolve_abtest_embedding_config(app_settings)
 
     manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
 
@@ -564,8 +590,7 @@ async def run_vector_search_and_score(
     Returns aggregate metrics per arm_id.
     """
     from tldw_Server_API.app.core.config import settings as app_settings
-    embedding_config = app_settings.get("EMBEDDING_CONFIG", {}).copy()
-    embedding_config["USER_DB_BASE_DIR"] = app_settings.get("USER_DB_BASE_DIR")
+    embedding_config = _resolve_abtest_embedding_config(app_settings)
     manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
 
     # Embed queries per arm
@@ -872,8 +897,7 @@ def cleanup_abtest_resources(
     from tldw_Server_API.app.core.config import settings as app_settings
 
     deleted = 0
-    embedding_config = app_settings.get("EMBEDDING_CONFIG", {}).copy()
-    embedding_config["USER_DB_BASE_DIR"] = app_settings.get("USER_DB_BASE_DIR")
+    embedding_config = _resolve_abtest_embedding_config(app_settings)
     manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
     arms = db.get_abtest_arms(test_id, created_by=created_by)
     for arm in arms:

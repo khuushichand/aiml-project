@@ -133,6 +133,28 @@ def reload_selector_guardrails_from_env() -> None:
     _selector_guardrail_limits.cache_clear()
 
 
+def _count_xpath_function_calls(expr: str) -> int:
+    """Count likely XPath function calls using a linear scan."""
+    count = 0
+    for idx, ch in enumerate(expr):
+        if ch != "(":
+            continue
+        prev = idx - 1
+        while prev >= 0 and expr[prev].isspace():
+            prev -= 1
+        if prev < 0:
+            continue
+        if not (expr[prev].isalnum() or expr[prev] in {"_", "-"}):
+            continue
+        start = prev
+        while start >= 0 and (expr[start].isalnum() or expr[start] in {"_", "-"}):
+            start -= 1
+        token = expr[start + 1 : prev + 1]
+        if token and (token[0].isalpha() or token[0] == "_"):
+            count += 1
+    return count
+
+
 def _selector_safety_error(selector: str) -> str | None:
     (
         max_selector_expr_len,
@@ -168,7 +190,7 @@ def _selector_safety_error(selector: str) -> str | None:
     if expr.count("[") > max_xpath_predicates:
         return f"selector_too_complex:predicates>{max_xpath_predicates}"
 
-    function_calls = len(re.findall(r"[A-Za-z_][A-Za-z0-9_-]*\s*\(", expr))
+    function_calls = _count_xpath_function_calls(expr)
     if function_calls > max_xpath_function_calls:
         return f"selector_too_complex:function_calls>{max_xpath_function_calls}"
 

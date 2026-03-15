@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Button,
+  Drawer,
   Form,
   Input,
   Modal,
@@ -27,7 +28,7 @@ import {
   type ServerChatSummary
 } from "@/services/tldw/TldwApiClient"
 import { fetchChatModels } from "@/services/tldw-server"
-import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download, CheckSquare, Square, Tags, X, MoreHorizontal, Star, StarOff, ExternalLink, Clock3, Columns2 } from "lucide-react"
+import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Upload as UploadIcon, Download, CheckSquare, Square, Tags, X, MoreHorizontal, Star, ExternalLink, Clock3, Columns2 } from "lucide-react"
 import { CharacterPreview } from "./CharacterPreview"
 import { CharacterGalleryCard, type GalleryCardDensity } from "./CharacterGalleryCard"
 import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
@@ -52,6 +53,7 @@ import {
   summarizeCharacterImportQueue
 } from "./import-state-model"
 import { GenerateCharacterPanel, GenerationPreviewModal } from "./GenerateCharacterPanel"
+import { ActiveFilterChips } from "./ActiveFilterChips"
 import { GenerateFieldButton } from "./GenerateFieldButton"
 import { useCharacterGeneration } from "@/hooks/useCharacterGeneration"
 import { useFormDraft, formatDraftAge } from "@/hooks/useFormDraft"
@@ -88,6 +90,7 @@ import {
   defaultCharacterStorage,
   resolveCharacterSelectionId
 } from "@/utils/default-character-preference"
+import { buildPersonaGardenRoute } from "@/utils/persona-garden-route"
 
 const MAX_NAME_LENGTH = 500
 const MAX_NAME_DISPLAY_LENGTH = 75
@@ -112,6 +115,19 @@ type CharacterListScope = "active" | "deleted"
 type TableDensity = "comfortable" | "compact" | "dense"
 type DefaultCharacterPreferenceQueryResult = {
   defaultCharacterId: string | null
+}
+type PersonaProfileSummary = {
+  id?: string | number | null
+  name?: string | null
+  character_card_id?: number | null
+  origin_character_id?: number | null
+}
+type PersonaGardenAction = "open" | "create"
+type PersonaGardenActionContext = {
+  characterId: number
+  characterName: string
+  profiles: PersonaProfileSummary[]
+  existingPersona: PersonaProfileSummary | null
 }
 const DEFAULT_ADVANCED_SECTION_STATE: AdvancedSectionState = {
   promptControl: true,
@@ -386,7 +402,7 @@ const applyCharacterFolderToTags = (
 }
 
 const countPopulatedImportFields = (record: Record<string, unknown>): number =>
-  Object.values(record).reduce((count, value) => {
+  Object.values(record).reduce<number>((count, value) => {
     if (value == null) return count
     if (typeof value === "string") {
       return value.trim().length > 0 ? count + 1 : count
@@ -3469,6 +3485,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       }),
     [importQueueItemsById, importablePreviewItems]
   )
+  const importPreviewHasSuccessfulCompletion =
+    importQueueSummary.complete && importQueueSummary.success > 0
 
   const importCharacterFile = React.useCallback(
     async (
@@ -6036,6 +6054,315 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }, 0)
   }, [setSelectedCharacter, navigate])
 
+  const pendingPersonaCreateIdsRef = React.useRef<Set<number>>(new Set())
+  const [pendingPersonaCreateIds, setPendingPersonaCreateIds] = React.useState<number[]>([])
+  const pendingPersonaCreateIdSet = React.useMemo(
+    () => new Set(pendingPersonaCreateIds),
+    [pendingPersonaCreateIds]
+  )
+
+  const getCharacterNumericId = React.useCallback((record: any): number | null => {
+    const parsed = Number(record?.id)
+    return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : null
+  }, [])
+
+  const getCharacterDisplayName = React.useCallback(
+    (record: any): string =>
+      String(record?.name || record?.title || record?.slug || "Character").trim() ||
+      "Character",
+    []
+  )
+
+  const listPersonaProfiles = React.useCallback(async (): Promise<PersonaProfileSummary[]> => {
+    const response = await tldwClient.fetchWithAuth(
+      "/api/v1/persona/profiles?limit=200" as any,
+      { method: "GET" }
+    )
+    if (!response.ok) {
+      throw new Error(response.error || "Failed to load persona profiles")
+    }
+    const payload = await response.json()
+    return Array.isArray(payload) ? (payload as PersonaProfileSummary[]) : []
+  }, [])
+
+  const findPersonaForCharacter = React.useCallback(
+    (
+      profiles: PersonaProfileSummary[],
+      characterId: number
+    ): PersonaProfileSummary | null =>
+      profiles.find((profile) => {
+        const originCharacterId = Number(profile?.origin_character_id)
+        const linkedCharacterId = Number(profile?.character_card_id)
+        return originCharacterId === characterId || linkedCharacterId === characterId
+      }) || null,
+    []
+  )
+
+  const buildSuggestedPersonaName = React.useCallback(
+    (record: any, profiles: PersonaProfileSummary[]): string => {
+      const baseName = `${getCharacterDisplayName(record)} Persona`
+      const existingNames = new Set(
+        profiles
+          .map((profile) => String(profile?.name || "").trim().toLowerCase())
+          .filter(Boolean)
+      )
+      if (!existingNames.has(baseName.toLowerCase())) {
+        return baseName
+      }
+      let suffix = 2
+      while (existingNames.has(`${baseName} ${suffix}`.toLowerCase())) {
+        suffix += 1
+      }
+      return `${baseName} ${suffix}`
+    },
+    [getCharacterDisplayName]
+  )
+
+  const setPersonaCreatePending = React.useCallback(
+    (characterId: number, pending: boolean) => {
+      const nextPendingIds = new Set(pendingPersonaCreateIdsRef.current)
+      if (pending) {
+        nextPendingIds.add(characterId)
+      } else {
+        nextPendingIds.delete(characterId)
+      }
+      pendingPersonaCreateIdsRef.current = nextPendingIds
+      setPendingPersonaCreateIds(Array.from(nextPendingIds))
+    },
+    []
+  )
+
+  const isPersonaCreatePending = React.useCallback(
+    (record: any): boolean => {
+      const characterId = getCharacterNumericId(record)
+      return characterId != null && pendingPersonaCreateIdSet.has(characterId)
+    },
+    [getCharacterNumericId, pendingPersonaCreateIdSet]
+  )
+
+  const getCreatePersonaActionLabel = React.useCallback(
+    (record: any): string =>
+      isPersonaCreatePending(record)
+        ? t("settings:manageCharacters.actions.creatingPersonaFromCharacter", {
+            defaultValue: "Creating Persona..."
+          })
+        : t("settings:manageCharacters.actions.createPersonaFromCharacter", {
+            defaultValue: "Create Persona from Character"
+          }),
+    [isPersonaCreatePending, t]
+  )
+
+  const loadPersonaGardenActionContext = React.useCallback(
+    async (
+      record: any,
+      action: PersonaGardenAction
+    ): Promise<PersonaGardenActionContext | null> => {
+      const characterId = getCharacterNumericId(record)
+      const characterName = getCharacterDisplayName(record)
+      if (characterId == null) {
+        notification.warning({
+          message: t("settings:manageCharacters.personaGarden.invalidCharacter", {
+            defaultValue: "Character missing a numeric ID"
+          }),
+          description: t(
+            "settings:manageCharacters.personaGarden.invalidCharacterDesc",
+            {
+              defaultValue:
+                action === "create"
+                  ? "Save {{name}} to the server before creating a linked persona."
+                  : "Save {{name}} to the server before opening a linked persona.",
+              name: characterName
+            }
+          )
+        })
+        return null
+      }
+      try {
+        const profiles = await listPersonaProfiles()
+        return {
+          characterId,
+          characterName,
+          profiles,
+          existingPersona: findPersonaForCharacter(profiles, characterId)
+        }
+      } catch (error: any) {
+        notification.error({
+          message: t(
+            action === "create"
+              ? "settings:manageCharacters.personaGarden.createError"
+              : "settings:manageCharacters.personaGarden.openError",
+            {
+              defaultValue:
+                action === "create"
+                  ? "Failed to create persona"
+                  : "Failed to open Persona Garden"
+            }
+          ),
+          description:
+            sanitizeServerErrorMessage(
+              error?.message,
+              t("settings:manageCharacters.notification.someError", {
+                defaultValue: "Something went wrong. Please try again later"
+              })
+            ) ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+        return null
+      }
+    },
+    [
+      findPersonaForCharacter,
+      getCharacterDisplayName,
+      getCharacterNumericId,
+      listPersonaProfiles,
+      notification,
+      t
+    ]
+  )
+
+  const openPersonaGardenForCharacter = React.useCallback(
+    async (record: any) => {
+      const context = await loadPersonaGardenActionContext(record, "open")
+      if (!context) {
+        return
+      }
+      const { characterName, existingPersona } = context
+      if (existingPersona?.id != null) {
+        navigate(
+          buildPersonaGardenRoute({
+            personaId: String(existingPersona.id),
+            tab: "profiles"
+          })
+        )
+        return
+      }
+      notification.info({
+        message: t("settings:manageCharacters.personaGarden.noneFound", {
+          defaultValue: "No linked persona yet"
+        }),
+        description: t(
+          "settings:manageCharacters.personaGarden.noneFoundDesc",
+          {
+            defaultValue:
+              "Open Persona Garden to create a persona derived from {{name}}.",
+            name: characterName
+          }
+        )
+      })
+      navigate(buildPersonaGardenRoute({ tab: "profiles" }))
+    },
+    [
+      loadPersonaGardenActionContext,
+      navigate,
+      notification,
+      t
+    ]
+  )
+
+  const createPersonaFromCharacter = React.useCallback(
+    async (record: any) => {
+      const characterId = getCharacterNumericId(record)
+      if (characterId == null || pendingPersonaCreateIdsRef.current.has(characterId)) {
+        return
+      }
+      setPersonaCreatePending(characterId, true)
+      try {
+        const context = await loadPersonaGardenActionContext(record, "create")
+        if (!context) {
+          return
+        }
+        const { characterId: resolvedCharacterId, characterName, profiles, existingPersona } =
+          context
+        if (existingPersona?.id != null) {
+          notification.info({
+            message: t("settings:manageCharacters.personaGarden.existingPersona", {
+              defaultValue: "Persona already exists"
+            }),
+            description: t(
+              "settings:manageCharacters.personaGarden.existingPersonaDesc",
+              {
+                defaultValue:
+                  "Opened the existing persona derived from {{name}}.",
+                name: characterName
+              }
+            )
+          })
+          navigate(
+            buildPersonaGardenRoute({
+              personaId: String(existingPersona.id),
+              tab: "profiles"
+            })
+          )
+          return
+        }
+
+        const personaName = buildSuggestedPersonaName(record, profiles)
+        const response = await tldwClient.fetchWithAuth("/api/v1/persona/profiles" as any, {
+          method: "POST",
+          body: {
+            name: personaName,
+            character_card_id: resolvedCharacterId,
+            mode: "persistent_scoped"
+          }
+        })
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to create persona from character")
+        }
+        const payload = await response.json()
+        const personaId = String(payload?.id || "").trim()
+        if (!personaId) {
+          throw new Error("Persona creation response missing id")
+        }
+        notification.success({
+          message: t("settings:manageCharacters.personaGarden.created", {
+            defaultValue: "Persona created"
+          }),
+          description: t("settings:manageCharacters.personaGarden.createdDesc", {
+            defaultValue:
+              "Created {{personaName}} from {{characterName}} and opened it in Persona Garden.",
+            personaName,
+            characterName
+          })
+        })
+        navigate(
+          buildPersonaGardenRoute({
+            personaId,
+            tab: "profiles"
+          })
+        )
+      } catch (error: any) {
+        notification.error({
+          message: t("settings:manageCharacters.personaGarden.createError", {
+            defaultValue: "Failed to create persona"
+          }),
+          description:
+            sanitizeServerErrorMessage(
+              error?.message,
+              t("settings:manageCharacters.notification.someError", {
+                defaultValue: "Something went wrong. Please try again later"
+              })
+            ) ||
+            t("settings:manageCharacters.notification.someError", {
+              defaultValue: "Something went wrong. Please try again later"
+            })
+        })
+      } finally {
+        setPersonaCreatePending(characterId, false)
+      }
+    },
+    [
+      buildSuggestedPersonaName,
+      getCharacterNumericId,
+      loadPersonaGardenActionContext,
+      navigate,
+      notification,
+      setPersonaCreatePending,
+      t
+    ]
+  )
+
   const handleChatInNewTab = React.useCallback(
     async (record: any) => {
       const characterSelection = buildCharacterSelectionPayload(record)
@@ -6224,6 +6551,35 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         return
       }
 
+      // Optimistic update: immediately reflect the change in the UI
+      let previousData: unknown = undefined
+      let previousPreview: any = undefined
+      try {
+        previousData = qc.getQueryData?.(["tldw:listCharacters"])
+        qc.setQueryData?.(["tldw:listCharacters"], (old: any) => {
+          if (!Array.isArray(old)) return old
+          return old.map((c: any) => {
+            const cId = String(c?.id || c?.slug || c?.name || "")
+            if (cId !== id) return c
+            return { ...c, extensions: nextExtensions ?? {} }
+          })
+        })
+      } catch {
+        // Optimistic update not available — continue with server call
+      }
+      setPreviewCharacter((current) => {
+        previousPreview = current
+        if (!current) return current
+        const currentId = String(
+          current?.id || current?.slug || current?.name || ""
+        )
+        if (currentId !== id) return current
+        return {
+          ...current,
+          extensions: nextExtensions ?? {}
+        }
+      })
+
       try {
         await tldwClient.updateCharacter(
           id,
@@ -6231,18 +6587,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           record?.version
         )
         qc.invalidateQueries({ queryKey: ["tldw:listCharacters"] })
-        setPreviewCharacter((current) => {
-          if (!current) return current
-          const currentId = String(
-            current?.id || current?.slug || current?.name || ""
-          )
-          if (currentId !== id) return current
-          return {
-            ...current,
-            extensions: nextExtensions ?? {}
-          }
-        })
       } catch (error: any) {
+        // Roll back optimistic update on failure
+        if (previousData !== undefined) {
+          try { qc.setQueryData?.(["tldw:listCharacters"], previousData) } catch { /* noop */ }
+        }
+        if (previousPreview !== undefined) {
+          setPreviewCharacter(previousPreview)
+        }
         notification.error({
           message: t("settings:manageCharacters.notification.error", {
             defaultValue: "Error"
@@ -6705,272 +7057,301 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         role="main"
         tabIndex={-1}
         aria-describedby="characters-shortcuts-summary"
-        className="space-y-4">
+        className="space-y-4"
+        onDragEnter={handleImportDragEnter}
+        onDragOver={handleImportDragOver}
+        onDragLeave={handleImportDragLeave}
+        onDrop={(event) => {
+          void handleImportDrop(event)
+        }}>
       <div id="characters-shortcuts-summary" className="sr-only">
         {`${t("settings:manageCharacters.shortcuts.title", {
           defaultValue: "Keyboard shortcuts"
         })}: ${shortcutSummaryText}`}
       </div>
       <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-          <div className="flex flex-wrap items-center gap-2">
+        {/* Primary toolbar */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* New character button + Import button */}
+          <Tooltip title="N" placement="bottom">
             <Button
               type="primary"
               ref={newButtonRef}
               onClick={openCreateModal}
-              data-testid="characters-new-button">
+              data-testid="characters-new-button"
+            >
               {t("settings:manageCharacters.addBtn", {
                 defaultValue: "New character"
               })}
             </Button>
-            <div
-              ref={importButtonContainerRef}
-              data-testid="character-import-dropzone"
-              className={`rounded-md border border-dashed px-2 py-1 transition-colors ${
-                importQueueState.dragState === "drag-over"
-                  ? "border-primary bg-primary/5"
-                  : "border-border bg-surface/40"
-              }`}
-              onDragEnter={handleImportDragEnter}
-              onDragOver={handleImportDragOver}
-              onDragLeave={handleImportDragLeave}
-              onDrop={(event) => {
-                void handleImportDrop(event)
-              }}>
-              <Upload
-                accept={IMPORT_UPLOAD_ACCEPT}
-                multiple
-                showUploadList={false}
-                beforeUpload={handleImportUpload}
-                disabled={isImportBusy}>
-                <Button loading={isImportBusy}>
-                  {t("settings:manageCharacters.import.button", {
-                    defaultValue: "Upload character"
-                  })}
-                </Button>
-              </Upload>
-              <div className="mt-1 text-[11px] text-text-subtle">
-                {t("settings:manageCharacters.import.dropHint", {
-                  defaultValue: "Drag and drop files here"
-                })}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 xl:justify-end">
-            <Tooltip
-              title={t("settings:manageCharacters.search.shortcut", {
-                defaultValue: "Press / to search"
-              })}>
-              <Input
-                ref={searchInputRef}
-                allowClear
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                data-testid="characters-search-input"
-                placeholder={t(
-                  "settings:manageCharacters.search.placeholder",
-                  {
-                    defaultValue: "Search characters"
-                  }
-                )}
-                aria-label={t("settings:manageCharacters.search.label", {
-                  defaultValue: "Search characters"
-                })}
-                className="w-full sm:w-72"
-                suffix={
-                  <span className="hidden text-xs text-text-subtle sm:inline">/</span>
-                }
-              />
-            </Tooltip>
-
-            <Segmented
-              value={characterListScope}
-              data-testid="characters-scope-segmented"
-              onChange={(value) =>
-                setCharacterListScope(value as CharacterListScope)
-              }
-              options={[
-                {
-                  value: "active",
-                  label: t("settings:manageCharacters.scope.active", {
-                    defaultValue: "Active"
-                  }),
-                  title: t("settings:manageCharacters.scope.activeTitle", {
-                    defaultValue: "Active characters"
-                  })
-                },
-                {
-                  value: "deleted",
-                  label: t("settings:manageCharacters.scope.deleted", {
-                    defaultValue: "Recently deleted"
-                  }),
-                  title: t("settings:manageCharacters.scope.deletedTitle", {
-                    defaultValue: "Soft-deleted characters"
-                  })
-                }
-              ]}
-              aria-label={t("settings:manageCharacters.scope.label", {
-                defaultValue: "Character list scope"
-              })}
-            />
-
+          </Tooltip>
+          <Tooltip title={t("settings:manageCharacters.import.button", { defaultValue: "Import" })}>
             <Button
               size="small"
-              type={advancedFiltersOpen ? "primary" : "default"}
-              icon={
-                advancedFiltersOpen ? (
-                  <ChevronUp className="h-4 w-4" />
-                ) : (
-                  <ChevronDown className="h-4 w-4" />
-                )
-              }
-              aria-expanded={advancedFiltersOpen}
-              aria-controls="characters-advanced-filters-panel"
-              onClick={() => setAdvancedFiltersOpen((prev) => !prev)}>
-              {advancedFiltersOpen
-                ? t("settings:manageCharacters.filter.hideAdvanced", {
-                    defaultValue: "Hide filters"
-                  })
-                : t("settings:manageCharacters.filter.showAdvanced", {
-                    defaultValue: "Advanced filters"
-                  })}
-              {!advancedFiltersOpen && activeAdvancedFilterCount > 0
-                ? ` (${activeAdvancedFilterCount})`
-                : ""}
-            </Button>
-
-            {hasFilters && !advancedFiltersOpen && (
-              <Button size="small" onClick={clearFilters}>
-                {t("settings:manageCharacters.filter.clear", {
-                  defaultValue: "Clear filters"
-                })}
-              </Button>
-            )}
-
-            <Segmented
-              value={viewMode}
-              data-testid="characters-view-mode-segmented"
-              onChange={(v) => setViewMode(v as "table" | "gallery")}
-              disabled={characterListScope === "deleted"}
-              options={[
-                {
-                  value: "table",
-                  icon: <List className="h-4 w-4" />,
-                  title: t("settings:manageCharacters.viewMode.table", {
-                    defaultValue: "Table view"
-                  })
-                },
-                {
-                  value: "gallery",
-                  icon: <LayoutGrid className="h-4 w-4" />,
-                  title: t("settings:manageCharacters.viewMode.gallery", {
-                    defaultValue: "Gallery view"
-                  })
-                }
-              ]}
-              aria-label={t("settings:manageCharacters.viewMode.label", {
-                defaultValue: "View mode"
+              icon={<UploadIcon className="h-4 w-4" />}
+              loading={isImportBusy}
+              onClick={triggerImportPicker}
+              aria-label={t("settings:manageCharacters.import.button", {
+                defaultValue: "Import character"
               })}
             />
+          </Tooltip>
 
-            {viewMode === "gallery" && (
-              <Segmented
-                value={galleryDensity}
-                onChange={(v) => setGalleryDensity(v as GalleryCardDensity)}
-                options={[
-                  {
-                    value: "rich",
-                    label: t("settings:manageCharacters.galleryDensity.rich", {
-                      defaultValue: "Rich"
-                    }),
-                    title: t("settings:manageCharacters.galleryDensity.richTitle", {
-                      defaultValue: "Rich gallery cards"
-                    })
-                  },
-                  {
-                    value: "compact",
-                    label: t("settings:manageCharacters.galleryDensity.compact", {
-                      defaultValue: "Compact"
-                    }),
-                    title: t("settings:manageCharacters.galleryDensity.compactTitle", {
-                      defaultValue: "Compact gallery cards"
-                    })
-                  }
-                ]}
-                aria-label={t("settings:manageCharacters.galleryDensity.label", {
-                  defaultValue: "Gallery card density"
+          {/* Hidden import dropzone — keeps Upload for triggerImportPicker + drag-and-drop */}
+          <div
+            ref={importButtonContainerRef}
+            data-testid="character-import-dropzone"
+            className="sr-only"
+          >
+            <Upload
+              accept={IMPORT_UPLOAD_ACCEPT}
+              multiple
+              showUploadList={false}
+              beforeUpload={handleImportUpload}
+              disabled={isImportBusy}>
+              <button type="button" tabIndex={-1} aria-hidden="true">
+                {t("settings:manageCharacters.import.button", {
+                  defaultValue: "Upload character"
                 })}
-              />
-            )}
-
-            {viewMode === "table" && (
-              <Segmented
-                value={tableDensity}
-                onChange={(v) => setTableDensity(v as TableDensity)}
-                options={[
-                  {
-                    value: "comfortable",
-                    label: t("settings:manageCharacters.tableDensity.comfortable", {
-                      defaultValue: "Comfortable"
-                    })
-                  },
-                  {
-                    value: "compact",
-                    label: t("settings:manageCharacters.tableDensity.compact", {
-                      defaultValue: "Compact"
-                    })
-                  },
-                  {
-                    value: "dense",
-                    label: t("settings:manageCharacters.tableDensity.dense", {
-                      defaultValue: "Dense"
-                    })
-                  }
-                ]}
-                aria-label={t("settings:manageCharacters.tableDensity.label", {
-                  defaultValue: "Table density"
-                })}
-              />
-            )}
-
-            {/* Keyboard shortcuts help (H1) */}
-            <Tooltip
-              title={
-                <div className="space-y-1 text-xs">
-                  <div className="mb-1 font-medium">
-                    {t("settings:manageCharacters.shortcuts.title", {
-                      defaultValue: "Keyboard shortcuts"
-                    })}
-                  </div>
-                  {shortcutHelpItems.map((item) => (
-                    <div key={item.id}>
-                      {item.keys.map((key, index) => (
-                        <React.Fragment key={`${item.id}-${key}-${index}`}>
-                          {index > 0 && " "}
-                          <kbd className="rounded bg-white/20 px-1">{key}</kbd>
-                        </React.Fragment>
-                      ))}{" "}
-                      {item.label}
-                    </div>
-                  ))}
-                </div>
-              }
-              placement="bottomRight"
-              trigger={["hover", "focus"]}
-              classNames={{ root: "characters-motion-overlay" }}>
-              <Button
-                type="text"
-                size="small"
-                icon={<Keyboard className="h-4 w-4" />}
-                aria-label={t("settings:manageCharacters.shortcuts.ariaLabel", {
-                  defaultValue: "Keyboard shortcuts"
-                })}
-                aria-describedby="characters-shortcuts-summary"
-              />
-            </Tooltip>
+              </button>
+            </Upload>
           </div>
+
+          {/* Search */}
+          <Tooltip
+            title={t("settings:manageCharacters.search.shortcut", {
+              defaultValue: "Press / to search"
+            })}>
+            <Input
+              ref={searchInputRef}
+              allowClear
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              data-testid="characters-search-input"
+              placeholder={t(
+                "settings:manageCharacters.search.placeholder",
+                {
+                  defaultValue: "Search characters"
+                }
+              )}
+              aria-label={t("settings:manageCharacters.search.label", {
+                defaultValue: "Search characters"
+              })}
+              className="w-full sm:w-72"
+              suffix={
+                <span className="hidden text-xs text-text-subtle sm:inline">/</span>
+              }
+            />
+          </Tooltip>
+
+          {/* View mode toggle */}
+          <Segmented
+            value={viewMode}
+            data-testid="characters-view-mode-segmented"
+            onChange={(v) => setViewMode(v as "table" | "gallery")}
+            disabled={characterListScope === "deleted"}
+            options={[
+              {
+                value: "table",
+                icon: <List className="h-4 w-4" />,
+                title: t("settings:manageCharacters.viewMode.table", {
+                  defaultValue: "Table view"
+                })
+              },
+              {
+                value: "gallery",
+                icon: <LayoutGrid className="h-4 w-4" />,
+                title: t("settings:manageCharacters.viewMode.gallery", {
+                  defaultValue: "Gallery view"
+                })
+              }
+            ]}
+            aria-label={t("settings:manageCharacters.viewMode.label", {
+              defaultValue: "View mode"
+            })}
+          />
+
+          <div className="flex-1" />
+
+          {/* Secondary controls: scope, filters, display options */}
+          <Segmented
+            value={characterListScope}
+            data-testid="characters-scope-segmented"
+            onChange={(value) =>
+              setCharacterListScope(value as CharacterListScope)
+            }
+            options={[
+              {
+                value: "active",
+                label: t("settings:manageCharacters.scope.active", {
+                  defaultValue: "Active"
+                }),
+                title: t("settings:manageCharacters.scope.activeTitle", {
+                  defaultValue: "Active characters"
+                })
+              },
+              {
+                value: "deleted",
+                label: t("settings:manageCharacters.scope.deleted", {
+                  defaultValue: "Trash"
+                }),
+                title: t("settings:manageCharacters.scope.deletedTitle", {
+                  defaultValue: "Recently deleted characters"
+                })
+              }
+            ]}
+            aria-label={t("settings:manageCharacters.scope.label", {
+              defaultValue: "Character list view"
+            })}
+          />
+
+          <Button
+            size="small"
+            type={advancedFiltersOpen ? "primary" : "default"}
+            icon={
+              advancedFiltersOpen ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )
+            }
+            aria-expanded={advancedFiltersOpen}
+            aria-controls="characters-advanced-filters-panel"
+            onClick={() => setAdvancedFiltersOpen((prev) => !prev)}>
+            {t("settings:manageCharacters.filter.showAdvanced", {
+              defaultValue: "Filters"
+            })}
+            {activeAdvancedFilterCount > 0
+              ? ` (${activeAdvancedFilterCount})`
+              : ""}
+          </Button>
+
+          {/* Display options dropdown: density + shortcuts */}
+          <Dropdown
+            menu={{
+              items: [
+                ...(viewMode === "gallery"
+                  ? [
+                      {
+                        key: "density-label",
+                        label: t("settings:manageCharacters.galleryDensity.label", {
+                          defaultValue: "Gallery card density"
+                        }),
+                        type: "group" as const,
+                        children: [
+                          {
+                            key: "rich",
+                            label: t("settings:manageCharacters.galleryDensity.rich", {
+                              defaultValue: "Rich"
+                            }),
+                            onClick: () => setGalleryDensity("rich" as GalleryCardDensity)
+                          },
+                          {
+                            key: "compact",
+                            label: t("settings:manageCharacters.galleryDensity.compact", {
+                              defaultValue: "Compact"
+                            }),
+                            onClick: () => setGalleryDensity("compact" as GalleryCardDensity)
+                          }
+                        ]
+                      }
+                    ]
+                  : [
+                      {
+                        key: "density-label",
+                        label: t("settings:manageCharacters.tableDensity.label", {
+                          defaultValue: "Table density"
+                        }),
+                        type: "group" as const,
+                        children: [
+                          {
+                            key: "comfortable",
+                            label: t("settings:manageCharacters.tableDensity.comfortable", {
+                              defaultValue: "Comfortable"
+                            }),
+                            onClick: () => setTableDensity("comfortable" as TableDensity)
+                          },
+                          {
+                            key: "compact-table",
+                            label: t("settings:manageCharacters.tableDensity.compact", {
+                              defaultValue: "Compact"
+                            }),
+                            onClick: () => setTableDensity("compact" as TableDensity)
+                          },
+                          {
+                            key: "dense",
+                            label: t("settings:manageCharacters.tableDensity.dense", {
+                              defaultValue: "Dense"
+                            }),
+                            onClick: () => setTableDensity("dense" as TableDensity)
+                          }
+                        ]
+                      }
+                    ]),
+                { type: "divider" as const },
+                {
+                  key: "shortcuts",
+                  label: t("settings:manageCharacters.shortcuts.title", {
+                    defaultValue: "Keyboard shortcuts"
+                  }),
+                  icon: <Keyboard className="h-4 w-4" />,
+                  children: shortcutHelpItems.map((item) => ({
+                    key: item.id,
+                    label: (
+                      <span>
+                        {item.keys.map((key, index) => (
+                          <React.Fragment key={`${item.id}-${key}-${index}`}>
+                            {index > 0 && " "}
+                            <kbd className="rounded bg-surface2 px-1 text-xs">{key}</kbd>
+                          </React.Fragment>
+                        ))}{" "}
+                        {item.label}
+                      </span>
+                    ),
+                    disabled: true
+                  }))
+                }
+              ]
+            }}
+            trigger={["click"]}
+          >
+            <Button
+              size="small"
+              aria-label={t("settings:manageCharacters.displayOptions", {
+                defaultValue: "Display options"
+              })}
+            >
+              {t("settings:manageCharacters.displayOptions", {
+                defaultValue: "Display"
+              })}
+              <ChevronDown className="ml-1 h-3 w-3" />
+            </Button>
+          </Dropdown>
         </div>
+
+        {/* Active filter chips — always visible when filters are set */}
+        {!advancedFiltersOpen && (
+          <ActiveFilterChips
+            filterTags={filterTags}
+            folderFilterId={folderFilterId}
+            folderLabel={selectedFolderFilterLabel}
+            creatorFilter={creatorFilter}
+            createdFromDate={createdFromDate}
+            createdToDate={createdToDate}
+            updatedFromDate={updatedFromDate}
+            updatedToDate={updatedToDate}
+            hasConversationsOnly={hasConversationsOnly}
+            favoritesOnly={favoritesOnly}
+            onRemoveTag={(tag) => setFilterTags((prev) => prev.filter((t) => t !== tag))}
+            onClearFolder={() => setFolderFilterId(undefined)}
+            onClearCreator={() => setCreatorFilter(undefined)}
+            onClearCreatedDate={() => { setCreatedFromDate(""); setCreatedToDate("") }}
+            onClearUpdatedDate={() => { setUpdatedFromDate(""); setUpdatedToDate("") }}
+            onClearConversations={() => setHasConversationsOnly(false)}
+            onClearFavorites={() => setFavoritesOnly(false)}
+            onClearAll={clearFilters}
+          />
+        )}
 
         {advancedFiltersOpen && (
           <div
@@ -7226,74 +7607,91 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         data.length === 0 &&
         characterListScope === "active" &&
         !hasFilters && (
-          <div className="space-y-3">
-            <FeatureEmptyState
-              icon={UserCircle2}
-              title={t("settings:manageCharacters.emptyTitle", {
-                defaultValue: "No characters yet"
-              })}
-              description={t("settings:manageCharacters.emptyDescription", {
-                defaultValue:
-                  "Create reusable personas you can chat with. Each character keeps its own conversation history."
-              })}
-              examples={[
-                t("settings:manageCharacters.emptyExample.writingCoach", {
-                  defaultValue: "Create a writing coach"
-                }),
-                t("settings:manageCharacters.emptyExample.sillytavernImport", {
-                  defaultValue: "Import a SillyTavern card"
-                }),
-                t("settings:manageCharacters.emptyExample.interviewPrep", {
-                  defaultValue: "Build an interview practice persona"
-                })
-              ]}
-              primaryActionLabel={t(
-                "settings:manageCharacters.emptyPrimaryCta",
-                {
-                  defaultValue: "Create character"
-                }
-              )}
-              onPrimaryAction={openCreateModal}
-              secondaryActionLabel={t("settings:manageCharacters.emptySecondaryCta", {
-                defaultValue: "Import character"
-              })}
-              onSecondaryAction={triggerImportPicker}
-              secondaryDisabled={isImportBusy}
-            />
+          <div className="space-y-4">
+            <div className="text-center">
+              <UserCircle2 className="mx-auto h-10 w-10 text-text-muted" />
+              <h3 className="mt-2 text-base font-semibold">
+                {t("settings:manageCharacters.emptyTitle", {
+                  defaultValue: "Get started with your first character"
+                })}
+              </h3>
+              <p className="mt-1 text-sm text-text-muted">
+                {t("settings:manageCharacters.emptyDescription", {
+                  defaultValue:
+                    "Create reusable personas you can chat with. Each character keeps its own conversation history."
+                })}
+              </p>
+            </div>
 
-            <div className="rounded-xl border border-border bg-surface p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {/* Create from scratch */}
+              <button
+                type="button"
+                className="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface p-4 text-center transition-all hover:border-primary hover:shadow-md"
+                onClick={openCreateModal}
+              >
+                <Pen className="h-7 w-7 text-primary" />
                 <span className="text-sm font-medium">
-                  {t("settings:manageCharacters.emptyTemplates.title", {
+                  {t("settings:manageCharacters.onboarding.createTitle", {
+                    defaultValue: "Create from scratch"
+                  })}
+                </span>
+                <span className="text-xs text-text-muted">
+                  {t("settings:manageCharacters.onboarding.createDesc", {
+                    defaultValue: "Build a custom character with your own persona and system prompt"
+                  })}
+                </span>
+              </button>
+
+              {/* Start from a template */}
+              <button
+                type="button"
+                className="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface p-4 text-center transition-all hover:border-primary hover:shadow-md"
+                onClick={() => {
+                  setShowTemplates(true)
+                  markTemplateChooserSeen()
+                  openCreateModal()
+                }}
+              >
+                <Copy className="h-7 w-7 text-primary" />
+                <span className="text-sm font-medium">
+                  {t("settings:manageCharacters.onboarding.templateTitle", {
                     defaultValue: "Start from a template"
                   })}
                 </span>
-                <Button
-                  type="link"
-                  size="small"
-                  onClick={() => {
-                    setShowTemplates(true)
-                    markTemplateChooserSeen()
-                    openCreateModal()
-                  }}>
-                  {t("settings:manageCharacters.emptyTemplates.browseAll", {
-                    defaultValue: "Browse all"
+                <span className="text-xs text-text-muted">
+                  {t("settings:manageCharacters.onboarding.templateDesc", {
+                    defaultValue: "Choose from pre-built personas like Writing Coach or Research Helper"
                   })}
-                </Button>
-              </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {CHARACTER_TEMPLATES.slice(0, 3).map((template) => (
-                  <button
-                    key={template.id}
-                    type="button"
-                    className="rounded border border-border p-2 text-left transition-colors motion-reduce:transition-none hover:border-primary hover:bg-surface-hover"
-                    onClick={() => applyTemplateToCreateForm(template)}>
-                    <div className="text-sm font-medium">{template.name}</div>
-                    <div className="text-xs text-text-muted">{template.description}</div>
-                  </button>
-                ))}
-              </div>
+                </span>
+              </button>
+
+              {/* Import existing */}
+              <button
+                type="button"
+                className="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface p-4 text-center transition-all hover:border-primary hover:shadow-md"
+                disabled={isImportBusy}
+                onClick={triggerImportPicker}
+              >
+                <UploadIcon className="h-7 w-7 text-primary" />
+                <span className="text-sm font-medium">
+                  {t("settings:manageCharacters.onboarding.importTitle", {
+                    defaultValue: "Import existing"
+                  })}
+                </span>
+                <span className="text-xs text-text-muted">
+                  {t("settings:manageCharacters.onboarding.importDesc", {
+                    defaultValue: "Upload JSON, PNG, or YAML character card files"
+                  })}
+                </span>
+              </button>
             </div>
+
+            <p className="text-center text-xs text-text-muted">
+              {t("settings:manageCharacters.onboarding.tip", {
+                defaultValue: "Tip: Characters appear in the chat header dropdown so you can quickly switch personas across conversations."
+              })}
+            </p>
           </div>
         )}
       {status === "success" &&
@@ -7673,7 +8071,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         })}
                       >
                         <span
-                          className="line-clamp-1 cursor-text rounded px-1 -mx-1 font-medium hover:bg-surface-hover"
+                          className="group/edit inline-flex items-center gap-1 line-clamp-1 cursor-text rounded px-1 -mx-1 font-medium hover:bg-surface-hover"
                           title={v || undefined}
                           data-inline-edit-key={`${recordId}:name`}
                           role="button"
@@ -7702,6 +8100,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           }}
                         >
                           {truncateText(v, MAX_NAME_DISPLAY_LENGTH)}
+                          <Pen className="h-3 w-3 flex-shrink-0 opacity-0 transition-opacity group-hover/edit:opacity-40" />
                         </span>
                       </Tooltip>
                     )
@@ -7731,7 +8130,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       })}
                     >
                       <span
-                        className={`${descriptionLineClass} cursor-text rounded px-1 -mx-1 text-xs text-text-muted hover:bg-surface-hover`}
+                        className={`group/edit-desc inline-flex items-center gap-1 ${descriptionLineClass} cursor-text rounded px-1 -mx-1 text-xs text-text-muted hover:bg-surface-hover`}
                         title={descriptionValue}
                         data-inline-edit-key={`${recordId}:description`}
                         role="button"
@@ -7756,6 +8155,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         }}
                       >
                         {truncateText(descriptionValue, MAX_DESCRIPTION_LENGTH * 2)}
+                        <Pen className="h-3 w-3 flex-shrink-0 opacity-0 transition-opacity group-hover/edit-desc:opacity-40" />
                       </span>
                     </Tooltip>
                   ) : null
@@ -8158,7 +8558,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         {isFavorite ? (
                           <Star className="w-4 h-4 fill-current" />
                         ) : (
-                          <StarOff className="w-4 h-4" />
+                          <Star className="w-4 h-4" />
                         )}
                       </button>
                     </Tooltip>
@@ -8170,7 +8570,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             key: 'quick-chat',
                             icon: <MessageCircle className="w-4 h-4" />,
                             label: t("settings:manageCharacters.actions.quickChat", {
-                              defaultValue: "Quick chat"
+                              defaultValue: "Test in popup"
                             }),
                             onClick: () => openQuickChat(record)
                           },
@@ -8198,6 +8598,28 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             }
                           },
                           {
+                            key: "create-persona",
+                            icon: <UserCircle2 className="w-4 h-4" />,
+                            label: getCreatePersonaActionLabel(record),
+                            disabled: isPersonaCreatePending(record),
+                            onClick: () => {
+                              void createPersonaFromCharacter(record)
+                            }
+                          },
+                          {
+                            key: "open-persona-garden",
+                            icon: <ExternalLink className="w-4 h-4" />,
+                            label: t(
+                              "settings:manageCharacters.actions.openInPersonaGarden",
+                              {
+                                defaultValue: "Open in Persona Garden"
+                              }
+                            ),
+                            onClick: () => {
+                              void openPersonaGardenForCharacter(record)
+                            }
+                          },
+                          {
                             key: "version-history",
                             icon: <Clock3 className="w-4 h-4" />,
                             label: t(
@@ -8217,7 +8639,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           {
                             key: isDefaultCharacter ? "clear-default" : "set-default",
                             icon: isDefaultCharacter ? (
-                              <StarOff className="w-4 h-4" />
+                              <Star className="w-4 h-4" />
                             ) : (
                               <Star className="w-4 h-4" />
                             ),
@@ -8390,12 +8812,27 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             setPreviewCharacter(null)
           }
         }}
+        onCreatePersonaFromCharacter={() => {
+          if (previewCharacter) {
+            void createPersonaFromCharacter(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
+        onOpenPersonaGarden={() => {
+          if (previewCharacter) {
+            void openPersonaGardenForCharacter(previewCharacter)
+            setPreviewCharacter(null)
+          }
+        }}
         onViewVersionHistory={() => {
           if (previewCharacter) {
             openVersionHistory(previewCharacter)
             setPreviewCharacter(null)
           }
         }}
+        creatingPersonaFromCharacter={
+          previewCharacter ? isPersonaCreatePending(previewCharacter) : false
+        }
         attachedWorldBooks={previewCharacterWorldBooks}
         attachedWorldBooksLoading={previewCharacterWorldBooksLoading}
         launchedFromWorldBooks={crossNavigationContext.launchedFromWorldBooks}
@@ -8410,43 +8847,69 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         })}
         open={importPreviewOpen}
         onCancel={resetImportPreview}
-        footer={[
-          <Button
-            key="cancel"
-            disabled={importPreviewProcessing}
-            onClick={resetImportPreview}>
-            {t("common:cancel", { defaultValue: "Cancel" })}
-          </Button>,
-          retryableFailedPreviewItems.length > 0 ? (
-            <Button
-              key="retry-failed"
-              disabled={importPreviewProcessing}
-              onClick={() => {
-                void handleRetryFailedImportPreview()
-              }}>
-              {t("settings:manageCharacters.import.retryFailed", {
-                defaultValue: "Retry failed"
-              })}
-            </Button>
-          ) : null,
-          <Button
-            key="confirm"
-            type="primary"
-            loading={importPreviewProcessing || importing}
-            disabled={
-              importablePreviewItems.length === 0 ||
-              importPreviewLoading ||
-              importPreviewProcessing ||
-              importQueueSummary.complete
-            }
-            onClick={() => {
-              void handleConfirmImportPreview()
-            }}>
-            {t("settings:manageCharacters.import.confirmPreview", {
-              defaultValue: "Confirm import"
-            })}
-          </Button>
-        ]}
+        destroyOnHidden
+        footer={
+          importPreviewHasSuccessfulCompletion
+            ? [
+                retryableFailedPreviewItems.length > 0 ? (
+                  <Button
+                    key="retry-failed"
+                    disabled={importPreviewProcessing}
+                    onClick={() => {
+                      void handleRetryFailedImportPreview()
+                    }}>
+                    {t("settings:manageCharacters.import.retryFailed", {
+                      defaultValue: "Retry failed"
+                    })}
+                  </Button>
+                ) : null,
+                <Button
+                  key="ok"
+                  type="primary"
+                  onClick={resetImportPreview}>
+                  {t("settings:manageCharacters.import.dismissOk", {
+                    defaultValue: "OK"
+                  })}
+                </Button>
+              ].filter(Boolean)
+            : [
+                <Button
+                  key="cancel"
+                  disabled={importPreviewProcessing}
+                  onClick={resetImportPreview}>
+                  {t("common:cancel", { defaultValue: "Cancel" })}
+                </Button>,
+                retryableFailedPreviewItems.length > 0 ? (
+                  <Button
+                    key="retry-failed"
+                    disabled={importPreviewProcessing}
+                    onClick={() => {
+                      void handleRetryFailedImportPreview()
+                    }}>
+                    {t("settings:manageCharacters.import.retryFailed", {
+                      defaultValue: "Retry failed"
+                    })}
+                  </Button>
+                ) : null,
+                <Button
+                  key="confirm"
+                  type="primary"
+                  loading={importPreviewProcessing || importing}
+                  disabled={
+                    importablePreviewItems.length === 0 ||
+                    importPreviewLoading ||
+                    importPreviewProcessing ||
+                    importQueueSummary.complete
+                  }
+                  onClick={() => {
+                    void handleConfirmImportPreview()
+                  }}>
+                  {t("settings:manageCharacters.import.confirmPreview", {
+                    defaultValue: "Confirm import"
+                  })}
+                </Button>
+              ].filter(Boolean)
+        }
         rootClassName="characters-motion-modal">
         {importPreviewLoading ? (
           <Skeleton active paragraph={{ rows: 3 }} />
@@ -8708,7 +9171,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             <span>
               {t("settings:manageCharacters.conversations.avgMessages", {
                 defaultValue: "Avg messages: {{count}}",
-                count: averageConversationMessageCountLabel
+                count: Number(averageConversationMessageCountLabel)
               })}
             </span>
           </div>
@@ -8948,12 +9411,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         </div>
       </Modal>
 
-      <Modal
+      <Drawer
         title={t("settings:manageCharacters.modal.addTitle", {
           defaultValue: "New character"
         })}
         open={open}
-        onCancel={() => {
+        onClose={() => {
           if (createFormDirty) {
             Modal.confirm({
               title: t("settings:manageCharacters.modal.unsavedTitle", {
@@ -8985,7 +9448,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             }, 0)
           }
         }}
-        footer={null}
+        width={520}
+        placement="right"
         rootClassName="characters-motion-modal">
         <p className="text-sm text-text-muted mb-4">
           {t("settings:manageCharacters.modal.description", {
@@ -9133,14 +9597,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             setShowCreateAdvanced(false)
           }
         })}
-      </Modal>
+      </Drawer>
 
-      <Modal
+      <Drawer
         title={t("settings:manageCharacters.modal.editTitle", {
           defaultValue: "Edit character"
         })}
         open={openEdit}
-        onCancel={() => {
+        onClose={() => {
           if (editFormDirty) {
             Modal.confirm({
               title: t("settings:manageCharacters.modal.unsavedTitle", {
@@ -9176,7 +9640,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             }, 0)
           }
         }}
-        footer={null}
+        width={520}
+        placement="right"
         rootClassName="characters-motion-modal">
         <p className="text-sm text-text-muted mb-4">
           {t("settings:manageCharacters.modal.editDescription", {
@@ -9291,7 +9756,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             setEditFormDirty(false)
           }
         })}
-      </Modal>
+      </Drawer>
 
       {/* Generation Preview Modal */}
       <GenerationPreviewModal

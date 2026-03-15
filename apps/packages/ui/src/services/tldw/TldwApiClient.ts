@@ -1,3 +1,5 @@
+import type { ChatScope } from "@/types/chat-scope"
+import { toChatScopeParams } from "@/types/chat-scope"
 import { Storage } from "@plasmohq/storage"
 import { createSafeStorage, safeStorageSerde } from "@/utils/safe-storage"
 import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
@@ -22,14 +24,30 @@ import {
 } from "@/services/tldw/data-tables"
 import type { DataTableColumn } from "@/types/data-tables"
 import type {
+  CreateReadingSavedSearchRequest,
   CreateReadingDigestScheduleRequest,
   ImportSource,
+  ReadingNoteLink,
+  ReadingSavedSearch,
+  ReadingSavedSearchListResponse,
   ReadingDigestSchedule,
   ReadingImportJobResponse,
   ReadingImportJobStatus,
   ReadingImportJobsListResponse,
+  UpdateReadingSavedSearchRequest,
   UpdateReadingDigestScheduleRequest
 } from "@/types/collections"
+import type {
+  CreateIngestionSourceRequest,
+  IngestionSourceItem,
+  IngestionSourceItemFilters,
+  IngestionSourceItemsListResponse,
+  IngestionSourceListResponse,
+  IngestionSourceSummary,
+  IngestionSourceSyncSummary,
+  IngestionSourceSyncTriggerResponse,
+  UpdateIngestionSourceRequest
+} from "@/types/ingestion-sources"
 
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
@@ -63,6 +81,132 @@ const normalizeReadingDigestSchedule = (schedule: any): ReadingDigestSchedule =>
   last_status: schedule?.last_status ?? null,
   created_at: schedule?.created_at ?? null,
   updated_at: schedule?.updated_at ?? null
+})
+
+const toFiniteNumber = (value: unknown, fallback = 0): number => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+  return fallback
+}
+
+const toOptionalString = (value: unknown): string | null => {
+  if (value === null || typeof value === "undefined") {
+    return null
+  }
+  return String(value)
+}
+
+const toRecord = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {}
+  }
+  return { ...(value as Record<string, unknown>) }
+}
+
+const normalizeIngestionSourceSyncSummary = (
+  summary: unknown
+): IngestionSourceSyncSummary | null => {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return null
+  }
+  const record = summary as Record<string, unknown>
+  return {
+    changed_count: toFiniteNumber(record.changed_count),
+    degraded_count: toFiniteNumber(record.degraded_count),
+    conflict_count: toFiniteNumber(record.conflict_count),
+    sink_failure_count: toFiniteNumber(record.sink_failure_count),
+    ingestion_failure_count: toFiniteNumber(record.ingestion_failure_count),
+    created_count: toFiniteNumber(record.created_count),
+    updated_count: toFiniteNumber(record.updated_count),
+    deleted_count: toFiniteNumber(record.deleted_count),
+    unchanged_count: toFiniteNumber(record.unchanged_count)
+  }
+}
+
+const normalizeIngestionSourceType = (value: unknown): IngestionSourceSummary["source_type"] => {
+  if (value === "archive_snapshot" || value === "git_repository") {
+    return value
+  }
+  return "local_directory"
+}
+
+const normalizeIngestionSource = (source: any): IngestionSourceSummary => ({
+  id: String(source?.id ?? ""),
+  user_id: toFiniteNumber(source?.user_id),
+  source_type: normalizeIngestionSourceType(source?.source_type),
+  sink_type: source?.sink_type === "notes" ? "notes" : "media",
+  policy: source?.policy === "import_only" ? "import_only" : "canonical",
+  enabled: Boolean(source?.enabled),
+  schedule_enabled: Boolean(source?.schedule_enabled),
+  schedule_config: toRecord(source?.schedule_config),
+  config: toRecord(source?.config),
+  active_job_id: toOptionalString(source?.active_job_id),
+  last_successful_snapshot_id: toOptionalString(source?.last_successful_snapshot_id),
+  last_sync_started_at: toOptionalString(source?.last_sync_started_at),
+  last_sync_completed_at: toOptionalString(source?.last_sync_completed_at),
+  last_sync_status: toOptionalString(source?.last_sync_status),
+  last_error: toOptionalString(source?.last_error),
+  last_successful_sync_summary: normalizeIngestionSourceSyncSummary(
+    source?.last_successful_sync_summary
+  ),
+  created_at: toOptionalString(source?.created_at),
+  updated_at: toOptionalString(source?.updated_at)
+})
+
+const normalizeIngestionSourceListResponse = (payload: any): IngestionSourceListResponse => {
+  const rawSources = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.sources)
+      ? payload.sources
+      : []
+  const sources = rawSources.map((source: any) => normalizeIngestionSource(source))
+  return {
+    sources,
+    total: toFiniteNumber(payload?.total, sources.length)
+  }
+}
+
+const normalizeIngestionSourceItem = (item: any): IngestionSourceItem => ({
+  id: String(item?.id ?? ""),
+  source_id: String(item?.source_id ?? ""),
+  normalized_relative_path: String(item?.normalized_relative_path ?? ""),
+  content_hash: item?.content_hash == null ? null : String(item.content_hash),
+  sync_status: String(item?.sync_status ?? "unknown"),
+  binding: toRecord(item?.binding),
+  present_in_source: Boolean(item?.present_in_source),
+  created_at: toOptionalString(item?.created_at),
+  updated_at: toOptionalString(item?.updated_at)
+})
+
+const normalizeIngestionSourceItemsListResponse = (
+  payload: any
+): IngestionSourceItemsListResponse => {
+  const rawItems = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.items)
+      ? payload.items
+      : []
+  const items = rawItems.map((item: any) => normalizeIngestionSourceItem(item))
+  return {
+    items,
+    total: toFiniteNumber(payload?.total, items.length)
+  }
+}
+
+const normalizeIngestionSourceSyncTrigger = (
+  payload: any
+): IngestionSourceSyncTriggerResponse => ({
+  status: String(payload?.status ?? ""),
+  source_id: String(payload?.source_id ?? ""),
+  job_id: toOptionalString(payload?.job_id),
+  snapshot_status: toOptionalString(payload?.snapshot_status)
 })
 
 export interface TldwConfig {
@@ -115,6 +259,64 @@ export interface OpenAICredentialSourceSwitchResponse {
   provider: "openai"
   auth_source: "api_key" | "oauth"
   updated_at?: string | null
+}
+
+export type PresentationStudioSlide = {
+  order: number
+  layout: string
+  title?: string | null
+  content: string
+  speaker_notes?: string | null
+  metadata: Record<string, any>
+}
+
+export type PresentationStudioRecord = {
+  id: string
+  title: string
+  description?: string | null
+  theme: string
+  marp_theme?: string | null
+  template_id?: string | null
+  settings?: Record<string, any> | null
+  studio_data?: Record<string, any> | null
+  slides: PresentationStudioSlide[]
+  custom_css?: string | null
+  source_type?: string | null
+  source_ref?: unknown
+  source_query?: string | null
+  created_at: string
+  last_modified: string
+  deleted?: boolean
+  client_id?: string
+  version: number
+}
+
+export type PresentationRenderFormat = "mp4" | "webm"
+
+export type PresentationRenderJob = {
+  job_id: number
+  status: string
+  job_type: string
+  presentation_id?: string | null
+  presentation_version?: number | null
+  format?: PresentationRenderFormat | null
+  output_id?: number | null
+  download_url?: string | null
+  error?: string | null
+}
+
+export type PresentationRenderArtifact = {
+  output_id: number
+  format: PresentationRenderFormat
+  title?: string | null
+  download_url: string
+  presentation_version?: number | null
+  created_at?: string | null
+}
+
+export type PresentationRenderArtifactList = {
+  presentation_id: string
+  artifacts: PresentationRenderArtifact[]
 }
 
 export type UserProfileUpdateEntry = {
@@ -229,6 +431,11 @@ export interface ChatCompletionRequest {
   api_provider?: string
   extra_headers?: Record<string, unknown>
   extra_body?: Record<string, unknown>
+  thinking_budget_tokens?: number
+  grammar_mode?: "none" | "library" | "inline"
+  grammar_id?: string
+  grammar_inline?: string
+  grammar_override?: string
   response_format?: { type: "json_object" | "text" }
 }
 
@@ -246,10 +453,75 @@ export interface ServerChatSummary {
   external_ref?: string | null
   bm25_norm?: number | null
   character_id?: string | number | null
+  assistant_kind?: "character" | "persona" | null
+  assistant_id?: string | null
+  persona_memory_mode?: "read_only" | "read_write" | null
   parent_conversation_id?: string | null
   root_id?: string | null
   forked_from_message_id?: string | null
   version?: number | null
+}
+
+export interface PersonaProfileSummary {
+  id: string
+  name?: string | null
+  character_card_id?: number | null
+  origin_character_id?: number | null
+  [key: string]: unknown
+}
+
+export interface PersonaProfile extends PersonaProfileSummary {
+  mode?: string | null
+  system_prompt?: string | null
+  use_persona_state_context_default?: boolean
+}
+
+export interface PersonaExemplar {
+  id: string
+  persona_id: string
+  kind: string
+  content: string
+  tone?: string | null
+  scenario_tags: string[]
+  capability_tags: string[]
+  priority: number
+  enabled: boolean
+  source_type?: string | null
+  source_ref?: string | null
+  notes?: string | null
+  created_at?: string | null
+  last_modified?: string | null
+}
+
+export type PersonaExemplarInput = {
+  kind: string
+  content: string
+  tone?: string | null
+  scenario_tags?: string[]
+  capability_tags?: string[]
+  priority?: number
+  enabled?: boolean
+  source_type?: string | null
+  source_ref?: string | null
+  notes?: string | null
+}
+
+export type PersonaExemplarListOptions = {
+  includeDisabled?: boolean
+  includeDeleted?: boolean
+  includeDeletedPersonas?: boolean
+}
+
+export type PersonaExemplarImportInput = {
+  transcript: string
+  source_ref?: string | null
+  notes?: string | null
+  max_candidates?: number
+}
+
+export type PersonaExemplarReviewInput = {
+  action: "approve" | "reject"
+  notes?: string | null
 }
 
 export type ConversationSharePermission = "view"
@@ -309,6 +581,64 @@ export type ChatSettingsResponse = {
   conversation_id: string
   settings: Record<string, unknown>
   last_modified: string
+}
+
+const normalizePersonaProfile = <T extends Record<string, unknown>>(
+  input: T | null | undefined
+): PersonaProfile => {
+  const candidate = input && typeof input === "object" ? input : ({} as T)
+  return {
+    ...candidate,
+    id: String(candidate?.id ?? candidate?.persona_id ?? "")
+  }
+}
+
+const normalizeStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0)
+}
+
+const normalizePersonaExemplar = (
+  input: Record<string, unknown> | null | undefined
+): PersonaExemplar => {
+  const candidate = input && typeof input === "object" ? input : {}
+  const priorityValue = Number(candidate?.priority)
+  return {
+    id: String(candidate?.id ?? ""),
+    persona_id: String(candidate?.persona_id ?? candidate?.personaId ?? ""),
+    kind: String(candidate?.kind ?? "style"),
+    content: String(candidate?.content ?? ""),
+    tone:
+      candidate?.tone == null || String(candidate.tone).trim() === ""
+        ? null
+        : String(candidate.tone),
+    scenario_tags: normalizeStringArray(
+      candidate?.scenario_tags ?? candidate?.scenarioTags
+    ),
+    capability_tags: normalizeStringArray(
+      candidate?.capability_tags ?? candidate?.capabilityTags
+    ),
+    priority: Number.isFinite(priorityValue) ? priorityValue : 0,
+    enabled: candidate?.enabled !== false,
+    source_type:
+      candidate?.source_type == null || String(candidate.source_type).trim() === ""
+        ? null
+        : String(candidate.source_type),
+    source_ref:
+      candidate?.source_ref == null || String(candidate.source_ref).trim() === ""
+        ? null
+        : String(candidate.source_ref),
+    notes:
+      candidate?.notes == null || String(candidate.notes).trim() === ""
+        ? null
+        : String(candidate.notes),
+    created_at:
+      candidate?.created_at == null ? null : String(candidate.created_at),
+    last_modified:
+      candidate?.last_modified == null ? null : String(candidate.last_modified)
+  }
 }
 
 export type WorldBookProcessDiagnostic = {
@@ -1498,6 +1828,585 @@ export class TldwApiClient {
     })
   }
 
+  // ── Admin API Key Management ──
+
+  async listUserApiKeys(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({
+      path: `/api/v1/admin/users/${userId}/api-keys`,
+      method: "GET"
+    })
+  }
+
+  async createUserApiKey(userId: number, payload: { name?: string; rate_limit?: number; allowed_ips?: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/api-keys`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async revokeUserApiKey(userId: number, keyId: number): Promise<{ message: string }> {
+    return await bgRequest<{ message: string }>({
+      path: `/api/v1/admin/users/${userId}/api-keys/${keyId}`,
+      method: "DELETE"
+    })
+  }
+
+  async updateUserApiKey(userId: number, keyId: number, payload: { rate_limit?: number; allowed_ips?: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/api-keys/${keyId}`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async rotateUserApiKey(userId: number, keyId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/api-keys/${keyId}/rotate`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async listUserVirtualKeys(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({
+      path: `/api/v1/admin/users/${userId}/virtual-keys`,
+      method: "GET"
+    })
+  }
+
+  async getApiKeyAuditLog(keyId: number): Promise<any[]> {
+    return await bgRequest<any[]>({
+      path: `/api/v1/admin/api-keys/${keyId}/audit-log`,
+      method: "GET"
+    })
+  }
+
+  // ── Admin Maintenance ──
+
+  async getMaintenanceState(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/maintenance", method: "GET" })
+  }
+
+  async updateMaintenanceState(payload: { enabled?: boolean; message?: string; allowlist?: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/maintenance",
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listFeatureFlags(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/feature-flags", method: "GET" })
+  }
+
+  async updateFeatureFlag(flagKey: string, payload: { enabled: boolean }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/feature-flags/${encodeURIComponent(flagKey)}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteFeatureFlag(flagKey: string): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/feature-flags/${encodeURIComponent(flagKey)}`,
+      method: "DELETE"
+    })
+  }
+
+  async listIncidents(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/incidents", method: "GET" })
+  }
+
+  async createIncident(payload: { title: string; severity?: string; description?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/incidents",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async updateIncident(incidentId: number, payload: { status?: string; severity?: string; description?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/incidents/${incidentId}`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteIncident(incidentId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/incidents/${incidentId}`,
+      method: "DELETE"
+    })
+  }
+
+  async listRotationRuns(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/maintenance/rotation-runs", method: "GET" })
+  }
+
+  async createRotationRun(): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/maintenance/rotation-runs",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  // ── Admin Monitoring & Alerting ──
+
+  async listAlertRules(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/monitoring/alert-rules", method: "GET" })
+  }
+
+  async createAlertRule(payload: {
+    metric: string; operator: string; threshold: number;
+    duration_minutes?: number; severity?: string
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/monitoring/alert-rules",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteAlertRule(ruleId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/monitoring/alert-rules/${ruleId}`,
+      method: "DELETE"
+    })
+  }
+
+  async assignAlert(alertIdentity: string, payload: { user_id?: number | null }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/monitoring/alerts/${encodeURIComponent(alertIdentity)}/assign`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async snoozeAlert(alertIdentity: string, payload: { until: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/monitoring/alerts/${encodeURIComponent(alertIdentity)}/snooze`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async escalateAlert(alertIdentity: string): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/monitoring/alerts/${encodeURIComponent(alertIdentity)}/escalate`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async listAlertHistory(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/monitoring/alerts/history", method: "GET" })
+  }
+
+  async getSecurityAlertStatus(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/security/alert-status", method: "GET" })
+  }
+
+  async getDashboardActivity(params?: { days?: number; granularity?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/activity${query}`, method: "GET" })
+  }
+
+  // ── Admin Usage Analytics ──
+
+  async getDailyUsage(params?: { start_date?: string; end_date?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/usage/daily${query}`, method: "GET" })
+  }
+
+  async getTopUsage(params?: { metric?: string; limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/usage/top${query}`, method: "GET" })
+  }
+
+  async exportDailyUsageCsv(): Promise<string> {
+    return await bgRequest<string>({ path: "/api/v1/admin/usage/daily/export.csv", method: "GET" })
+  }
+
+  async exportTopUsageCsv(): Promise<string> {
+    return await bgRequest<string>({ path: "/api/v1/admin/usage/top/export.csv", method: "GET" })
+  }
+
+  async getLlmUsage(params?: { provider?: string; model?: string; limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/llm-usage${query}`, method: "GET" })
+  }
+
+  async getLlmUsageSummary(params?: { group_by?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/llm-usage/summary${query}`, method: "GET" })
+  }
+
+  async getLlmTopSpenders(params?: { limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/llm-usage/top-spenders${query}`, method: "GET" })
+  }
+
+  async getRouterAnalyticsStatus(params?: { range?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/router-analytics/status${query}`, method: "GET" })
+  }
+
+  async getRouterAnalyticsProviders(params?: { range?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/router-analytics/providers${query}`, method: "GET" })
+  }
+
+  // ── Admin Organizations & Teams ──
+
+  async createOrg(payload: { name: string; slug?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/orgs",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listOrgs(params?: { search?: string; limit?: number; offset?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/orgs${query}`, method: "GET" })
+  }
+
+  async listOrgMembers(orgId: number, params?: { role?: string; status?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/orgs/${orgId}/members${query}`, method: "GET" })
+  }
+
+  async addOrgMember(orgId: number, payload: { user_id: number; role?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/orgs/${orgId}/members`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async removeOrgMember(orgId: number, userId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/orgs/${orgId}/members/${userId}`,
+      method: "DELETE"
+    })
+  }
+
+  async updateOrgMemberRole(orgId: number, userId: number, payload: { role: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/orgs/${orgId}/members/${userId}`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async createTeam(orgId: number, payload: { name: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/orgs/${orgId}/teams`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listTeams(orgId: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/admin/orgs/${orgId}/teams`, method: "GET" })
+  }
+
+  async listTeamMembers(teamId: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/admin/teams/${teamId}/members`, method: "GET" })
+  }
+
+  async addTeamMember(teamId: number, payload: { user_id: number; role?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/teams/${teamId}/members`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async removeTeamMember(teamId: number, userId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/teams/${teamId}/members/${userId}`,
+      method: "DELETE"
+    })
+  }
+
+  async updateTeamMemberRole(teamId: number, userId: number, payload: { role: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/teams/${teamId}/members/${userId}`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  // ── Admin Data Operations ──
+
+  async listBackups(params?: { dataset?: string; user_id?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/backups${query}`, method: "GET" })
+  }
+
+  async createBackup(payload: { dataset: string; user_id?: number }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/backups",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async restoreBackup(backupId: string): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/backups/${encodeURIComponent(backupId)}/restore`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async listBackupSchedules(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/backup-schedules", method: "GET" })
+  }
+
+  async createBackupSchedule(payload: { dataset: string; cron?: string; retention_days?: number }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/backup-schedules",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteBackupSchedule(scheduleId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/backup-schedules/${scheduleId}`,
+      method: "DELETE"
+    })
+  }
+
+  async previewDsr(payload: { requester_identifier: string; request_type?: string; categories?: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/data-subject-requests/preview",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async createDsr(payload: {
+    requester_identifier: string; request_type: string;
+    categories?: string[]; client_request_id?: string; notes?: string
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/data-subject-requests",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listDsrs(params?: { limit?: number; offset?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/data-subject-requests${query}`, method: "GET" })
+  }
+
+  async executeDsr(requestId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/data-subject-requests/${requestId}/execute`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async listRetentionPolicies(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/retention-policies", method: "GET" })
+  }
+
+  async updateRetentionPolicy(policyKey: string, payload: { retention_days: number }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/retention-policies/${encodeURIComponent(policyKey)}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listBundles(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/backups/bundles", method: "GET" })
+  }
+
+  async createBundle(payload: { datasets: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/backups/bundles",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteBundle(bundleId: string): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/backups/bundles/${encodeURIComponent(bundleId)}`,
+      method: "DELETE"
+    })
+  }
+
+  // ── Admin RBAC & Permissions ──
+
+  async listPermissions(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/permissions", method: "GET" })
+  }
+
+  async listPermissionCategories(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/permissions/categories", method: "GET" })
+  }
+
+  async getRolePermissionMatrix(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/roles/matrix-boolean", method: "GET" })
+  }
+
+  async listRolePermissions(roleId: number): Promise<any[]> {
+    return await bgRequest<any[]>({ path: `/api/v1/admin/roles/${roleId}/permissions`, method: "GET" })
+  }
+
+  async grantRolePermission(roleId: number, permissionId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/roles/${roleId}/permissions/${permissionId}`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async revokeRolePermission(roleId: number, permissionId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/roles/${roleId}/permissions/${permissionId}`,
+      method: "DELETE"
+    })
+  }
+
+  async listUserRoles(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({ path: `/api/v1/admin/users/${userId}/roles`, method: "GET" })
+  }
+
+  async assignUserRole(userId: number, roleId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/roles/${roleId}`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async removeUserRole(userId: number, roleId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/roles/${roleId}`,
+      method: "DELETE"
+    })
+  }
+
+  async listUserOverrides(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({ path: `/api/v1/admin/users/${userId}/overrides`, method: "GET" })
+  }
+
+  async getUserEffectivePermissions(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({ path: `/api/v1/admin/users/${userId}/effective-permissions`, method: "GET" })
+  }
+
+  async addUserOverride(userId: number, payload: { permission_id: number; effect: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/overrides`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteUserOverride(userId: number, permissionId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/overrides/${permissionId}`,
+      method: "DELETE"
+    })
+  }
+
+  // ── Admin Billing ──
+
+  async getBillingOverview(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/billing/overview", method: "GET" })
+  }
+
+  async listAllSubscriptions(params?: { status?: string; limit?: number; offset?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/billing/subscriptions${query}`, method: "GET" })
+  }
+
+  async getUserSubscription(userId: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/admin/billing/subscriptions/${userId}`, method: "GET" })
+  }
+
+  async overrideUserPlan(userId: number, payload: { plan_id: string; reason?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/billing/subscriptions/${userId}/override`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async grantCredits(userId: number, payload: { amount: number; reason?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/billing/subscriptions/${userId}/credits`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listBillingEvents(params?: { limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/billing/events${query}`, method: "GET" })
+  }
+
+  // Storage Quotas
+  async getUserStorageQuota(userId: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/admin/storage-quotas/users/${userId}`, method: "GET" })
+  }
+
+  async updateUserStorageQuota(userId: number, payload: { quota_mb: number }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/storage-quotas/users/${userId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getStorageQuotaSummary(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/storage-quotas/summary", method: "GET" })
+  }
+
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
@@ -2521,11 +3430,23 @@ export class TldwApiClient {
     params?: {
       page?: number
       results_per_page?: number
+      limit?: number
+      offset?: number
       include_keywords?: boolean
     },
     options?: { signal?: AbortSignal }
   ): Promise<any> {
-    const query = this.buildQuery(params as Record<string, any>)
+    const limit = params?.limit ?? params?.results_per_page
+    const offset = params?.offset ?? (
+      params?.page != null && limit != null
+        ? Math.max(0, (params.page - 1) * limit)
+        : undefined
+    )
+    const query = this.buildQuery({
+      limit,
+      offset,
+      include_keywords: params?.include_keywords
+    } as Record<string, any>)
     return await bgRequest<any>({
       path: `/api/v1/notes/${query}`,
       method: "GET",
@@ -2534,8 +3455,17 @@ export class TldwApiClient {
   }
 
   async searchNotes(query: string): Promise<any> {
-    // OpenAPI uses trailing slash for this path
-    return await bgRequest<any>({ path: '/api/v1/notes/search/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query } })
+    const normalized = query.trim()
+    if (!normalized) {
+      return await this.listNotes()
+    }
+    const queryString = this.buildQuery({
+      query: normalized
+    })
+    return await bgRequest<any>({
+      path: `/api/v1/notes/search/${queryString}`,
+      method: "GET"
+    })
   }
   // Prompts Methods
   async getPrompts(): Promise<any> {
@@ -3545,6 +4475,17 @@ export class TldwApiClient {
         : typeof messageCountRaw === "string" && messageCountRaw.trim().length > 0
           ? Number.parseFloat(messageCountRaw)
           : null
+    const character_id = input?.character_id ?? input?.characterId ?? null
+    const assistant_kind =
+      input?.assistant_kind ??
+      input?.assistantKind ??
+      (character_id != null ? "character" : null)
+    const assistant_id =
+      input?.assistant_id ??
+      input?.assistantId ??
+      (assistant_kind === "character" && character_id != null
+        ? String(character_id)
+        : null)
     return {
       id: String(input?.id ?? ""),
       title: String(input?.title || ""),
@@ -3565,7 +4506,23 @@ export class TldwApiClient {
           : typeof input?.relevance === "number"
             ? input?.relevance
             : null,
-      character_id: input?.character_id ?? input?.characterId ?? null,
+      character_id,
+      assistant_kind:
+        assistant_kind === "character" || assistant_kind === "persona"
+          ? assistant_kind
+          : null,
+      assistant_id:
+        assistant_id == null || assistant_id === ""
+          ? null
+          : String(assistant_id),
+      persona_memory_mode:
+        input?.persona_memory_mode === "read_only" ||
+        input?.persona_memory_mode === "read_write"
+          ? input.persona_memory_mode
+          : input?.personaMemoryMode === "read_only" ||
+              input?.personaMemoryMode === "read_write"
+            ? input.personaMemoryMode
+            : null,
       parent_conversation_id:
         input?.parent_conversation_id ?? input?.parentConversationId ?? null,
       root_id: input?.root_id ?? input?.rootId ?? null,
@@ -3580,6 +4537,178 @@ export class TldwApiClient {
     }
   }
 
+  async listPersonaProfiles(): Promise<PersonaProfileSummary[]> {
+    const payload = await this.request<any>({
+      path: "/api/v1/persona/catalog",
+      method: "GET"
+    })
+    const list = Array.isArray(payload) ? payload : []
+    return list.map((item) =>
+      normalizePersonaProfile(item as Record<string, unknown>)
+    )
+  }
+
+  async getPersonaProfile(id: string | number): Promise<PersonaProfile> {
+    const personaId = encodeURIComponent(String(id))
+    const payload = await this.request<any>({
+      path: `/api/v1/persona/profiles/${personaId}`,
+      method: "GET"
+    })
+    return normalizePersonaProfile(
+      payload as Record<string, unknown> | null | undefined
+    )
+  }
+
+  async listPersonaExemplars(
+    personaId: string | number,
+    options?: PersonaExemplarListOptions
+  ): Promise<PersonaExemplar[]> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const query = new URLSearchParams()
+    if (options?.includeDisabled) query.set("include_disabled", "true")
+    if (options?.includeDeleted) query.set("include_deleted", "true")
+    if (options?.includeDeletedPersonas) {
+      query.set("include_deleted_personas", "true")
+    }
+    const payload = await this.request<any>({
+      path: appendPathQuery(
+        `/api/v1/persona/profiles/${encodedPersonaId}/exemplars`,
+        query.toString() ? `?${query.toString()}` : ""
+      ),
+      method: "GET"
+    })
+    const list = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : []
+    return list.map((item) =>
+      normalizePersonaExemplar(item as Record<string, unknown>)
+    )
+  }
+
+  async createPersonaExemplar(
+    personaId: string | number,
+    payload: PersonaExemplarInput
+  ): Promise<PersonaExemplar> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars`,
+      method: "POST",
+      body: payload
+    })
+    return normalizePersonaExemplar(response as Record<string, unknown>)
+  }
+
+  async importPersonaExemplars(
+    personaId: string | number,
+    payload: PersonaExemplarImportInput
+  ): Promise<PersonaExemplar[]> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/import`,
+      method: "POST",
+      body: payload
+    })
+    const list = Array.isArray(response)
+      ? response
+      : Array.isArray(response?.items)
+        ? response.items
+        : []
+    return list.map((item) =>
+      normalizePersonaExemplar(item as Record<string, unknown>)
+    )
+  }
+
+  async updatePersonaExemplar(
+    personaId: string | number,
+    exemplarId: string | number,
+    payload: Partial<PersonaExemplarInput>
+  ): Promise<PersonaExemplar> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const encodedExemplarId = encodeURIComponent(String(exemplarId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}`,
+      method: "PATCH",
+      body: payload
+    })
+    return normalizePersonaExemplar(response as Record<string, unknown>)
+  }
+
+  async reviewPersonaExemplar(
+    personaId: string | number,
+    exemplarId: string | number,
+    payload: PersonaExemplarReviewInput
+  ): Promise<PersonaExemplar> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const encodedExemplarId = encodeURIComponent(String(exemplarId))
+    const response = await this.request<any>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}/review`,
+      method: "POST",
+      body: payload
+    })
+    return normalizePersonaExemplar(response as Record<string, unknown>)
+  }
+
+  async deletePersonaExemplar(
+    personaId: string | number,
+    exemplarId: string | number
+  ): Promise<void> {
+    const encodedPersonaId = encodeURIComponent(String(personaId))
+    const encodedExemplarId = encodeURIComponent(String(exemplarId))
+    await this.request<void>({
+      path: `/api/v1/persona/profiles/${encodedPersonaId}/exemplars/${encodedExemplarId}`,
+      method: "DELETE"
+    })
+  }
+
+  private isVersionConflictError(error: unknown): boolean {
+    const candidate = error as
+      | {
+          status?: unknown
+          response?: { status?: unknown }
+          message?: unknown
+          details?: unknown
+        }
+      | null
+      | undefined
+    const rawStatus = candidate?.status ?? candidate?.response?.status
+    const statusCode =
+      typeof rawStatus === "number"
+        ? rawStatus
+        : typeof rawStatus === "string"
+          ? Number(rawStatus)
+          : Number.NaN
+    const normalizedMessage = String(candidate?.message || "").toLowerCase()
+    const normalizedDetails = (() => {
+      const details = candidate?.details
+      if (typeof details === "string") return details.toLowerCase()
+      if (details == null) return ""
+      try {
+        return JSON.stringify(details).toLowerCase()
+      } catch {
+        return String(details).toLowerCase()
+      }
+    })()
+
+    return (
+      statusCode === 409 ||
+      normalizedMessage.includes("version conflict") ||
+      normalizedMessage.includes("expected_version") ||
+      normalizedDetails.includes("version conflict") ||
+      normalizedDetails.includes("expected_version")
+    )
+  }
+
+  private async getLatestChatVersion(chatId: string): Promise<number> {
+    const current = await this.getChat(chatId)
+    const version = Number(current?.version)
+    if (Number.isInteger(version) && version >= 0) {
+      return version
+    }
+    throw new Error("Chat mutation failed: missing expected version")
+  }
+
   // Chats API (resource-based)
   async listChatCommands(): Promise<any> {
     return await bgRequest<any>({
@@ -3590,9 +4719,9 @@ export class TldwApiClient {
 
   async listChats(
     params?: Record<string, any>,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; scope?: ChatScope }
   ): Promise<ServerChatSummary[]> {
-    const query = this.buildQuery(params)
+    const query = this.buildQuery({ ...toChatScopeParams(options?.scope), ...params })
     const data = await bgRequest<any>({
       path: `/api/v1/chats/${query}`,
       method: "GET",
@@ -3621,9 +4750,9 @@ export class TldwApiClient {
 
   async listChatsWithMeta(
     params?: Record<string, any>,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; scope?: ChatScope }
   ): Promise<{ chats: ServerChatSummary[]; total: number }> {
-    const query = this.buildQuery(params)
+    const query = this.buildQuery({ ...toChatScopeParams(options?.scope), ...params })
     const data = await bgRequest<any>({
       path: `/api/v1/chats/${query}`,
       method: "GET",
@@ -3660,12 +4789,55 @@ export class TldwApiClient {
     }
   }
 
-  async createChat(payload: Record<string, any>): Promise<ServerChatSummary> {
+  async searchConversationsWithMeta(
+    params?: Record<string, any>,
+    options?: { signal?: AbortSignal; scope?: ChatScope }
+  ): Promise<{ chats: ServerChatSummary[]; total: number }> {
+    const query = this.buildQuery({ ...toChatScopeParams(options?.scope), ...params })
+    const data = await bgRequest<any>({
+      path: `/api/v1/chats/conversations${query}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+
+    let list: any[] = []
+    let total: number | null = null
+
+    if (Array.isArray(data)) {
+      list = data
+    } else if (data && typeof data === "object") {
+      const obj: any = data
+      if (typeof obj.total === "number") {
+        total = obj.total
+      } else if (typeof obj.count === "number") {
+        total = obj.count
+      } else if (obj.pagination && typeof obj.pagination.total === "number") {
+        total = obj.pagination.total
+      }
+      if (Array.isArray(obj.items)) {
+        list = obj.items
+      } else if (Array.isArray(obj.chats)) {
+        list = obj.chats
+      } else if (Array.isArray(obj.results)) {
+        list = obj.results
+      } else if (Array.isArray(obj.data)) {
+        list = obj.data
+      }
+    }
+
+    const chats = list.map((item) => this.normalizeChatSummary(item))
+    return {
+      chats,
+      total: typeof total === "number" ? total : chats.length
+    }
+  }
+
+  async createChat(payload: Record<string, any>, options?: { scope?: ChatScope }): Promise<ServerChatSummary> {
     const res = await bgRequest<any>({
       path: "/api/v1/chats/",
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: payload
+      body: { ...toChatScopeParams(options?.scope), ...payload }
     })
     return this.normalizeChatSummary(res)
   }
@@ -3734,25 +4906,37 @@ export class TldwApiClient {
     let expectedVersion = options?.expectedVersion
     if (expectedVersion == null) {
       try {
-        const current = await this.getChat(cid)
-        if (typeof current?.version === "number") {
-          expectedVersion = current.version
-        }
+        expectedVersion = await this.getLatestChatVersion(cid)
       } catch {
         // ignore and fall back to unversioned update
       }
     }
-    const qp =
-      typeof expectedVersion === "number"
-        ? `?expected_version=${encodeURIComponent(String(expectedVersion))}`
-        : ""
-    const res = await bgRequest<any>({
-      path: `/api/v1/chats/${cid}${qp}`,
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: payload
-    })
-    return this.normalizeChatSummary(res)
+    const attemptUpdate = async (
+      versionToUse: number | undefined,
+      hasRetried = false
+    ): Promise<ServerChatSummary> => {
+      const qp =
+        typeof versionToUse === "number"
+          ? `?expected_version=${encodeURIComponent(String(versionToUse))}`
+          : ""
+      try {
+        const res = await bgRequest<any>({
+          path: `/api/v1/chats/${cid}${qp}`,
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: payload
+        })
+        return this.normalizeChatSummary(res)
+      } catch (error) {
+        if (hasRetried || !this.isVersionConflictError(error)) {
+          throw error
+        }
+        const latestVersion = await this.getLatestChatVersion(cid)
+        return await attemptUpdate(latestVersion, true)
+      }
+    }
+
+    return await attemptUpdate(expectedVersion)
   }
 
   async deleteChat(
@@ -3763,16 +4947,31 @@ export class TldwApiClient {
     }
   ): Promise<void> {
     const cid = String(chat_id)
-    const query = this.buildQuery({
-      ...(typeof options?.expectedVersion === "number"
-        ? { expected_version: options.expectedVersion }
-        : {}),
-      ...(options?.hardDelete ? { hard_delete: true } : {})
-    })
-    await bgRequest<void>({
-      path: `/api/v1/chats/${cid}${query}`,
-      method: "DELETE"
-    })
+    const attemptDelete = async (
+      versionToUse: number | undefined,
+      hasRetried = false
+    ): Promise<void> => {
+      const query = this.buildQuery({
+        ...(typeof versionToUse === "number"
+          ? { expected_version: versionToUse }
+          : {}),
+        ...(options?.hardDelete ? { hard_delete: true } : {})
+      })
+      try {
+        await bgRequest<void>({
+          path: `/api/v1/chats/${cid}${query}`,
+          method: "DELETE"
+        })
+      } catch (error) {
+        if (hasRetried || !this.isVersionConflictError(error)) {
+          throw error
+        }
+        const latestVersion = await this.getLatestChatVersion(cid)
+        await attemptDelete(latestVersion, true)
+      }
+    }
+
+    await attemptDelete(options?.expectedVersion)
   }
 
   async restoreChat(
@@ -3780,16 +4979,36 @@ export class TldwApiClient {
     options?: { expectedVersion?: number }
   ): Promise<ServerChatSummary> {
     const cid = String(chat_id)
-    const query = this.buildQuery(
-      typeof options?.expectedVersion === "number"
-        ? { expected_version: options.expectedVersion }
-        : {}
-    )
-    const res = await bgRequest<any>({
-      path: `/api/v1/chats/${cid}/restore${query}`,
-      method: "POST"
-    })
-    return this.normalizeChatSummary(res)
+    let expectedVersion = options?.expectedVersion
+    if (expectedVersion == null) {
+      expectedVersion = await this.getLatestChatVersion(cid)
+    }
+
+    const attemptRestore = async (
+      versionToUse: number | undefined,
+      hasRetried = false
+    ): Promise<ServerChatSummary> => {
+      const query = this.buildQuery(
+        typeof versionToUse === "number"
+          ? { expected_version: versionToUse }
+          : {}
+      )
+      try {
+        const res = await bgRequest<any>({
+          path: `/api/v1/chats/${cid}/restore${query}`,
+          method: "POST"
+        })
+        return this.normalizeChatSummary(res)
+      } catch (error) {
+        if (hasRetried || !this.isVersionConflictError(error)) {
+          throw error
+        }
+        const latestVersion = await this.getLatestChatVersion(cid)
+        return await attemptRestore(latestVersion, true)
+      }
+    }
+
+    return await attemptRestore(expectedVersion)
   }
 
   async createConversationShareLink(
@@ -5662,6 +6881,7 @@ export class TldwApiClient {
     title?: string
     tags?: string[]
     notes?: string
+    archive_mode?: "use_default" | "always" | "never"
     status?: string
     favorite?: boolean
     summary?: string
@@ -5751,6 +6971,132 @@ export class TldwApiClient {
     const qs = query.toString()
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}${qs ? `?${qs}` : ""}` as const
     await bgRequest<void>({ path, method: "DELETE" })
+  }
+
+  async createReadingSavedSearch(
+    data: CreateReadingSavedSearchRequest
+  ): Promise<ReadingSavedSearch> {
+    const row = await bgRequest<any>({
+      path: "/api/v1/reading/saved-searches",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+    return {
+      id: String(row?.id ?? ""),
+      name: String(row?.name ?? ""),
+      query:
+        row?.query && typeof row.query === "object" && !Array.isArray(row.query)
+          ? row.query
+          : {},
+      sort: row?.sort ?? undefined,
+      created_at: row?.created_at ?? undefined,
+      updated_at: row?.updated_at ?? undefined
+    }
+  }
+
+  async listReadingSavedSearches(
+    params?: { limit?: number; offset?: number }
+  ): Promise<ReadingSavedSearchListResponse> {
+    const query = new URLSearchParams()
+    if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+      query.set("limit", String(Math.max(1, Math.floor(params.limit))))
+    }
+    if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+      query.set("offset", String(Math.max(0, Math.floor(params.offset))))
+    }
+    const qs = query.toString()
+    const path = `/api/v1/reading/saved-searches${qs ? `?${qs}` : ""}` as const
+    const data = await bgRequest<any>({ path, method: "GET" })
+    const items: ReadingSavedSearch[] = Array.isArray(data?.items)
+      ? data.items.map((row: any) => ({
+          id: String(row?.id ?? ""),
+          name: String(row?.name ?? ""),
+          query:
+            row?.query && typeof row.query === "object" && !Array.isArray(row.query)
+              ? row.query
+              : {},
+          sort: row?.sort ?? undefined,
+          created_at: row?.created_at ?? undefined,
+          updated_at: row?.updated_at ?? undefined
+        }))
+      : []
+    return {
+      items,
+      total: Number.isFinite(data?.total) ? Number(data.total) : items.length,
+      limit:
+        Number.isFinite(data?.limit) && Number(data.limit) > 0
+          ? Number(data.limit)
+          : params?.limit ?? 50,
+      offset:
+        Number.isFinite(data?.offset) && Number(data.offset) >= 0
+          ? Number(data.offset)
+          : params?.offset ?? 0
+    }
+  }
+
+  async updateReadingSavedSearch(
+    searchId: string,
+    data: UpdateReadingSavedSearchRequest
+  ): Promise<ReadingSavedSearch> {
+    const path = `/api/v1/reading/saved-searches/${encodeURIComponent(searchId)}` as const
+    const row = await bgRequest<any>({
+      path,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: data
+    })
+    return {
+      id: String(row?.id ?? ""),
+      name: String(row?.name ?? ""),
+      query:
+        row?.query && typeof row.query === "object" && !Array.isArray(row.query)
+          ? row.query
+          : {},
+      sort: row?.sort ?? undefined,
+      created_at: row?.created_at ?? undefined,
+      updated_at: row?.updated_at ?? undefined
+    }
+  }
+
+  async deleteReadingSavedSearch(searchId: string): Promise<{ ok: boolean }> {
+    const path = `/api/v1/reading/saved-searches/${encodeURIComponent(searchId)}` as const
+    const response = await bgRequest<{ ok?: boolean }>({ path, method: "DELETE" })
+    return { ok: Boolean(response?.ok) }
+  }
+
+  async linkReadingItemToNote(itemId: string, noteId: string): Promise<ReadingNoteLink> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/links/note` as const
+    const row = await bgRequest<any>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { note_id: noteId }
+    })
+    return {
+      item_id: String(row?.item_id ?? itemId),
+      note_id: String(row?.note_id ?? noteId),
+      created_at: row?.created_at ?? undefined
+    }
+  }
+
+  async listReadingItemNoteLinks(itemId: string): Promise<ReadingNoteLink[]> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/links` as const
+    const data = await bgRequest<any>({ path, method: "GET" })
+    if (!Array.isArray(data?.links)) {
+      return []
+    }
+    return data.links.map((row: any) => ({
+      item_id: String(row?.item_id ?? itemId),
+      note_id: String(row?.note_id ?? ""),
+      created_at: row?.created_at ?? undefined
+    }))
+  }
+
+  async unlinkReadingItemNote(itemId: string, noteId: string): Promise<{ ok: boolean }> {
+    const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/links/note/${encodeURIComponent(noteId)}` as const
+    const response = await bgRequest<{ ok?: boolean }>({ path, method: "DELETE" })
+    return { ok: Boolean(response?.ok) }
   }
 
   async summarizeReadingItem(
@@ -6035,6 +7381,101 @@ export class TldwApiClient {
     return new Blob([data], { type: mime })
   }
 
+  async listIngestionSources(): Promise<IngestionSourceListResponse> {
+    const response = await this.request<any>({
+      path: "/api/v1/ingestion-sources",
+      method: "GET"
+    })
+    return normalizeIngestionSourceListResponse(response)
+  }
+
+  async getIngestionSource(sourceId: string): Promise<IngestionSourceSummary> {
+    const encodedSourceId = encodeURIComponent(sourceId)
+    const response = await this.request<any>({
+      path: `/api/v1/ingestion-sources/${encodedSourceId}`,
+      method: "GET"
+    })
+    return normalizeIngestionSource(response)
+  }
+
+  async listIngestionSourceItems(
+    sourceId: string,
+    filters?: IngestionSourceItemFilters
+  ): Promise<IngestionSourceItemsListResponse> {
+    const encodedSourceId = encodeURIComponent(sourceId)
+    const query = this.buildQuery(filters as Record<string, any> | undefined)
+    const response = await this.request<any>({
+      path: `/api/v1/ingestion-sources/${encodedSourceId}/items${query}`,
+      method: "GET"
+    })
+    return normalizeIngestionSourceItemsListResponse(response)
+  }
+
+  async createIngestionSource(
+    payload: CreateIngestionSourceRequest
+  ): Promise<IngestionSourceSummary> {
+    const response = await this.request<any>({
+      path: "/api/v1/ingestion-sources",
+      method: "POST",
+      body: payload
+    })
+    return normalizeIngestionSource(response)
+  }
+
+  async updateIngestionSource(
+    sourceId: string,
+    payload: UpdateIngestionSourceRequest
+  ): Promise<IngestionSourceSummary> {
+    const encodedSourceId = encodeURIComponent(sourceId)
+    const response = await this.request<any>({
+      path: `/api/v1/ingestion-sources/${encodedSourceId}`,
+      method: "PATCH",
+      body: payload
+    })
+    return normalizeIngestionSource(response)
+  }
+
+  async syncIngestionSource(sourceId: string): Promise<IngestionSourceSyncTriggerResponse> {
+    const encodedSourceId = encodeURIComponent(sourceId)
+    const response = await this.request<any>({
+      path: `/api/v1/ingestion-sources/${encodedSourceId}/sync`,
+      method: "POST"
+    })
+    return normalizeIngestionSourceSyncTrigger(response)
+  }
+
+  async uploadIngestionSourceArchive(
+    sourceId: string,
+    file: File
+  ): Promise<IngestionSourceSyncTriggerResponse> {
+    const encodedSourceId = encodeURIComponent(sourceId)
+    const data = await file.arrayBuffer()
+    const response = await this.upload<any>({
+      path: `/api/v1/ingestion-sources/${encodedSourceId}/archive`,
+      method: "POST",
+      fileFieldName: "archive",
+      file: {
+        name: file.name || "archive-upload",
+        type: file.type || "application/octet-stream",
+        data
+      }
+    })
+    return normalizeIngestionSourceSyncTrigger(response)
+  }
+
+  async reattachIngestionSourceItem(
+    sourceId: string,
+    itemId: string
+  ): Promise<IngestionSourceItem> {
+    const encodedSourceId = encodeURIComponent(sourceId)
+    const encodedItemId = encodeURIComponent(itemId)
+    const response = await this.request<any>({
+      path: `/api/v1/ingestion-sources/${encodedSourceId}/items/${encodedItemId}/reattach`,
+      method: "POST"
+    })
+    return normalizeIngestionSourceItem(response)
+  }
+
   // Import/Export
   async importReadingList(data: {
     source: ImportSource
@@ -6234,24 +7675,102 @@ export class TldwApiClient {
     })
   }
 
-  async getPresentation(presentationId: string): Promise<{
-    id: string
-    title: string
-    description?: string
-    theme: string
-    slides: Array<{
-      order: number
-      layout: string
-      title?: string
-      content: string
-      speaker_notes?: string
-    }>
-    version: number
-    created_at: string
-    last_modified: string
-  }> {
-    return await this.request<any>({
+  async getPresentation(presentationId: string): Promise<PresentationStudioRecord> {
+    return await this.request<PresentationStudioRecord>({
       path: `/api/v1/slides/presentations/${encodeURIComponent(presentationId)}`,
+      method: "GET"
+    })
+  }
+
+  async createPresentation(payload: {
+    title: string
+    description?: string | null
+    theme?: string
+    marp_theme?: string | null
+    template_id?: string | null
+    settings?: Record<string, any> | null
+    studio_data?: Record<string, any> | null
+    slides: PresentationStudioSlide[]
+    custom_css?: string | null
+  }): Promise<PresentationStudioRecord> {
+    const path = await this.resolveApiPath("slides.presentations.create", [
+      "/api/v1/slides/presentations"
+    ])
+    return await this.request<PresentationStudioRecord>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async patchPresentation(
+    presentationId: string,
+    payload: {
+      title?: string | null
+      description?: string | null
+      theme?: string | null
+      marp_theme?: string | null
+      template_id?: string | null
+      settings?: Record<string, any> | null
+      studio_data?: Record<string, any> | null
+      slides?: PresentationStudioSlide[] | null
+      custom_css?: string | null
+    },
+    options?: { ifMatch?: string | number | null }
+  ): Promise<PresentationStudioRecord> {
+    const template = await this.resolveApiPath("slides.presentations.patch", [
+      "/api/v1/slides/presentations/{presentation_id}"
+    ])
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (options?.ifMatch != null) {
+      headers["If-Match"] = String(options.ifMatch)
+    }
+    return await this.request<PresentationStudioRecord>({
+      path: this.fillPathParams(template, presentationId),
+      method: "PATCH",
+      headers,
+      body: payload
+    })
+  }
+
+  async submitPresentationRenderJob(
+    presentationId: string,
+    payload: { format: PresentationRenderFormat },
+    options: { ifMatch: string | number }
+  ): Promise<PresentationRenderJob> {
+    const template = await this.resolveApiPath("slides.presentations.render.create", [
+      "/api/v1/slides/presentations/{presentation_id}/render-jobs"
+    ])
+    return await this.request<PresentationRenderJob>({
+      path: this.fillPathParams(template, presentationId),
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": String(options.ifMatch)
+      },
+      body: payload
+    })
+  }
+
+  async getPresentationRenderJob(jobId: number): Promise<PresentationRenderJob> {
+    const template = await this.resolveApiPath("slides.presentations.render.get", [
+      "/api/v1/slides/render-jobs/{job_id}"
+    ])
+    return await this.request<PresentationRenderJob>({
+      path: this.fillPathParams(template, String(jobId)),
+      method: "GET"
+    })
+  }
+
+  async listPresentationRenderArtifacts(
+    presentationId: string
+  ): Promise<PresentationRenderArtifactList> {
+    const template = await this.resolveApiPath("slides.presentations.render.artifacts", [
+      "/api/v1/slides/presentations/{presentation_id}/render-artifacts"
+    ])
+    return await this.request<PresentationRenderArtifactList>({
+      path: this.fillPathParams(template, presentationId),
       method: "GET"
     })
   }
@@ -6465,6 +7984,179 @@ export class TldwApiClient {
       "/api/v1/skills/context/"
     ])
     return await bgRequest<any>({ path: base, method: "GET" })
+  }
+
+  // --- Workspace sub-resource methods ---
+
+  async getWorkspace(workspaceId: string): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}`, method: "GET" })
+  }
+
+  async getWorkspaceSources(workspaceId: string): Promise<any[]> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}/sources`, method: "GET" })
+  }
+
+  async addWorkspaceSource(workspaceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/sources`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async updateWorkspaceSource(workspaceId: string, sourceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/sources/${sourceId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async deleteWorkspaceSource(workspaceId: string, sourceId: string): Promise<void> {
+    await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/sources/${sourceId}`,
+      method: "DELETE",
+    })
+  }
+
+  async getWorkspaceArtifacts(workspaceId: string): Promise<any[]> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}/artifacts`, method: "GET" })
+  }
+
+  async addWorkspaceArtifact(workspaceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/artifacts`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async updateWorkspaceArtifact(workspaceId: string, artifactId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/artifacts/${artifactId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async deleteWorkspaceArtifact(workspaceId: string, artifactId: string): Promise<void> {
+    await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/artifacts/${artifactId}`,
+      method: "DELETE",
+    })
+  }
+
+  async getWorkspaceNotes(workspaceId: string): Promise<any[]> {
+    return await bgRequest<any>({ path: `/api/v1/workspaces/${workspaceId}/notes`, method: "GET" })
+  }
+
+  async addWorkspaceNote(workspaceId: string, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/notes`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async updateWorkspaceNote(workspaceId: string, noteId: number, data: Record<string, any>): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/notes/${noteId}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: data,
+    })
+  }
+
+  async deleteWorkspaceNote(workspaceId: string, noteId: number): Promise<void> {
+    await bgRequest<any>({
+      path: `/api/v1/workspaces/${workspaceId}/notes/${noteId}`,
+      method: "DELETE",
+    })
+  }
+
+  // ── Watchlists / Monitoring ──
+
+  async listWatchlists(): Promise<any[]> {
+    const res = await bgRequest<any>({ path: "/api/v1/monitoring/watchlists", method: "GET" })
+    return res?.watchlists ?? (Array.isArray(res) ? res : [])
+  }
+
+  async createWatchlist(payload: { name: string; description?: string; scope_type?: string; rules?: any[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/monitoring/watchlists",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteWatchlist(id: string): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/monitoring/watchlists/${id}`, method: "DELETE" })
+  }
+
+  async listMonitoringAlerts(params?: { rule_severity?: string; source?: string; limit?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/monitoring/alerts${query}`, method: "GET" })
+  }
+
+  async acknowledgeAlert(id: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/monitoring/alerts/${id}/acknowledge`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async dismissAlert(id: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/monitoring/alerts/${id}`, method: "DELETE" })
+  }
+
+  // ── Runtime Config ──
+
+  async getCleanupSettings(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/cleanup-settings", method: "GET" })
+  }
+
+  async updateCleanupSettings(payload: any): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/cleanup-settings",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getRegistrationSettings(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/registration-settings", method: "GET" })
+  }
+
+  async updateRegistrationSettings(payload: any): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/registration-settings",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  // ── Rate Limiting / Resource Governor ──
+
+  async getGovernorPolicy(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/resource-governor/policy", method: "GET" })
+  }
+
+  async getGovernorCoverage(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/diag/coverage", method: "GET" })
+  }
+
+  async listAdminRateLimits(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/rate-limits", method: "GET" })
   }
 }
 

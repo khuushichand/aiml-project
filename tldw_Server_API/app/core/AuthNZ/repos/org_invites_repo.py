@@ -312,6 +312,8 @@ class AuthnzOrgInvitesRepo:
                     total = count_row[0] if count_row else 0
 
                     # Get paginated results
+                    limit_placeholder = f"${len(params) + 1}"
+                    offset_placeholder = f"${len(params) + 2}"
                     select_sql_template = """
                         SELECT i.id, i.code, i.org_id, i.team_id, i.role_to_grant, i.created_by,
                                i.created_at, i.expires_at, i.max_uses, i.uses_count, i.is_active,
@@ -320,7 +322,7 @@ class AuthnzOrgInvitesRepo:
                         LEFT JOIN teams t ON t.id = i.team_id
                         WHERE {where_clause}
                         ORDER BY i.created_at DESC
-                        LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
+                        LIMIT {limit_placeholder} OFFSET {offset_placeholder}
                         """
                     select_sql = select_sql_template.format_map(locals())  # nosec B608
                     rows = await conn.fetch(

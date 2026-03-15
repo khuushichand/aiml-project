@@ -26,8 +26,12 @@ const NAV_GROUPS: Array<{ key: NavGroupKey; titleToken: string }> = [
 type NavItemWithOrder = SettingsNavItem & { order: number }
 
 const SETTINGS_ROUTE_PREFIX = "/settings"
+const SETTINGS_NAV_ADDITIONAL_PATHS = new Set<string>([
+  "/moderation-playground"
+])
 
 const SETTINGS_BETA_BADGE_WINDOWS: Record<string, string> = {
+  "/settings/family-guardrails": "2026-12-31",
   "/settings/guardian": "2026-12-31",
   "/settings/prompt-studio": "2026-09-30"
 }
@@ -56,7 +60,12 @@ const buildNavItemsByGroup = (
 ) =>
   optionRoutes.reduce((acc, route) => {
     if (!route.nav) return acc
-    if (!route.path.startsWith(SETTINGS_ROUTE_PREFIX)) return acc
+    if (
+      !route.path.startsWith(SETTINGS_ROUTE_PREFIX) &&
+      !SETTINGS_NAV_ADDITIONAL_PATHS.has(route.path)
+    ) {
+      return acc
+    }
     const capabilitiesResolved = capabilities !== undefined
     if (
       capabilitiesResolved &&

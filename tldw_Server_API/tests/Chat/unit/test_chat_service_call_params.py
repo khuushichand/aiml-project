@@ -3,6 +3,7 @@
 import pytest
 
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionRequest
+from tldw_Server_API.app.core.LLM_Calls import adapter_registry
 from tldw_Server_API.app.core.Chat.chat_service import build_call_params_from_request
 
 
@@ -35,3 +36,59 @@ def test_build_call_params_excludes_extension_fields() -> None:
     assert params["api_endpoint"] == "openai"
     assert params["api_key"] == "test-key"
     assert params["messages_payload"]
+
+
+@pytest.mark.unit
+def test_build_call_params_negotiates_structured_response_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure shared call-param construction downgrades unsupported json_schema requests."""
+
+    class _JsonObjectOnlyAdapter:
+        def capabilities(self):
+            return {"response_format_types": ["json_object"]}
+
+    class _Registry:
+        def get_adapter(self, _provider: str):
+            return _JsonObjectOnlyAdapter()
+
+    monkeypatch.setattr(adapter_registry, "get_registry", lambda: _Registry())
+
+    req = ChatCompletionRequest(
+        model="gpt-4o-mini",
+        api_provider="openai",
+        messages=[{"role": "user", "content": "return structured"}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            },
+        },
+    )
+
+    params = build_call_params_from_request(
+        request_data=req,
+        target_api_provider="openai",
+        provider_api_key="test-key",
+        templated_llm_payload=[{"role": "user", "content": "return structured"}],
+        final_system_message=None,
+        app_config=None,
+    )
+
+    assert params["response_format"] == {"type": "json_object"}
+    assert params["_structured_requested_response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "answer_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+            },
+        },
+    }

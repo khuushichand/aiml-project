@@ -72,6 +72,8 @@ Top navigation groups features into tabs. Notable areas include:
 
 - Evaluations
   - Evaluations tab: run unified evaluations (RAG, batch, metrics) and inspect results.
+  - Benchmark runs via API + WebUI/extension:
+    [Benchmark Creation and Runs (API + WebUI/Extension)](../Server/Benchmark_Creation_API_WebUI_Extension_Guide.md).
 
 - Vector stores and embeddings
   - Embeddings and Vector Stores tabs: manage providers/models, warmups, caches, collections, upserts, and queries.

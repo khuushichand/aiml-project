@@ -76,6 +76,10 @@ except ImportError:  # pragma: no cover - defensive fallback
 import yaml
 
 from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator, MigrationError
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    begin_immediate_if_needed,
+    configure_sqlite_connection,
+)
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 
 try:
@@ -1437,8 +1441,7 @@ class MediaDatabase:
             pc = sqlite3.connect(self.db_path_str, check_same_thread=False, isolation_level=None)
             try:
                 pc.row_factory = sqlite3.Row
-                pc.execute("PRAGMA foreign_keys = ON")
-                pc.execute("PRAGMA busy_timeout = 10000")
+                self._apply_sqlite_connection_pragmas(pc)
             except sqlite3.Error:
                 pass
             self._persistent_conn = pc
@@ -1805,14 +1808,14 @@ class MediaDatabase:
                 wal_mode = bool(getattr(cfg, "sqlite_wal_mode", True))
                 foreign_keys = bool(getattr(cfg, "sqlite_foreign_keys", True))
 
-            if foreign_keys:
-                conn.execute("PRAGMA foreign_keys = ON")
-            if wal_mode and not self.is_memory_db:
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.execute("PRAGMA synchronous = NORMAL")
-            conn.execute("PRAGMA busy_timeout = 10000")
-            conn.execute("PRAGMA cache_size = -2000")
-            conn.execute("PRAGMA temp_store = MEMORY")
+            configure_sqlite_connection(
+                conn,
+                use_wal=wal_mode,
+                synchronous="NORMAL" if wal_mode else None,
+                foreign_keys=foreign_keys,
+                busy_timeout_ms=10000,
+                cache_size=-2000,
+            )
         except _MEDIA_NONCRITICAL_EXCEPTIONS:
             pass
 
@@ -2507,8 +2510,7 @@ class MediaDatabase:
                 with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
                     conn.row_factory = sqlite3.Row
                 try:
-                    conn.execute("PRAGMA foreign_keys = ON")
-                    conn.execute("PRAGMA busy_timeout = 10000")
+                    self._apply_sqlite_connection_pragmas(conn)
                 except sqlite3.Error:
                     pass
             else:
@@ -2517,7 +2519,7 @@ class MediaDatabase:
             self._inc_tx_depth()
             try:
                 if outermost:
-                    conn.execute("BEGIN")
+                    begin_immediate_if_needed(conn)
                     self._set_txn_conn(conn)
                     logging.debug("Started SQLite transaction.")
                 yield conn
@@ -12375,6 +12377,73 @@ class MediaDatabase:
                 raise
             return
 
+    def sync_refresh_fts_for_entity(
+        self,
+        conn,
+        *,
+        entity: str,
+        entity_uuid: str,
+        operation: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Refresh FTS state for sync-applied Media/Keywords mutations inside a transaction."""
+        payload = payload or {}
+
+        if entity == "Media":
+            row = self._fetchone_with_connection(
+                conn,
+                "SELECT id, title, content, deleted FROM Media WHERE uuid = ?",
+                (entity_uuid,),
+            )
+            if not row:
+                logging.warning(
+                    "sync_refresh_fts_for_entity: Media row not found for uuid={} operation={}",
+                    entity_uuid,
+                    operation,
+                )
+                return
+
+            media_id = int(row["id"])
+            if operation == "delete" or bool(row.get("deleted", 0)):
+                self._delete_fts_media(conn, media_id)
+                return
+
+            if operation in {"create", "update"}:
+                if operation == "update" and not any(k in payload for k in ("title", "content", "deleted")):
+                    return
+                self._update_fts_media(
+                    conn,
+                    media_id,
+                    str(row.get("title") or ""),
+                    row.get("content"),
+                )
+            return
+
+        if entity == "Keywords":
+            row = self._fetchone_with_connection(
+                conn,
+                "SELECT id, keyword, deleted FROM Keywords WHERE uuid = ?",
+                (entity_uuid,),
+            )
+            if not row:
+                logging.warning(
+                    "sync_refresh_fts_for_entity: Keyword row not found for uuid={} operation={}",
+                    entity_uuid,
+                    operation,
+                )
+                return
+
+            keyword_id = int(row["id"])
+            if operation == "delete" or bool(row.get("deleted", 0)):
+                self._delete_fts_keyword(conn, keyword_id)
+                return
+
+            if operation in {"create", "update"}:
+                if operation == "update" and not any(k in payload for k in ("keyword", "deleted")):
+                    return
+                self._update_fts_keyword(conn, keyword_id, str(row.get("keyword") or ""))
+            return
+
         # In Media_DB_v2.py (within the Database class)
 
         # Add 'media_ids_filter' to the method signature
@@ -12661,13 +12730,15 @@ class MediaDatabase:
         if cleaned_must_have:
             kw_mh_placeholders = ','.join('?' * len(cleaned_must_have))
             # Subquery to ensure media_id is linked to ALL provided keywords
-            conditions.append("""
+            conditions.append(
+                """
                 (SELECT COUNT(DISTINCT k_mh.id)
                  FROM MediaKeywords mk_mh
                  JOIN Keywords k_mh ON mk_mh.keyword_id = k_mh.id
                  WHERE mk_mh.media_id = m.id AND k_mh.deleted = 0 AND LOWER(k_mh.keyword) IN ({kw_mh_placeholders})
                 ) = ?
-            """).format_map(locals())  # nosec B608
+            """.format_map(locals())  # nosec B608
+            )
             params.extend(cleaned_must_have)
             params.append(len(cleaned_must_have))
 
@@ -12675,14 +12746,16 @@ class MediaDatabase:
         cleaned_must_not_have = [k.strip().lower() for k in must_not_have_keywords if k and k.strip()] if must_not_have_keywords else []
         if cleaned_must_not_have:
             kw_mnh_placeholders = ','.join('?' * len(cleaned_must_not_have))
-            conditions.append("""
+            conditions.append(
+                """
                 NOT EXISTS (
                     SELECT 1
                     FROM MediaKeywords mk_mnh
                     JOIN Keywords k_mnh ON mk_mnh.keyword_id = k_mnh.id
                     WHERE mk_mnh.media_id = m.id AND k_mnh.deleted = 0 AND LOWER(k_mnh.keyword) IN ({kw_mnh_placeholders})
                 )
-            """).format_map(locals())  # nosec B608
+            """.format_map(locals())  # nosec B608
+            )
             params.extend(cleaned_must_not_have)
 
         # Text Search Logic (FTS or LIKE)
@@ -15857,6 +15930,134 @@ class MediaDatabase:
         except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error restoring media {media_id} trash: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected restore trash error: {e}") from e  # noqa: TRY003
+
+    def apply_synced_document_content_update(
+        self,
+        *,
+        media_id: int,
+        content: str,
+        prompt: str | None = None,
+        analysis_content: str | None = None,
+        safe_metadata: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Apply an externally-sourced document content update atomically.
+
+        This helper keeps file-sync reconciliation aligned with the main media
+        update semantics by updating the active ``Media`` row, refreshing FTS,
+        and creating a new ``DocumentVersion`` in one transaction.
+        """
+        if content is None:
+            raise InputError("Content is required for synced document updates.")  # noqa: TRY003
+
+        client_id = self.client_id
+        current_time = self._get_current_utc_timestamp_str()
+
+        try:
+            with self.transaction() as conn:
+                media_info = self._fetchone_with_connection(
+                    conn,
+                    "SELECT uuid, version, title FROM Media WHERE id = ? AND deleted = 0",
+                    (media_id,),
+                )
+                if not media_info:
+                    raise InputError(f"Media {media_id} not found or deleted.")  # noqa: TRY003, TRY301
+
+                media_uuid = media_info["uuid"]
+                current_media_version = media_info["version"]
+                current_title = media_info["title"]
+                new_media_version = current_media_version + 1
+                new_content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+                update_cursor = self._execute_with_connection(
+                    conn,
+                    """
+                    UPDATE Media
+                    SET content = ?,
+                        content_hash = ?,
+                        last_modified = ?,
+                        version = ?,
+                        client_id = ?,
+                        chunking_status = 'pending',
+                        vector_processing = 0
+                    WHERE id = ? AND version = ?
+                    """,
+                    (
+                        content,
+                        new_content_hash,
+                        current_time,
+                        new_media_version,
+                        client_id,
+                        media_id,
+                        current_media_version,
+                    ),
+                )
+                if getattr(update_cursor, "rowcount", 0) == 0:
+                    raise ConflictError("Media", media_id)  # noqa: TRY301
+
+                new_doc_version_info = self.create_document_version(
+                    media_id=media_id,
+                    content=content,
+                    prompt=prompt,
+                    analysis_content=analysis_content,
+                    safe_metadata=safe_metadata,
+                )
+
+                updated_media_data = self._fetchone_with_connection(
+                    conn,
+                    "SELECT * FROM Media WHERE id = ?",
+                    (media_id,),
+                ) or {}
+                updated_media_data["created_doc_ver_uuid"] = new_doc_version_info.get("uuid")
+                updated_media_data["created_doc_ver_num"] = new_doc_version_info.get("version_number")
+                self._log_sync_event(
+                    conn,
+                    "Media",
+                    media_uuid,
+                    "update",
+                    new_media_version,
+                    updated_media_data,
+                )
+                self._update_fts_media(conn, media_id, current_title, content)
+
+            logger.info(
+                "Applied synced content update for media {}. New doc version: {}, new media version: {}",
+                media_id,
+                new_doc_version_info.get("version_number"),
+                new_media_version,
+            )
+            try:
+                if _CollectionsDB is not None and client_id is not None:
+                    _CollectionsDB.from_backend(user_id=str(client_id), backend=self.backend).mark_highlights_stale_if_content_changed(
+                        media_id,
+                        new_content_hash,
+                    )
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as _anch_err:
+                logger.debug("Highlight re-anchoring hook (sync update) failed: {}", _anch_err)
+            try:
+                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
+                    invalidate_intra_doc_vectors,  # lazy import
+                )
+
+                invalidate_intra_doc_vectors(str(media_id))
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as _rag_err:
+                logger.debug("Intra-doc vector invalidation skipped for media {}: {}", media_id, _rag_err)
+        except (InputError, ConflictError, DatabaseError, sqlite3.Error, TypeError) as e:
+            logger.error(f"Synced content update error media {media_id}: {e}", exc_info=True)
+            if isinstance(e, (InputError, ConflictError, DatabaseError, TypeError)):
+                raise
+            raise DatabaseError(f"Synced content update failed: {e}") from e  # noqa: TRY003
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Unexpected synced content update error media {media_id}: {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected synced content update error: {e}") from e  # noqa: TRY003
+        else:
+            return {
+                "media_id": media_id,
+                "content_hash": new_content_hash,
+                "new_media_version": new_media_version,
+                "document_version_number": new_doc_version_info.get("version_number"),
+                "document_version_uuid": new_doc_version_info.get("uuid"),
+            }
 
     def rollback_to_version(self, media_id: int, target_version_number: int) -> dict[str, Any]:
         """

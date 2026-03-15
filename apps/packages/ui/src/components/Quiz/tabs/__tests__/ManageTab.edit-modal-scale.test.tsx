@@ -76,6 +76,12 @@ describe("ManageTab edit modal scale", () => {
             total_questions: 2,
             passing_score: 70,
             media_id: null,
+            source_bundle_json: [
+              { source_type: "media", source_id: "42" },
+              { source_type: "note", source_id: "note-1" },
+              { source_type: "flashcard_deck", source_id: "7" },
+              { source_type: "flashcard_card", source_id: "card-123" }
+            ],
             time_limit_seconds: 900,
             deleted: false,
             client_id: "test",
@@ -154,7 +160,7 @@ describe("ManageTab edit modal scale", () => {
     const editModal = modalTitle.closest(".ant-modal") ?? document.querySelector(".ant-modal")
     expect(editModal).not.toBeNull()
     if (!editModal) return
-    const modalQueries = within(editModal)
+    const modalQueries = within(editModal as HTMLElement)
 
     expect(modalQueries.getByTestId("manage-questions-scroll-container")).toBeInTheDocument()
     expect(modalQueries.queryByText(/items\/page/i)).not.toBeInTheDocument()
@@ -180,4 +186,23 @@ describe("ManageTab edit modal scale", () => {
       }
     })
   }, 20000)
+
+  it("shows source badges for mixed-source quizzes", async () => {
+    render(
+      <ManageTab
+        onNavigateToCreate={() => {}}
+        onNavigateToGenerate={() => {}}
+        onStartQuiz={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId("manage-quiz-source-media-12")).toBeInTheDocument()
+    })
+    expect(screen.getByTestId("manage-quiz-source-notes-12")).toBeInTheDocument()
+    expect(screen.getByTestId("manage-quiz-source-flashcards-12")).toBeInTheDocument()
+    expect(screen.getByText("Media 1")).toBeInTheDocument()
+    expect(screen.getByText("Notes 1")).toBeInTheDocument()
+    expect(screen.getByText("Flashcards 2")).toBeInTheDocument()
+  })
 })

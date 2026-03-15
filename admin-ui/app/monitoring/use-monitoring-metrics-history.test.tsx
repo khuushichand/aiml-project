@@ -172,7 +172,7 @@ describe('useMonitoringMetricsHistory', () => {
     expect(onManualRangeLoadSuccess).not.toHaveBeenCalled();
   });
 
-  it('falls back to synthetic history when the metrics endpoint fails', async () => {
+  it('does not fabricate monitoring history when the metrics endpoint fails', async () => {
     const apiClient = buildApiClient();
     apiClient.getMonitoringMetrics.mockRejectedValue(new Error('monitoring down'));
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -180,10 +180,11 @@ describe('useMonitoringMetricsHistory', () => {
     render(<Harness apiClient={apiClient} pollIntervalMs={60_000} />);
 
     await waitFor(() => {
-      expect(apiClient.getHealthMetrics).toHaveBeenCalledTimes(1);
-      expect(apiClient.getMetrics).toHaveBeenCalledTimes(1);
-      expect(Number(screen.getByTestId('history-count').textContent)).toBeGreaterThan(0);
+      expect(apiClient.getMonitoringMetrics).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('history-count').textContent).toBe('0');
     });
+    expect(apiClient.getHealthMetrics).not.toHaveBeenCalled();
+    expect(apiClient.getMetrics).not.toHaveBeenCalled();
 
     consoleWarn.mockRestore();
   });

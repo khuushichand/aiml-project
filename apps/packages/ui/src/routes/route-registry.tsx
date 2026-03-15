@@ -34,12 +34,13 @@ import {
   SlidersHorizontal,
   FileText,
   Zap,
-  Sparkles
+  Sparkles,
+  ListTodo,
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
-import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
+import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
 
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
@@ -100,6 +101,10 @@ const OptionChatbooks = createSettingsRoute(
 const SidepanelChat = lazy(() => import("./sidepanel-chat"))
 const SidepanelSettings = lazy(() => import("./sidepanel-settings"))
 const SidepanelAgent = lazy(() => import("./sidepanel-agent"))
+const SidepanelCompanion = lazy(() => import("./sidepanel-companion"))
+const SidepanelCompanionConversation = lazy(
+  () => import("./sidepanel-companion-conversation")
+)
 const SidepanelPersona = lazy(() => import("./sidepanel-persona"))
 const SidepanelErrorBoundaryTest = lazy(() => import("./sidepanel-error-boundary-test"))
 const OptionRagSettings = createSettingsRoute(
@@ -155,6 +160,7 @@ const OptionSettingsPromptStudio = createSettingsRoute(
 const OptionAdminServer = lazy(() => import("./option-admin-server"))
 const OptionAdminLlamacpp = lazy(() => import("./option-admin-llamacpp"))
 const OptionAdminMlx = lazy(() => import("./option-admin-mlx"))
+const OptionAdminRuntimeConfig = lazy(() => import("./option-admin-runtime-config"))
 const OptionChatSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/ChatSettings"),
   "ChatSettings"
@@ -180,19 +186,41 @@ const OptionWritingPlayground = lazy(() => import("./option-writing-playground")
 const OptionDocumentWorkspace = lazy(() => import("./option-document-workspace"))
 const OptionModelPlayground = lazy(() => import("./option-model-playground"))
 const OptionModerationPlayground = lazy(() => import("./option-moderation-playground"))
+const OptionFamilyGuardrailsWizard = lazy(
+  () => import("./option-family-guardrails-wizard")
+)
 const OptionGuardianSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/GuardianSettings"),
   "GuardianSettings"
 )
 const OptionChatbooksPlayground = lazy(() => import("./option-chatbooks-playground"))
 const OptionWatchlists = lazy(() => import("./option-watchlists"))
+const OptionCompanion = lazy(() => import("./option-companion"))
+const OptionCompanionConversation = lazy(
+  () => import("./option-companion-conversation")
+)
 const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
+const OptionSources = lazy(() => import("./option-sources"))
+const OptionSourcesNew = lazy(() => import("./option-sources-new"))
+const OptionSourcesDetail = lazy(() => import("./option-sources-detail"))
+const OptionAdminSources = lazy(() => import("./option-admin-sources"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
+const OptionPresentationStudio = lazy(() => import("./option-presentation-studio"))
+const OptionPresentationStudioNew = lazy(() => import("./option-presentation-studio-new"))
+const OptionPresentationStudioStart = lazy(() => import("./option-presentation-studio-start"))
+const OptionPresentationStudioDetail = lazy(
+  () => import("./option-presentation-studio-detail")
+)
+const OptionChatWorkflows = lazy(() => import("./option-chat-workflows"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
+const OptionAgents = lazy(() => import("./option-agents"))
+const OptionAgentTasks = lazy(() => import("./option-agent-tasks"))
+const OptionMcpHub = lazy(() => import("./option-mcp-hub"))
 const OptionSkills = lazy(() => import("./option-skills"))
+const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
 const OptionSetup = lazy(() => import("./option-setup"))
 const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
 const OptionWorkspacePlayground = lazy(() => import("./option-workspace-playground"))
@@ -239,6 +267,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "settings:manageModels.title",
       icon: BrainCircuitIcon,
       order: 6
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/mcp-hub",
+    element: <OptionMcpHub />,
+    nav: {
+      group: "server",
+      labelToken: "settings:mcpHubNav",
+      icon: ServerIcon,
+      order: 7
     }
   },
   {
@@ -492,6 +531,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: REPO2TXT_PATH,
+    element: <OptionRepo2Txt />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:repo2txt.nav",
+      icon: FileText,
+      order: 7
+    }
+  },
+  {
+    kind: "options",
     path: "/model-playground",
     element: <OptionModelPlayground />,
     nav: {
@@ -529,6 +579,21 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       beta: true
     }
   },
+  {
+    kind: "options",
+    path: "/sources",
+    element: <OptionSources />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.sources",
+      icon: Layers,
+      order: 9.5,
+      beta: true
+    }
+  },
+  { kind: "options", path: "/sources/new", element: <OptionSourcesNew /> },
+  { kind: "options", path: "/sources/:sourceId", element: <OptionSourcesDetail /> },
+  { kind: "options", path: "/admin/sources", element: <OptionAdminSources /> },
   {
     kind: "options",
     path: "/media",
@@ -575,6 +640,24 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/companion",
+    element: <OptionCompanion />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.companion",
+      icon: Sparkles,
+      order: 2.5,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/companion/conversation",
+    element: <OptionCompanionConversation />,
+    targets: ALL_TARGETS
+  },
+  {
+    kind: "options",
     path: "/notes",
     element: <OptionNotes />,
     nav: {
@@ -611,6 +694,45 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/presentation-studio",
+    element: <OptionPresentationStudio />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.presentationStudio",
+      icon: ImageIcon,
+      order: 10.25,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio/new",
+    element: <OptionPresentationStudioNew />
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio/start",
+    element: <OptionPresentationStudioStart />
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio/:projectId",
+    element: <OptionPresentationStudioDetail />
+  },
+  {
+    kind: "options",
+    path: "/chat-workflows",
+    element: <OptionChatWorkflows />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.chatWorkflows",
+      icon: ClipboardList,
+      order: 10.5,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
     path: "/workflow-editor",
     element: <OptionWorkflowEditor />,
     nav: {
@@ -630,6 +752,42 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "settings:acpPlaygroundNav",
       icon: Bot,
       order: 12,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/agents",
+    element: <OptionAgents />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.agents",
+      icon: Bot,
+      order: 12.2,
+      beta: true,
+    },
+  },
+  {
+    kind: "options",
+    path: "/agent-tasks",
+    element: <OptionAgentTasks />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.agentTasks",
+      icon: ListTodo,
+      order: 12.4,
+      beta: true,
+    },
+  },
+  {
+    kind: "options",
+    path: "/mcp-hub",
+    element: <OptionMcpHub />,
+    nav: {
+      group: "workspace",
+      labelToken: "settings:mcpHubNav",
+      icon: Bot,
+      order: 12.5,
       beta: true
     }
   },
@@ -683,13 +841,25 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/settings/family-guardrails",
+    element: <OptionFamilyGuardrailsWizard />,
+    nav: {
+      group: "server",
+      labelToken: "settings:familyGuardrailsWizardNav",
+      icon: ShieldCheck,
+      order: 8,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
     path: "/settings/guardian",
     element: <OptionGuardianSettings />,
     nav: {
       group: "server",
       labelToken: "settings:guardianNav",
       icon: ShieldCheck,
-      order: 8,
+      order: 9,
       beta: true
     }
   },
@@ -725,6 +895,19 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/admin/runtime-config",
+    element: <OptionAdminRuntimeConfig />,
+    targets: ALL_TARGETS,
+    nav: {
+      group: "server",
+      labelToken: "option:header.adminRuntimeConfig",
+      icon: SlidersHorizontal,
+      order: 10,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
     path: "/quick-chat-popout",
     element: <OptionQuickChatPopout />,
     targets: ALL_TARGETS
@@ -734,6 +917,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     kind: "sidepanel",
     path: "/agent",
     element: <SidepanelAgent />,
+    targets: ALL_TARGETS
+  },
+  {
+    kind: "sidepanel",
+    path: "/companion",
+    element: <SidepanelCompanion />,
+    targets: ALL_TARGETS
+  },
+  {
+    kind: "sidepanel",
+    path: "/companion/conversation",
+    element: <SidepanelCompanionConversation />,
     targets: ALL_TARGETS
   },
   {

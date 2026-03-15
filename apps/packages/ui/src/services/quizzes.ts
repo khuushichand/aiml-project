@@ -1,6 +1,13 @@
 import { bgRequest } from "@/services/background-proxy"
 import type { AllowedPath } from "@/services/tldw/openapi-guard"
 import { createResourceClient } from "@/services/resource-client"
+import type {
+  DeckSchedulerSettingsEnvelope,
+  DeckSchedulerType,
+  StudyAssistantContextResponse,
+  StudyAssistantRespondRequest,
+  StudyAssistantRespondResponse
+} from "@/services/flashcards"
 
 const quizzesClient = createResourceClient({
   basePath: "/api/v1/quizzes" as AllowedPath
@@ -26,7 +33,20 @@ const getQuizAttemptsClient = (quizId: number) =>
 // Question types
 export type QuestionType = "multiple_choice" | "multi_select" | "matching" | "true_false" | "fill_blank"
 export type AnswerValue = number | string | number[] | Record<string, string>
+export type QuizGenerateSourceType =
+  | "media"
+  | "note"
+  | "flashcard_deck"
+  | "flashcard_card"
+  | "quiz_attempt"
+  | "quiz_attempt_question"
+export type QuizGenerateSource = {
+  source_type: QuizGenerateSourceType
+  source_id: string
+}
 export type SourceCitation = {
+  source_type?: QuizGenerateSourceType | null
+  source_id?: string | null
   label?: string | null
   quote?: string | null
   media_id?: number | null
@@ -42,6 +62,7 @@ export type Quiz = {
   description?: string | null
   workspace_tag?: string | null
   media_id?: number | null
+  source_bundle_json?: QuizGenerateSource[] | null
   total_questions: number
   time_limit_seconds?: number | null
   passing_score?: number | null
@@ -121,6 +142,7 @@ export type QuizCreate = {
   description?: string | null
   workspace_tag?: string | null
   media_id?: number | null
+  source_bundle_json?: QuizGenerateSource[] | null
   time_limit_seconds?: number | null
   passing_score?: number | null
 }
@@ -130,6 +152,7 @@ export type QuizUpdate = {
   description?: string | null
   workspace_tag?: string | null
   media_id?: number | null
+  source_bundle_json?: QuizGenerateSource[] | null
   time_limit_seconds?: number | null
   passing_score?: number | null
   expected_version?: number | null
@@ -165,14 +188,93 @@ export type QuestionUpdate = {
 }
 
 // AI generation request
-export type QuizGenerateRequest = {
-  media_id: number
+type QuizGenerateRequestBase = {
   num_questions?: number
   question_types?: QuestionType[]
   difficulty?: "easy" | "medium" | "hard" | "mixed"
   focus_topics?: string[]
   model?: string
   workspace_tag?: string | null
+}
+
+type QuizGenerateRequestWithMedia = QuizGenerateRequestBase & {
+  media_id: number
+  sources?: QuizGenerateSource[]
+}
+
+type QuizGenerateRequestWithSources = QuizGenerateRequestBase & {
+  sources: QuizGenerateSource[]
+  media_id?: number
+}
+
+export type QuizGenerateRequest = QuizGenerateRequestWithMedia | QuizGenerateRequestWithSources
+
+export type QuizRemediationGenerateRequest = {
+  attemptId: number
+  questionIds: number[]
+  num_questions?: number
+  question_types?: QuestionType[]
+  difficulty?: "easy" | "medium" | "hard" | "mixed"
+  focus_topics?: string[]
+  model?: string
+  workspace_tag?: string | null
+}
+
+export type QuizRemediationConversionSummary = {
+  id: number
+  attempt_id: number
+  quiz_id: number
+  question_id: number
+  status: "active" | "superseded"
+  orphaned: boolean
+  superseded_count: number
+  superseded_by_id?: number | null
+  target_deck_id?: number | null
+  target_deck_name_snapshot?: string | null
+  flashcard_count: number
+  flashcard_uuids_json: string[]
+  source_ref_id?: string | null
+  created_at?: string | null
+  last_modified?: string | null
+  client_id: string
+  version: number
+}
+
+export type QuizRemediationConversionListResponse = {
+  attempt_id: number
+  items: QuizRemediationConversionSummary[]
+  count: number
+  superseded_count: number
+}
+
+export type QuizRemediationTargetDeck = {
+  id: number
+  name: string
+}
+
+export type QuizRemediationConvertRequest = {
+  question_ids: number[]
+  target_deck_id?: number | null
+  create_deck_name?: string | null
+  create_deck_scheduler_type?: DeckSchedulerType | null
+  create_deck_scheduler_settings?: DeckSchedulerSettingsEnvelope | null
+  replace_active?: boolean
+}
+
+export type QuizRemediationConvertResult = {
+  question_id: number
+  status: "created" | "already_exists" | "superseded_and_created" | "failed"
+  conversion?: QuizRemediationConversionSummary | null
+  flashcard_uuids: string[]
+  error?: string | null
+}
+
+export type QuizRemediationConvertResponse = {
+  attempt_id: number
+  quiz_id: number
+  target_deck?: QuizRemediationTargetDeck | null
+  results: QuizRemediationConvertResult[]
+  created_flashcard_uuids: string[]
 }
 
 // List response types
@@ -365,6 +467,58 @@ export async function getAttempt(
   })
 }
 
+export async function listAttemptRemediationConversions(
+  attemptId: number,
+  options?: { signal?: AbortSignal }
+): Promise<QuizRemediationConversionListResponse> {
+  return await bgRequest<QuizRemediationConversionListResponse, AllowedPath, "GET">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/remediation-conversions` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function convertAttemptRemediationQuestions(
+  attemptId: number,
+  input: QuizRemediationConvertRequest,
+  options?: { signal?: AbortSignal }
+): Promise<QuizRemediationConvertResponse> {
+  return await bgRequest<QuizRemediationConvertResponse, AllowedPath, "POST">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/remediation-conversions/convert` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input,
+    abortSignal: options?.signal
+  })
+}
+
+export async function getQuizAttemptQuestionAssistant(
+  attemptId: number,
+  questionId: number,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantContextResponse> {
+  return await bgRequest<StudyAssistantContextResponse, AllowedPath, "GET">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/questions/${questionId}/assistant` as AllowedPath,
+    method: "GET",
+    abortSignal: options?.signal
+  })
+}
+
+export async function respondQuizAttemptQuestionAssistant(
+  attemptId: number,
+  questionId: number,
+  input: StudyAssistantRespondRequest,
+  options?: { signal?: AbortSignal }
+): Promise<StudyAssistantRespondResponse> {
+  return await bgRequest<StudyAssistantRespondResponse, AllowedPath, "POST">({
+    path: `/api/v1/quizzes/attempts/${attemptId}/questions/${questionId}/assistant/respond` as AllowedPath,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input,
+    abortSignal: options?.signal
+  })
+}
+
 // --- AI Generation ---
 
 export async function generateQuiz(
@@ -384,6 +538,34 @@ export async function generateQuiz(
     abortSignal: options?.signal,
     timeoutMs
   })
+}
+
+export function buildQuizAttemptQuestionSources(
+  attemptId: number,
+  questionIds: number[]
+): QuizGenerateSource[] {
+  return questionIds.map((questionId) => ({
+    source_type: "quiz_attempt_question",
+    source_id: `${attemptId}:${questionId}`
+  }))
+}
+
+export async function generateRemediationQuiz(
+  request: QuizRemediationGenerateRequest,
+  options?: { signal?: AbortSignal; timeoutMs?: number }
+): Promise<QuizGenerateResponse> {
+  return await generateQuiz(
+    {
+      num_questions: request.num_questions,
+      question_types: request.question_types,
+      difficulty: request.difficulty,
+      focus_topics: request.focus_topics,
+      model: request.model,
+      workspace_tag: request.workspace_tag,
+      sources: buildQuizAttemptQuestionSources(request.attemptId, request.questionIds)
+    },
+    options
+  )
 }
 
 export async function importQuizzesJson(

@@ -6,6 +6,19 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
+class ModerationOverrideRule(BaseModel):
+    """A single phrase rule that can block or warn during input/output moderation."""
+
+    id: str = Field(..., min_length=1, description="Stable rule identifier")
+    pattern: str = Field(..., min_length=1, description="Literal phrase or regex source")
+    is_regex: bool = Field(False, description="Whether pattern should be treated as regex")
+    action: Literal['block', 'warn'] = Field(..., description="Per-rule moderation action")
+    phase: Literal['input', 'output', 'both'] = Field(
+        'both',
+        description="Which moderation phase this rule should apply to",
+    )
+
+
 class ModerationUserOverride(BaseModel):
     enabled: Optional[bool] = Field(None, description="Enable moderation for this user")
     input_enabled: Optional[bool] = Field(None, description="Enable input moderation for this user")
@@ -16,6 +29,10 @@ class ModerationUserOverride(BaseModel):
     categories_enabled: Optional[list[str]] = Field(
         None,
         description="Categories to enable for this user (comma-separated string or list, e.g., 'pii,confidential')",
+    )
+    rules: Optional[list[ModerationOverrideRule]] = Field(
+        None,
+        description="Optional per-user phrase rules for block or warn actions",
     )
 
     @field_validator("categories_enabled", mode="before")
@@ -44,6 +61,11 @@ class ModerationBlocklistUpdate(BaseModel):
 
 class ModerationUserOverridesResponse(BaseModel):
     overrides: dict[str, dict[str, Any]]
+
+
+class ModerationUserOverrideLookupResponse(BaseModel):
+    exists: bool
+    override: dict[str, Any]
 
 
 class BlocklistManagedItem(BaseModel):

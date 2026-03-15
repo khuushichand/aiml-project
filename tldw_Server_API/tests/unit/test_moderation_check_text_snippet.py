@@ -1,9 +1,14 @@
 import os
+import re
 import tempfile
 
 import pytest
 
-from tldw_Server_API.app.core.Moderation.moderation_service import ModerationService, ModerationPolicy
+from tldw_Server_API.app.core.Moderation.moderation_service import (
+    ModerationPolicy,
+    ModerationService,
+    PatternRule,
+)
 
 
 @pytest.mark.unit
@@ -110,3 +115,34 @@ def test_check_text_detects_long_match_across_window():
             os.unlink(path)
         except Exception:
             _ = None
+
+
+@pytest.mark.unit
+def test_rule_phase_input_only_does_not_trigger_output():
+    svc = ModerationService()
+    rule = PatternRule(
+        regex=re.compile(r"danger", re.IGNORECASE),
+        action="block",
+        phase="input",
+    )
+    pol = ModerationPolicy(
+        enabled=True,
+        input_enabled=True,
+        output_enabled=True,
+        input_action="block",
+        output_action="warn",
+        redact_replacement="[REDACTED]",
+        per_user_overrides=False,
+        block_patterns=[rule],
+        categories_enabled=None,
+    )
+
+    flagged_input, _ = svc.check_text("danger", pol, phase="input")
+    flagged_output, _ = svc.check_text("danger", pol, phase="output")
+    input_action, _, _, _ = svc.evaluate_action("danger", pol, "input")
+    output_action, _, _, _ = svc.evaluate_action("danger", pol, "output")
+
+    assert flagged_input is True
+    assert flagged_output is False
+    assert input_action == "block"
+    assert output_action == "pass"

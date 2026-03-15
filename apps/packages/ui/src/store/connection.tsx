@@ -23,28 +23,46 @@ const TEST_BYPASS_KEY = "__tldw_allow_offline"
 const FORCE_UNCONFIGURED_KEY = "__tldw_force_unconfigured"
 const FIRST_RUN_COMPLETE_KEY = "__tldw_first_run_complete"
 
+const coerceStorageFlag = (value: unknown): boolean | null => {
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") return value === "true"
+  return null
+}
+
+const readLocalStorageFlag = (key: string): boolean | null => {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem(key)
+      if (raw != null) {
+        return raw === "true"
+      }
+    }
+  } catch {
+    // ignore localStorage availability
+  }
+
+  return null
+}
+
 const getStorageFlag = async (key: string): Promise<boolean> => {
   try {
     if (typeof chrome !== "undefined" && chrome?.storage?.local) {
       return await new Promise<boolean>((resolve) => {
-        chrome.storage.local.get(key, (res) =>
-          resolve(Boolean(res?.[key]))
-        )
+        chrome.storage.local.get(key, (res) => {
+          if (res && Object.prototype.hasOwnProperty.call(res, key)) {
+            resolve(coerceStorageFlag(res[key]) ?? false)
+            return
+          }
+
+          resolve(readLocalStorageFlag(key) ?? false)
+        })
       })
     }
   } catch {
     // ignore storage read errors
   }
 
-  try {
-    if (typeof localStorage !== "undefined") {
-      return localStorage.getItem(key) === "true"
-    }
-  } catch {
-    // ignore localStorage availability
-  }
-
-  return false
+  return readLocalStorageFlag(key) ?? false
 }
 
 const getOfflineBypassFlag = async (): Promise<boolean> => {
@@ -199,6 +217,86 @@ const getCurrentBrowserOrigin = (): string | null => {
   }
 }
 
+const getCurrentBrowserHostname = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const hostname = window.location?.hostname
+    if (!hostname) return null
+    return String(hostname).trim().toLowerCase() || null
+  } catch {
+    return null
+  }
+}
+
+const parsePrivateIpv4Host = (value: string | null | undefined): number[] | null => {
+  if (!value) return null
+  const normalized = String(value).trim().toLowerCase()
+  const match = normalized.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!match) return null
+  const parts = match.slice(1).map((raw) => Number(raw))
+  if (parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return null
+  }
+  const [a, b] = parts
+  if (a === 10) return parts
+  if (a === 192 && b === 168) return parts
+  if (a === 172 && b >= 16 && b <= 31) return parts
+  return null
+}
+
+const deriveCurrentHostRecoveryServerUrl = (
+  configuredServerUrl: string | null | undefined
+): string | null => {
+  if (!configuredServerUrl) return null
+  const browserHostname = getCurrentBrowserHostname()
+  if (!browserHostname) return null
+  try {
+    const parsed = new URL(String(configuredServerUrl))
+    const configuredHost = String(parsed.hostname || "").trim().toLowerCase()
+    if (!configuredHost || configuredHost === browserHostname) return null
+    const configuredPrivateIp = parsePrivateIpv4Host(configuredHost)
+    const browserPrivateIp = parsePrivateIpv4Host(browserHostname)
+    if (!configuredPrivateIp || !browserPrivateIp) return null
+    const port = parsed.port || "8000"
+    return `${parsed.protocol}//${browserHostname}:${port}`
+  } catch {
+    return null
+  }
+}
+
+const isNetworkTransportFailure = (value: string | null | undefined): boolean => {
+  if (!value) return false
+  const text = String(value)
+  return NETWORK_BLOCK_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+const probeServerLiveness = async (
+  serverUrl: string,
+  timeoutMs: number
+): Promise<boolean> => {
+  if (!serverUrl || typeof fetch === "undefined") return false
+  const safeTimeoutMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 3000
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  try {
+    if (controller) {
+      timeoutId = setTimeout(() => controller.abort(), safeTimeoutMs)
+    }
+    const response = await fetch(`${String(serverUrl).replace(/\/$/, "")}${HEALTH_LIVENESS_PATH}`, {
+      method: "GET",
+      credentials: "omit",
+      signal: controller?.signal
+    })
+    return Boolean(response?.ok)
+  } catch {
+    return false
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
+  }
+}
+
 const CORS_ERROR_PATTERNS = [
   /cors/i,
   /cross-origin/i,
@@ -209,7 +307,8 @@ const NETWORK_BLOCK_PATTERNS = [
   /networkerror when attempting to fetch resource/i,
   /failed to fetch/i,
   /network request failed/i,
-  /load failed/i
+  /load failed/i,
+  /the operation was aborted/i
 ]
 
 const maybeAnnotateCorsMismatchError = ({
@@ -265,6 +364,7 @@ type ConnectionStore = {
   enableOfflineBypass: () => Promise<void>
   disableOfflineBypass: () => Promise<void>
   beginOnboarding: () => Promise<void>
+  restartOnboarding: () => Promise<void>
   setConfigPartial: (config: Partial<TldwConfig>) => Promise<void>
   testConnectionFromOnboarding: () => Promise<void>
   setDemoMode: () => void
@@ -311,6 +411,44 @@ const getPersistedServerUrl = async (): Promise<string | null> => {
   return null
 }
 
+const hasRequiredAuthForConfig = (config: Partial<TldwConfig> | null | undefined): boolean => {
+  const authMode = config?.authMode ?? "single-user"
+  if (authMode === "multi-user") {
+    return Boolean(String(config?.accessToken || "").trim())
+  }
+
+  return Boolean(String(config?.apiKey || "").trim())
+}
+
+const deriveOnboardingConfigStep = (
+  config: Partial<TldwConfig> | null | undefined,
+  fallbackServerUrl: string | null,
+  currentState: ConnectionState
+): ConnectionState["configStep"] => {
+  if (!config) {
+    if (
+      currentState.phase === ConnectionPhase.CONNECTED ||
+      currentState.errorKind === "partial"
+    ) {
+      return currentState.configStep === "none" ? "health" : currentState.configStep
+    }
+    if (currentState.errorKind === "auth") {
+      return "auth"
+    }
+  }
+
+  const serverUrl = String(config?.serverUrl || fallbackServerUrl || "").trim()
+  if (!serverUrl) {
+    return "url"
+  }
+
+  if (!hasRequiredAuthForConfig(config)) {
+    return "auth"
+  }
+
+  return currentState.configStep === "none" ? "health" : currentState.configStep
+}
+
 export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, get) => ({
   state: initialState,
 
@@ -331,13 +469,18 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     const bypass = await getOfflineBypassFlag()
     console.log('[CONN_DEBUG] flags loaded', { persistedFirstRun, persistedServerUrl, forceUnconfigured, bypass })
 
+    const currentState =
+      !prev.hasCompletedFirstRun && persistedFirstRun
+        ? {
+            ...prev,
+            hasCompletedFirstRun: true
+          }
+        : prev
+
     // Apply persisted first-run flag if not already set
-    if (!prev.hasCompletedFirstRun && persistedFirstRun) {
+    if (currentState !== prev) {
       set({
-        state: {
-          ...prev,
-          hasCompletedFirstRun: true
-        }
+        state: currentState
       })
     }
 
@@ -345,7 +488,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     if (forceUnconfigured) {
       set({
         state: {
-          ...prev,
+          ...currentState,
           errorKind: "none",
           phase: ConnectionPhase.UNCONFIGURED,
           serverUrl: persistedServerUrl,
@@ -371,12 +514,12 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       const serverUrl =
         persistedServerUrl ??
         (await ensurePlaceholderConfig()) ??
-        prev.serverUrl ??
+        currentState.serverUrl ??
         "offline://local"
 
       set({
         state: {
-          ...prev,
+          ...currentState,
           phase: ConnectionPhase.CONNECTED,
           serverUrl,
           isConnected: true,
@@ -398,29 +541,29 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     // Throttle repeated checks when already connected recently.
     // This prevents the landing page/header from hammering the server.
     const now = Date.now()
-    const nextChecksSinceConfigChange = prev.checksSinceConfigChange + 1
+    const nextChecksSinceConfigChange = currentState.checksSinceConfigChange + 1
     if (
-      prev.isConnected &&
-      prev.phase === ConnectionPhase.CONNECTED &&
-      prev.lastCheckedAt != null &&
-      now - prev.lastCheckedAt < CONNECTED_THROTTLE_MS
+      currentState.isConnected &&
+      currentState.phase === ConnectionPhase.CONNECTED &&
+      currentState.lastCheckedAt != null &&
+      now - currentState.lastCheckedAt < CONNECTED_THROTTLE_MS
     ) {
       return
     }
 
     const isBackgroundRefresh =
-      prev.isConnected && prev.phase === ConnectionPhase.CONNECTED
+      currentState.isConnected && currentState.phase === ConnectionPhase.CONNECTED
     set({
       state: {
-        ...prev,
+        ...currentState,
         phase: isBackgroundRefresh
           ? ConnectionPhase.CONNECTED
           : ConnectionPhase.SEARCHING,
-        serverUrl: persistedServerUrl ?? prev.serverUrl,
-        errorKind: isBackgroundRefresh ? prev.errorKind : "none",
+        serverUrl: persistedServerUrl ?? currentState.serverUrl,
+        errorKind: isBackgroundRefresh ? currentState.errorKind : "none",
         isChecking: true,
         offlineBypass: false,
-        lastError: isBackgroundRefresh ? prev.lastError : null,
+        lastError: isBackgroundRefresh ? currentState.lastError : null,
         checksSinceConfigChange: nextChecksSinceConfigChange
       }
     })
@@ -452,13 +595,43 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         }
       }
 
-      // If we have a server URL but no API key, treat as unconfigured/unauthenticated.
-      // Users must explicitly configure their own credentials in Settings/Onboarding.
+      const missingSingleUserApiKey =
+        Boolean(serverUrl) &&
+        (cfg?.authMode ?? "single-user") === "single-user" &&
+        !String(cfg?.apiKey || "").trim()
+
+      // If we have a server URL but no single-user API key, treat as
+      // unconfigured/unauthenticated instead of marking the app connected
+      // off an unauthenticated liveness check.
+      // Users must explicitly configure their own credentials in
+      // Settings/Onboarding before authenticated pages can function.
+      if (missingSingleUserApiKey) {
+        set({
+          state: {
+            ...currentState,
+            phase: ConnectionPhase.UNCONFIGURED,
+            serverUrl,
+            isConnected: false,
+            isChecking: false,
+            consecutiveFailures: 0,
+            offlineBypass: false,
+            errorKind: "none",
+            configStep: "auth",
+            lastCheckedAt: Date.now(),
+            lastError: null,
+            lastStatusCode: null,
+            knowledgeStatus: "unknown",
+            knowledgeLastCheckedAt: null,
+            knowledgeError: null
+          }
+        })
+        return
+      }
 
       if (!serverUrl) {
         set({
           state: {
-            ...prev,
+            ...currentState,
             phase: ConnectionPhase.UNCONFIGURED,
             serverUrl: null,
             isConnected: false,
@@ -495,6 +668,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           const resp = await apiSend({
             path: HEALTH_LIVENESS_PATH,
             method: 'GET',
+            timeoutMs: CONNECTION_TIMEOUT_MS,
             // Allow unauthenticated health checks when no credentials have
             // been configured yet so first‑run onboarding can still detect a
             // reachable server URL. Once an API key or access token exists,
@@ -508,27 +682,77 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           return { ok: false, status: 0, error: (e as Error)?.message || 'Network error' }
         }
       })()
-      const raced = await Promise.race([
+      let healthResult = await Promise.race([
         healthPromise,
         new Promise<{ ok: boolean; status: number; error: string | null }>((resolve) =>
           setTimeout(() => resolve({ ok: false, status: 0, error: 'timeout' }), CONNECTION_TIMEOUT_MS)
         )
       ])
-      console.log('[CONN_DEBUG] health check result', { ok: raced.ok, status: raced.status, error: raced.error })
-      const ok = raced.ok
+      console.log('[CONN_DEBUG] health check result', { ok: healthResult.ok, status: healthResult.status, error: healthResult.error })
+
+      const fallbackServerUrl = deriveCurrentHostRecoveryServerUrl(serverUrl)
+      if (
+        !healthResult.ok &&
+        healthResult.status === 0 &&
+        isNetworkTransportFailure(healthResult.error) &&
+        fallbackServerUrl
+      ) {
+        console.log("[CONN_DEBUG] attempting stale-host recovery probe", {
+          from: serverUrl,
+          to: fallbackServerUrl
+        })
+        const probeOk = await probeServerLiveness(
+          fallbackServerUrl,
+          Math.min(5_000, CONNECTION_TIMEOUT_MS)
+        )
+        console.log("[CONN_DEBUG] stale-host recovery probe result", {
+          serverUrl: fallbackServerUrl,
+          ok: probeOk
+        })
+        if (probeOk) {
+          await tldwClient.updateConfig({ serverUrl: fallbackServerUrl })
+          serverUrl = fallbackServerUrl
+          cfg = {
+            ...(cfg || {}),
+            serverUrl: fallbackServerUrl
+          } as TldwConfig
+          const fallbackNoAuth = !cfg ||
+            (!cfg.apiKey &&
+              !cfg.accessToken &&
+              cfg.authMode !== "multi-user")
+          const fallbackResp = await apiSend({
+            path: HEALTH_LIVENESS_PATH,
+            method: "GET",
+            timeoutMs: CONNECTION_TIMEOUT_MS,
+            noAuth: fallbackNoAuth
+          })
+          healthResult = {
+            ok: Boolean(fallbackResp?.ok),
+            status: Number(fallbackResp?.status) || 0,
+            error: fallbackResp?.ok ? null : (fallbackResp?.error || null)
+          }
+          console.log("[CONN_DEBUG] stale-host recovery health result", {
+            ok: healthResult.ok,
+            status: healthResult.status,
+            error: healthResult.error
+          })
+        }
+      }
+
+      const ok = healthResult.ok
       const resolvedHealthError = maybeAnnotateCorsMismatchError({
-        error: raced.error,
-        status: raced.status,
+        error: healthResult.error,
+        status: healthResult.status,
         serverUrl
       })
 
-      let knowledgeStatus: KnowledgeStatus = prev.knowledgeStatus
-      let knowledgeLastCheckedAt = prev.knowledgeLastCheckedAt
-      let knowledgeError = prev.knowledgeError
+      let knowledgeStatus: KnowledgeStatus = currentState.knowledgeStatus
+      let knowledgeLastCheckedAt = currentState.knowledgeLastCheckedAt
+      let knowledgeError = currentState.knowledgeError
       const shouldRefreshKnowledge =
-        !prev.knowledgeLastCheckedAt ||
-        now - prev.knowledgeLastCheckedAt >= KNOWLEDGE_RECHECK_INTERVAL_MS ||
-        prev.knowledgeStatus !== "ready"
+        !currentState.knowledgeLastCheckedAt ||
+        now - currentState.knowledgeLastCheckedAt >= KNOWLEDGE_RECHECK_INTERVAL_MS ||
+        currentState.knowledgeStatus !== "ready"
 
       if (ok && shouldRefreshKnowledge) {
         try {
@@ -564,7 +788,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       }
 
       let errorKind: ConnectionState["errorKind"] = "none"
-      const nextConsecutiveFailures = ok ? 0 : prev.consecutiveFailures + 1
+      const nextConsecutiveFailures = ok ? 0 : currentState.consecutiveFailures + 1
 
       if (ok) {
         if (knowledgeStatus === "offline") {
@@ -573,7 +797,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           errorKind = "none"
         }
       } else {
-        const status = raced.status
+        const status = healthResult.status
         if (status === 401 || status === 403) {
           errorKind = "auth"
         } else {
@@ -584,21 +808,21 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       const holdConnectedOnTransientFailure =
         !ok &&
         errorKind === "unreachable" &&
-        prev.isConnected &&
-        prev.phase === ConnectionPhase.CONNECTED &&
+        currentState.isConnected &&
+        currentState.phase === ConnectionPhase.CONNECTED &&
         nextConsecutiveFailures < CONNECTED_FAILURE_THRESHOLD
 
       if (holdConnectedOnTransientFailure) {
         set({
           state: {
-            ...prev,
+            ...currentState,
             phase: ConnectionPhase.CONNECTED,
             isConnected: true,
             isChecking: false,
             offlineBypass: false,
             lastCheckedAt: Date.now(),
             lastError: resolvedHealthError || "transient-health-check-failure",
-            lastStatusCode: raced.status || 0,
+            lastStatusCode: healthResult.status || 0,
             errorKind: "partial",
             consecutiveFailures: nextConsecutiveFailures
           }
@@ -615,7 +839,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       })
       set({
         state: {
-          ...prev,
+          ...currentState,
           phase: ok ? ConnectionPhase.CONNECTED : ConnectionPhase.ERROR,
           serverUrl,
           isConnected: ok,
@@ -629,7 +853,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           offlineBypass: false,
           lastCheckedAt: Date.now(),
           lastError: ok ? null : (resolvedHealthError || 'timeout-or-offline'),
-          lastStatusCode: ok ? null : raced.status,
+          lastStatusCode: ok ? null : healthResult.status,
           knowledgeStatus,
           knowledgeLastCheckedAt,
           knowledgeError,
@@ -643,15 +867,15 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         maybeAnnotateCorsMismatchError({
           error: (error as Error)?.message ?? "unknown-error",
           status: 0,
-          serverUrl: prev.serverUrl
+          serverUrl: currentState.serverUrl
         }) ?? "unknown-error"
       set({
         state: {
-          ...prev,
+          ...currentState,
           phase: ConnectionPhase.ERROR,
           isConnected: false,
           isChecking: false,
-          consecutiveFailures: prev.consecutiveFailures + 1,
+          consecutiveFailures: currentState.consecutiveFailures + 1,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
           lastError: fallbackError,
@@ -683,16 +907,67 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
   async beginOnboarding() {
     const prev = get().state
-    // Clear the persisted first-run flag so onboarding can restart
+    const isSyntheticConnectedState =
+      prev.mode === "demo" || prev.offlineBypass === true
+    let config: TldwConfig | null = null
+    try {
+      config = await tldwClient.getConfig()
+    } catch {
+      // ignore config lookup failures and fall back to current state
+    }
+
+    const nextServerUrl =
+      String(config?.serverUrl || prev.serverUrl || "").trim() || null
+    const nextConfigStep = deriveOnboardingConfigStep(
+      config,
+      nextServerUrl,
+      isSyntheticConnectedState
+        ? {
+            ...prev,
+            phase: ConnectionPhase.UNCONFIGURED,
+            isConnected: false,
+            configStep: "none",
+            errorKind: "none",
+            mode: "normal",
+            offlineBypass: false
+          }
+        : prev
+    )
+
+    set({
+      state: {
+        ...prev,
+        ...(isSyntheticConnectedState
+          ? {
+              phase: ConnectionPhase.UNCONFIGURED,
+              isConnected: false,
+              consecutiveFailures: 0,
+              errorKind: "none" as const,
+              lastError: null,
+              lastStatusCode: null,
+              knowledgeStatus: "unknown" as const,
+              knowledgeLastCheckedAt: null,
+              knowledgeError: null
+            }
+          : {}),
+        serverUrl: nextServerUrl,
+        configStep: nextConfigStep,
+        mode: "normal",
+        isChecking: false,
+        offlineBypass: false
+      }
+    })
+  },
+
+  async restartOnboarding() {
+    const prev = get().state
     await setFirstRunCompleteFlag(false)
     set({
       state: {
         ...prev,
         phase: ConnectionPhase.UNCONFIGURED,
-        // Always return to the guided config flow when onboarding starts.
         configStep: "url",
         hasCompletedFirstRun: false,
-        // Exit demo/offline modes so the wizard can take over again.
         mode: "normal",
         isConnected: false,
         isChecking: false,

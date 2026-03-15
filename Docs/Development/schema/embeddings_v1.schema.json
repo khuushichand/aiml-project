@@ -14,7 +14,8 @@
       "const": "tldw.embeddings.v1"
     },
     "schema_url": {
-      "type": "string"
+      "type": "string",
+      "const": "https://schemas.tldw.ai/embeddings/v1.json"
     },
     "idempotency_key": {
       "type": "string"

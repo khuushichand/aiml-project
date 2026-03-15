@@ -14,7 +14,10 @@ export const HumanMessage = ({ message }: Props) => {
    if(useMarkdownForUserMessage) {
     return (
       <React.Suspense fallback={<span className="whitespace-pre-wrap">{message}</span>}>
-        <Markdown message={message} />
+        <Markdown
+          message={message}
+          className="prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark max-w-none"
+        />
       </React.Suspense>
     )
    }

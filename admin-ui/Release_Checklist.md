@@ -35,6 +35,7 @@ This checklist covers release readiness for the admin UI (Next.js). Treat it as 
 
 - [ ] Run `bun install` from `admin-ui/`.
 - [ ] Run `bun run lint` and address warnings.
+- [ ] Run `bun run typecheck` and fix all TypeScript errors.
 - [ ] Run `bun run build` and confirm the build completes without errors.
 - [ ] Start the production build (`bun run start`) and confirm pages load correctly.
 
@@ -43,9 +44,12 @@ This checklist covers release readiness for the admin UI (Next.js). Treat it as 
 ## 5. Test Matrix (Frontend)
 
 - [ ] Run unit tests (`bun run test` or `bunx vitest run`).
+- [ ] Run accessibility coverage (`bun run test:a11y`).
+- [ ] Run browser smoke coverage (`bun run test:smoke`).
 - [ ] Confirm React Testing Library coverage for new UI flows and error states.
 - [ ] If snapshots are used, review and update them intentionally.
 - [ ] Verify key pages (dashboard, monitoring, auth/config views) render without console errors.
+- [ ] Verify the smoke suite still covers password login, MFA completion, and privileged user actions.
 
 ---
 

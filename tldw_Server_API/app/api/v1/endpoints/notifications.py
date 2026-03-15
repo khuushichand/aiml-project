@@ -129,6 +129,11 @@ def _notification_stream_payload(row: UserNotificationRow) -> dict:
         "title": row.title,
         "message": row.message,
         "severity": row.severity,
+        "link_type": row.link_type,
+        "link_id": row.link_id,
+        "source_job_id": row.source_job_id,
+        "source_domain": row.source_domain,
+        "source_job_type": row.source_job_type,
     }
 
 

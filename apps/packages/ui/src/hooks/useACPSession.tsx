@@ -19,7 +19,7 @@ import type {
   ACPUpdate,
   ACPPermissionTier,
 } from "@/services/acp/types"
-import { WS_CONFIG, SESSION_CONFIG } from "@/services/acp/constants"
+import { WS_CONFIG, SESSION_CONFIG, shouldRetryACPWebSocketClose } from "@/services/acp/constants"
 
 // -----------------------------------------------------------------------------
 // Types
@@ -197,6 +197,12 @@ export function useACPSession(options: UseACPSessionOptions = {}): UseACPSession
             tool_name: message.tool_name,
             tool_arguments: message.tool_arguments,
             tier: message.tier,
+            approval_requirement: message.approval_requirement,
+            governance_reason: message.governance_reason,
+            deny_reason: message.deny_reason,
+            provenance_summary: message.provenance_summary,
+            runtime_narrowing_reason: message.runtime_narrowing_reason,
+            policy_snapshot_fingerprint: message.policy_snapshot_fingerprint,
             timeout_seconds: message.timeout_seconds,
             requestedAt: new Date(),
           }
@@ -260,7 +266,10 @@ export function useACPSession(options: UseACPSessionOptions = {}): UseACPSession
       ws.onclose = (event) => {
         if (!isClosingRef.current) {
           // Unexpected close - attempt reconnect
-          if (event.code !== 4401 && reconnectAttemptsRef.current < WS_CONFIG.MAX_RECONNECT_ATTEMPTS) {
+          if (
+            shouldRetryACPWebSocketClose(event.code) &&
+            reconnectAttemptsRef.current < WS_CONFIG.MAX_RECONNECT_ATTEMPTS
+          ) {
             const delay = Math.min(
               WS_CONFIG.RECONNECT_DELAY_MS * Math.pow(WS_CONFIG.RECONNECT_BACKOFF_MULTIPLIER, reconnectAttemptsRef.current),
               WS_CONFIG.MAX_RECONNECT_DELAY_MS

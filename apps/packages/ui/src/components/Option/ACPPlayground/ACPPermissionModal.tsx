@@ -26,6 +26,7 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
   const { t } = useTranslation(["playground", "common"])
 
   const [batchApprove, setBatchApprove] = useState(false)
+  const [showPolicyDetails, setShowPolicyDetails] = useState(false)
   const currentPermission = pendingPermissions[0]
 
   if (!currentPermission) {
@@ -66,6 +67,13 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
   const timeElapsed = Date.now() - currentPermission.requestedAt.getTime()
   const timeRemaining = Math.max(0, currentPermission.timeout_seconds * 1000 - timeElapsed)
   const progressPercent = (timeRemaining / (currentPermission.timeout_seconds * 1000)) * 100
+  const hasPolicyMetadata = Boolean(
+    currentPermission.approval_requirement
+    || currentPermission.governance_reason
+    || currentPermission.runtime_narrowing_reason
+    || currentPermission.policy_snapshot_fingerprint
+    || currentPermission.provenance_summary
+  )
 
   return (
     <Modal
@@ -137,6 +145,71 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
             {UI_CONFIG.TIER_DESCRIPTIONS[currentPermission.tier]}
           </div>
         </div>
+
+        {hasPolicyMetadata && (
+          <div className="rounded-lg border border-border bg-bg p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-medium uppercase text-text-muted">
+                {t("playground:acp.policySnapshot", "Policy Snapshot")}
+              </div>
+              {currentPermission.provenance_summary && (
+                <Button
+                  type="link"
+                  size="small"
+                  className="px-0"
+                  onClick={() => setShowPolicyDetails((value) => !value)}
+                >
+                  {showPolicyDetails
+                    ? t("playground:acp.hidePolicyDetails", "Hide details")
+                    : t("playground:acp.showPolicyDetails", "Show details")}
+                </Button>
+              )}
+            </div>
+            <div className="space-y-1 text-xs text-text-muted">
+              {currentPermission.approval_requirement && (
+                <div>
+                  <span className="font-medium text-text">
+                    {t("playground:acp.approvalRequirement", "Approval")}:{" "}
+                  </span>
+                  <span>{currentPermission.approval_requirement}</span>
+                </div>
+              )}
+              {currentPermission.governance_reason && (
+                <div>
+                  <span className="font-medium text-text">
+                    {t("playground:acp.governanceReason", "Reason")}:{" "}
+                  </span>
+                  <span>{currentPermission.governance_reason}</span>
+                </div>
+              )}
+              {currentPermission.runtime_narrowing_reason && (
+                <div>
+                  <span className="font-medium text-text">
+                    {t("playground:acp.runtimeConstraint", "Runtime constraint")}:{" "}
+                  </span>
+                  <span>{currentPermission.runtime_narrowing_reason}</span>
+                </div>
+              )}
+              {currentPermission.policy_snapshot_fingerprint && (
+                <div>
+                  <span className="font-medium text-text">
+                    {t("playground:acp.snapshotFingerprint", "Snapshot")}:{" "}
+                  </span>
+                  <span className="font-mono">
+                    {currentPermission.policy_snapshot_fingerprint.slice(0, 12)}
+                  </span>
+                </div>
+              )}
+            </div>
+            {showPolicyDetails && currentPermission.provenance_summary && (
+              <div className="mt-3 rounded bg-surface2 p-2">
+                <pre className="overflow-auto text-xs text-text">
+                  {JSON.stringify(currentPermission.provenance_summary, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Timeout progress */}
         <div className="space-y-1">

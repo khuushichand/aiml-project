@@ -1,11 +1,9 @@
+// @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { ModerationPlayground } from "../index"
-
-const useQueryMock = vi.fn()
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: (options: unknown) => useQueryMock(options)
+  useQuery: () => ({ data: null, isFetching: false, error: null, refetch: vi.fn() })
 }))
 
 vi.mock("react-i18next", () => ({
@@ -18,97 +16,37 @@ vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
 }))
 
-if (!(globalThis as any).ResizeObserver) {
-  ;(globalThis as any).ResizeObserver = class ResizeObserver {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-}
+vi.mock("@/services/moderation", () => ({
+  getModerationSettings: vi.fn(),
+  getEffectivePolicy: vi.fn(),
+  reloadModeration: vi.fn(),
+  listUserOverrides: vi.fn(),
+  getManagedBlocklist: vi.fn().mockResolvedValue({
+    data: { version: "v1", items: [] },
+    etag: null
+  }),
+  testModeration: vi.fn(),
+  getUserOverride: vi.fn(),
+  setUserOverride: vi.fn(),
+  deleteUserOverride: vi.fn()
+}))
+
+import { ModerationPlaygroundShell } from "../ModerationPlaygroundShell"
 
 describe("ModerationPlayground disclosure UX", () => {
-  const originalMatchMedia = window.matchMedia
-
-  const settingsQueryResult = {
-    data: {
-      pii_enabled: false,
-      categories_enabled: [] as string[],
-      effective: { categories_enabled: [] as string[] }
-    },
-    isFetching: false
-  }
-
-  const policyQueryResult = {
-    data: {
-      enabled: true,
-      input_enabled: true,
-      output_enabled: true,
-      input_action: "warn",
-      output_action: "warn",
-      categories_enabled: [] as string[],
-      blocklist_count: 0
-    },
-    isFetching: false
-  }
-
-  const overridesQueryResult = {
-    data: { overrides: {} as Record<string, unknown> },
-    isFetching: false
-  }
-
-  beforeAll(() => {
-    if (typeof window.matchMedia !== "function") {
-      Object.defineProperty(window, "matchMedia", {
-        writable: true,
-        value: vi.fn().mockImplementation((query: string) => ({
-          matches: false,
-          media: query,
-          onchange: null,
-          addListener: vi.fn(),
-          removeListener: vi.fn(),
-          addEventListener: vi.fn(),
-          removeEventListener: vi.fn(),
-          dispatchEvent: vi.fn()
-        }))
-      })
-    }
-  })
-
-  afterAll(() => {
-    Object.defineProperty(window, "matchMedia", {
-      writable: true,
-      value: originalMatchMedia
-    })
-  })
-
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.removeItem("moderation-playground-onboarded")
-
-    useQueryMock.mockImplementation((options: { queryKey?: unknown[] } | undefined) => {
-      const firstKey = options?.queryKey?.[0]
-      const queryKey = typeof firstKey === "string" ? firstKey : ""
-      if (queryKey === "moderation-settings") {
-        return settingsQueryResult
-      }
-      if (queryKey === "moderation-policy") {
-        return policyQueryResult
-      }
-      if (queryKey === "moderation-overrides") {
-        return overridesQueryResult
-      }
-      return { data: null, isFetching: false }
-    })
   })
 
   it("allows dismissing onboarding and persists dismissal", async () => {
-    render(<ModerationPlayground />)
+    render(<ModerationPlaygroundShell />)
 
     expect(
       screen.getByText("Welcome to Moderation Playground")
     ).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("button", { name: "Got it, let's start" }))
+    fireEvent.click(screen.getByText("Got it, let's start"))
 
     await waitFor(() => {
       expect(
@@ -119,18 +57,70 @@ describe("ModerationPlayground disclosure UX", () => {
     expect(localStorage.getItem("moderation-playground-onboarded")).toBe("true")
   })
 
-  it("starts with advanced content hidden and reveals it on demand", async () => {
-    render(<ModerationPlayground />)
+  it("shows Policy & Settings tab content by default", async () => {
+    localStorage.setItem("moderation-playground-onboarded", "true")
+    render(<ModerationPlaygroundShell />)
 
-    expect(
-      screen.getByText("Looking for blocklist rules or user overrides?")
-    ).toBeInTheDocument()
-    expect(screen.queryByText("Blocklist Studio")).not.toBeInTheDocument()
+    // The Policy tab should be selected by default
+    const policyTab = screen.getByRole("tab", { name: /policy/i })
+    expect(policyTab).toHaveAttribute("aria-selected", "true")
 
-    fireEvent.click(screen.getByRole("button", { name: "Enable Advanced mode" }))
+    // Policy panel content should be visible
+    expect(await screen.findByText(/personal data protection/i)).toBeInTheDocument()
+  })
 
+  it("switches tab content when clicking a different tab", async () => {
+    localStorage.setItem("moderation-playground-onboarded", "true")
+    render(<ModerationPlaygroundShell />)
+
+    // Click the Blocklist Studio tab
+    fireEvent.click(screen.getByRole("tab", { name: /blocklist/i }))
+
+    // Blocklist panel content should appear
+    expect(await screen.findByText(/syntax reference/i)).toBeInTheDocument()
+
+    // Policy tab should no longer be selected
+    expect(screen.getByRole("tab", { name: /policy/i })).toHaveAttribute(
+      "aria-selected",
+      "false"
+    )
+  })
+
+  it("defaults to server scope in the context bar", () => {
+    localStorage.setItem("moderation-playground-onboarded", "true")
+    render(<ModerationPlaygroundShell />)
+
+    const serverOption = screen.getByRole("option", {
+      name: /server/i
+    }) as HTMLOptionElement
+    expect(serverOption.selected).toBe(true)
+  })
+
+  it("renders all 5 tabs", () => {
+    localStorage.setItem("moderation-playground-onboarded", "true")
+    render(<ModerationPlaygroundShell />)
+
+    expect(screen.getByRole("tab", { name: /policy/i })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /blocklist/i })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /overrides/i })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /test/i })).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /advanced/i })).toBeInTheDocument()
+  })
+
+  it("navigates to Advanced tab and shows its content", async () => {
+    localStorage.setItem("moderation-playground-onboarded", "true")
+    render(<ModerationPlaygroundShell />)
+
+    fireEvent.click(screen.getByRole("tab", { name: /advanced/i }))
+
+    expect(screen.getByRole("tab", { name: /advanced/i })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+
+    // Advanced panel should render (lazy loaded)
     await waitFor(() => {
-      expect(screen.getByText("Blocklist Studio")).toBeInTheDocument()
+      expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
     })
   })
 })

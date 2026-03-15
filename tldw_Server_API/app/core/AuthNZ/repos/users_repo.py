@@ -108,6 +108,20 @@ class AuthnzUsersRepo:
             logger.error(f"AuthnzUsersRepo.get_user_by_username failed: {exc}")
             raise
 
+    async def get_user_by_email(self, email: str) -> dict[str, Any] | None:
+        """Fetch a user row by email address."""
+        db = await self._users_db()
+        try:
+            row = await db.get_user_by_email(email)
+            if row is None:
+                return None
+            return self._normalize_user_record(row)
+        except DatabaseError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(f"AuthnzUsersRepo.get_user_by_email failed: {exc}")
+            raise
+
     async def create_user(
         self,
         *,
@@ -170,6 +184,7 @@ class AuthnzUsersRepo:
         offset: int,
         limit: int,
         role: str | None = None,
+        admin_capable: bool = False,
         is_active: bool | None = None,
         search: str | None = None,
         org_ids: list[int] | None = None,
@@ -209,6 +224,41 @@ class AuthnzUsersRepo:
             conditions.append(f"role = ${param_count}" if is_pg else "role = ?")
             params.append(role)
 
+        if admin_capable:
+            if is_pg:
+                role_pos = param_count + 1
+                rbac_pos = param_count + 2
+                admin_capable_condition = """(
+                        users.role = ${role_pos}
+                        OR COALESCE(users.is_superuser, FALSE) = TRUE
+                        OR EXISTS (
+                            SELECT 1
+                            FROM user_roles ur
+                            JOIN roles r ON r.id = ur.role_id
+                            WHERE ur.user_id = users.id
+                              AND r.name = ANY(${rbac_pos})
+                        )
+                    )"""
+                conditions.append(admin_capable_condition.format_map(locals()))  # nosec B608
+                params.append("admin")
+                params.append(["admin", "owner", "super_admin"])
+                param_count += 2
+            else:
+                placeholders = ", ".join(["?"] * 3)
+                admin_capable_condition = """(
+                        users.role = ?
+                        OR COALESCE(users.is_superuser, 0) = 1
+                        OR EXISTS (
+                            SELECT 1
+                            FROM user_roles ur
+                            JOIN roles r ON r.id = ur.role_id
+                            WHERE ur.user_id = users.id
+                              AND r.name IN ({placeholders})
+                        )
+                    )"""
+                conditions.append(admin_capable_condition.format_map(locals()))  # nosec B608
+                params.extend(["admin", "admin", "owner", "super_admin"])
+
         if is_active is not None:
             param_count += 1
             conditions.append(f"is_active = ${param_count}" if is_pg else "is_active = ?")
@@ -235,12 +285,14 @@ class AuthnzUsersRepo:
 
             # Page of users
             if is_pg:
+                limit_pos = param_count + 1
+                offset_pos = param_count + 2
                 query_template = """
                     SELECT DISTINCT users.id, users.uuid, users.username, users.email, users.role, users.is_active, users.is_verified,
                            created_at, last_login, storage_quota_mb, storage_used_mb
                     FROM users{join_clause}{where_clause}
                     ORDER BY users.created_at DESC
-                    LIMIT ${param_count + 1} OFFSET ${param_count + 2}
+                    LIMIT ${limit_pos} OFFSET ${offset_pos}
                 """
                 query = query_template.format_map(locals())  # nosec B608
                 q_params = [*params, limit, offset]

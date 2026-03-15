@@ -2,8 +2,10 @@ import React from "react"
 import { Button, Card, Form, Input, Select, Space, Alert, Skeleton } from "antd"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
 import { useServerOnline } from "@/hooks/useServerOnline"
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { getRateLimits } from "@/services/evaluations"
 import {
   getEvaluationDefaults,
@@ -30,6 +32,8 @@ const EVAL_TYPES = [
 export const EvaluationsSettings = () => {
   const { t } = useTranslation(["settings", "common"])
   const isOnline = useServerOnline()
+  const navigate = useNavigate()
+  const { uxState } = useConnectionUxState()
 
   const [form] = Form.useForm()
   const [specType, setSpecType] = React.useState<string>("response_quality")
@@ -126,6 +130,70 @@ export const EvaluationsSettings = () => {
 
   const defaults = defaultsResp || {}
 
+  const offlineWarning =
+    !isOnline && uxState !== "testing"
+      ? uxState === "error_auth" || uxState === "configuring_auth"
+        ? (
+      <Alert
+        type="warning"
+        showIcon
+        title={t("settings:evaluationsSettings.authRequired", {
+          defaultValue: "Add your credentials to test Evaluations."
+        })}
+        action={
+          <Button size="small" onClick={() => navigate("/settings/tldw")}>
+            {t("settings:evaluationsSettings.openSettings", {
+              defaultValue: "Open Settings"
+            })}
+          </Button>
+        }
+      />
+          )
+        : uxState === "unconfigured" || uxState === "configuring_url"
+          ? (
+      <Alert
+        type="warning"
+        showIcon
+        title={t("settings:evaluationsSettings.setupRequired", {
+          defaultValue: "Finish setup to test Evaluations."
+        })}
+        action={
+          <Button size="small" onClick={() => navigate("/")}>
+            {t("settings:evaluationsSettings.finishSetup", {
+              defaultValue: "Finish Setup"
+            })}
+          </Button>
+        }
+      />
+            )
+          : uxState === "error_unreachable"
+            ? (
+      <Alert
+        type="warning"
+        showIcon
+        title={t("settings:evaluationsSettings.unreachable", {
+          defaultValue: "Can't reach your tldw server right now."
+        })}
+        action={
+          <Button size="small" onClick={() => navigate("/settings/health")}>
+            {t("settings:evaluationsSettings.diagnostics", {
+              defaultValue: "Health & diagnostics"
+            })}
+          </Button>
+        }
+      />
+              )
+            : (
+      <Alert
+        type="warning"
+        showIcon
+        title={t("settings:evaluationsSettings.offline", {
+          defaultValue: "Connect to your tldw server to test Evaluations."
+        })}
+      />
+              )
+      : null
+
   return (
     <div className="space-y-4">
       <div>
@@ -142,15 +210,7 @@ export const EvaluationsSettings = () => {
         </p>
       </div>
 
-      {!isOnline && (
-        <Alert
-          type="warning"
-          showIcon
-          title={t("settings:evaluationsSettings.offline", {
-            defaultValue: "Connect to your tldw server to test Evaluations."
-          })}
-        />
-      )}
+      {offlineWarning}
 
       {defaultsLoading && <Skeleton active paragraph={{ rows: 6 }} />}
 

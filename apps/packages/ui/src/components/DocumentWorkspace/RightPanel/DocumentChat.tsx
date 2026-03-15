@@ -1,12 +1,13 @@
 import React, { useState, useRef, useCallback, Suspense, useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { Empty, Spin, Switch, Tooltip } from "antd"
+import { Empty, Spin, Switch, Tooltip, Popconfirm } from "antd"
 import {
   SendHorizontal,
   Trash2,
   AlertCircle,
   BookOpen,
-  StopCircle
+  StopCircle,
+  Sparkles
 } from "lucide-react"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { useDocumentChat } from "@/hooks/document-workspace/useDocumentChat"
@@ -154,15 +155,17 @@ export const DocumentChat: React.FC = () => {
     suggestionsCollapsed
   ])
 
-  // Handle suggested question click
+  // Handle suggested question click - auto-send
   const handleQuestionClick = useCallback(
-    (question: string) => {
-      setInputValue(question)
-      if (textareaRef.current) {
-        textareaRef.current.focus()
-      }
+    async (question: string) => {
+      if (!hasSelectedModel || isProcessing || streaming) return
+      setSuggestionsCollapsed(true)
+      await onSubmit({
+        message: question,
+        image: ""
+      })
     },
-    [setInputValue]
+    [hasSelectedModel, isProcessing, streaming, onSubmit]
   )
 
   // Handle keyboard events in textarea
@@ -198,12 +201,18 @@ export const DocumentChat: React.FC = () => {
   // Server not available state
   if (!isServerAvailable) {
     return (
-      <div className="flex h-full flex-col items-center justify-center p-4 text-center">
-        <AlertCircle className="mb-3 h-10 w-10 text-warning" />
-        <p className="text-sm text-text-muted">
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+        <AlertCircle className="mb-2 h-10 w-10 text-warning" />
+        <p className="text-sm font-medium text-text-muted">
           {t(
             "option:documentWorkspace.serverRequired",
             "Connect to server to use document chat"
+          )}
+        </p>
+        <p className="text-xs text-text-muted max-w-xs">
+          {t(
+            "option:documentWorkspace.serverRequiredHint",
+            "Start the tldw server and configure the connection in Settings. The server provides AI chat, RAG search, and document analysis."
           )}
         </p>
       </div>
@@ -211,7 +220,7 @@ export const DocumentChat: React.FC = () => {
   }
 
   const hasMessages = messages.length > 0
-  const showSuggestions = !hasMessages && !suggestionsCollapsed
+  const showSuggestions = !suggestionsCollapsed
 
   return (
     <div className="flex h-full flex-col">
@@ -221,19 +230,41 @@ export const DocumentChat: React.FC = () => {
           <span className="text-xs text-text-muted">
             {t("option:documentWorkspace.chatWithDocument", "Chat with document")}
           </span>
-          <Tooltip
-            title={t("common:clearChat", "Clear chat")}
-            placement="left"
+          <Popconfirm
+            title={t("option:documentWorkspace.clearChatConfirm", "Clear chat history?")}
+            onConfirm={handleClearChat}
+            okText={t("common:clear", "Clear")}
+            cancelText={t("common:cancel", "Cancel")}
+            okButtonProps={{ danger: true }}
+            placement="bottomRight"
           >
-            <button
-              type="button"
-              onClick={handleClearChat}
-              disabled={isProcessing || streaming}
-              className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text disabled:opacity-50"
+            <Tooltip
+              title={t("common:clearChat", "Clear chat")}
+              placement="left"
             >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </Tooltip>
+              <button
+                type="button"
+                disabled={isProcessing || streaming}
+                className="rounded p-1 text-text-muted transition-colors hover:bg-hover hover:text-text disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          </Popconfirm>
+        </div>
+      )}
+
+      {/* Show suggestions button when collapsed */}
+      {hasMessages && suggestionsCollapsed && (
+        <div className="flex justify-center border-b border-border py-1">
+          <button
+            type="button"
+            onClick={() => setSuggestionsCollapsed(false)}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-text-muted transition-colors hover:bg-hover hover:text-text"
+          >
+            <Sparkles className="h-3 w-3" />
+            {t("option:documentWorkspace.showSuggestions", "Show suggestions")}
+          </button>
         </div>
       )}
 
@@ -258,51 +289,62 @@ export const DocumentChat: React.FC = () => {
               }
             >
               {messages.map((message, index) => (
-                <PlaygroundMessage
-                  key={message.id || `msg-${index}`}
-                  isBot={message.isBot}
-                  message={message.message}
-                  name={message.name}
-                  role={message.role}
-                  images={message.images || []}
-                  currentMessageIndex={index}
-                  totalMessages={messages.length}
-                  onRegenerate={regenerateLastMessage}
-                  isProcessing={isProcessing}
-                  sources={message.sources}
-                  onEditFormSubmit={(value, isSend) => {
-                    editMessage(index, value, !message.isBot, isSend)
-                  }}
-                  onDeleteMessage={() => {
-                    deleteMessage(index)
-                  }}
-                  isTTSEnabled={ttsEnabled}
-                  generationInfo={message?.generationInfo}
-                  isStreaming={streaming}
-                  modelImage={message?.modelImage}
-                  modelName={message?.modelName}
-                  createdAt={message?.createdAt}
-                  temporaryChat={temporaryChat}
-                  onStopStreaming={stopStreamingRequest}
-                  onContinue={() => {
-                    onSubmit({
-                      image: "",
-                      message: "",
-                      isContinue: true
-                    })
-                  }}
-                  documents={message?.documents}
-                  actionInfo={actionInfo}
-                  serverChatId={serverChatId}
-                  serverMessageId={message.serverMessageId}
-                  messageId={message.id}
-                  discoSkillComment={message.discoSkillComment}
-                  conversationInstanceId={`doc-${activeDocumentId}`}
-                  hideCopy={false}
-                  hideEditAndRegenerate={false}
-                  toolCalls={message?.toolCalls}
-                  toolResults={message?.toolResults}
-                />
+                <div key={message.id || `msg-${index}`}>
+                  <PlaygroundMessage
+                    isBot={message.isBot}
+                    message={message.message}
+                    name={message.name}
+                    role={message.role}
+                    images={message.images || []}
+                    currentMessageIndex={index}
+                    totalMessages={messages.length}
+                    onRegenerate={regenerateLastMessage}
+                    isProcessing={isProcessing}
+                    sources={message.sources}
+                    onEditFormSubmit={(idx, value, isUser, isSend) => {
+                      editMessage(idx, value, isUser, isSend)
+                    }}
+                    onDeleteMessage={(idx) => {
+                      deleteMessage(idx)
+                    }}
+                    isTTSEnabled={ttsEnabled}
+                    generationInfo={message?.generationInfo}
+                    isStreaming={streaming}
+                    modelImage={message?.modelImage}
+                    modelName={message?.modelName}
+                    createdAt={message?.createdAt}
+                    temporaryChat={temporaryChat}
+                    onStopStreaming={stopStreamingRequest}
+                    onContinue={() => {
+                      onSubmit({
+                        image: "",
+                        message: "",
+                        isContinue: true
+                      })
+                    }}
+                    documents={message?.documents}
+                    actionInfo={actionInfo}
+                    serverChatId={serverChatId}
+                    serverMessageId={message.serverMessageId}
+                    messageId={message.id}
+                    discoSkillComment={message.discoSkillComment}
+                    conversationInstanceId={`doc-${activeDocumentId}`}
+                    hideCopy={false}
+                    hideEditAndRegenerate={false}
+                    toolCalls={message?.toolCalls}
+                    toolResults={message?.toolResults}
+                  />
+                  {message.isBot && message.sources && message.sources.length > 0 && (
+                    <div className="ml-10 mt-1 flex items-center gap-1 text-xs text-text-muted">
+                      <Tooltip title={t("option:documentWorkspace.usesDocumentContext", "Uses document context")}>
+                        <span className="flex items-center gap-1">
+                          <BookOpen className="h-3 w-3" />
+                          <span>{message.sources.length} source{message.sources.length !== 1 ? "s" : ""}</span>
+                        </span>
+                      </Tooltip>
+                    </div>
+                  )}
+                </div>
               ))}
             </Suspense>
             <div ref={messagesEndRef} />
@@ -357,6 +399,7 @@ export const DocumentChat: React.FC = () => {
               "option:documentWorkspace.chatPlaceholder",
               "Ask about this document..."
             )}
+            aria-label={t("option:documentWorkspace.chatPlaceholder", "Ask about this document...")}
             disabled={!hasSelectedModel || (isProcessing && !streaming)}
             rows={1}
             className="

@@ -59,6 +59,8 @@ _KANBAN_NONCRITICAL_EXCEPTIONS = (
     ValueError,
 )
 
+_WORKFLOW_METADATA_UNSET = object()
+
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -195,10 +197,18 @@ class ConflictError(KanbanDBError):
     an update/delete operation (optimistic locking), or if an insert/update
     violates a unique constraint (e.g., duplicate client_id).
     """
-    def __init__(self, message: str = "Conflict detected.", entity: str | None = None, entity_id: Any = None):
+    def __init__(
+        self,
+        message: str = "Conflict detected.",
+        entity: str | None = None,
+        entity_id: Any = None,
+        *,
+        code: str | None = None,
+    ):
         super().__init__(message)
         self.entity = entity
         self.entity_id = entity_id
+        self.code = code
 
     def __str__(self):
         base = super().__str__()
@@ -248,6 +258,15 @@ class KanbanDB:
     MAX_COMMENT_SIZE = 16384  # characters
     VECTOR_INDEX_RETRY_DELAY_SECONDS = 5
     VECTOR_INDEX_MAX_RETRY_ATTEMPTS = 1
+    DEFAULT_WORKFLOW_STATUSES = (
+        ("todo", "To Do", 0, 0, 1),
+        ("impl", "In Progress", 1, 0, 1),
+        ("done", "Done", 2, 1, 1),
+    )
+    DEFAULT_WORKFLOW_TRANSITIONS = (
+        ("todo", "impl", 1, 0, None, None, None, 0, 1),
+        ("impl", "done", 1, 0, None, None, None, 0, 1),
+    )
 
     def __init__(self, db_path: str, user_id: str) -> None:
         """
@@ -345,6 +364,7 @@ class KanbanDB:
             if enable_wal:
                 conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA temp_store=MEMORY")
             conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
         except sqlite3.Error as e:
             logger.error(f"Failed to set performance PRAGMA options: {e}")
@@ -591,6 +611,120 @@ CREATE INDEX IF NOT EXISTS idx_activities_list ON kanban_activities(list_id);
 CREATE INDEX IF NOT EXISTS idx_activities_card ON kanban_activities(card_id);
 CREATE INDEX IF NOT EXISTS idx_activities_created ON kanban_activities(created_at);
 
+-- Workflow Policies
+CREATE TABLE IF NOT EXISTS board_workflow_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    board_id INTEGER NOT NULL UNIQUE REFERENCES kanban_boards(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL DEFAULT 1,
+    is_paused INTEGER NOT NULL DEFAULT 0 CHECK (is_paused IN (0, 1)),
+    is_draining INTEGER NOT NULL DEFAULT 0 CHECK (is_draining IN (0, 1)),
+    default_lease_ttl_sec INTEGER NOT NULL DEFAULT 900 CHECK (default_lease_ttl_sec > 0),
+    strict_projection INTEGER NOT NULL DEFAULT 1 CHECK (strict_projection IN (0, 1)),
+    metadata JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_policies_board ON board_workflow_policies(board_id);
+
+-- Workflow Status Catalog
+CREATE TABLE IF NOT EXISTS board_workflow_statuses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_id INTEGER NOT NULL REFERENCES board_workflow_policies(id) ON DELETE CASCADE,
+    status_key TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    is_terminal INTEGER NOT NULL DEFAULT 0 CHECK (is_terminal IN (0, 1)),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(policy_id, status_key)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_statuses_policy ON board_workflow_statuses(policy_id);
+
+-- Workflow Transition Edges
+CREATE TABLE IF NOT EXISTS board_workflow_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_id INTEGER NOT NULL REFERENCES board_workflow_policies(id) ON DELETE CASCADE,
+    from_status_key TEXT NOT NULL,
+    to_status_key TEXT NOT NULL,
+    requires_claim INTEGER NOT NULL DEFAULT 1 CHECK (requires_claim IN (0, 1)),
+    requires_approval INTEGER NOT NULL DEFAULT 0 CHECK (requires_approval IN (0, 1)),
+    approve_to_status_key TEXT,
+    reject_to_status_key TEXT,
+    auto_move_list_id INTEGER REFERENCES kanban_lists(id) ON DELETE SET NULL,
+    max_retries INTEGER NOT NULL DEFAULT 0 CHECK(max_retries >= 0),
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(policy_id, from_status_key, to_status_key),
+    FOREIGN KEY(policy_id, from_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE CASCADE,
+    FOREIGN KEY(policy_id, to_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE CASCADE,
+    FOREIGN KEY(policy_id, approve_to_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE SET NULL,
+    FOREIGN KEY(policy_id, reject_to_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_transitions_policy ON board_workflow_transitions(policy_id);
+
+-- Card Workflow Runtime State
+CREATE TABLE IF NOT EXISTS kanban_card_workflow_state (
+    card_id INTEGER PRIMARY KEY REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    policy_id INTEGER NOT NULL REFERENCES board_workflow_policies(id) ON DELETE CASCADE,
+    workflow_status_key TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_expires_at TIMESTAMP,
+    approval_state TEXT NOT NULL DEFAULT 'none'
+        CHECK (approval_state IN ('none', 'awaiting_approval', 'approved', 'rejected')),
+    pending_transition_id INTEGER REFERENCES board_workflow_transitions(id) ON DELETE SET NULL,
+    retry_counters JSON,
+    last_transition_at TIMESTAMP,
+    last_actor TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(policy_id, workflow_status_key)
+        REFERENCES board_workflow_statuses(policy_id, status_key) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_state_policy ON kanban_card_workflow_state(policy_id);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_state_status ON kanban_card_workflow_state(workflow_status_key);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_state_lease ON kanban_card_workflow_state(lease_expires_at);
+
+-- Card Workflow Events (append-only)
+CREATE TABLE IF NOT EXISTS kanban_card_workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    from_status_key TEXT,
+    to_status_key TEXT,
+    actor TEXT NOT NULL,
+    reason TEXT,
+    idempotency_key TEXT NOT NULL,
+    correlation_id TEXT,
+    before_snapshot JSON,
+    after_snapshot JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(card_id, event_type, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_events_card_created ON kanban_card_workflow_events(card_id, created_at DESC);
+
+-- Card Workflow Approvals
+CREATE TABLE IF NOT EXISTS kanban_card_workflow_approvals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    transition_id INTEGER NOT NULL REFERENCES board_workflow_transitions(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'rejected')),
+    reviewer TEXT,
+    decision_reason TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_card_workflow_approvals_card ON kanban_card_workflow_approvals(card_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_card_workflow_approvals_pending_unique
+    ON kanban_card_workflow_approvals(card_id, transition_id)
+    WHERE state = 'pending';
+
 -- Card Links
 CREATE TABLE IF NOT EXISTS kanban_card_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -640,6 +774,1513 @@ CREATE TRIGGER kanban_cards_au AFTER UPDATE ON kanban_cards BEGIN
     WHERE NEW.deleted = 0 AND NEW.archived = 0;
 END;
 """
+
+    # =========================================================================
+    # WORKFLOW OPERATIONS
+    # =========================================================================
+
+    @staticmethod
+    def _coerce_bool_int(value: Any, *, default: bool = False) -> int:
+        """Coerce a boolean-like value to SQLite integer form."""
+        if value is None:
+            return 1 if default else 0
+        if isinstance(value, bool):
+            return 1 if value else 0
+        if isinstance(value, int):
+            return 1 if value != 0 else 0
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return 1
+            if normalized in {"0", "false", "no", "off", ""}:
+                return 0
+        raise InputError("Boolean-like value required")  # noqa: TRY003
+
+    def _default_workflow_statuses(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "status_key": status_key,
+                "display_name": display_name,
+                "sort_order": sort_order,
+                "is_terminal": is_terminal,
+                "is_active": is_active,
+            }
+            for status_key, display_name, sort_order, is_terminal, is_active in self.DEFAULT_WORKFLOW_STATUSES
+        ]
+
+    def _default_workflow_transitions(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "from_status_key": from_status_key,
+                "to_status_key": to_status_key,
+                "requires_claim": requires_claim,
+                "requires_approval": requires_approval,
+                "approve_to_status_key": approve_to_status_key,
+                "reject_to_status_key": reject_to_status_key,
+                "auto_move_list_id": auto_move_list_id,
+                "max_retries": max_retries,
+                "is_active": is_active,
+            }
+            for (
+                from_status_key,
+                to_status_key,
+                requires_claim,
+                requires_approval,
+                approve_to_status_key,
+                reject_to_status_key,
+                auto_move_list_id,
+                max_retries,
+                is_active,
+            ) in self.DEFAULT_WORKFLOW_TRANSITIONS
+        ]
+
+    def _normalize_workflow_statuses(
+        self,
+        statuses: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        raw_statuses = statuses if statuses is not None else self._default_workflow_statuses()
+        if not raw_statuses:
+            raise InputError("At least one workflow status is required")  # noqa: TRY003
+
+        normalized: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for index, raw in enumerate(raw_statuses):
+            status_key = str(raw.get("status_key") or "").strip()
+            if not status_key:
+                raise InputError("status_key is required for all statuses")  # noqa: TRY003
+            if status_key in seen_keys:
+                raise InputError(f"Duplicate workflow status_key: {status_key}")  # noqa: TRY003
+            seen_keys.add(status_key)
+
+            display_name = str(raw.get("display_name") or "").strip() or status_key
+            sort_order = int(raw.get("sort_order", index))
+            normalized.append(
+                {
+                    "status_key": status_key,
+                    "display_name": display_name,
+                    "sort_order": sort_order,
+                    "is_terminal": self._coerce_bool_int(raw.get("is_terminal"), default=False),
+                    "is_active": self._coerce_bool_int(raw.get("is_active"), default=True),
+                }
+            )
+        return normalized
+
+    def _normalize_workflow_transitions(
+        self,
+        transitions: list[dict[str, Any]] | None,
+        *,
+        valid_status_keys: set[str],
+    ) -> list[dict[str, Any]]:
+        raw_transitions = transitions if transitions is not None else self._default_workflow_transitions()
+        normalized: list[dict[str, Any]] = []
+        seen_edges: set[tuple[str, str]] = set()
+
+        for raw in raw_transitions:
+            from_status_key = str(raw.get("from_status_key") or "").strip()
+            to_status_key = str(raw.get("to_status_key") or "").strip()
+            if not from_status_key or not to_status_key:
+                raise InputError("from_status_key and to_status_key are required for transitions")  # noqa: TRY003
+            if from_status_key not in valid_status_keys:
+                raise InputError(f"Unknown transition from_status_key: {from_status_key}")  # noqa: TRY003
+            if to_status_key not in valid_status_keys:
+                raise InputError(f"Unknown transition to_status_key: {to_status_key}")  # noqa: TRY003
+
+            edge_key = (from_status_key, to_status_key)
+            if edge_key in seen_edges:
+                raise InputError(f"Duplicate transition edge: {from_status_key} -> {to_status_key}")  # noqa: TRY003
+            seen_edges.add(edge_key)
+
+            approve_to_status_key = raw.get("approve_to_status_key")
+            reject_to_status_key = raw.get("reject_to_status_key")
+            if approve_to_status_key is not None and str(approve_to_status_key).strip() not in valid_status_keys:
+                raise InputError("approve_to_status_key must reference a known status_key")  # noqa: TRY003
+            if reject_to_status_key is not None and str(reject_to_status_key).strip() not in valid_status_keys:
+                raise InputError("reject_to_status_key must reference a known status_key")  # noqa: TRY003
+
+            normalized.append(
+                {
+                    "from_status_key": from_status_key,
+                    "to_status_key": to_status_key,
+                    "requires_claim": self._coerce_bool_int(raw.get("requires_claim"), default=True),
+                    "requires_approval": self._coerce_bool_int(raw.get("requires_approval"), default=False),
+                    "approve_to_status_key": str(approve_to_status_key).strip() if approve_to_status_key else None,
+                    "reject_to_status_key": str(reject_to_status_key).strip() if reject_to_status_key else None,
+                    "auto_move_list_id": raw.get("auto_move_list_id"),
+                    "max_retries": max(0, int(raw.get("max_retries", 0))),
+                    "is_active": self._coerce_bool_int(raw.get("is_active"), default=True),
+                }
+            )
+
+        return normalized
+
+    def _row_to_workflow_policy_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "board_id": row["board_id"],
+            "version": row["version"],
+            "is_paused": bool(row["is_paused"]),
+            "is_draining": bool(row["is_draining"]),
+            "default_lease_ttl_sec": row["default_lease_ttl_sec"],
+            "strict_projection": bool(row["strict_projection"]),
+            "metadata": json.loads(row["metadata"]) if row["metadata"] else None,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _row_to_workflow_status_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "policy_id": row["policy_id"],
+            "status_key": row["status_key"],
+            "display_name": row["display_name"],
+            "is_terminal": bool(row["is_terminal"]),
+            "sort_order": row["sort_order"],
+            "is_active": bool(row["is_active"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _row_to_workflow_transition_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "policy_id": row["policy_id"],
+            "from_status_key": row["from_status_key"],
+            "to_status_key": row["to_status_key"],
+            "requires_claim": bool(row["requires_claim"]),
+            "requires_approval": bool(row["requires_approval"]),
+            "approve_to_status_key": row["approve_to_status_key"],
+            "reject_to_status_key": row["reject_to_status_key"],
+            "auto_move_list_id": row["auto_move_list_id"],
+            "max_retries": row["max_retries"],
+            "is_active": bool(row["is_active"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _row_to_card_workflow_state_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        retry_counters = row["retry_counters"]
+        return {
+            "card_id": row["card_id"],
+            "policy_id": row["policy_id"],
+            "workflow_status_key": row["workflow_status_key"],
+            "lease_owner": row["lease_owner"],
+            "lease_expires_at": row["lease_expires_at"],
+            "approval_state": row["approval_state"],
+            "pending_transition_id": row["pending_transition_id"],
+            "retry_counters": json.loads(retry_counters) if retry_counters else None,
+            "last_transition_at": row["last_transition_at"],
+            "last_actor": row["last_actor"],
+            "version": row["version"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _get_workflow_policy_row(self, conn: sqlite3.Connection, board_id: int) -> sqlite3.Row | None:
+        return conn.execute(
+            """
+            SELECT p.id, p.board_id, p.version, p.is_paused, p.is_draining,
+                   p.default_lease_ttl_sec, p.strict_projection, p.metadata,
+                   p.created_at, p.updated_at
+            FROM board_workflow_policies p
+            JOIN kanban_boards b ON b.id = p.board_id
+            WHERE p.board_id = ? AND b.user_id = ? AND b.deleted = 0
+            """,
+            (board_id, self.user_id),
+        ).fetchone()
+
+    def _list_workflow_statuses_for_policy(
+        self,
+        conn: sqlite3.Connection,
+        policy_id: int,
+        *,
+        include_inactive: bool = False,
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT id, policy_id, status_key, display_name, is_terminal, sort_order, is_active, created_at, updated_at
+            FROM board_workflow_statuses
+            WHERE policy_id = ?
+        """
+        params: list[Any] = [policy_id]
+        if not include_inactive:
+            sql += " AND is_active = 1"
+        sql += " ORDER BY sort_order ASC, status_key ASC"
+        rows = conn.execute(sql, params).fetchall()
+        return [self._row_to_workflow_status_dict(row) for row in rows]
+
+    def _list_workflow_transitions_for_policy(
+        self,
+        conn: sqlite3.Connection,
+        policy_id: int,
+        *,
+        include_inactive: bool = False,
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT id, policy_id, from_status_key, to_status_key, requires_claim, requires_approval,
+                   approve_to_status_key, reject_to_status_key, auto_move_list_id, max_retries,
+                   is_active, created_at, updated_at
+            FROM board_workflow_transitions
+            WHERE policy_id = ?
+        """
+        params: list[Any] = [policy_id]
+        if not include_inactive:
+            sql += " AND is_active = 1"
+        sql += " ORDER BY from_status_key ASC, to_status_key ASC"
+        rows = conn.execute(sql, params).fetchall()
+        return [self._row_to_workflow_transition_dict(row) for row in rows]
+
+    def _upsert_workflow_policy_internal(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        board_id: int,
+        statuses: list[dict[str, Any]] | None = None,
+        transitions: list[dict[str, Any]] | None = None,
+        is_paused: bool = False,
+        is_draining: bool = False,
+        default_lease_ttl_sec: int = 900,
+        strict_projection: bool = True,
+        metadata: dict[str, Any] | None | object = _WORKFLOW_METADATA_UNSET,
+    ) -> dict[str, Any]:
+        board = self._get_board_by_id(conn, board_id)
+        if not board:
+            raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
+
+        if default_lease_ttl_sec <= 0:
+            raise InputError("default_lease_ttl_sec must be greater than zero")  # noqa: TRY003
+
+        normalized_statuses = self._normalize_workflow_statuses(statuses)
+        status_keys = {status["status_key"] for status in normalized_statuses}
+        normalized_transitions = self._normalize_workflow_transitions(
+            transitions,
+            valid_status_keys=status_keys,
+        )
+
+        now = _utcnow_iso()
+        policy_row = self._get_workflow_policy_row(conn, board_id)
+        if metadata is _WORKFLOW_METADATA_UNSET:
+            metadata_json = policy_row["metadata"] if policy_row else None
+        else:
+            metadata_json = json.dumps(metadata) if metadata is not None else None
+
+        if policy_row:
+            policy_id = policy_row["id"]
+            conn.execute(
+                """
+                UPDATE board_workflow_policies
+                SET version = version + 1,
+                    is_paused = ?,
+                    is_draining = ?,
+                    default_lease_ttl_sec = ?,
+                    strict_projection = ?,
+                    metadata = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    self._coerce_bool_int(is_paused),
+                    self._coerce_bool_int(is_draining),
+                    int(default_lease_ttl_sec),
+                    self._coerce_bool_int(strict_projection, default=True),
+                    metadata_json,
+                    now,
+                    policy_id,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO board_workflow_policies
+                (board_id, version, is_paused, is_draining, default_lease_ttl_sec,
+                 strict_projection, metadata, created_at, updated_at)
+                VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    board_id,
+                    self._coerce_bool_int(is_paused),
+                    self._coerce_bool_int(is_draining),
+                    int(default_lease_ttl_sec),
+                    self._coerce_bool_int(strict_projection, default=True),
+                    metadata_json,
+                    now,
+                    now,
+                ),
+            )
+            policy_id = int(cur.lastrowid)
+
+        for status in normalized_statuses:
+            conn.execute(
+                """
+                INSERT INTO board_workflow_statuses
+                (policy_id, status_key, display_name, is_terminal, sort_order, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(policy_id, status_key) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    is_terminal = excluded.is_terminal,
+                    sort_order = excluded.sort_order,
+                    is_active = excluded.is_active,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    policy_id,
+                    status["status_key"],
+                    status["display_name"],
+                    status["is_terminal"],
+                    status["sort_order"],
+                    status["is_active"],
+                    now,
+                    now,
+                ),
+            )
+
+        status_placeholders = ",".join("?" * len(status_keys))
+        conn.execute(
+            f"""
+            UPDATE board_workflow_statuses
+            SET is_active = 0, updated_at = ?
+            WHERE policy_id = ? AND status_key NOT IN ({status_placeholders})
+            """,  # nosec B608
+            [now, policy_id, *status_keys],
+        )
+
+        for transition in normalized_transitions:
+            conn.execute(
+                """
+                INSERT INTO board_workflow_transitions
+                (policy_id, from_status_key, to_status_key, requires_claim, requires_approval,
+                 approve_to_status_key, reject_to_status_key, auto_move_list_id, max_retries,
+                 is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(policy_id, from_status_key, to_status_key) DO UPDATE SET
+                    requires_claim = excluded.requires_claim,
+                    requires_approval = excluded.requires_approval,
+                    approve_to_status_key = excluded.approve_to_status_key,
+                    reject_to_status_key = excluded.reject_to_status_key,
+                    auto_move_list_id = excluded.auto_move_list_id,
+                    max_retries = excluded.max_retries,
+                    is_active = excluded.is_active,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    policy_id,
+                    transition["from_status_key"],
+                    transition["to_status_key"],
+                    transition["requires_claim"],
+                    transition["requires_approval"],
+                    transition["approve_to_status_key"],
+                    transition["reject_to_status_key"],
+                    transition["auto_move_list_id"],
+                    transition["max_retries"],
+                    transition["is_active"],
+                    now,
+                    now,
+                ),
+            )
+
+        if normalized_transitions:
+            transition_clauses = " OR ".join(["(from_status_key = ? AND to_status_key = ?)"] * len(normalized_transitions))
+            transition_params: list[Any] = [now, policy_id]
+            for transition in normalized_transitions:
+                transition_params.extend([transition["from_status_key"], transition["to_status_key"]])
+            conn.execute(
+                f"""
+                UPDATE board_workflow_transitions
+                SET is_active = 0, updated_at = ?
+                WHERE policy_id = ? AND NOT ({transition_clauses})
+                """,  # nosec B608
+                transition_params,
+            )
+        else:
+            conn.execute(
+                "UPDATE board_workflow_transitions SET is_active = 0, updated_at = ? WHERE policy_id = ?",
+                (now, policy_id),
+            )
+
+        return self._get_workflow_policy_internal(conn, board_id)
+
+    def _ensure_workflow_policy_for_board(self, conn: sqlite3.Connection, board_id: int) -> dict[str, Any]:
+        policy = self._get_workflow_policy_internal(conn, board_id)
+        if policy:
+            return policy
+        return self._upsert_workflow_policy_internal(conn, board_id=board_id)
+
+    def _get_workflow_policy_internal(self, conn: sqlite3.Connection, board_id: int) -> dict[str, Any] | None:
+        row = self._get_workflow_policy_row(conn, board_id)
+        if not row:
+            return None
+
+        policy = self._row_to_workflow_policy_dict(row)
+        policy_id = int(row["id"])
+        policy["statuses"] = self._list_workflow_statuses_for_policy(conn, policy_id)
+        policy["transitions"] = self._list_workflow_transitions_for_policy(conn, policy_id)
+        return policy
+
+    def upsert_workflow_policy(
+        self,
+        *,
+        board_id: int,
+        statuses: list[dict[str, Any]] | None = None,
+        transitions: list[dict[str, Any]] | None = None,
+        is_paused: bool = False,
+        is_draining: bool = False,
+        default_lease_ttl_sec: int = 900,
+        strict_projection: bool = True,
+        metadata: dict[str, Any] | None | object = _WORKFLOW_METADATA_UNSET,
+    ) -> dict[str, Any]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                policy = self._upsert_workflow_policy_internal(
+                    conn,
+                    board_id=board_id,
+                    statuses=statuses,
+                    transitions=transitions,
+                    is_paused=is_paused,
+                    is_draining=is_draining,
+                    default_lease_ttl_sec=default_lease_ttl_sec,
+                    strict_projection=strict_projection,
+                    metadata=metadata,
+                )
+                conn.commit()
+                return policy
+            finally:
+                conn.close()
+
+    def update_workflow_policy_flags(
+        self,
+        *,
+        board_id: int,
+        is_paused: bool | None = None,
+        is_draining: bool | None = None,
+    ) -> dict[str, Any]:
+        """Update policy control flags without rewriting statuses/transitions."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                policy = self._ensure_workflow_policy_for_board(conn, board_id)
+                policy_row = self._get_workflow_policy_row(conn, board_id)
+                if not policy_row:
+                    raise NotFoundError("Workflow policy not found", entity="workflow_policy", entity_id=board_id)  # noqa: TRY003
+
+                next_paused = bool(policy["is_paused"]) if is_paused is None else bool(is_paused)
+                next_draining = bool(policy["is_draining"]) if is_draining is None else bool(is_draining)
+                now = _utcnow_iso()
+                conn.execute(
+                    """
+                    UPDATE board_workflow_policies
+                    SET version = version + 1,
+                        is_paused = ?,
+                        is_draining = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        self._coerce_bool_int(next_paused),
+                        self._coerce_bool_int(next_draining),
+                        now,
+                        int(policy_row["id"]),
+                    ),
+                )
+                updated = self._get_workflow_policy_internal(conn, board_id)
+                if not updated:
+                    raise KanbanDBError("workflow_policy_update_failed")  # noqa: TRY003
+                conn.commit()
+                return updated
+            finally:
+                conn.close()
+
+    def get_workflow_policy(self, board_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                policy = self._ensure_workflow_policy_for_board(conn, board_id)
+                conn.commit()
+                return policy
+            finally:
+                conn.close()
+
+    def list_workflow_statuses(self, board_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                policy = self._ensure_workflow_policy_for_board(conn, board_id)
+                statuses = self._list_workflow_statuses_for_policy(conn, int(policy["id"]))
+                conn.commit()
+                return statuses
+            finally:
+                conn.close()
+
+    def list_workflow_transitions(self, board_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                policy = self._ensure_workflow_policy_for_board(conn, board_id)
+                transitions = self._list_workflow_transitions_for_policy(conn, int(policy["id"]))
+                conn.commit()
+                return transitions
+            finally:
+                conn.close()
+
+    def _get_card_workflow_state_row(self, conn: sqlite3.Connection, card_id: int) -> sqlite3.Row | None:
+        return conn.execute(
+            """
+            SELECT s.card_id, s.policy_id, s.workflow_status_key, s.lease_owner, s.lease_expires_at,
+                   s.approval_state, s.pending_transition_id, s.retry_counters, s.last_transition_at,
+                   s.last_actor, s.version, s.created_at, s.updated_at
+            FROM kanban_card_workflow_state s
+            JOIN kanban_cards c ON c.id = s.card_id
+            JOIN kanban_boards b ON b.id = c.board_id
+            WHERE s.card_id = ? AND b.user_id = ? AND b.deleted = 0 AND c.deleted = 0
+            """,
+            (card_id, self.user_id),
+        ).fetchone()
+
+    def _get_default_policy_status_key(self, conn: sqlite3.Connection, policy_id: int) -> str:
+        row = conn.execute(
+            """
+            SELECT status_key
+            FROM board_workflow_statuses
+            WHERE policy_id = ? AND is_active = 1
+            ORDER BY sort_order ASC, status_key ASC
+            LIMIT 1
+            """,
+            (policy_id,),
+        ).fetchone()
+        if not row:
+            raise NotFoundError("No active workflow statuses found for policy", entity="workflow_policy", entity_id=policy_id)  # noqa: TRY003
+        return str(row["status_key"])
+
+    def _ensure_card_workflow_state(self, conn: sqlite3.Connection, card_id: int) -> sqlite3.Row:
+        existing_state = self._get_card_workflow_state_row(conn, card_id)
+        if existing_state:
+            return existing_state
+
+        card = self._get_card_by_id(conn, card_id)
+        if not card:
+            raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
+
+        policy = self._ensure_workflow_policy_for_board(conn, int(card["board_id"]))
+        policy_id = int(policy["id"])
+        default_status_key = self._get_default_policy_status_key(conn, policy_id)
+        now = _utcnow_iso()
+
+        try:
+            conn.execute(
+                """
+                INSERT INTO kanban_card_workflow_state
+                (card_id, policy_id, workflow_status_key, approval_state, version, created_at, updated_at)
+                VALUES (?, ?, ?, 'none', 1, ?, ?)
+                """,
+                (card_id, policy_id, default_status_key, now, now),
+            )
+        except sqlite3.IntegrityError:
+            # Lost a race to another initializer; fetch the row created by the winner.
+            pass
+
+        state_row = self._get_card_workflow_state_row(conn, card_id)
+        if not state_row:
+            raise KanbanDBError("Failed to initialize card workflow state")  # noqa: TRY003
+        return state_row
+
+    def get_card_workflow_state(self, card_id: int) -> dict[str, Any]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                state_row = self._ensure_card_workflow_state(conn, card_id)
+                conn.commit()
+                return self._row_to_card_workflow_state_dict(state_row)
+            finally:
+                conn.close()
+
+    def patch_card_workflow_state(
+        self,
+        *,
+        card_id: int,
+        workflow_status_key: str | None,
+        expected_version: int,
+        lease_owner: str | None,
+        idempotency_key: str,
+        correlation_id: str | None = None,
+        last_actor: str | None = None,
+    ) -> dict[str, Any]:
+        if expected_version < 1:
+            raise InputError("expected_version must be >= 1")  # noqa: TRY003
+        if not idempotency_key or not idempotency_key.strip():
+            raise InputError("idempotency_key is required")  # noqa: TRY003
+
+        actor = (last_actor or self.user_id).strip()
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                state_row = self._ensure_card_workflow_state(conn, card_id)
+                current_state = self._row_to_card_workflow_state_dict(state_row)
+
+                replay = conn.execute(
+                    """
+                    SELECT id
+                    FROM kanban_card_workflow_events
+                    WHERE card_id = ? AND event_type = 'state_patched' AND idempotency_key = ?
+                    """,
+                    (card_id, idempotency_key.strip()),
+                ).fetchone()
+                if replay:
+                    conn.commit()
+                    return current_state
+
+                if int(current_state["version"]) != int(expected_version):
+                    raise ConflictError(  # noqa: TRY003
+                        f"version_conflict: expected {expected_version}, got {current_state['version']}",
+                        entity="card_workflow_state",
+                        entity_id=card_id,
+                        code="version_conflict",
+                    )
+
+                next_status_key = workflow_status_key.strip() if workflow_status_key else current_state["workflow_status_key"]
+                status_row = conn.execute(
+                    """
+                    SELECT status_key
+                    FROM board_workflow_statuses
+                    WHERE policy_id = ? AND status_key = ? AND is_active = 1
+                    """,
+                    (current_state["policy_id"], next_status_key),
+                ).fetchone()
+                if not status_row:
+                    raise InputError("workflow_status_key is not valid for this policy")  # noqa: TRY003
+
+                now = _utcnow_iso()
+                update_cur = conn.execute(
+                    """
+                    UPDATE kanban_card_workflow_state
+                    SET workflow_status_key = ?,
+                        lease_owner = ?,
+                        last_transition_at = ?,
+                        last_actor = ?,
+                        version = version + 1,
+                        updated_at = ?
+                    WHERE card_id = ? AND version = ?
+                    """,
+                    (
+                        next_status_key,
+                        lease_owner,
+                        now,
+                        actor,
+                        now,
+                        card_id,
+                        expected_version,
+                    ),
+                )
+                if update_cur.rowcount != 1:
+                    raise ConflictError(  # noqa: TRY003
+                        "version_conflict: workflow state update conflict",
+                        entity="card_workflow_state",
+                        entity_id=card_id,
+                        code="version_conflict",
+                    )
+
+                updated_row = self._get_card_workflow_state_row(conn, card_id)
+                if not updated_row:
+                    raise KanbanDBError("Updated workflow state could not be loaded")  # noqa: TRY003
+                updated_state = self._row_to_card_workflow_state_dict(updated_row)
+
+                conn.execute(
+                    """
+                    INSERT INTO kanban_card_workflow_events
+                    (card_id, event_type, from_status_key, to_status_key, actor, idempotency_key,
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'state_patched', ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        card_id,
+                        current_state["workflow_status_key"],
+                        updated_state["workflow_status_key"],
+                        actor,
+                        idempotency_key.strip(),
+                        corr_id,
+                        json.dumps(current_state),
+                        json.dumps(updated_state),
+                        now,
+                    ),
+                )
+
+                conn.commit()
+                return updated_state
+            finally:
+                conn.close()
+
+    def claim_card_workflow(
+        self,
+        *,
+        card_id: int,
+        owner: str,
+        lease_ttl_sec: int | None = None,
+        idempotency_key: str,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not owner or not owner.strip():
+            raise InputError("owner is required")  # noqa: TRY003
+        if not idempotency_key or not idempotency_key.strip():
+            raise InputError("idempotency_key is required")  # noqa: TRY003
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                state_row = self._ensure_card_workflow_state(conn, card_id)
+                current_state = self._row_to_card_workflow_state_dict(state_row)
+
+                replay = conn.execute(
+                    """
+                    SELECT id
+                    FROM kanban_card_workflow_events
+                    WHERE card_id = ? AND event_type = 'workflow_claimed' AND idempotency_key = ?
+                    """,
+                    (card_id, idempotency_key.strip()),
+                ).fetchone()
+                if replay:
+                    conn.commit()
+                    return current_state
+
+                if lease_ttl_sec is None:
+                    ttl_row = conn.execute(
+                        "SELECT default_lease_ttl_sec FROM board_workflow_policies WHERE id = ?",
+                        (current_state["policy_id"],),
+                    ).fetchone()
+                    lease_ttl_sec = int(ttl_row["default_lease_ttl_sec"]) if ttl_row else 900
+                if lease_ttl_sec <= 0:
+                    raise InputError("lease_ttl_sec must be greater than zero")  # noqa: TRY003
+
+                now = _utcnow_iso()
+                lease_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=lease_ttl_sec)).strftime("%Y-%m-%d %H:%M:%S")
+                lease_owner = current_state["lease_owner"]
+                lease_expiry = current_state["lease_expires_at"]
+                owner_name = owner.strip()
+
+                if lease_owner and lease_owner != owner_name and lease_expiry and str(lease_expiry) > now:
+                    raise ConflictError(  # noqa: TRY003
+                        "lease_mismatch",
+                        entity="card_workflow_state",
+                        entity_id=card_id,
+                        code="lease_mismatch",
+                    )
+
+                update_cur = conn.execute(
+                    """
+                    UPDATE kanban_card_workflow_state
+                    SET lease_owner = ?,
+                        lease_expires_at = ?,
+                        last_actor = ?,
+                        version = version + 1,
+                        updated_at = ?
+                    WHERE card_id = ? AND version = ?
+                      AND (
+                        lease_owner IS NULL
+                        OR lease_expires_at IS NULL
+                        OR lease_expires_at <= ?
+                        OR lease_owner = ?
+                      )
+                    """,
+                    (owner_name, lease_expires_at, owner_name, now, card_id, current_state["version"], now, owner_name),
+                )
+                if update_cur.rowcount != 1:
+                    latest_row = self._get_card_workflow_state_row(conn, card_id)
+                    latest_state = self._row_to_card_workflow_state_dict(latest_row) if latest_row else None
+                    if latest_state:
+                        latest_owner = latest_state["lease_owner"]
+                        latest_expiry = latest_state["lease_expires_at"]
+                        if latest_owner and latest_owner != owner_name and latest_expiry and str(latest_expiry) > now:
+                            raise ConflictError(  # noqa: TRY003
+                                "lease_mismatch",
+                                entity="card_workflow_state",
+                                entity_id=card_id,
+                                code="lease_mismatch",
+                            )
+                    raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id, code="version_conflict")  # noqa: TRY003
+
+                updated_row = self._get_card_workflow_state_row(conn, card_id)
+                if not updated_row:
+                    raise KanbanDBError("Updated workflow state could not be loaded")  # noqa: TRY003
+                updated_state = self._row_to_card_workflow_state_dict(updated_row)
+
+                conn.execute(
+                    """
+                    INSERT INTO kanban_card_workflow_events
+                    (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_claimed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        card_id,
+                        current_state["workflow_status_key"],
+                        updated_state["workflow_status_key"],
+                        owner.strip(),
+                        "claim_acquired",
+                        idempotency_key.strip(),
+                        corr_id,
+                        json.dumps(current_state),
+                        json.dumps(updated_state),
+                        now,
+                    ),
+                )
+
+                conn.commit()
+                return updated_state
+            finally:
+                conn.close()
+
+    def release_card_workflow(
+        self,
+        *,
+        card_id: int,
+        owner: str,
+        idempotency_key: str,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not owner or not owner.strip():
+            raise InputError("owner is required")  # noqa: TRY003
+        if not idempotency_key or not idempotency_key.strip():
+            raise InputError("idempotency_key is required")  # noqa: TRY003
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                state_row = self._ensure_card_workflow_state(conn, card_id)
+                current_state = self._row_to_card_workflow_state_dict(state_row)
+
+                replay = conn.execute(
+                    """
+                    SELECT id
+                    FROM kanban_card_workflow_events
+                    WHERE card_id = ? AND event_type = 'workflow_released' AND idempotency_key = ?
+                    """,
+                    (card_id, idempotency_key.strip()),
+                ).fetchone()
+                if replay:
+                    conn.commit()
+                    return current_state
+
+                if current_state["lease_owner"] and current_state["lease_owner"] != owner.strip():
+                    raise ConflictError("lease_mismatch", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                now = _utcnow_iso()
+                update_cur = conn.execute(
+                    """
+                    UPDATE kanban_card_workflow_state
+                    SET lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        last_actor = ?,
+                        version = version + 1,
+                        updated_at = ?
+                    WHERE card_id = ? AND version = ?
+                    """,
+                    (owner.strip(), now, card_id, current_state["version"]),
+                )
+                if update_cur.rowcount != 1:
+                    raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                updated_row = self._get_card_workflow_state_row(conn, card_id)
+                if not updated_row:
+                    raise KanbanDBError("Updated workflow state could not be loaded")  # noqa: TRY003
+                updated_state = self._row_to_card_workflow_state_dict(updated_row)
+
+                conn.execute(
+                    """
+                    INSERT INTO kanban_card_workflow_events
+                    (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_released', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        card_id,
+                        current_state["workflow_status_key"],
+                        updated_state["workflow_status_key"],
+                        owner.strip(),
+                        "claim_released",
+                        idempotency_key.strip(),
+                        corr_id,
+                        json.dumps(current_state),
+                        json.dumps(updated_state),
+                        now,
+                    ),
+                )
+
+                conn.commit()
+                return updated_state
+            finally:
+                conn.close()
+
+    def transition_card_workflow(
+        self,
+        *,
+        card_id: int,
+        to_status_key: str,
+        actor: str,
+        expected_version: int,
+        idempotency_key: str,
+        correlation_id: str | None = None,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        if not to_status_key or not to_status_key.strip():
+            raise InputError("to_status_key is required")  # noqa: TRY003
+        if not actor or not actor.strip():
+            raise InputError("actor is required")  # noqa: TRY003
+        if expected_version < 1:
+            raise InputError("expected_version must be >= 1")  # noqa: TRY003
+        if not idempotency_key or not idempotency_key.strip():
+            raise InputError("idempotency_key is required")  # noqa: TRY003
+
+        target_status_key = to_status_key.strip()
+        actor_name = actor.strip()
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                state_row = self._ensure_card_workflow_state(conn, card_id)
+                current_state = self._row_to_card_workflow_state_dict(state_row)
+                card_row = conn.execute(
+                    """
+                    SELECT id, board_id, list_id
+                    FROM kanban_cards
+                    WHERE id = ? AND deleted = 0
+                    """,
+                    (card_id,),
+                ).fetchone()
+                if not card_row:
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
+
+                policy_row = conn.execute(
+                    "SELECT is_paused, strict_projection FROM board_workflow_policies WHERE id = ?",
+                    (current_state["policy_id"],),
+                ).fetchone()
+                if policy_row and bool(policy_row["is_paused"]):
+                    raise ConflictError("policy_paused", entity="workflow_policy", entity_id=current_state["policy_id"])  # noqa: TRY003
+
+                replay = conn.execute(
+                    """
+                    SELECT id
+                    FROM kanban_card_workflow_events
+                    WHERE card_id = ?
+                      AND event_type IN ('workflow_transitioned', 'workflow_approval_requested')
+                      AND idempotency_key = ?
+                    """,
+                    (card_id, idempotency_key.strip()),
+                ).fetchone()
+                if replay:
+                    conn.commit()
+                    return current_state
+
+                if int(current_state["version"]) != int(expected_version):
+                    raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                transition_row = conn.execute(
+                    """
+                    SELECT id, requires_claim, requires_approval, is_active, auto_move_list_id
+                    FROM board_workflow_transitions
+                    WHERE policy_id = ? AND from_status_key = ? AND to_status_key = ? AND is_active = 1
+                    """,
+                    (current_state["policy_id"], current_state["workflow_status_key"], target_status_key),
+                ).fetchone()
+                if not transition_row:
+                    raise ConflictError("transition_not_allowed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                now = _utcnow_iso()
+                if bool(transition_row["requires_claim"]):
+                    lease_owner = current_state["lease_owner"]
+                    lease_expires_at = current_state["lease_expires_at"]
+                    if not lease_owner or lease_owner != actor_name:
+                        raise ConflictError("lease_required", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+                    if not lease_expires_at or str(lease_expires_at) <= now:
+                        raise ConflictError("lease_required", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                projected_list_id: int | None = None
+                if transition_row["auto_move_list_id"] is not None:
+                    projected_row = conn.execute(
+                        """
+                        SELECT id
+                        FROM kanban_lists
+                        WHERE id = ? AND board_id = ? AND deleted = 0 AND archived = 0
+                        """,
+                        (transition_row["auto_move_list_id"], card_row["board_id"]),
+                    ).fetchone()
+                    if not projected_row and bool(policy_row and policy_row["strict_projection"]):
+                        raise ConflictError("projection_failed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+                    if projected_row:
+                        projected_list_id = int(projected_row["id"])
+
+                if bool(transition_row["requires_approval"]):
+                    update_cur = conn.execute(
+                        """
+                        UPDATE kanban_card_workflow_state
+                        SET approval_state = 'awaiting_approval',
+                            pending_transition_id = ?,
+                            last_actor = ?,
+                            version = version + 1,
+                            updated_at = ?
+                        WHERE card_id = ? AND version = ?
+                        """,
+                        (transition_row["id"], actor_name, now, card_id, expected_version),
+                    )
+                    if update_cur.rowcount != 1:
+                        raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                    conn.execute(
+                        """
+                        UPDATE kanban_card_workflow_approvals
+                        SET state = 'rejected', updated_at = ?, decision_reason = COALESCE(decision_reason, 'superseded')
+                        WHERE card_id = ? AND state = 'pending'
+                        """,
+                        (now, card_id),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO kanban_card_workflow_approvals
+                        (card_id, transition_id, state, reviewer, decision_reason, created_at, updated_at)
+                        VALUES (?, ?, 'pending', NULL, ?, ?, ?)
+                        """,
+                        (card_id, transition_row["id"], reason, now, now),
+                    )
+
+                    updated_row = self._get_card_workflow_state_row(conn, card_id)
+                    if not updated_row:
+                        raise KanbanDBError("Updated workflow state could not be loaded")  # noqa: TRY003
+                    updated_state = self._row_to_card_workflow_state_dict(updated_row)
+
+                    conn.execute(
+                        """
+                        INSERT INTO kanban_card_workflow_events
+                        (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
+                         correlation_id, before_snapshot, after_snapshot, created_at)
+                        VALUES (?, 'workflow_approval_requested', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            card_id,
+                            current_state["workflow_status_key"],
+                            target_status_key,
+                            actor_name,
+                            reason,
+                            idempotency_key.strip(),
+                            corr_id,
+                            json.dumps(current_state),
+                            json.dumps(updated_state),
+                            now,
+                        ),
+                    )
+
+                    conn.commit()
+                    return updated_state
+
+                update_cur = conn.execute(
+                    """
+                    UPDATE kanban_card_workflow_state
+                    SET workflow_status_key = ?,
+                        approval_state = 'none',
+                        pending_transition_id = NULL,
+                        last_transition_at = ?,
+                        last_actor = ?,
+                        version = version + 1,
+                        updated_at = ?
+                    WHERE card_id = ? AND version = ?
+                    """,
+                    (target_status_key, now, actor_name, now, card_id, expected_version),
+                )
+                if update_cur.rowcount != 1:
+                    raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                if projected_list_id is not None and int(card_row["list_id"]) != projected_list_id:
+                    projected_update = conn.execute(
+                        """
+                        UPDATE kanban_cards
+                        SET list_id = ?, version = version + 1, updated_at = ?
+                        WHERE id = ? AND board_id = ? AND deleted = 0 AND archived = 0
+                        """,
+                        (projected_list_id, now, card_id, card_row["board_id"]),
+                    )
+                    if projected_update.rowcount != 1 and bool(policy_row["strict_projection"]):
+                        raise ConflictError("projection_failed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                updated_row = self._get_card_workflow_state_row(conn, card_id)
+                if not updated_row:
+                    raise KanbanDBError("Updated workflow state could not be loaded")  # noqa: TRY003
+                updated_state = self._row_to_card_workflow_state_dict(updated_row)
+
+                conn.execute(
+                    """
+                    INSERT INTO kanban_card_workflow_events
+                    (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_transitioned', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        card_id,
+                        current_state["workflow_status_key"],
+                        updated_state["workflow_status_key"],
+                        actor_name,
+                        reason,
+                        idempotency_key.strip(),
+                        corr_id,
+                        json.dumps(current_state),
+                        json.dumps(updated_state),
+                        now,
+                    ),
+                )
+
+                conn.commit()
+                return updated_state
+            finally:
+                conn.close()
+
+    def decide_card_workflow_approval(
+        self,
+        *,
+        card_id: int,
+        reviewer: str,
+        decision: str,
+        expected_version: int,
+        idempotency_key: str,
+        correlation_id: str | None = None,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        if not reviewer or not reviewer.strip():
+            raise InputError("reviewer is required")  # noqa: TRY003
+        if decision not in {"approved", "rejected"}:
+            raise InputError("decision must be 'approved' or 'rejected'")  # noqa: TRY003
+        if expected_version < 1:
+            raise InputError("expected_version must be >= 1")  # noqa: TRY003
+        if not idempotency_key or not idempotency_key.strip():
+            raise InputError("idempotency_key is required")  # noqa: TRY003
+
+        reviewer_name = reviewer.strip()
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                state_row = self._ensure_card_workflow_state(conn, card_id)
+                current_state = self._row_to_card_workflow_state_dict(state_row)
+
+                replay = conn.execute(
+                    """
+                    SELECT id
+                    FROM kanban_card_workflow_events
+                    WHERE card_id = ? AND event_type = 'workflow_approval_decided' AND idempotency_key = ?
+                    """,
+                    (card_id, idempotency_key.strip()),
+                ).fetchone()
+                if replay:
+                    conn.commit()
+                    return current_state
+
+                if int(current_state["version"]) != int(expected_version):
+                    raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+                if current_state["approval_state"] != "awaiting_approval" or not current_state["pending_transition_id"]:
+                    raise ConflictError("approval_required", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                transition_row = conn.execute(
+                    """
+                    SELECT id, to_status_key, approve_to_status_key, reject_to_status_key, auto_move_list_id
+                    FROM board_workflow_transitions
+                    WHERE id = ?
+                    """,
+                    (current_state["pending_transition_id"],),
+                ).fetchone()
+                if not transition_row:
+                    raise ConflictError("transition_not_allowed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                if decision == "approved":
+                    target_status_key = transition_row["approve_to_status_key"] or transition_row["to_status_key"]
+                    approval_state = "approved"
+                else:
+                    target_status_key = transition_row["reject_to_status_key"] or current_state["workflow_status_key"]
+                    approval_state = "rejected"
+
+                now = _utcnow_iso()
+                card_row = conn.execute(
+                    """
+                    SELECT id, board_id, list_id
+                    FROM kanban_cards
+                    WHERE id = ? AND deleted = 0
+                    """,
+                    (card_id,),
+                ).fetchone()
+                if not card_row:
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
+                policy_row = conn.execute(
+                    "SELECT strict_projection FROM board_workflow_policies WHERE id = ?",
+                    (current_state["policy_id"],),
+                ).fetchone()
+                projected_list_id: int | None = None
+                if decision == "approved" and transition_row["auto_move_list_id"] is not None:
+                    projected_row = conn.execute(
+                        """
+                        SELECT id
+                        FROM kanban_lists
+                        WHERE id = ? AND board_id = ? AND deleted = 0 AND archived = 0
+                        """,
+                        (transition_row["auto_move_list_id"], card_row["board_id"]),
+                    ).fetchone()
+                    if not projected_row and bool(policy_row and policy_row["strict_projection"]):
+                        raise ConflictError("projection_failed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+                    if projected_row:
+                        projected_list_id = int(projected_row["id"])
+
+                conn.execute(
+                    """
+                    UPDATE kanban_card_workflow_approvals
+                    SET state = ?, reviewer = ?, decision_reason = ?, updated_at = ?
+                    WHERE card_id = ? AND transition_id = ? AND state = 'pending'
+                    """,
+                    (decision, reviewer_name, reason, now, card_id, transition_row["id"]),
+                )
+
+                update_cur = conn.execute(
+                    """
+                    UPDATE kanban_card_workflow_state
+                    SET workflow_status_key = ?,
+                        approval_state = ?,
+                        pending_transition_id = NULL,
+                        last_transition_at = ?,
+                        last_actor = ?,
+                        version = version + 1,
+                        updated_at = ?
+                    WHERE card_id = ? AND version = ?
+                    """,
+                    (target_status_key, approval_state, now, reviewer_name, now, card_id, expected_version),
+                )
+                if update_cur.rowcount != 1:
+                    raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                if projected_list_id is not None and int(card_row["list_id"]) != projected_list_id:
+                    projected_update = conn.execute(
+                        """
+                        UPDATE kanban_cards
+                        SET list_id = ?, version = version + 1, updated_at = ?
+                        WHERE id = ? AND board_id = ? AND deleted = 0 AND archived = 0
+                        """,
+                        (projected_list_id, now, card_id, card_row["board_id"]),
+                    )
+                    if projected_update.rowcount != 1 and bool(policy_row and policy_row["strict_projection"]):
+                        raise ConflictError("projection_failed", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                updated_row = self._get_card_workflow_state_row(conn, card_id)
+                if not updated_row:
+                    raise KanbanDBError("Updated workflow state could not be loaded")  # noqa: TRY003
+                updated_state = self._row_to_card_workflow_state_dict(updated_row)
+
+                conn.execute(
+                    """
+                    INSERT INTO kanban_card_workflow_events
+                    (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_approval_decided', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        card_id,
+                        current_state["workflow_status_key"],
+                        updated_state["workflow_status_key"],
+                        reviewer_name,
+                        reason or decision,
+                        idempotency_key.strip(),
+                        corr_id,
+                        json.dumps(current_state),
+                        json.dumps(updated_state),
+                        now,
+                    ),
+                )
+
+                conn.commit()
+                return updated_state
+            finally:
+                conn.close()
+
+    def list_card_workflow_events(
+        self,
+        *,
+        card_id: int,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        if limit < 1:
+            raise InputError("limit must be positive")  # noqa: TRY003
+        if offset < 0:
+            raise InputError("offset must be non-negative")  # noqa: TRY003
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT e.id, e.card_id, e.event_type, e.from_status_key, e.to_status_key, e.actor,
+                           e.reason, e.idempotency_key, e.correlation_id, e.before_snapshot, e.after_snapshot,
+                           e.created_at
+                    FROM kanban_card_workflow_events e
+                    JOIN kanban_cards c ON c.id = e.card_id
+                    JOIN kanban_boards b ON b.id = c.board_id
+                    WHERE e.card_id = ? AND b.user_id = ?
+                    ORDER BY e.id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (card_id, self.user_id, limit, offset),
+                ).fetchall()
+                events: list[dict[str, Any]] = []
+                for row in rows:
+                    events.append(
+                        {
+                            "id": row["id"],
+                            "card_id": row["card_id"],
+                            "event_type": row["event_type"],
+                            "from_status_key": row["from_status_key"],
+                            "to_status_key": row["to_status_key"],
+                            "actor": row["actor"],
+                            "reason": row["reason"],
+                            "idempotency_key": row["idempotency_key"],
+                            "correlation_id": row["correlation_id"],
+                            "before_snapshot": json.loads(row["before_snapshot"]) if row["before_snapshot"] else None,
+                            "after_snapshot": json.loads(row["after_snapshot"]) if row["after_snapshot"] else None,
+                            "created_at": row["created_at"],
+                        }
+                    )
+                return events
+            finally:
+                conn.close()
+
+    def list_stale_workflow_claims(
+        self,
+        *,
+        board_id: int | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        if limit < 1:
+            raise InputError("limit must be positive")  # noqa: TRY003
+
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                sql = """
+                    SELECT s.card_id, c.board_id, c.list_id, c.title, s.workflow_status_key,
+                           s.lease_owner, s.lease_expires_at, s.version, s.updated_at
+                    FROM kanban_card_workflow_state s
+                    JOIN kanban_cards c ON c.id = s.card_id
+                    JOIN kanban_boards b ON b.id = c.board_id
+                    WHERE b.user_id = ?
+                      AND s.lease_owner IS NOT NULL
+                      AND s.lease_expires_at IS NOT NULL
+                      AND s.lease_expires_at <= ?
+                """
+                params: list[Any] = [self.user_id, now]
+                if board_id is not None:
+                    sql += " AND c.board_id = ?"
+                    params.append(board_id)
+                sql += " ORDER BY s.lease_expires_at ASC LIMIT ?"
+                params.append(limit)
+                rows = conn.execute(sql, params).fetchall()
+
+                return [
+                    {
+                        "card_id": row["card_id"],
+                        "board_id": row["board_id"],
+                        "list_id": row["list_id"],
+                        "title": row["title"],
+                        "workflow_status_key": row["workflow_status_key"],
+                        "lease_owner": row["lease_owner"],
+                        "lease_expires_at": row["lease_expires_at"],
+                        "version": row["version"],
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
+
+    def force_reassign_workflow_claim(
+        self,
+        *,
+        card_id: int,
+        new_owner: str,
+        idempotency_key: str,
+        correlation_id: str | None = None,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        if not new_owner or not new_owner.strip():
+            raise InputError("new_owner is required")  # noqa: TRY003
+        if not idempotency_key or not idempotency_key.strip():
+            raise InputError("idempotency_key is required")  # noqa: TRY003
+
+        owner = new_owner.strip()
+        corr_id = correlation_id.strip() if correlation_id and correlation_id.strip() else None
+        with self._lock:
+            conn = self._connect()
+            try:
+                state_row = self._ensure_card_workflow_state(conn, card_id)
+                current_state = self._row_to_card_workflow_state_dict(state_row)
+
+                replay = conn.execute(
+                    """
+                    SELECT id
+                    FROM kanban_card_workflow_events
+                    WHERE card_id = ? AND event_type = 'workflow_claim_reassigned' AND idempotency_key = ?
+                    """,
+                    (card_id, idempotency_key.strip()),
+                ).fetchone()
+                if replay:
+                    conn.commit()
+                    return current_state
+
+                ttl_row = conn.execute(
+                    "SELECT default_lease_ttl_sec FROM board_workflow_policies WHERE id = ?",
+                    (current_state["policy_id"],),
+                ).fetchone()
+                lease_ttl_sec = int(ttl_row["default_lease_ttl_sec"]) if ttl_row else 900
+
+                now = _utcnow_iso()
+                lease_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=lease_ttl_sec)).strftime("%Y-%m-%d %H:%M:%S")
+                update_cur = conn.execute(
+                    """
+                    UPDATE kanban_card_workflow_state
+                    SET lease_owner = ?,
+                        lease_expires_at = ?,
+                        last_actor = ?,
+                        version = version + 1,
+                        updated_at = ?
+                    WHERE card_id = ? AND version = ?
+                    """,
+                    (owner, lease_expires_at, owner, now, card_id, current_state["version"]),
+                )
+                if update_cur.rowcount != 1:
+                    raise ConflictError("version_conflict", entity="card_workflow_state", entity_id=card_id)  # noqa: TRY003
+
+                updated_row = self._get_card_workflow_state_row(conn, card_id)
+                if not updated_row:
+                    raise KanbanDBError("Updated workflow state could not be loaded")  # noqa: TRY003
+                updated_state = self._row_to_card_workflow_state_dict(updated_row)
+
+                conn.execute(
+                    """
+                    INSERT INTO kanban_card_workflow_events
+                    (card_id, event_type, from_status_key, to_status_key, actor, reason, idempotency_key,
+                     correlation_id, before_snapshot, after_snapshot, created_at)
+                    VALUES (?, 'workflow_claim_reassigned', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        card_id,
+                        current_state["workflow_status_key"],
+                        updated_state["workflow_status_key"],
+                        owner,
+                        reason,
+                        idempotency_key.strip(),
+                        corr_id,
+                        json.dumps(current_state),
+                        json.dumps(updated_state),
+                        now,
+                    ),
+                )
+
+                conn.commit()
+                return updated_state
+            finally:
+                conn.close()
 
     # =========================================================================
     # BOARD OPERATIONS
@@ -2191,7 +3832,19 @@ END;
             if self._vector_search_initialized:
                 return self._vector_search
             embedding_config = dict(settings.get("EMBEDDING_CONFIG") or {})
-            user_db_base_dir = settings.get("USER_DB_BASE_DIR")
+            user_db_base_dir = None
+            if not self._is_memory_db:
+                try:
+                    # Keep vector storage colocated with the active Kanban DB root
+                    # so tests and runtime do not drift to stale persisted stores.
+                    user_db_base_dir = str(Path(self.db_path).expanduser().resolve().parent.parent)
+                except (OSError, RuntimeError) as exc:
+                    logger.debug(
+                        f"Failed to derive USER_DB_BASE_DIR from db_path={self.db_path}: {exc}; "
+                        "falling back to settings."
+                    )
+            if not user_db_base_dir:
+                user_db_base_dir = settings.get("USER_DB_BASE_DIR")
             if user_db_base_dir:
                 embedding_config["USER_DB_BASE_DIR"] = user_db_base_dir
             self._vector_search = create_kanban_vector_search(self.user_id, embedding_config)

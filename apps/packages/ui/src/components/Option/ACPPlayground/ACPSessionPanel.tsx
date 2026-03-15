@@ -100,6 +100,7 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
   const replaceSessionId = useACPSessionsStore((s) => s.replaceSessionId)
   const applySessionDetail = useACPSessionsStore((s) => s.applySessionDetail)
   const applySessionUsage = useACPSessionsStore((s) => s.applySessionUsage)
+  const setGlobalError = useACPSessionsStore((s) => s.setGlobalError)
   const hasActiveFilters = searchQuery.trim().length > 0 || stateFilter !== "all" || sortKey !== "recent"
   const refreshLoading = isRefreshing || isRefreshingLocal
 
@@ -151,6 +152,10 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
         args: server.args ? [...server.args] : undefined,
         env: server.env ? { ...server.env } : undefined,
       })),
+      personaId: sourceSession.personaId ?? undefined,
+      workspaceId: sourceSession.workspaceId ?? undefined,
+      workspaceGroupId: sourceSession.workspaceGroupId ?? undefined,
+      scopeSnapshotId: sourceSession.scopeSnapshotId ?? undefined,
     })
 
     useACPSessionsStore.setState((state) => {
@@ -188,6 +193,8 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
     if (!sourceSession) {
       return
     }
+    const isServerBacked = sourceSession.backendStatus !== null
+    setGlobalError(null)
 
     const fallbackName = `${sourceSession.name || sourceSession.cwd.split("/").filter(Boolean).pop() || "Session"} (fork)`
 
@@ -205,7 +212,11 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
       }
 
       if (messageIndex < 0) {
-        createLocalFork(sourceSession)
+        if (!isServerBacked) {
+          createLocalFork(sourceSession)
+        } else {
+          setGlobalError("fork_not_resumable")
+        }
         return
       }
 
@@ -226,6 +237,10 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
           args: server.args ? [...server.args] : undefined,
           env: server.env ? { ...server.env } : undefined,
         })),
+        personaId: sourceSession.personaId ?? undefined,
+        workspaceId: sourceSession.workspaceId ?? undefined,
+        workspaceGroupId: sourceSession.workspaceGroupId ?? undefined,
+        scopeSnapshotId: sourceSession.scopeSnapshotId ?? undefined,
       })
 
       replaceSessionId(localForkSessionId, serverSessionId, {
@@ -238,8 +253,13 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
         .catch(() => undefined)
 
       setActiveSession(serverSessionId)
-    } catch (_error) {
-      createLocalFork(sourceSession)
+    } catch (error) {
+      if (!isServerBacked) {
+        createLocalFork(sourceSession)
+        return
+      }
+      const message = error instanceof Error && error.message ? error.message : "Failed to fork ACP session"
+      setGlobalError(message)
     }
   }
 
@@ -493,6 +513,30 @@ const getAgentTypeName = (agentType?: ACPAgentType): string => {
   return info?.name ?? agentType
 }
 
+const getPolicySummaryBadges = (session: ACPSession): string[] => {
+  const summary = (session.policySummary || null) as Record<string, unknown> | null
+  if (!summary) {
+    return []
+  }
+
+  const badges: string[] = []
+  const approvalMode = typeof summary.approval_mode === "string" ? summary.approval_mode : null
+  const allowedCount = typeof summary.allowed_tool_count === "number" ? summary.allowed_tool_count : null
+  const deniedCount = typeof summary.denied_tool_count === "number" ? summary.denied_tool_count : null
+
+  if (approvalMode) {
+    badges.push(`Policy ${approvalMode}`)
+  }
+  if (allowedCount !== null) {
+    badges.push(`Allow ${allowedCount}`)
+  }
+  if (deniedCount !== null && deniedCount > 0) {
+    badges.push(`Deny ${deniedCount}`)
+  }
+
+  return badges
+}
+
 const SessionItem: React.FC<SessionItemProps> = ({
   session,
   isActive,
@@ -507,6 +551,8 @@ const SessionItem: React.FC<SessionItemProps> = ({
   formatDate,
 }) => {
   const { t } = useTranslation(["playground", "common"])
+  const policyBadges = getPolicySummaryBadges(session)
+  const hasPolicyError = typeof session.policyRefreshError === "string" && session.policyRefreshError.length > 0
 
   // Get the last part of the path for display
   const displayPath = session.cwd.split("/").filter(Boolean).slice(-2).join("/") || session.cwd || "/"
@@ -575,6 +621,26 @@ const SessionItem: React.FC<SessionItemProps> = ({
             </Tooltip>
           )}
         </div>
+
+        {(policyBadges.length > 0 || hasPolicyError) && (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+            {policyBadges.map((badge) => (
+              <span
+                key={`${session.id}-${badge}`}
+                className="rounded bg-primary/10 px-1.5 py-0.5 text-primary"
+              >
+                {badge}
+              </span>
+            ))}
+            {hasPolicyError && (
+              <Tooltip title={session.policyRefreshError}>
+                <span className="rounded bg-danger/10 px-1.5 py-0.5 text-danger">
+                  {t("playground:acp.sessionMeta.policyError", "Policy refresh error")}
+                </span>
+              </Tooltip>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">

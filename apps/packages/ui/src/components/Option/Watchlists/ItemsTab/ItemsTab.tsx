@@ -16,7 +16,7 @@ import {
   message
 } from "antd"
 import DOMPurify from "dompurify"
-import { CheckCircle2, ExternalLink, HelpCircle, RefreshCw, Rss, Sun } from "lucide-react"
+import { CheckCircle2, ExternalLink, HelpCircle, MessageSquare, RefreshCw, Rss, Sun } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
 import {
@@ -65,6 +65,15 @@ import {
   getFocusableActiveElement,
   restoreFocusToElement
 } from "../shared/focus-management"
+import { useNavigate } from "react-router-dom"
+import { setSetting } from "@/services/settings"
+import { DISCUSS_WATCHLIST_PROMPT_SETTING } from "@/services/settings/ui-settings"
+import {
+  type WatchlistChatHandoffPayload,
+  type WatchlistChatArticle,
+  getWatchlistChatTotalChars,
+  WATCHLIST_CHAT_CONTENT_WARN_THRESHOLD
+} from "@/services/tldw/watchlist-chat-handoff"
 
 const { Search } = Input
 
@@ -170,7 +179,16 @@ const isEditableTarget = (target: EventTarget | null): boolean => {
   return false
 }
 
+const useSafeNavigate = () => {
+  try {
+    return useNavigate()
+  } catch {
+    return null
+  }
+}
+
 export const ItemsTab: React.FC = () => {
+  const navigate = useSafeNavigate()
   const { t } = useTranslation(["watchlists", "common"])
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const openSourceForm = useWatchlistsStore((s) => s.openSourceForm)
@@ -1495,6 +1513,75 @@ export const ItemsTab: React.FC = () => {
     window.open(selectedItem.url, "_blank", "noopener,noreferrer")
   }, [selectedItem])
 
+  const navigateHome = useCallback(() => {
+    if (navigate) {
+      navigate("/")
+      return
+    }
+
+    if (typeof window !== "undefined") {
+      window.location.hash = "#/"
+    }
+  }, [navigate])
+
+  const handleChatAboutItem = useCallback(
+    (item: ScrapedItem) => {
+      const article: WatchlistChatArticle = {
+        title: item.title || undefined,
+        url: item.url || undefined,
+        content: item.content || item.summary || undefined,
+        sourceType: "item",
+        mediaId: item.media_id ?? undefined
+      }
+      const payload: WatchlistChatHandoffPayload = { articles: [article] }
+      void setSetting(DISCUSS_WATCHLIST_PROMPT_SETTING, payload)
+      window.dispatchEvent(
+        new CustomEvent("tldw:discuss-watchlist", { detail: payload })
+      )
+      navigateHome()
+    },
+    [navigateHome]
+  )
+
+  const handleChatAboutSelected = useCallback(() => {
+    const selected = items.filter((item) => selectedItemIdSet.has(item.id))
+    if (selected.length === 0) return
+    const articles: WatchlistChatArticle[] = selected.map((item) => ({
+      title: item.title || undefined,
+      url: item.url || undefined,
+      content: item.content || item.summary || undefined,
+      sourceType: "item" as const,
+      mediaId: item.media_id ?? undefined
+    }))
+    const payload: WatchlistChatHandoffPayload = { articles }
+    const totalChars = getWatchlistChatTotalChars(payload)
+    if (totalChars > WATCHLIST_CHAT_CONTENT_WARN_THRESHOLD) {
+      Modal.confirm({
+        title: t("watchlists:items.chatSizeWarningTitle", "Large content warning"),
+        content: t(
+          "watchlists:items.chatSizeWarningContent",
+          "Selected articles contain {{chars}} characters of content. This may use significant tokens. Continue with full content?",
+          { chars: totalChars.toLocaleString() }
+        ),
+        okText: t("watchlists:items.chatSizeWarningOk", "Use full content"),
+        cancelText: t("watchlists:items.chatSizeWarningCancel", "Cancel"),
+        onOk: () => {
+          void setSetting(DISCUSS_WATCHLIST_PROMPT_SETTING, payload)
+          window.dispatchEvent(
+            new CustomEvent("tldw:discuss-watchlist", { detail: payload })
+          )
+          navigateHome()
+        }
+      })
+      return
+    }
+    void setSetting(DISCUSS_WATCHLIST_PROMPT_SETTING, payload)
+    window.dispatchEvent(
+      new CustomEvent("tldw:discuss-watchlist", { detail: payload })
+    )
+    navigateHome()
+  }, [items, navigateHome, selectedItemIdSet, t])
+
   const openSelectedItemMonitor = useCallback(() => {
     if (!selectedItem) return
     setActiveTab("jobs")
@@ -2107,6 +2194,18 @@ export const ItemsTab: React.FC = () => {
                       "Mark all filtered as reviewed"
                     )}
                   </Button>
+
+                  <Button
+                    size="small"
+                    icon={<MessageSquare className="h-3.5 w-3.5" />}
+                    onClick={handleChatAboutSelected}
+                    disabled={selectedItemIds.length === 0}
+                    data-testid="watchlists-items-chat-selected"
+                  >
+                    {t("watchlists:items.batch.chatSelected", "Chat about selected ({{count}})", {
+                      count: selectedItemIds.length
+                    })}
+                  </Button>
                 </div>
 
                 {collectingAllFiltered && (
@@ -2453,6 +2552,17 @@ export const ItemsTab: React.FC = () => {
                           </Button>
                         </Tooltip>
                       )}
+                      <Tooltip title={t("watchlists:items.chatAbout", "Chat about this article")}>
+                        <Button
+                          size="small"
+                          icon={<MessageSquare className="h-3.5 w-3.5" />}
+                          onClick={() => handleChatAboutItem(selectedItem)}
+                          disabled={!selectedItem.content && !selectedItem.summary && !selectedItem.title}
+                          data-testid="watchlists-item-chat-about"
+                        >
+                          {t("watchlists:items.chatAboutButton", "Chat")}
+                        </Button>
+                      </Tooltip>
                       <Button
                         size="small"
                         loading={updatingItemId === selectedItem.id}

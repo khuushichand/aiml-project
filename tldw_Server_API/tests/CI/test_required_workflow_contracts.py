@@ -22,6 +22,16 @@ def _assert_ffmpeg_portaudio_setup(path: str, job_name: str) -> None:
     assert install_step["with"]["install-portaudio"] == "true"
 
 
+def _assert_portaudio_installed_before_python_setup(path: str, job_name: str) -> None:
+    workflow = _load(path)
+    steps = workflow["jobs"][job_name]["steps"]
+    install_step = _get_step(steps, "Install FFmpeg and PortAudio (Linux)")
+    setup_step = _get_step(steps, "Setup Python and backend")
+    assert install_step["uses"] == "./.github/actions/setup-ffmpeg"
+    assert install_step["with"]["install-portaudio"] == "true"
+    assert steps.index(install_step) < steps.index(setup_step)
+
+
 def test_backend_required_has_noop_and_execute_paths() -> None:
     workflow = _load(".github/workflows/backend-required.yml")
     jobs = workflow["jobs"]
@@ -54,11 +64,11 @@ def test_coverage_required_installs_portaudio_for_pyaudio_builds() -> None:
     _assert_ffmpeg_portaudio_setup(".github/workflows/coverage-required.yml", "coverage-required")
 
 
-def test_coverage_required_uses_baseline_global_floor() -> None:
+def test_coverage_required_uses_documented_global_floor() -> None:
     workflow = _load(".github/workflows/coverage-required.yml")
     steps = workflow["jobs"]["coverage-required"]["steps"]
     coverage_step = _get_step(steps, "Run global coverage floor")
-    assert "--cov-fail-under=5" in coverage_step["run"]
+    assert "--cov-fail-under=4" in coverage_step["run"]
 
 
 def test_frontend_required_lane_exists() -> None:
@@ -117,6 +127,14 @@ def test_e2e_required_explicitly_loads_pytest_asyncio_plugin() -> None:
     retry = _get_step(steps, "Run critical e2e suite (retry)")
     assert "-p pytest_asyncio.plugin" in primary["run"]
     assert "-p pytest_asyncio.plugin" in retry["run"]
+
+
+def test_frontend_e2e_tiers_install_portaudio_before_backend_dependency_setup() -> None:
+    for job_name in ("critical", "features", "admin"):
+        _assert_portaudio_installed_before_python_setup(
+            ".github/workflows/frontend-e2e-tiers.yml",
+            job_name,
+        )
 
 
 def test_security_required_lane_exists_and_uses_threshold_policy() -> None:

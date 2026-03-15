@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
-import { ACPRestClient } from "@/services/acp/client"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { ACPRestClient, ACPWebSocketClient } from "@/services/acp/client"
+import type { ACPWSPermissionRequestMessage } from "@/services/acp/types"
 
 describe("ACPRestClient", () => {
   beforeEach(() => {
@@ -39,7 +40,16 @@ describe("ACPRestClient", () => {
       .fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ session_id: "sess-1", messages: [] }),
+        json: async () => ({
+          session_id: "sess-1",
+          messages: [],
+          policy_snapshot_version: "resolved-v1",
+          policy_snapshot_fingerprint: "snapshot-123",
+          policy_snapshot_refreshed_at: "2026-03-14T12:00:00+00:00",
+          policy_summary: { allowed_tool_count: 2, approval_mode: "require_approval" },
+          policy_provenance_summary: { source_kinds: ["capability_mapping"] },
+          policy_refresh_error: null,
+        }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -48,8 +58,13 @@ describe("ACPRestClient", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     const client = createClient()
-    await client.getSessionDetail("sess-1")
+    const detail = await client.getSessionDetail("sess-1")
     await client.getSessionUsage("sess-1")
+
+    expect(detail.policy_snapshot_version).toBe("resolved-v1")
+    expect(detail.policy_snapshot_fingerprint).toBe("snapshot-123")
+    expect(detail.policy_summary?.approval_mode).toBe("require_approval")
+    expect(detail.policy_provenance_summary?.source_kinds).toEqual(["capability_mapping"])
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -85,5 +100,100 @@ describe("ACPRestClient", () => {
         body: JSON.stringify({ message_index: 3, name: "Forked" }),
       })
     )
+  })
+
+  it("keeps tier while exposing permission policy metadata", () => {
+    const message: ACPWSPermissionRequestMessage = {
+      type: "permission_request",
+      request_id: "req-1",
+      session_id: "sess-1",
+      tool_name: "web.search",
+      tool_arguments: { query: "opa" },
+      tier: "individual",
+      timeout_seconds: 30,
+      approval_requirement: "approval_required",
+      governance_reason: "policy_approval_required",
+      deny_reason: undefined,
+      provenance_summary: { source_kinds: ["capability_mapping"] },
+      runtime_narrowing_reason: "workspace_trust_required",
+      policy_snapshot_fingerprint: "snapshot-123",
+    }
+
+    expect(message.tier).toBe("individual")
+    expect(message.approval_requirement).toBe("approval_required")
+    expect(message.policy_snapshot_fingerprint).toBe("snapshot-123")
+    expect(message.provenance_summary?.source_kinds).toEqual(["capability_mapping"])
+  })
+})
+
+describe("ACPWebSocketClient", () => {
+  class MockWebSocket {
+    static instances: MockWebSocket[] = []
+    static CONNECTING = 0
+    static OPEN = 1
+    static CLOSING = 2
+    static CLOSED = 3
+
+    readonly url: string
+    readyState = MockWebSocket.CONNECTING
+    onopen: (() => void) | null = null
+    onclose: ((event: CloseEvent) => void) | null = null
+    onerror: ((event: Event) => void) | null = null
+    onmessage: ((event: MessageEvent) => void) | null = null
+
+    constructor(url: string) {
+      this.url = url
+      MockWebSocket.instances.push(this)
+    }
+
+    close(): void {
+      this.readyState = MockWebSocket.CLOSED
+    }
+
+    send(): void {}
+
+    open(): void {
+      this.readyState = MockWebSocket.OPEN
+      this.onopen?.()
+    }
+
+    closeWith(code: number, reason = ""): void {
+      this.readyState = MockWebSocket.CLOSED
+      this.onclose?.({ code, reason } as CloseEvent)
+    }
+  }
+
+  const createClient = () =>
+    new ACPWebSocketClient({
+      serverUrl: "http://localhost:8000",
+      getAuthHeaders: async () => ({ "X-API-KEY": "test-key" }),
+      getAuthParams: async () => ({ api_key: "test-key" }),
+    })
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    MockWebSocket.instances = []
+    vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket)
+  })
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it.each([4401, 4404, 4429])("does not reconnect for fatal close code %s", async (code) => {
+    const client = createClient()
+
+    await client.connect("sess-1")
+    expect(MockWebSocket.instances).toHaveLength(1)
+
+    const ws = MockWebSocket.instances[0]
+    ws.open()
+    ws.closeWith(code)
+
+    await vi.advanceTimersByTimeAsync(60000)
+
+    expect(MockWebSocket.instances).toHaveLength(1)
   })
 })

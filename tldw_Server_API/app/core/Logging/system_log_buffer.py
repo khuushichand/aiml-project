@@ -8,7 +8,7 @@ from collections import deque
 from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Lock, local
 from typing import Any
 
 from loguru import logger
@@ -25,6 +25,7 @@ _SINK_ID: int | None = None
 _DEFAULT_LOG_FILE_ENTRIES = 5000
 _DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES = 250
 _LOG_FILE_SETTINGS_LOCK = Lock()
+_LOG_FILE_SETTINGS_THREAD_STATE = local()
 _LOG_FILE_SETTINGS_INITIALIZED = False
 _LOG_FILE_MAX_ENTRIES = _DEFAULT_LOG_FILE_ENTRIES
 _LOG_FILE_COMPACT_EVERY_WRITES = _DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES
@@ -80,6 +81,10 @@ def _extract_extra(extra: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _log_file_settings_init_active() -> bool:
+    return bool(getattr(_LOG_FILE_SETTINGS_THREAD_STATE, "initializing", False))
+
+
 def _init_log_file_settings() -> None:
     global _LOG_FILE_MAX_ENTRIES
     global _LOG_FILE_COMPACT_EVERY_WRITES
@@ -89,69 +94,74 @@ def _init_log_file_settings() -> None:
     global _LOG_FILE_LOCK_TIMEOUT
     global _LOG_FILE_SETTINGS_INITIALIZED
 
-    if _LOG_FILE_SETTINGS_INITIALIZED:
+    if _LOG_FILE_SETTINGS_INITIALIZED or _log_file_settings_init_active():
         return
     with _LOG_FILE_SETTINGS_LOCK:
         if _LOG_FILE_SETTINGS_INITIALIZED:
             return
-
-        env_enabled = os.getenv("SYSTEM_LOG_FILE_ENABLED")
-        env_path = os.getenv("SYSTEM_LOG_FILE_PATH")
-        env_max_entries = os.getenv("SYSTEM_LOG_FILE_MAX_ENTRIES")
-        env_compact_every = os.getenv("SYSTEM_LOG_FILE_COMPACT_EVERY_WRITES")
-        env_lock_timeout = os.getenv("SYSTEM_LOG_FILE_LOCK_TIMEOUT")
-
-        config_path = None
-        config_max_entries = None
-        config_compact_every = None
-        if env_path is None or env_max_entries is None or env_compact_every is None:
-            try:
-                from tldw_Server_API.app.core.config import load_comprehensive_config
-
-                parser = load_comprehensive_config()
-                if hasattr(parser, "has_section") and parser.has_section("Logging"):
-                    if env_path is None:
-                        config_path = parser.get("Logging", "system_log_file_path", fallback=None)
-                    if env_max_entries is None:
-                        config_max_entries = parser.get("Logging", "system_log_file_max_entries", fallback=None)
-                    if env_compact_every is None:
-                        config_compact_every = parser.get(
-                            "Logging",
-                            "system_log_file_compact_every_writes",
-                            fallback=None,
-                        )
-            except Exception as exc:
-                logger.debug("System log settings config read failed: {}", exc)
-
-        _LOG_FILE_ENABLED = _coerce_bool(env_enabled, True)
-        path_value = env_path or config_path
-        _LOG_FILE_PATH = Path(path_value) if path_value else Path(get_database_dir()) / "system_logs.jsonl"
-
-        max_raw = env_max_entries if env_max_entries is not None else config_max_entries
+        _LOG_FILE_SETTINGS_THREAD_STATE.initializing = True
         try:
-            max_entries = int(str(max_raw).strip()) if max_raw else _DEFAULT_LOG_FILE_ENTRIES
-        except (TypeError, ValueError):
-            max_entries = _DEFAULT_LOG_FILE_ENTRIES
-        _LOG_FILE_MAX_ENTRIES = max(100, max_entries)
+            env_enabled = os.getenv("SYSTEM_LOG_FILE_ENABLED")
+            env_path = os.getenv("SYSTEM_LOG_FILE_PATH")
+            env_max_entries = os.getenv("SYSTEM_LOG_FILE_MAX_ENTRIES")
+            env_compact_every = os.getenv("SYSTEM_LOG_FILE_COMPACT_EVERY_WRITES")
+            env_lock_timeout = os.getenv("SYSTEM_LOG_FILE_LOCK_TIMEOUT")
 
-        compact_raw = env_compact_every if env_compact_every is not None else config_compact_every
-        try:
-            compact_every = int(str(compact_raw).strip()) if compact_raw else _DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES
-        except (TypeError, ValueError):
-            compact_every = _DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES
-        compact_every = max(1, compact_every)
-        if _LOG_FILE_MAX_ENTRIES > 0:
-            compact_every = min(compact_every, _LOG_FILE_MAX_ENTRIES)
-        _LOG_FILE_COMPACT_EVERY_WRITES = compact_every
-        _LOG_FILE_APPENDS_SINCE_COMPACT = 0
+            config_path = None
+            config_max_entries = None
+            config_compact_every = None
+            if env_path is None or env_max_entries is None or env_compact_every is None:
+                try:
+                    from tldw_Server_API.app.core.config import load_comprehensive_config
 
-        if env_lock_timeout:
+                    parser = load_comprehensive_config()
+                    if hasattr(parser, "has_section") and parser.has_section("Logging"):
+                        if env_path is None:
+                            config_path = parser.get("Logging", "system_log_file_path", fallback=None)
+                        if env_max_entries is None:
+                            config_max_entries = parser.get("Logging", "system_log_file_max_entries", fallback=None)
+                        if env_compact_every is None:
+                            config_compact_every = parser.get(
+                                "Logging",
+                                "system_log_file_compact_every_writes",
+                                fallback=None,
+                            )
+                except Exception as exc:
+                    logger.debug("System log settings config read failed: {}", exc)
+
+            _LOG_FILE_ENABLED = _coerce_bool(env_enabled, True)
+            path_value = env_path or config_path
+            _LOG_FILE_PATH = Path(path_value) if path_value else Path(get_database_dir()) / "system_logs.jsonl"
+
+            max_raw = env_max_entries if env_max_entries is not None else config_max_entries
             try:
-                _LOG_FILE_LOCK_TIMEOUT = float(env_lock_timeout)
+                max_entries = int(str(max_raw).strip()) if max_raw else _DEFAULT_LOG_FILE_ENTRIES
             except (TypeError, ValueError):
-                _LOG_FILE_LOCK_TIMEOUT = 5.0
+                max_entries = _DEFAULT_LOG_FILE_ENTRIES
+            _LOG_FILE_MAX_ENTRIES = max(100, max_entries)
 
-        _LOG_FILE_SETTINGS_INITIALIZED = True
+            compact_raw = env_compact_every if env_compact_every is not None else config_compact_every
+            try:
+                compact_every = (
+                    int(str(compact_raw).strip()) if compact_raw else _DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES
+                )
+            except (TypeError, ValueError):
+                compact_every = _DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES
+            compact_every = max(1, compact_every)
+            if _LOG_FILE_MAX_ENTRIES > 0:
+                compact_every = min(compact_every, _LOG_FILE_MAX_ENTRIES)
+            _LOG_FILE_COMPACT_EVERY_WRITES = compact_every
+            _LOG_FILE_APPENDS_SINCE_COMPACT = 0
+
+            if env_lock_timeout:
+                try:
+                    _LOG_FILE_LOCK_TIMEOUT = float(env_lock_timeout)
+                except (TypeError, ValueError):
+                    _LOG_FILE_LOCK_TIMEOUT = 5.0
+
+            _LOG_FILE_SETTINGS_INITIALIZED = True
+        finally:
+            _LOG_FILE_SETTINGS_THREAD_STATE.initializing = False
 
 
 @contextmanager
@@ -267,6 +277,8 @@ def _compact_log_file_locked() -> None:
 
 
 def _append_log_file(entry: dict[str, Any]) -> None:
+    if _log_file_settings_init_active():
+        return
     _init_log_file_settings()
     if not _LOG_FILE_ENABLED:
         return
@@ -416,11 +428,11 @@ def query_system_logs(
             continue
         if user_id is not None and entry.get("user_id") != user_id:
             continue
-        if timestamp and not isinstance(entry.get("timestamp"), datetime):
+        if timestamp is not None:
             entry["timestamp"] = timestamp
         filtered.append(entry)
 
-    filtered.sort(key=lambda item: item.get("timestamp") or datetime.min, reverse=True)
+    filtered.sort(key=_sort_timestamp_value, reverse=True)
     total = len(filtered)
     safe_offset = max(0, offset)
     safe_limit = max(1, limit)

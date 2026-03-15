@@ -225,6 +225,9 @@ make quickstart-install
 # Docker paths:
 # make quickstart-docker
 # make quickstart-docker-webui
+# Force a full image rebuild when needed:
+# make quickstart-docker DOCKER_BUILD=true
+# make quickstart-docker-webui DOCKER_BUILD=true
 ```
 
 If `make` is unavailable, use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
@@ -468,6 +471,8 @@ make quickstart-docker-webui
 # WebUI: http://localhost:8080
 # Optional (non-localhost deployments):
 # make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
+# Optional (force image rebuild instead of cached layers):
+# make quickstart-docker-webui DOCKER_BUILD=true
 ```
 No-`make` equivalent: use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
 
@@ -537,6 +542,7 @@ Security note: avoid exposing this quickstart setup directly to the public inter
 
 For the fastest Docker path, use the quickstart targets in [At-a-Glance Commands](#at-a-glance-commands).
 This section is the canonical manual/no-`make` compose reference.
+Quickstart targets skip forced rebuilds by default; pass `DOCKER_BUILD=true` to force a rebuild.
 
 Or manually:
 ```bash
@@ -742,6 +748,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format) ([docs](Docs/Deployment/Monitoring/Metrics_Cheatsheet.md))
 - Providers: `GET /api/v1/llm/providers` - provider/models list ([docs](Docs/API-related/Providers_API_Documentation.md))
 - MCP: `GET /api/v1/mcp/status` - MCP server status ([docs](Docs/MCP/Unified/System_Admin_Guide.md))
+- MCP Hub Management: `GET /api/v1/mcp/hub/acp-profiles`, `GET /api/v1/mcp/hub/external-servers`, plus mutation endpoints for authorized principals ([docs](Docs/MCP/mcp_hub_management.md))
 
 Admin maintenance
 - Chat model aliases cache reload: `POST /api/v1/admin/chat/model-aliases/reload`

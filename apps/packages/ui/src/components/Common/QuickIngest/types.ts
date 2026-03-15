@@ -116,3 +116,139 @@ export type TabBadgeState = {
   /** Whether the latest run failed and needs attention (for Results tab) */
   hasFailure?: boolean
 }
+
+// ---------------------------------------------------------------------------
+// Wizard types (ingest wizard redesign)
+// ---------------------------------------------------------------------------
+
+/**
+ * Step number in the ingest wizard flow.
+ * 1=Add, 2=Configure, 3=Review, 4=Processing, 5=Results
+ */
+export type WizardStep = 1 | 2 | 3 | 4 | 5
+
+/**
+ * Detected media type for a queued item.
+ */
+export type DetectedMediaType =
+  | "audio"
+  | "video"
+  | "document"
+  | "pdf"
+  | "ebook"
+  | "image"
+  | "web"
+  | "unknown"
+
+/**
+ * Validation state for a queued item.
+ */
+export type QueueItemValidation = {
+  valid: boolean
+  errors?: string[]
+  warnings?: string[]
+}
+
+/**
+ * An item in the wizard's ingest queue (files + URLs with detected types).
+ */
+export type WizardQueueItem = {
+  /** Unique identifier for this queue item. */
+  id: string
+  /** Original file name (for file uploads). */
+  fileName?: string
+  /** URL string (for URL-based items). */
+  url?: string
+  /** The File object if this is a local file upload. */
+  file?: File
+  /** Detected media type based on extension/MIME. */
+  detectedType: DetectedMediaType
+  /** Icon identifier (lucide icon name) for the detected type. */
+  icon: string
+  /** File size in bytes (0 for URLs until resolved). */
+  fileSize: number
+  /** MIME type if known. */
+  mimeType?: string
+  /** Validation state for this item. */
+  validation: QueueItemValidation
+}
+
+/**
+ * Processing status for a single item during the wizard's processing step.
+ */
+export type ItemProgressStatus =
+  | "queued"
+  | "uploading"
+  | "processing"
+  | "analyzing"
+  | "storing"
+  | "complete"
+  | "failed"
+  | "cancelled"
+
+/**
+ * Per-item progress tracking during processing.
+ */
+export type ItemProgress = {
+  /** ID matching the corresponding WizardQueueItem. */
+  id: string
+  /** Current processing status of this item. */
+  status: ItemProgressStatus
+  /** Progress percentage (0-100). */
+  progressPercent: number
+  /** Human-readable label for the current processing stage. */
+  currentStage: string
+  /** Estimated seconds remaining for this item. */
+  estimatedRemaining: number
+  /** Error message if status is 'failed'. */
+  error?: string
+}
+
+/**
+ * Overall processing status for the wizard.
+ */
+export type ProcessingStatus =
+  | "idle"
+  | "running"
+  | "complete"
+  | "cancelled"
+  | "error"
+
+/**
+ * Error classification for result items.
+ */
+export type ErrorClassification =
+  | "network"
+  | "auth"
+  | "validation"
+  | "server"
+  | "timeout"
+  | "unknown"
+
+/**
+ * Extended result item with error classification for the wizard.
+ */
+export type WizardResultItem = ResultItem & {
+  /** Classification of the error, if status is "error". */
+  errorClassification?: ErrorClassification
+  /** Duration of processing in milliseconds. */
+  durationMs?: number
+  /** Media ID returned from the server. */
+  mediaId?: string | number | null
+  /** Title extracted or assigned during processing. */
+  title?: string | null
+}
+
+/**
+ * Aggregate processing state for the wizard.
+ */
+export type WizardProcessingState = {
+  /** Overall status. */
+  status: ProcessingStatus
+  /** Per-item progress entries. */
+  perItemProgress: ItemProgress[]
+  /** Elapsed time in seconds since processing started. */
+  elapsed: number
+  /** Estimated total seconds remaining. */
+  estimatedRemaining: number
+}

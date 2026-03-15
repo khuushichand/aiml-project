@@ -13,6 +13,16 @@ def _fake_config():
     return cfg
 
 
+def _fake_config_with_llama():
+    cfg = _fake_config()
+    cfg.set("Local-API", "llama_api_IP", "http://localhost:8001/v1/chat/completions")
+    return cfg
+
+
+def _provider_by_display_name(data: dict, display_name: str) -> dict:
+    return next(provider for provider in data.get("providers", []) if provider.get("display_name") == display_name)
+
+
 @pytest.fixture
 def llm_client():
     from fastapi import FastAPI
@@ -194,3 +204,70 @@ def test_llm_providers_includes_model_level_tokenizer_metadata(monkeypatch, llm_
     assert "kind" in tokenizers["gpt-4o-mini"]
     assert "source" in tokenizers["gpt-4o-mini"]
     assert "detokenize" in tokenizers["gpt-4o-mini"]
+
+
+def test_llm_providers_exposes_llama_cpp_controls_block(monkeypatch, llm_client):
+    import tldw_Server_API.app.core.config as core_config
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+    import tldw_Server_API.app.core.LLM_Calls.adapter_registry as reg_mod
+
+    monkeypatch.setattr(core_config, "load_comprehensive_config", _fake_config_with_llama)
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config_with_llama)
+
+    class _DummyReg:
+        def list_capabilities(self, include_disabled=True):
+            return []
+
+    monkeypatch.setattr(reg_mod, "get_registry", lambda: _DummyReg())
+
+    response = llm_client.get("/api/v1/llm/providers")
+    assert response.status_code == 200
+    llama = _provider_by_display_name(response.json(), "Llama.cpp")
+    controls = llama["llama_cpp_controls"]
+    assert controls["grammar"]["supported"] is True
+    assert "thinking_budget" in controls
+    assert controls["reserved_extra_body_keys"] == ["grammar"]
+
+
+def test_llm_providers_disables_thinking_budget_without_verified_mapping(monkeypatch, llm_client):
+    import tldw_Server_API.app.core.config as core_config
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+    import tldw_Server_API.app.core.LLM_Calls.adapter_registry as reg_mod
+
+    monkeypatch.setattr(core_config, "load_comprehensive_config", _fake_config_with_llama)
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config_with_llama)
+    monkeypatch.delenv("LLAMA_CPP_THINKING_BUDGET_PARAM", raising=False)
+
+    class _DummyReg:
+        def list_capabilities(self, include_disabled=True):
+            return []
+
+    monkeypatch.setattr(reg_mod, "get_registry", lambda: _DummyReg())
+
+    response = llm_client.get("/api/v1/llm/providers")
+    assert response.status_code == 200
+    controls = _provider_by_display_name(response.json(), "Llama.cpp")["llama_cpp_controls"]
+    assert controls["thinking_budget"]["supported"] is False
+    assert controls["thinking_budget"]["request_key"] is None
+
+
+def test_llm_providers_exposes_reserved_key_when_mapping_configured(monkeypatch, llm_client):
+    import tldw_Server_API.app.core.config as core_config
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_endpoints
+    import tldw_Server_API.app.core.LLM_Calls.adapter_registry as reg_mod
+
+    monkeypatch.setattr(core_config, "load_comprehensive_config", _fake_config_with_llama)
+    monkeypatch.setattr(llm_endpoints, "load_comprehensive_config", _fake_config_with_llama)
+    monkeypatch.setenv("LLAMA_CPP_THINKING_BUDGET_PARAM", "reasoning_budget")
+
+    class _DummyReg:
+        def list_capabilities(self, include_disabled=True):
+            return []
+
+    monkeypatch.setattr(reg_mod, "get_registry", lambda: _DummyReg())
+
+    response = llm_client.get("/api/v1/llm/providers")
+    assert response.status_code == 200
+    controls = _provider_by_display_name(response.json(), "Llama.cpp")["llama_cpp_controls"]
+    assert controls["thinking_budget"]["request_key"] == "reasoning_budget"
+    assert "reasoning_budget" in controls["reserved_extra_body_keys"]

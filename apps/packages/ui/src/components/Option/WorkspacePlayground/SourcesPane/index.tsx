@@ -29,6 +29,7 @@ import {
 } from "antd"
 import { useWorkspaceStore } from "@/store/workspace"
 import type { WorkspaceSourceType } from "@/types/workspace"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
   WORKSPACE_SOURCE_DRAG_TYPE,
   serializeWorkspaceSourceDragPayload
@@ -38,7 +39,31 @@ import {
   scheduleWorkspaceUndoAction,
   undoWorkspaceAction
 } from "../undo-manager"
+import {
+  collectDescendantSourceIds,
+  createWorkspaceOrganizationIndex,
+  deriveEffectiveSelectedSourceIds,
+  getFolderSelectionState,
+  getSourceSelectionOrigin
+} from "@/store/workspace-organization"
 import { AddSourceModal } from "./AddSourceModal"
+import {
+  SourceFolderMembershipMenu,
+  type SourceFolderMembershipOption
+} from "./SourceFolderMembershipMenu"
+import {
+  SourceFolderTree,
+  type SourceFolderTreeNode
+} from "./SourceFolderTree"
+import { SourceAdvancedControls } from "./SourceAdvancedControls"
+import {
+  buildSourceFilterSummary,
+  DEFAULT_SOURCE_LIST_VIEW_STATE,
+  filterSources as applyAdvancedSourceFilters,
+  hasActiveSourceFilters,
+  sortSources as applySourceSort,
+  type SourceListViewState
+} from "./source-list-view"
 
 // Icon mapping for source types
 const SOURCE_TYPE_ICONS: Record<WorkspaceSourceType, React.ElementType> = {
@@ -91,6 +116,12 @@ interface SourcesPaneProps {
   onHide?: () => void
   /** Rollout gate for status/guardrails source handling. */
   statusGuardrailsEnabled?: boolean
+  /** Non-persisted session-local source list view state owned by the page. */
+  sourceListViewState?: SourceListViewState
+  /** Partial state patcher for source list view state. */
+  onPatchSourceListViewState?: (patch: Partial<SourceListViewState>) => void
+  /** Reset advanced controls without clearing search/folder state. */
+  onResetAdvancedSourceFilters?: () => void
 }
 
 /**
@@ -98,29 +129,63 @@ interface SourcesPaneProps {
  */
 export const SourcesPane: React.FC<SourcesPaneProps> = ({
   onHide,
-  statusGuardrailsEnabled = true
+  statusGuardrailsEnabled = true,
+  sourceListViewState = DEFAULT_SOURCE_LIST_VIEW_STATE,
+  onPatchSourceListViewState,
+  onResetAdvancedSourceFilters
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const [messageApi, messageContextHolder] = message.useMessage()
+  const patchSourceListViewState = React.useCallback(
+    (patch: Partial<SourceListViewState>) => {
+      onPatchSourceListViewState?.(patch)
+    },
+    [onPatchSourceListViewState]
+  )
+  const resetAdvancedSourceFilters = React.useCallback(() => {
+    onResetAdvancedSourceFilters?.()
+  }, [onResetAdvancedSourceFilters])
 
   // Store state
   const sources = useWorkspaceStore((s) => s.sources)
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const sourceFolders = useWorkspaceStore((s) => s.sourceFolders) || []
+  const sourceFolderMemberships = useWorkspaceStore(
+    (s) => s.sourceFolderMemberships
+  ) || []
+  const selectedSourceFolderIds = useWorkspaceStore(
+    (s) => s.selectedSourceFolderIds
+  ) || []
+  const activeFolderId = useWorkspaceStore((s) => s.activeFolderId) || null
   const sourceSearchQuery = useWorkspaceStore((s) => s.sourceSearchQuery)
   const sourceFocusTarget = useWorkspaceStore((s) => s.sourceFocusTarget)
 
   // Store actions
   const toggleSourceSelection = useWorkspaceStore((s) => s.toggleSourceSelection)
+  const toggleSourceFolderSelection = useWorkspaceStore(
+    (s) => s.toggleSourceFolderSelection
+  ) || (() => undefined)
   const selectAllSources = useWorkspaceStore((s) => s.selectAllSources)
   const deselectAllSources = useWorkspaceStore((s) => s.deselectAllSources)
+  const setSelectedSourceIds = useWorkspaceStore(
+    (s) => s.setSelectedSourceIds
+  ) || (() => undefined)
   const setSourceSearchQuery = useWorkspaceStore((s) => s.setSourceSearchQuery)
+  const setActiveFolder = useWorkspaceStore((s) => s.setActiveFolder) || (() => undefined)
   const clearSourceFocusTarget = useWorkspaceStore(
     (s) => s.clearSourceFocusTarget
   )
   const openAddSourceModal = useWorkspaceStore((s) => s.openAddSourceModal)
+  const addSource = useWorkspaceStore((s) => s.addSource)
   const removeSource = useWorkspaceStore((s) => s.removeSource)
+  const removeSources = useWorkspaceStore((s) => s.removeSources)
   const restoreSource = useWorkspaceStore((s) => s.restoreSource)
   const reorderSource = useWorkspaceStore((s) => s.reorderSource)
+  const createSourceFolder = useWorkspaceStore((s) => s.createSourceFolder) || null
+  const assignSourceToFolders =
+    useWorkspaceStore((s) => s.assignSourceToFolders) || (() => undefined)
+  const getEffectiveSelectedSources =
+    useWorkspaceStore((s) => s.getEffectiveSelectedSources) || null
   const sourceItemRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
   const sourceListContainerRef = React.useRef<HTMLDivElement | null>(null)
   const [highlightedSourceId, setHighlightedSourceId] = React.useState<
@@ -141,15 +206,172 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   const [editingAnnotationId, setEditingAnnotationId] = React.useState<
     string | null
   >(null)
+  const [quickUrlValue, setQuickUrlValue] = React.useState("")
+  const [quickUrlLoading, setQuickUrlLoading] = React.useState(false)
 
-  // Filter sources based on search query
-  const filteredSources = React.useMemo(() => {
-    if (!sourceSearchQuery.trim()) return sources
+  const handleQuickUrlPaste = React.useCallback(
+    async (url: string) => {
+      const trimmed = url.trim()
+      if (!trimmed) return
+      try {
+        new URL(trimmed)
+      } catch {
+        return // Not a valid URL — ignore
+      }
+
+      setQuickUrlLoading(true)
+      try {
+        const response = await tldwClient.addMedia(trimmed)
+        const root = response as Record<string, unknown>
+        const candidates: Array<Record<string, unknown>> = []
+        if (Array.isArray(root.results)) {
+          for (const item of root.results) {
+            if (item && typeof item === "object")
+              candidates.push(item as Record<string, unknown>)
+          }
+        }
+        if (root.result && typeof root.result === "object")
+          candidates.push(root.result as Record<string, unknown>)
+        candidates.push(root)
+
+        for (const candidate of candidates) {
+          const mediaId = Number(
+            candidate.media_id ?? candidate.db_id ?? candidate.id
+          )
+          if (!Number.isFinite(mediaId) || mediaId <= 0) continue
+          const title =
+            typeof candidate.title === "string" && candidate.title.trim()
+              ? candidate.title
+              : trimmed
+          addSource({
+            mediaId,
+            title,
+            type: "website" as WorkspaceSourceType,
+            status: "processing",
+            url: trimmed
+          })
+          setQuickUrlValue("")
+          messageApi.success(
+            t("playground:sources.quickUrlAdded", "Source added from URL")
+          )
+          return
+        }
+        messageApi.error(
+          t("playground:sources.quickUrlFailed", "Could not add URL")
+        )
+      } catch {
+        messageApi.error(
+          t("playground:sources.quickUrlFailed", "Could not add URL")
+        )
+      } finally {
+        setQuickUrlLoading(false)
+      }
+    },
+    [addSource, messageApi, t]
+  )
+
+  const organizationIndex = React.useMemo(
+    () =>
+      createWorkspaceOrganizationIndex({
+        sources,
+        sourceFolders,
+        sourceFolderMemberships
+      }),
+    [sourceFolderMemberships, sourceFolders, sources]
+  )
+
+  const buildFolderTreeNode = React.useCallback(
+    (folderId: string): SourceFolderTreeNode | null => {
+      const folder = organizationIndex.folderById.get(folderId)
+      if (!folder) {
+        return null
+      }
+
+      return {
+        id: folder.id,
+        name: folder.name,
+        sourceCount: collectDescendantSourceIds(organizationIndex, folder.id).length,
+        children: (organizationIndex.childrenByFolderId.get(folder.id) || [])
+          .map((childId) => buildFolderTreeNode(childId))
+          .filter((node): node is SourceFolderTreeNode => Boolean(node))
+      }
+    },
+    [organizationIndex]
+  )
+
+  const folderTreeNodes = React.useMemo(
+    () =>
+      organizationIndex.rootFolderIds
+        .map((folderId) => buildFolderTreeNode(folderId))
+        .filter((node): node is SourceFolderTreeNode => Boolean(node)),
+    [buildFolderTreeNode, organizationIndex.rootFolderIds]
+  )
+
+  const sourceFolderOptions = React.useMemo<SourceFolderMembershipOption[]>(() => {
+    const flattened: SourceFolderMembershipOption[] = []
+
+    const walk = (nodes: SourceFolderTreeNode[], depth: number) => {
+      for (const node of nodes) {
+        flattened.push({
+          id: node.id,
+          name: node.name,
+          depth
+        })
+        walk(node.children, depth + 1)
+      }
+    }
+
+    walk(folderTreeNodes, 0)
+    return flattened
+  }, [folderTreeNodes])
+
+  const selectionStateByFolderId = React.useMemo(
+    () =>
+      Object.fromEntries(
+        sourceFolders.map((folder) => [
+          folder.id,
+          getFolderSelectionState(
+            organizationIndex,
+            folder.id,
+            selectedSourceIds,
+            selectedSourceFolderIds
+          )
+        ])
+      ) as Record<string, "unchecked" | "checked" | "indeterminate">,
+    [
+      organizationIndex,
+      selectedSourceFolderIds,
+      selectedSourceIds,
+      sourceFolders
+    ]
+  )
+
+  const activeFolderSourceIds = React.useMemo(
+    () =>
+      activeFolderId
+        ? new Set(collectDescendantSourceIds(organizationIndex, activeFolderId))
+        : null,
+    [activeFolderId, organizationIndex]
+  )
+
+  const searchedSources = React.useMemo(() => {
+    const scopedSources = activeFolderSourceIds
+      ? sources.filter((source) => activeFolderSourceIds.has(source.id))
+      : sources
+    if (!sourceSearchQuery.trim()) return scopedSources
     const query = sourceSearchQuery.toLowerCase()
-    return sources.filter((source) =>
+    return scopedSources.filter((source) =>
       source.title.toLowerCase().includes(query)
     )
-  }, [sources, sourceSearchQuery])
+  }, [activeFolderSourceIds, sourceSearchQuery, sources])
+  const filteredSources = React.useMemo(
+    () =>
+      applySourceSort(
+        applyAdvancedSourceFilters(searchedSources, sourceListViewState),
+        sourceListViewState.sort
+      ),
+    [searchedSources, sourceListViewState]
+  )
 
   const useVirtualizedSources =
     filteredSources.length > SOURCE_VIRTUALIZATION_THRESHOLD
@@ -172,16 +394,196 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
   const visibleSources = useVirtualizedSources
     ? filteredSources.slice(virtualStartIndex, virtualEndIndex)
     : filteredSources
-
-  const allSelected =
-    sources.length > 0 && selectedSourceIds.length === sources.length
-  const someSelected = selectedSourceIds.length > 0 && !allSelected
-  const selectedSourceEntries = React.useMemo(
-    () => sources.filter((source) => selectedSourceIds.includes(source.id)),
-    [selectedSourceIds, sources]
+  const sourceFilterSummary = React.useMemo(
+    () => buildSourceFilterSummary(sourceListViewState),
+    [sourceListViewState]
   )
+  const hasFileSizeSources = React.useMemo(
+    () => sources.some((source) => Number.isFinite(source.fileSize)),
+    [sources]
+  )
+  const hasDurationSources = React.useMemo(
+    () => sources.some((source) => Number.isFinite(source.duration)),
+    [sources]
+  )
+  const hasPageCountSources = React.useMemo(
+    () => sources.some((source) => Number.isFinite(source.pageCount)),
+    [sources]
+  )
+
+  const effectiveSelectedSourceEntries = React.useMemo(() => {
+    if (typeof getEffectiveSelectedSources === "function") {
+      return getEffectiveSelectedSources()
+    }
+
+    const effectiveSelectedIds = new Set(
+      deriveEffectiveSelectedSourceIds(
+        organizationIndex,
+        selectedSourceIds,
+        selectedSourceFolderIds
+      )
+    )
+    return sources.filter((source) => effectiveSelectedIds.has(source.id))
+  }, [
+    getEffectiveSelectedSources,
+    organizationIndex,
+    selectedSourceFolderIds,
+    selectedSourceIds,
+    sources
+  ])
+  const effectiveSelectedCount = effectiveSelectedSourceEntries.length
+  const effectiveSelectedSourceIds = React.useMemo(
+    () => new Set(effectiveSelectedSourceEntries.map((source) => source.id)),
+    [effectiveSelectedSourceEntries]
+  )
+  const visibleReadySourceIds = React.useMemo(
+    () =>
+      filteredSources
+        .filter((source) => organizationIndex.readySourceIds.has(source.id))
+        .map((source) => source.id),
+    [filteredSources, organizationIndex.readySourceIds]
+  )
+  const visibleReadySourceIdSet = React.useMemo(
+    () => new Set(visibleReadySourceIds),
+    [visibleReadySourceIds]
+  )
+  const hiddenDirectSelectedSourceIds = React.useMemo(
+    () =>
+      organizationIndex.sourceIdsInOrder.filter(
+        (sourceId) =>
+          selectedSourceIds.includes(sourceId) &&
+          organizationIndex.readySourceIds.has(sourceId) &&
+          !visibleReadySourceIdSet.has(sourceId)
+      ),
+    [
+      organizationIndex.readySourceIds,
+      organizationIndex.sourceIdsInOrder,
+      selectedSourceIds,
+      visibleReadySourceIdSet
+    ]
+  )
+  const visibleEffectiveSelectedCount = React.useMemo(
+    () =>
+      filteredSources.filter((source) => effectiveSelectedSourceIds.has(source.id))
+        .length,
+    [effectiveSelectedSourceIds, filteredSources]
+  )
+  const hiddenSelectedCount = Math.max(
+    0,
+    effectiveSelectedCount - visibleEffectiveSelectedCount
+  )
+  const isListNarrowed =
+    activeFolderId !== null ||
+    sourceSearchQuery.trim().length > 0 ||
+    hasActiveSourceFilters(sourceListViewState)
+  const isTemporarySortActive = sourceListViewState.sort !== "manual"
+  const allVisibleSelected =
+    visibleReadySourceIds.length > 0 &&
+    visibleReadySourceIds.every((sourceId) =>
+      effectiveSelectedSourceIds.has(sourceId)
+    )
+  const someVisibleSelected =
+    !allVisibleSelected && visibleEffectiveSelectedCount > 0
+  const allSelected =
+    organizationIndex.readySourceIds.size > 0 &&
+    effectiveSelectedCount === organizationIndex.readySourceIds.size
+  const someSelected = effectiveSelectedCount > 0 && !allSelected
+  const selectionCheckboxChecked = isListNarrowed ? allVisibleSelected : allSelected
+  const selectionCheckboxIndeterminate = isListNarrowed
+    ? !allVisibleSelected &&
+      (someVisibleSelected || hiddenSelectedCount > 0)
+    : someSelected
+  const selectionCheckboxLabel = isListNarrowed
+    ? t("playground:sources.selectVisible", "Select visible")
+    : t("playground:sources.selectAll", "Select all")
+  const selectedSourceEntries = effectiveSelectedSourceEntries
   const singleSelectedSource =
     selectedSourceEntries.length === 1 ? selectedSourceEntries[0] : null
+  const batchRemoveDescription =
+    hiddenSelectedCount > 0
+      ? t(
+          "playground:sources.batchRemoveHiddenSelection",
+          {
+            count: hiddenSelectedCount,
+            defaultValue:
+              "{{count}} selected sources are hidden by current filters and will also be removed."
+          }
+        )
+      : undefined
+
+  const clearEffectiveSelection = React.useCallback(() => {
+    deselectAllSources()
+    for (const folderId of [...new Set(selectedSourceFolderIds)]) {
+      toggleSourceFolderSelection(folderId)
+    }
+  }, [
+    deselectAllSources,
+    selectedSourceFolderIds,
+    toggleSourceFolderSelection
+  ])
+
+  const handleBatchRemoveSelected = React.useCallback(() => {
+    if (effectiveSelectedSourceEntries.length === 0) {
+      return
+    }
+
+    const removedSourceEntries = effectiveSelectedSourceEntries
+      .map((source) => ({
+        source,
+        index: sources.findIndex((entry) => entry.id === source.id),
+        wasDirectlySelected: selectedSourceIds.includes(source.id),
+        folderIds: [...(organizationIndex.folderIdsBySourceId.get(source.id) || [])]
+      }))
+      .filter((entry) => entry.index >= 0)
+    const selectedIds = removedSourceEntries.map((entry) => entry.source.id)
+
+    const undoHandle = scheduleWorkspaceUndoAction({
+      apply: () => {
+        removeSources(selectedIds)
+      },
+      undo: () => {
+        for (const entry of [...removedSourceEntries].sort((a, b) => a.index - b.index)) {
+          restoreSource(entry.source, {
+            index: entry.index,
+            select: entry.wasDirectlySelected
+          })
+          if (entry.folderIds.length > 0) {
+            assignSourceToFolders(entry.source.id, entry.folderIds)
+          }
+        }
+      }
+    })
+
+    messageApi.open({
+      type: "warning",
+      duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+      content: (
+        <div className="flex items-center gap-2">
+          <span>
+            {t("playground:sources.batchRemoved", "{{count}} sources removed", {
+              count: removedSourceEntries.length
+            })}
+          </span>
+          <Button
+            size="small"
+            onClick={() => undoWorkspaceAction(undoHandle.id)}
+          >
+            {t("common:undo", "Undo")}
+          </Button>
+        </div>
+      )
+    })
+  }, [
+    assignSourceToFolders,
+    effectiveSelectedSourceEntries,
+    messageApi,
+    organizationIndex.folderIdsBySourceId,
+    removeSources,
+    restoreSource,
+    selectedSourceIds,
+    sources,
+    t
+  ])
   const previewSource = previewSourceId
     ? sources.find((source) => source.id === previewSourceId) || null
     : null
@@ -189,13 +591,46 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     ? sourceAnnotations[previewSourceId] || []
     : []
 
-  const handleSelectAllToggle = () => {
-    if (allSelected || someSelected) {
-      deselectAllSources()
-    } else {
-      selectAllSources()
+  const handleSelectAllToggle = React.useCallback((event: {
+    target: { checked: boolean }
+  }) => {
+    if (isListNarrowed) {
+      const nextSelectedIds = event.target.checked
+        ? organizationIndex.sourceIdsInOrder.filter(
+            (sourceId) =>
+              visibleReadySourceIdSet.has(sourceId) ||
+              hiddenDirectSelectedSourceIds.includes(sourceId)
+          )
+        : hiddenDirectSelectedSourceIds
+      setSelectedSourceIds(nextSelectedIds)
+      return
     }
-  }
+
+    if (allSelected || someSelected) {
+      clearEffectiveSelection()
+      return
+    }
+
+    selectAllSources()
+  }, [
+    allSelected,
+    clearEffectiveSelection,
+    hiddenDirectSelectedSourceIds,
+    isListNarrowed,
+    organizationIndex.sourceIdsInOrder,
+    selectAllSources,
+    setSelectedSourceIds,
+    someSelected,
+    visibleReadySourceIdSet
+  ])
+
+  const handleCreateSourceFolder = React.useCallback(() => {
+    if (typeof createSourceFolder !== "function") {
+      return
+    }
+
+    createSourceFolder("New folder", activeFolderId)
+  }, [activeFolderId, createSourceFolder])
 
   const resetAnnotationEditor = React.useCallback(() => {
     setAnnotationQuoteDraft("")
@@ -388,6 +823,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     (source: (typeof sources)[number]) => {
       const sourceIndex = sources.findIndex((entry) => entry.id === source.id)
       const wasSelected = selectedSourceIds.includes(source.id)
+      const assignedFolderIds = organizationIndex.folderIdsBySourceId.get(source.id) || []
       const undoHandle = scheduleWorkspaceUndoAction({
         apply: () => {
           removeSource(source.id)
@@ -397,6 +833,9 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             index: sourceIndex,
             select: wasSelected
           })
+          if (assignedFolderIds.length > 0) {
+            assignSourceToFolders(source.id, assignedFolderIds)
+          }
         }
       })
 
@@ -440,7 +879,16 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
         }
       }
     },
-    [messageApi, removeSource, restoreSource, selectedSourceIds, sources, t]
+    [
+      assignSourceToFolders,
+      messageApi,
+      organizationIndex.folderIdsBySourceId,
+      removeSource,
+      restoreSource,
+      selectedSourceIds,
+      sources,
+      t
+    ]
   )
 
   React.useEffect(() => {
@@ -526,7 +974,13 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
 
   const renderSourceRow = (source: (typeof filteredSources)[number]) => {
     const Icon = SOURCE_TYPE_ICONS[source.type] || File
-    const isSelected = selectedSourceIds.includes(source.id)
+    const selectionOrigin = getSourceSelectionOrigin(
+      source.id,
+      selectedSourceIds,
+      selectedSourceFolderIds,
+      organizationIndex
+    )
+    const isSelected = selectionOrigin !== "none"
     const isHighlighted = highlightedSourceId === source.id
     const sourceStatus = statusGuardrailsEnabled
       ? source.status || "ready"
@@ -534,6 +988,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     const isReady = sourceStatus === "ready"
     const isProcessing = sourceStatus === "processing"
     const isError = sourceStatus === "error"
+    const canReorder = !isTemporarySortActive && isReady
     const processingStatusText =
       typeof source.statusMessage === "string" && source.statusMessage.trim().length > 0
         ? source.statusMessage
@@ -561,9 +1016,11 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
     const metadataPreview = metadataParts.slice(0, 2).join(" • ")
     const metadataTooltip = metadataParts.join(" • ")
     const sourceOrderIndex = sources.findIndex((entry) => entry.id === source.id)
-    const canMoveUp = sourceOrderIndex > 0
-    const canMoveDown = sourceOrderIndex >= 0 && sourceOrderIndex < sources.length - 1
+    const canMoveUp = canReorder && sourceOrderIndex > 0
+    const canMoveDown =
+      canReorder && sourceOrderIndex >= 0 && sourceOrderIndex < sources.length - 1
     const isDropTarget = draggedSourceId != null && draggedSourceId !== source.id
+    const assignedFolderIds = organizationIndex.folderIdsBySourceId.get(source.id) || []
     const sourceTypeLabel = t(`playground:sources.type.${source.type}`, source.type)
     const sourceStatusLabel = isProcessing
       ? t("playground:sources.statusProcessing", "Processing")
@@ -585,9 +1042,9 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
         ref={(element) => {
           sourceItemRefs.current[source.id] = element
         }}
-        draggable={isReady}
+        draggable={canReorder}
         onDragStart={(event) => {
-          if (!isReady) {
+          if (!canReorder) {
             event.preventDefault()
             return
           }
@@ -605,12 +1062,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
           event.dataTransfer.setData("text/plain", source.title)
         }}
         onDragOver={(event) => {
-          if (!isReady || !draggedSourceId || draggedSourceId === source.id) return
+          if (!canReorder || !draggedSourceId || draggedSourceId === source.id) return
           event.preventDefault()
           event.dataTransfer.dropEffect = "move"
         }}
         onDrop={(event) => {
-          if (!isReady || !draggedSourceId || draggedSourceId === source.id) return
+          if (!canReorder || !draggedSourceId || draggedSourceId === source.id) return
           event.preventDefault()
           const targetIndex = sources.findIndex((entry) => entry.id === source.id)
           if (targetIndex >= 0) {
@@ -629,7 +1086,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             : ""
         } ${
           isDropTarget ? "border-primary/50 bg-primary/5" : ""
-        } ${isReady ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
+        } ${canReorder ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
       >
         <div
           data-testid={`source-checkbox-hitarea-${source.id}`}
@@ -638,7 +1095,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
           <Checkbox
             checked={isSelected}
             disabled={!isReady}
-            onChange={() => toggleSourceSelection(source.id)}
+            onChange={() => {
+              if (selectionOrigin === "folder") {
+                return
+              }
+              toggleSourceSelection(source.id)
+            }}
           />
         </div>
         <div className="flex min-w-0 flex-1 items-start gap-2">
@@ -674,9 +1136,19 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               >
                 {sourceStatusLabel}
               </span>
-              {isSelected && (
+              {selectionOrigin === "direct" && (
                 <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
-                  {t("playground:sources.selectedBadge", "Selected")}
+                  {t("playground:sources.selectedDirectBadge", "Direct")}
+                </span>
+              )}
+              {selectionOrigin === "folder" && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                  {t("playground:sources.selectedFolderBadge", "From folder")}
+                </span>
+              )}
+              {selectionOrigin === "both" && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                  {t("playground:sources.selectedBothBadge", "Direct + folder")}
                 </span>
               )}
             </div>
@@ -696,17 +1168,38 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               </p>
             )}
             {statusGuardrailsEnabled && isError && (
-              <p
-                className="mt-0.5 flex items-center gap-1 text-[11px] text-error"
-                title={source.statusMessage || undefined}
+              <Tooltip
+                title={
+                  source.statusMessage ? (
+                    <span
+                      className="cursor-text select-all"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (source.statusMessage) {
+                          navigator.clipboard.writeText(source.statusMessage).catch(() => {})
+                        }
+                      }}
+                    >
+                      {source.statusMessage}
+                      <span className="ml-1 text-[10px] opacity-70">
+                        {t("playground:sources.clickToCopy", "(click to copy)")}
+                      </span>
+                    </span>
+                  ) : undefined
+                }
+                placement="bottom"
               >
-                <AlertTriangle className="h-3 w-3" />
-                {source.statusMessage ||
-                  t(
-                    "playground:sources.statusError",
-                    "Source processing failed"
-                  )}
-              </p>
+                <p className="mt-0.5 flex items-center gap-1 text-[11px] text-error">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  <span className="line-clamp-1">
+                    {source.statusMessage ||
+                      t(
+                        "playground:sources.statusError",
+                        "Source processing failed"
+                      )}
+                  </span>
+                </p>
+              </Tooltip>
             )}
           </div>
         </div>
@@ -715,6 +1208,12 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             isSelected ? "border border-primary/20 bg-primary/5" : ""
           }`}
         >
+          <SourceFolderMembershipMenu
+            sourceTitle={source.title}
+            folderOptions={sourceFolderOptions}
+            selectedFolderIds={assignedFolderIds}
+            onChange={(folderIds) => assignSourceToFolders(source.id, folderIds)}
+          />
           <Tooltip title={t("playground:sources.previewAnnotate", "Preview & annotate")}>
             <button
               type="button"
@@ -832,7 +1331,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               <button
                 type="button"
                 onClick={onHide}
-                className="hidden rounded p-1.5 text-text-muted transition hover:bg-surface2 hover:text-text lg:block"
+                className="hidden h-9 w-9 items-center justify-center rounded text-text-muted transition hover:bg-surface2 hover:text-text lg:flex"
                 aria-label={t("playground:workspace.hideSources", "Hide sources")}
               >
                 <PanelLeftClose className="h-4 w-4" />
@@ -840,6 +1339,42 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             </Tooltip>
           )}
         </div>
+      </div>
+
+      {/* Quick URL paste */}
+      <div className="border-b border-border px-4 py-1.5">
+        <Input
+          data-testid="quick-url-input"
+          placeholder={t(
+            "playground:sources.quickUrlPlaceholder",
+            "Paste a URL to add..."
+          )}
+          value={quickUrlValue}
+          onChange={(e) => {
+            setQuickUrlValue(e.target.value)
+          }}
+          onPaste={(e) => {
+            const pasted = e.clipboardData.getData("text/plain").trim()
+            try {
+              new URL(pasted)
+              e.preventDefault()
+              setQuickUrlValue(pasted)
+              handleQuickUrlPaste(pasted)
+            } catch {
+              // Not a URL — let normal paste happen
+            }
+          }}
+          onPressEnter={() => handleQuickUrlPaste(quickUrlValue)}
+          prefix={<Globe className="h-3.5 w-3.5 text-text-muted" />}
+          suffix={
+            quickUrlLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            ) : null
+          }
+          size="small"
+          allowClear
+          disabled={quickUrlLoading}
+        />
       </div>
 
       {/* Search and select controls */}
@@ -853,32 +1388,50 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
             size="small"
             allowClear
           />
+          <SourceAdvancedControls
+            viewState={sourceListViewState}
+            summary={sourceFilterSummary}
+            hasFileSizeSources={hasFileSizeSources}
+            hasDurationSources={hasDurationSources}
+            hasPageCountSources={hasPageCountSources}
+            onPatchViewState={patchSourceListViewState}
+            onResetAdvancedFilters={resetAdvancedSourceFilters}
+          />
+          {isTemporarySortActive && (
+            <p className="mt-2 text-[11px] text-text-subtle">
+              {t(
+                "playground:sources.reorderDisabledHint",
+                "Temporary sort is active. Switch back to manual order to reorder sources."
+              )}
+            </p>
+          )}
           <div className="mt-2 flex items-center justify-between text-xs">
             <Checkbox
-              checked={allSelected}
-              indeterminate={someSelected}
+              aria-label={selectionCheckboxLabel}
+              checked={selectionCheckboxChecked}
+              indeterminate={selectionCheckboxIndeterminate}
               onChange={handleSelectAllToggle}
               className="[@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11"
             >
               <span className="text-text-muted">
-                {selectedSourceIds.length > 0
+                {effectiveSelectedCount > 0
                   ? t("playground:sources.selectedCount", "{{count}} selected", {
-                      count: selectedSourceIds.length
+                      count: effectiveSelectedCount
                     })
-                  : t("playground:sources.selectAll", "Select all")}
+                  : selectionCheckboxLabel}
               </span>
             </Checkbox>
-            {selectedSourceIds.length > 0 && (
+            {effectiveSelectedCount > 0 && (
               <button
                 type="button"
-                onClick={deselectAllSources}
+                onClick={clearEffectiveSelection}
                 className="text-primary hover:underline"
               >
                 {t("common:clear", "Clear")}
               </button>
             )}
           </div>
-          {selectedSourceIds.length > 0 && (
+          {effectiveSelectedCount > 0 && (
             <div
               data-testid="sources-selected-actions"
               className="mt-2 flex flex-wrap items-center gap-2"
@@ -887,7 +1440,7 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
                 {t(
                   "playground:sources.selectedForChat",
                   "{{count}} selected for grounded chat",
-                  { count: selectedSourceIds.length }
+                  { count: effectiveSelectedCount }
                 )}
               </span>
               <button
@@ -901,10 +1454,44 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({
               >
                 {t("playground:sources.previewSelected", "Preview selected")}
               </button>
+              <Popconfirm
+                title={t(
+                  "playground:sources.batchRemoveConfirm",
+                  "Remove {{count}} selected sources?",
+                  { count: effectiveSelectedCount }
+                )}
+                description={batchRemoveDescription}
+                onConfirm={handleBatchRemoveSelected}
+                okText={t("common:remove", "Remove")}
+                cancelText={t("common:cancel", "Cancel")}
+                okButtonProps={{ danger: true }}
+              >
+                <button
+                  type="button"
+                  data-testid="batch-remove-sources"
+                  className="rounded border border-error/30 bg-error/10 px-2 py-0.5 text-[11px] font-medium text-error transition hover:bg-error/20"
+                >
+                  {t("playground:sources.removeCount", "Remove ({{count}})", {
+                    count: effectiveSelectedCount
+                  })}
+                </button>
+              </Popconfirm>
             </div>
           )}
         </div>
       )}
+
+      <div className="border-b border-border px-4 py-2">
+        <SourceFolderTree
+          nodes={folderTreeNodes}
+          activeFolderId={activeFolderId}
+          selectionStateByFolderId={selectionStateByFolderId}
+          onClearFocus={() => setActiveFolder(null)}
+          onCreateFolder={handleCreateSourceFolder}
+          onFocusFolder={setActiveFolder}
+          onToggleFolderSelection={toggleSourceFolderSelection}
+        />
+      </div>
 
       {/* Source list */}
       <div

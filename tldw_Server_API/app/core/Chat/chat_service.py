@@ -18,8 +18,9 @@ import os
 import re
 import time
 import uuid as _uuid
-from collections.abc import AsyncIterator, Awaitable, Iterator
-from functools import lru_cache
+from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping
+from dataclasses import dataclass
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -68,6 +69,7 @@ from tldw_Server_API.app.core.Chat.streaming_utils import (
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
 )
+from tldw_Server_API.app.core.Chat.chat_loop_engine import is_chat_loop_mode_enabled
 from tldw_Server_API.app.core.Chat.tool_auto_exec import execute_assistant_tool_calls
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
@@ -75,7 +77,20 @@ from tldw_Server_API.app.core.LLM_Calls.openrouter_model_inventory import (
     clear_openrouter_model_cache as _clear_openrouter_model_cache_shared,
     discover_openrouter_models as _discover_openrouter_models_shared,
 )
+from tldw_Server_API.app.core.LLM_Calls.llamacpp_request_extensions import (
+    resolve_llamacpp_request_extensions,
+    resolve_llamacpp_runtime_caps,
+)
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+from tldw_Server_API.app.core.LLM_Calls.structured_generation import (
+    StructuredGenerationCapabilityError,
+    StructuredGenerationError,
+    StructuredGenerationParseError,
+    StructuredGenerationSchemaError,
+    StructuredModeDecision,
+    negotiate_structured_response_mode,
+    parse_and_validate_structured_output,
+)
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.testing import (
@@ -173,6 +188,7 @@ _PROVIDER_MODEL_CONFIG_FIELDS: dict[str, tuple[str, str]] = {
 }
 
 _OPENROUTER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 5.0
+_DEFAULT_ASSISTANT_SYSTEM_PROMPT = "You are a helpful AI assistant."
 
 
 def _parse_tool_allow_catalog(value: str | None) -> list[str]:
@@ -247,6 +263,105 @@ def _discover_openrouter_models_for_chat(*, force_refresh: bool = False) -> tupl
             log_prefix="[OpenRouter model discovery/chat]",
         )
     )
+
+
+def _normalize_conversation_assistant_context(
+    conversation: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Normalize persisted conversation assistant identity into a small runtime dict."""
+    if not conversation:
+        return {
+            "assistant_kind": None,
+            "assistant_id": None,
+            "persona_memory_mode": None,
+        }
+
+    character_id = conversation.get("character_id")
+    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
+    assistant_id = conversation.get("assistant_id")
+    if assistant_id is None and character_id is not None:
+        assistant_id = str(character_id)
+
+    return {
+        "assistant_kind": assistant_kind,
+        "assistant_id": assistant_id,
+        "persona_memory_mode": conversation.get("persona_memory_mode"),
+    }
+
+
+def _build_persona_chat_projection(
+    persona_profile: dict[str, Any],
+    *,
+    fallback_persona_id: str | None = None,
+) -> dict[str, Any]:
+    """Project a persona profile into the minimal assistant card ordinary chat needs."""
+    persona_name = str(persona_profile.get("name") or fallback_persona_id or "Persona").strip() or "Persona"
+    system_prompt = str(persona_profile.get("system_prompt") or "").strip() or _DEFAULT_ASSISTANT_SYSTEM_PROMPT
+    return {
+        "name": persona_name,
+        "system_prompt": system_prompt,
+        "avatar_url": None,
+        "first_message": None,
+        "extensions": None,
+    }
+
+
+async def _resolve_assistant_context_for_chat(
+    *,
+    chat_db: Any,
+    request_data: Any,
+    loop: Any,
+    conversation_id: str | None,
+) -> tuple[dict[str, Any] | None, int | None, dict[str, Any] | None, dict[str, Any]]:
+    """Resolve character or persona context for ordinary chat."""
+    existing_conversation: dict[str, Any] | None = None
+    if conversation_id:
+        existing_conversation = await loop.run_in_executor(None, chat_db.get_conversation_by_id, conversation_id)
+
+    assistant_context = _normalize_conversation_assistant_context(existing_conversation)
+    assistant_kind = assistant_context.get("assistant_kind")
+    assistant_id = assistant_context.get("assistant_id")
+
+    if assistant_kind == "persona":
+        if not assistant_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Persona-backed conversation is missing assistant_id.",
+            )
+
+        persona_owner = str(getattr(chat_db, "client_id", "") or "").strip()
+        persona_profile = await loop.run_in_executor(
+            None,
+            partial(
+                chat_db.get_persona_profile,
+                assistant_id,
+                user_id=persona_owner,
+            ),
+        )
+        if persona_profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Persona profile not found for persona-backed conversation.",
+            )
+        return (
+            _build_persona_chat_projection(persona_profile, fallback_persona_id=assistant_id),
+            None,
+            existing_conversation,
+            assistant_context,
+        )
+
+    character_lookup = getattr(request_data, "character_id", None)
+    if character_lookup is None and existing_conversation:
+        character_lookup = existing_conversation.get("character_id") or assistant_id
+
+    character_card, character_db_id = await get_or_create_character_context(chat_db, character_lookup, loop)
+    if character_db_id is not None:
+        assistant_context = {
+            "assistant_kind": "character",
+            "assistant_id": str(character_db_id),
+            "persona_memory_mode": assistant_context.get("persona_memory_mode"),
+        }
+    return character_card, character_db_id, existing_conversation, assistant_context
 
 
 @lru_cache(maxsize=64)
@@ -461,6 +576,13 @@ def should_auto_execute_tools() -> bool:
     if raw is not None:
         return _coerce_bool(raw, CHAT_AUTO_EXECUTE_TOOLS)
     return CHAT_AUTO_EXECUTE_TOOLS
+
+
+def should_run_legacy_tool_autoexec(cleaned_args: dict[str, Any] | None) -> bool:
+    """Gate legacy auto-exec when loop mode is explicitly enabled on a request."""
+    if is_chat_loop_mode_enabled(cleaned_args):
+        return False
+    return should_auto_execute_tools()
 
 
 def get_chat_max_tool_calls() -> int:
@@ -1259,6 +1381,7 @@ def _build_adapter_request_from_chat_args(chat_args: dict[str, Any]) -> tuple[st
         "principal",
         "auth_user",
         "trusted_base_url_override",
+        "_structured_requested_response_format",
         "stream",
         "streaming",
         "history_message_limit",
@@ -1380,12 +1503,15 @@ def build_call_params_from_request(
     templated_llm_payload: list[dict[str, Any]],
     final_system_message: str | None,
     app_config: dict[str, Any] | None = None,
+    grammar_record: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Construct the cleaned argument dictionary for chat_api_call.
 
     Mirrors the transformation previously in the endpoint: renames OpenAI-style
     params to the generic names expected by chat_api_call and attaches
-    provider/model/messages/system/stream flags.
+    provider/model/messages/system/stream flags. Structured `response_format`
+    requests are negotiated here so every caller gets the downgraded outbound
+    payload before the provider call is wrapped.
     """
     call_params = request_data.model_dump(
         exclude_none=True,
@@ -1403,6 +1529,11 @@ def build_call_params_from_request(
             "persona_exemplar_budget_tokens",
             "persona_exemplar_strategy",
             "persona_debug",
+            "thinking_budget_tokens",
+            "grammar_mode",
+            "grammar_id",
+            "grammar_inline",
+            "grammar_override",
         },
     )
 
@@ -1415,6 +1546,31 @@ def build_call_params_from_request(
         call_params["topp"] = top_p_value
     if "user" in call_params:
         call_params["user_identifier"] = call_params.pop("user")
+    response_format = call_params.get("response_format")
+    if isinstance(response_format, dict):
+        requested_type = str(response_format.get("type") or "").strip().lower()
+        if requested_type == "json_schema":
+            decision = negotiate_structured_response_mode(
+                provider=target_api_provider,
+                requested=response_format,
+            )
+            call_params["_structured_requested_response_format"] = dict(response_format)
+            call_params["response_format"] = decision.response_format
+
+    llamacpp_request_fields = {
+        "thinking_budget_tokens": getattr(request_data, "thinking_budget_tokens", None),
+        "grammar_mode": getattr(request_data, "grammar_mode", None),
+        "grammar_id": getattr(request_data, "grammar_id", None),
+        "grammar_inline": getattr(request_data, "grammar_inline", None),
+        "grammar_override": getattr(request_data, "grammar_override", None),
+        "extra_body": getattr(request_data, "extra_body", None),
+    }
+    call_params["extra_body"] = resolve_llamacpp_request_extensions(
+        request_fields=llamacpp_request_fields,
+        provider=target_api_provider,
+        grammar_record=grammar_record,
+        runtime_caps=resolve_llamacpp_runtime_caps(app_config=app_config),
+    )["extra_body"]
 
     call_params.update(
         {
@@ -1586,6 +1742,147 @@ def _wrap_raw_string_response(content: str, model: str | None) -> dict[str, Any]
             }
         ],
     }
+
+
+def _extract_structured_schema_from_response_format(response_format: Any) -> dict[str, Any] | None:
+    """Return the requested JSON Schema payload when `response_format` uses `json_schema`."""
+
+    if not isinstance(response_format, dict):
+        return None
+    if str(response_format.get("type") or "").strip().lower() != "json_schema":
+        return None
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return None
+    schema = json_schema.get("schema")
+    if not isinstance(schema, dict):
+        return None
+    return schema
+
+
+@dataclass(frozen=True)
+class StructuredResponseRequestContext:
+    """Resolved structured-output state shared across request execution and validation."""
+
+    requested_response_format: dict[str, Any]
+    validation_schema: dict[str, Any]
+    decision: StructuredModeDecision
+
+
+def prepare_structured_response_request(
+    *,
+    provider: str,
+    response_format: Any,
+    requested_response_format: Any | None = None,
+) -> StructuredResponseRequestContext | None:
+    """Resolve structured-output negotiation for the original request payload."""
+
+    candidate_response_format = requested_response_format
+    if not isinstance(candidate_response_format, dict):
+        candidate_response_format = response_format
+    if not isinstance(candidate_response_format, dict):
+        return None
+
+    validation_schema = _extract_structured_schema_from_response_format(candidate_response_format)
+    if validation_schema is None:
+        return None
+
+    decision = negotiate_structured_response_mode(
+        provider=provider,
+        requested=candidate_response_format,
+    )
+    return StructuredResponseRequestContext(
+        requested_response_format=dict(candidate_response_format),
+        validation_schema=validation_schema,
+        decision=decision,
+    )
+
+
+def apply_structured_response_request(
+    *,
+    cleaned_args: dict[str, Any],
+    structured_request_context: StructuredResponseRequestContext | None,
+) -> None:
+    """Apply the negotiated outbound response format to provider call arguments."""
+
+    if structured_request_context is None:
+        return
+    cleaned_args["response_format"] = structured_request_context.decision.response_format
+
+
+def validate_structured_response(
+    *,
+    raw_text: Any,
+    structured_request_context: StructuredResponseRequestContext | None,
+) -> dict[str, Any] | None:
+    """Validate final assistant output against the original requested JSON Schema."""
+
+    if structured_request_context is None:
+        return None
+
+    validated_payload = parse_and_validate_structured_output(
+        raw_text=raw_text,
+        schema=structured_request_context.validation_schema,
+    )
+    return {
+        "validated": True,
+        "mode_used": structured_request_context.decision.mode_used,
+        "fallback_used": structured_request_context.decision.fallback_used,
+        "validated_payload": validated_payload,
+    }
+
+
+def _structured_error_detail(exc: StructuredGenerationError) -> dict[str, Any]:
+    """Return a bounded, client-safe structured-output error payload."""
+
+    error_code = getattr(exc, "code", "structured_output_error")
+    message_by_code = {
+        "structured_output_capability_error": "Requested structured output mode is not supported for this provider.",
+        "structured_output_parse_error": "Model output could not be parsed as JSON.",
+        "structured_output_schema_error": "Model output did not match the requested JSON schema.",
+    }
+    detail: dict[str, Any] = {
+        "code": error_code,
+        "message": message_by_code.get(error_code, "Structured output generation failed."),
+    }
+    attempts = getattr(exc, "attempts", None)
+    if isinstance(attempts, int):
+        detail["attempts"] = attempts
+    return detail
+
+
+def build_structured_http_exception(exc: StructuredGenerationError) -> HTTPException:
+    """Normalize structured-output failures into a 400 response."""
+
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=_structured_error_detail(exc),
+    )
+
+
+def _build_assistant_message_payload(
+    *,
+    character_card_for_context: dict[str, Any] | None,
+    assistant_parent_message_id: str | None,
+    content: Any,
+    tool_calls: Any,
+    function_call: Any,
+) -> dict[str, Any]:
+    """Build the persisted assistant message payload for the current turn."""
+
+    asst_name = sanitize_sender_name(
+        character_card_for_context.get("name") if character_card_for_context else None
+    )
+    message_payload: dict[str, Any] = {"role": "assistant", "name": asst_name}
+    if assistant_parent_message_id:
+        message_payload["parent_message_id"] = assistant_parent_message_id
+    if content is not None:
+        message_payload["content"] = content
+    if tool_calls is not None:
+        message_payload["tool_calls"] = tool_calls
+    if function_call is not None:
+        message_payload["function_call"] = function_call
+    return message_payload
 
 
 async def moderate_input_messages(
@@ -1818,6 +2115,116 @@ async def moderate_input_messages(
         logger.warning(f"Moderation input processing error: {e}")
 
 
+def _extract_tldw_continuation_spec(request_data: Any) -> tuple[str, str, str | None] | None:
+    """Return normalized continuation tuple (anchor_id, mode, assistant_prefill)."""
+    raw_spec = getattr(request_data, "tldw_continuation", None)
+    if raw_spec is None:
+        return None
+
+    if hasattr(raw_spec, "model_dump"):
+        try:
+            spec_dict = raw_spec.model_dump(exclude_none=True)
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
+            spec_dict = {}
+    elif isinstance(raw_spec, dict):
+        spec_dict = raw_spec
+    else:
+        return None
+
+    from_message_id = str(spec_dict.get("from_message_id") or "").strip()
+    mode = str(spec_dict.get("mode") or "").strip().lower()
+    assistant_prefill_raw = spec_dict.get("assistant_prefill")
+    assistant_prefill = assistant_prefill_raw if isinstance(assistant_prefill_raw, str) else None
+
+    if not from_message_id or mode not in {"branch", "append"}:
+        return None
+    return from_message_id, mode, assistant_prefill
+
+
+async def _resolve_tldw_continuation_history(
+    *,
+    chat_db: Any,
+    loop: Any,
+    conversation_id: str,
+    from_message_id: str,
+    mode: str,
+    history_limit: int,
+    history_order: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Resolve continuation anchor/chain and return history records + metadata."""
+    anchor_record = await loop.run_in_executor(None, chat_db.get_message_by_id, from_message_id)
+    if not anchor_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Continuation anchor message was not found.",
+        )
+    if str(anchor_record.get("conversation_id") or "") != str(conversation_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Continuation anchor does not belong to the requested conversation.",
+        )
+
+    if mode == "append":
+        latest_message = await loop.run_in_executor(
+            None,
+            chat_db.get_latest_message_for_conversation,
+            conversation_id,
+        )
+        latest_id = str((latest_message or {}).get("id") or "")
+        if latest_id != from_message_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Append continuation requires the anchor to be the latest "
+                    "message in the conversation."
+                ),
+            )
+
+    chain_reversed: list[dict[str, Any]] = []
+    visited_ids: set[str] = set()
+    current_record = anchor_record
+    while current_record:
+        message_id = str(current_record.get("id") or "")
+        if not message_id:
+            break
+        if message_id in visited_ids:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Detected a cycle while resolving continuation ancestry.",
+            )
+        visited_ids.add(message_id)
+        chain_reversed.append(current_record)
+
+        parent_id_raw = current_record.get("parent_message_id")
+        parent_id = parent_id_raw.strip() if isinstance(parent_id_raw, str) else ""
+        if not parent_id:
+            break
+        parent_record = await loop.run_in_executor(None, chat_db.get_message_by_id, parent_id)
+        if not parent_record:
+            break
+        if str(parent_record.get("conversation_id") or "") != str(conversation_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Continuation parent chain crossed conversation boundary.",
+            )
+        current_record = parent_record
+
+    ordered_chain = list(reversed(chain_reversed))
+    if history_limit > 0:
+        ordered_chain = ordered_chain[-history_limit:]
+    else:
+        ordered_chain = []
+    if history_order == "desc":
+        ordered_chain = list(reversed(ordered_chain))
+
+    metadata = {
+        "applied": True,
+        "mode": mode,
+        "from_message_id": from_message_id,
+    }
+    return ordered_chain, metadata
+
+
 async def build_context_and_messages(
     chat_db: Any,
     request_data: Any,
@@ -1826,29 +2233,45 @@ async def build_context_and_messages(
     default_save_to_db: bool,
     final_conversation_id: str | None,
     save_message_fn: Any,
+    runtime_state: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int | None, str, bool, list[dict[str, Any]], bool]:
     """Resolve character/conversation context, load history, save current messages, and return LLM-ready payload.
 
     Returns (character_card, character_db_id, final_conversation_id, conversation_created, llm_payload_messages, should_persist)
     """
-    # Character context
-    character_card, character_db_id = await get_or_create_character_context(chat_db, request_data.character_id, loop)
+    # Assistant context
+    (
+        character_card,
+        character_db_id,
+        existing_conversation,
+        assistant_context,
+    ) = await _resolve_assistant_context_for_chat(
+        chat_db=chat_db,
+        request_data=request_data,
+        loop=loop,
+        conversation_id=final_conversation_id,
+    )
     if character_card:
         system_prompt_preview = character_card.get("system_prompt")
         if system_prompt_preview:
             system_prompt_preview = system_prompt_preview[:50] + "..." if len(system_prompt_preview) > 50 else system_prompt_preview
         else:
             system_prompt_preview = "None"
-        logger.debug(f"Loaded character: {character_card.get('name')} with system_prompt: {system_prompt_preview}")
+        logger.debug(f"Loaded assistant context: {character_card.get('name')} with system_prompt: {system_prompt_preview}")
 
-    if character_card:
+    if character_card and character_db_id is not None:
         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_character_access(character_id=str(request_data.character_id or "default"), cache_hit=False)
 
     if not character_card:
         logger.warning("No character context found; proceeding with ephemeral default context.")
-        character_card = {"name": DEFAULT_CHARACTER_NAME, "system_prompt": "You are a helpful AI assistant."}
+        character_card = {"name": DEFAULT_CHARACTER_NAME, "system_prompt": _DEFAULT_ASSISTANT_SYSTEM_PROMPT}
         character_db_id = None
+        assistant_context = {
+            "assistant_kind": None,
+            "assistant_id": None,
+            "persona_memory_mode": assistant_context.get("persona_memory_mode"),
+        }
 
     # Persistence decision
     requested = getattr(request_data, "save_to_db", None)
@@ -1858,23 +2281,31 @@ async def build_context_and_messages(
     client_id_from_db = getattr(chat_db, "client_id", None)
     conversation_created = False
     conv_id = final_conversation_id
-    # Ensure a valid character ID is present before attempting persistence
-    if should_persist and character_db_id is None:
+    is_existing_persona_conversation = bool(
+        existing_conversation
+        and assistant_context.get("assistant_kind") == "persona"
+        and assistant_context.get("assistant_id")
+    )
+    # Ensure a valid assistant identity is present before attempting persistence
+    if should_persist and character_db_id is None and not is_existing_persona_conversation:
         logger.warning(
-            'Persistence requested but no character ID is available; disabling persistence for conversation {}.',
+            'Persistence requested but no compatible assistant identity is available; disabling persistence for conversation {}.',
             final_conversation_id or "<new>",
         )
         should_persist = False
 
     if should_persist:
-        conv_id, conversation_created = await get_or_create_conversation(
-            chat_db,
-            conv_id,
-            character_db_id,
-            character_card.get("name", "Chat"),
-            client_id_from_db,
-            loop,
-        )
+        if is_existing_persona_conversation and conv_id:
+            conversation_created = False
+        else:
+            conv_id, conversation_created = await get_or_create_conversation(
+                chat_db,
+                conv_id,
+                character_db_id,
+                character_card.get("name", "Chat"),
+                client_id_from_db,
+                loop,
+            )
     else:
         if not conv_id:
             conv_id = str(_uuid.uuid4())
@@ -1885,6 +2316,18 @@ async def build_context_and_messages(
             metrics.track_conversation(conv_id, conversation_created)
     if not conv_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
+
+    continuation_spec = _extract_tldw_continuation_spec(request_data)
+    continuation_metadata: dict[str, Any] | None = None
+    assistant_parent_message_id: str | None = None
+    assistant_prefill: str | None = None
+    if continuation_spec:
+        assistant_parent_message_id, _mode, assistant_prefill = continuation_spec
+        if conversation_created:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="conversation_id is required for continuation and must reference an existing conversation.",
+            )
 
     # History loading (configurable limit/order; filter missing roles, normalize assistant names)
     requested_history_limit = getattr(request_data, "history_message_limit", None)
@@ -1907,15 +2350,31 @@ async def build_context_and_messages(
     db_order = "ASC" if history_order == "asc" else "DESC"
 
     historical_msgs: list[dict[str, Any]] = []
-    if conv_id and (not conversation_created) and history_limit > 0:
-        raw_hist = await loop.run_in_executor(
-            None,
-            chat_db.get_messages_for_conversation,
-            conv_id,
-            history_limit,
-            0,
-            db_order,
-        )
+    if conv_id and (not conversation_created):
+        raw_hist: list[dict[str, Any]] = []
+        if continuation_spec:
+            from_message_id, mode, assistant_prefill = continuation_spec
+            resolved_hist, continuation_metadata = await _resolve_tldw_continuation_history(
+                chat_db=chat_db,
+                loop=loop,
+                conversation_id=conv_id,
+                from_message_id=from_message_id,
+                mode=mode,
+                history_limit=(history_limit if history_limit > 0 else _MAX_HISTORY_MESSAGES),
+                history_order=history_order,
+            )
+            if history_limit > 0:
+                raw_hist = resolved_hist
+            continuation_metadata["anchor_message_id"] = from_message_id
+        elif history_limit > 0:
+            raw_hist = await loop.run_in_executor(
+                None,
+                chat_db.get_messages_for_conversation,
+                conv_id,
+                history_limit,
+                0,
+                db_order,
+            )
         for db_msg in raw_hist:
             sender_val = str(db_msg.get("sender", "") or "")
             metadata = None
@@ -2115,6 +2574,27 @@ async def build_context_and_messages(
             if name:
                 msg_for_llm["name"] = name
         current_turn.append(msg_for_llm)
+
+    if continuation_spec and assistant_prefill:
+        prefill_payload: dict[str, Any] = {
+            "role": "assistant",
+            "content": assistant_prefill,
+        }
+        if character_card and character_card.get("name"):
+            prefill_name = sanitize_sender_name(character_card.get("name"))
+            if prefill_name:
+                prefill_payload["name"] = prefill_name
+        current_turn.append(prefill_payload)
+        if continuation_metadata is not None:
+            continuation_metadata["assistant_prefill"] = assistant_prefill
+            continuation_metadata["assistant_prefill_applied"] = True
+
+    if runtime_state is not None:
+        runtime_state["assistant_context"] = dict(assistant_context)
+        if continuation_spec and continuation_metadata is not None:
+            runtime_state["tldw_continuation"] = continuation_metadata
+            if assistant_parent_message_id:
+                runtime_state["assistant_parent_message_id"] = assistant_parent_message_id
 
     # Preserve requested history ordering (DB fetch already honors ASC/DESC).
     historical_msgs_for_payload = historical_msgs
@@ -2316,12 +2796,15 @@ async def execute_streaming_call(
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
     refresh_provider_params: Callable[[str], Any],
+    structured_request_context: StructuredResponseRequestContext | None = None,
     moderation_getter: Callable[[], Any] | None = None,
     rg_commit_cb: Callable[[int], Any] | None = None,
     rg_refund_cb: Callable[..., Any] | None = None,
     on_success: Callable[[str], Awaitable[None]] | None = None,
     self_monitoring_service: Any | None = None,
     on_stream_full_reply: Callable[[str], Awaitable[None] | None] | None = None,
+    assistant_parent_message_id: str | None = None,
+    continuation_metadata: dict[str, Any] | None = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -2332,6 +2815,11 @@ async def execute_streaming_call(
     - usage logging and audit success
     """
     llm_start_time = time.time()
+    normalized_continuation_metadata = (
+        dict(continuation_metadata)
+        if isinstance(continuation_metadata, dict) and continuation_metadata
+        else None
+    )
     stream_metrics_recorded = False
     stream_failure_recorded = False
     raw_stream_iter: AsyncIterator[str] | Iterator[str] | None = None
@@ -2339,6 +2827,23 @@ async def execute_streaming_call(
     queue_future: asyncio.Future[Any] | None = None
     queue_enabled = False
     try:
+        try:
+            if structured_request_context is None:
+                structured_request_context = prepare_structured_response_request(
+                    provider=selected_provider,
+                    response_format=cleaned_args.get("response_format"),
+                    requested_response_format=cleaned_args.get("_structured_requested_response_format"),
+                )
+            apply_structured_response_request(
+                cleaned_args=cleaned_args,
+                structured_request_context=structured_request_context,
+            )
+        except (
+            StructuredGenerationCapabilityError,
+            StructuredGenerationParseError,
+            StructuredGenerationSchemaError,
+        ) as structured_exc:
+            raise build_structured_http_exception(structured_exc) from structured_exc
         try:
             queue_for_exec = get_request_queue()
         except _CHAT_NONCRITICAL_EXCEPTIONS:
@@ -2372,7 +2877,7 @@ async def execute_streaming_call(
                 return refreshed  # type: ignore[return-value]
 
             def _queued_processor():
-                nonlocal selected_provider, model, llm_call_func, stream_failure_recorded
+                nonlocal selected_provider, model, llm_call_func, stream_failure_recorded, structured_request_context
                 local_start = time.time()
                 try:
                     result = llm_call_func()
@@ -2409,6 +2914,28 @@ async def execute_streaming_call(
                                         raise ValueError(
                                             f"Invalid refreshed params for {fallback_provider}: missing required fields"
                                         )
+                                    try:
+                                        structured_request_context = prepare_structured_response_request(
+                                            provider=fallback_provider,
+                                            response_format=(
+                                                refreshed_args.get("response_format")
+                                            ),
+                                            requested_response_format=(
+                                                structured_request_context.requested_response_format
+                                                if structured_request_context is not None
+                                                else refreshed_args.get("_structured_requested_response_format")
+                                            ),
+                                        )
+                                    except (
+                                        StructuredGenerationCapabilityError,
+                                        StructuredGenerationParseError,
+                                        StructuredGenerationSchemaError,
+                                    ) as structured_exc:
+                                        raise build_structured_http_exception(structured_exc) from structured_exc
+                                    apply_structured_response_request(
+                                        cleaned_args=refreshed_args,
+                                        structured_request_context=structured_request_context,
+                                    )
                                 except _CHAT_NONCRITICAL_EXCEPTIONS as refresh_error:
                                     provider_manager.record_failure(fallback_provider, refresh_error)
                                     raise
@@ -2559,6 +3086,8 @@ async def execute_streaming_call(
                     payload["tldw_conversation_id"] = final_conversation_id
                     if system_message_id:
                         payload["tldw_system_message_id"] = system_message_id
+                    if normalized_continuation_metadata:
+                        payload["tldw_continuation"] = normalized_continuation_metadata
                 yield f"data: {_json.dumps(payload)}\n\n"
             except _CHAT_NONCRITICAL_EXCEPTIONS:
                 # Fallback string serialization
@@ -2605,6 +3134,26 @@ async def execute_streaming_call(
                         # Validate refreshed params have required fields before proceeding
                         if not isinstance(refreshed_args, dict) or "messages_payload" not in refreshed_args:
                             raise ValueError(f"Invalid refreshed params for {fallback_provider}: missing required fields")
+                        try:
+                            structured_request_context = prepare_structured_response_request(
+                                provider=fallback_provider,
+                                response_format=refreshed_args.get("response_format"),
+                                requested_response_format=(
+                                    structured_request_context.requested_response_format
+                                    if structured_request_context is not None
+                                    else refreshed_args.get("_structured_requested_response_format")
+                                ),
+                            )
+                        except (
+                            StructuredGenerationCapabilityError,
+                            StructuredGenerationParseError,
+                            StructuredGenerationSchemaError,
+                        ) as structured_exc:
+                            raise build_structured_http_exception(structured_exc) from structured_exc
+                        apply_structured_response_request(
+                            cleaned_args=refreshed_args,
+                            structured_request_context=structured_request_context,
+                        )
                     except _CHAT_NONCRITICAL_EXCEPTIONS as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
                         raise
@@ -2655,6 +3204,8 @@ async def execute_streaming_call(
                     payload["tldw_conversation_id"] = final_conversation_id
                     if system_message_id:
                         payload["tldw_system_message_id"] = system_message_id
+                    if normalized_continuation_metadata:
+                        payload["tldw_continuation"] = normalized_continuation_metadata
                 yield f"data: {_json.dumps(payload)}\n\n"
             except _CHAT_NONCRITICAL_EXCEPTIONS:
                 if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
@@ -2681,6 +3232,13 @@ async def execute_streaming_call(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
 
     stream_mod_state = {"block_logged": False, "redact_logged": False}
+    loop_compat_enabled = False
+    loop_compat_run_id = str(final_conversation_id or f"run_{_uuid.uuid4().hex[:12]}")
+    try:
+        if request is not None:
+            loop_compat_enabled = _shared_is_truthy(request.headers.get("X-TLDW-Loop-Compat"))
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        loop_compat_enabled = False
 
     async def save_callback(
         full_reply: str,
@@ -2690,6 +3248,7 @@ async def execute_streaming_call(
         nonlocal stream_metrics_recorded
         saved_message_id: str | None = None
         tool_execution_payload: list[dict[str, Any]] | None = None
+        structured_events: list[dict[str, Any]] = []
         full_reply_to_save = full_reply
         post_stream_blocked = False
 
@@ -2832,6 +3391,30 @@ async def execute_streaming_call(
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
 
+        if structured_request_context is not None:
+            try:
+                structured_metadata = validate_structured_response(
+                    raw_text=full_reply_to_save,
+                    structured_request_context=structured_request_context,
+                )
+                structured_events.append(
+                    {
+                        "event": "structured_result",
+                        "data": structured_metadata,
+                    }
+                )
+            except (
+                StructuredGenerationCapabilityError,
+                StructuredGenerationParseError,
+                StructuredGenerationSchemaError,
+            ) as structured_exc:
+                structured_events.append(
+                    {
+                        "event": "structured_error",
+                        "data": _structured_error_detail(structured_exc),
+                    }
+                )
+
         if callable(on_stream_full_reply):
             try:
                 maybe_result = on_stream_full_reply(str(full_reply or ""))
@@ -2860,6 +3443,8 @@ async def execute_streaming_call(
                 "role": "assistant",
                 "name": asst_name,
             }
+            if assistant_parent_message_id:
+                message_payload["parent_message_id"] = assistant_parent_message_id
             if full_reply_to_save is not None:
                 message_payload["content"] = full_reply_to_save
             if tool_calls:
@@ -2875,7 +3460,7 @@ async def execute_streaming_call(
 
         if (
             not post_stream_blocked
-            and should_auto_execute_tools()
+            and should_run_legacy_tool_autoexec(cleaned_args)
             and isinstance(tool_calls, list)
             and tool_calls
         ):
@@ -2931,6 +3516,7 @@ async def execute_streaming_call(
             await log_llm_usage(
                 user_id=user_id,
                 key_id=api_key_id,
+                request=request,
                 endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
                 operation="chat",
                 provider=selected_provider,
@@ -2941,6 +3527,7 @@ async def execute_streaming_call(
                 completion_tokens=int(ct_est),
                 total_tokens=total_est,
                 request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
+                conversation_id=(str(final_conversation_id) if final_conversation_id is not None else None),
                 estimated=True,
             )
         except _CHAT_NONCRITICAL_EXCEPTIONS:
@@ -2977,15 +3564,62 @@ async def execute_streaming_call(
                 await on_success(selected_provider)
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
+        events: list[dict[str, Any]] = list(structured_events)
         if tool_execution_payload is not None:
+            events.append(
+                {
+                    "event": "tool_results",
+                    "data": {"tool_results": tool_execution_payload},
+                }
+            )
+            if loop_compat_enabled:
+                seq = 1
+                events.append(
+                    {
+                        "event": "run_started",
+                        "data": {"run_id": loop_compat_run_id, "seq": seq},
+                    }
+                )
+                seq += 1
+                if isinstance(tool_calls, list) and tool_calls:
+                    events.append(
+                        {
+                            "event": "tool_proposed",
+                            "data": {"run_id": loop_compat_run_id, "seq": seq, "tool_calls": tool_calls},
+                        }
+                    )
+                    seq += 1
+                events.append(
+                    {
+                        "event": "tool_finished",
+                        "data": {"run_id": loop_compat_run_id, "seq": seq, "tool_results": tool_execution_payload},
+                    }
+                )
+                seq += 1
+                events.append(
+                    {
+                        "event": "run_complete",
+                        "data": {"run_id": loop_compat_run_id, "seq": seq},
+                    }
+                )
+        elif loop_compat_enabled:
+            events.extend(
+                [
+                    {
+                        "event": "run_started",
+                        "data": {"run_id": loop_compat_run_id, "seq": 1},
+                    },
+                    {
+                        "event": "run_complete",
+                        "data": {"run_id": loop_compat_run_id, "seq": 2},
+                    },
+                ]
+            )
+
+        if events:
             return {
                 "saved_message_id": saved_message_id,
-                "events": [
-                    {
-                        "event": "tool_results",
-                        "data": {"tool_results": tool_execution_payload},
-                    }
-                ],
+                "events": events,
             }
         return saved_message_id
 
@@ -3223,6 +3857,7 @@ async def execute_streaming_call(
                 heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform,
                 system_message_id=system_message_id,
+                continuation_metadata=normalized_continuation_metadata,
             )
             try:
                 async for chunk in generator:
@@ -3336,20 +3971,48 @@ async def execute_non_stream_call(
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
     refresh_provider_params: Callable[[str], Any],
+    structured_request_context: StructuredResponseRequestContext | None = None,
     moderation_getter: Callable[[], Any] | None = None,
     on_success: Callable[[str], Awaitable[None]] | None = None,
     self_monitoring_service: Any | None = None,
+    assistant_parent_message_id: str | None = None,
+    continuation_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
 
     Returns the encoded payload (dict) ready to be wrapped by JSONResponse.
     """
     llm_start_time = time.time()
+    structured_metadata: dict[str, Any] | None = None
+    normalized_continuation_metadata = (
+        dict(continuation_metadata)
+        if isinstance(continuation_metadata, dict) and continuation_metadata
+        else None
+    )
     llm_response = None
     metrics_recorded = False
     queue_failure_recorded = False
     queue_enabled = False
+    pending_assistant_payload: dict[str, Any] | None = None
+    pending_tool_messages: list[dict[str, Any]] = []
     try:
+        try:
+            if structured_request_context is None:
+                structured_request_context = prepare_structured_response_request(
+                    provider=selected_provider,
+                    response_format=cleaned_args.get("response_format"),
+                    requested_response_format=cleaned_args.get("_structured_requested_response_format"),
+                )
+            apply_structured_response_request(
+                cleaned_args=cleaned_args,
+                structured_request_context=structured_request_context,
+            )
+        except (
+            StructuredGenerationCapabilityError,
+            StructuredGenerationParseError,
+            StructuredGenerationSchemaError,
+        ) as structured_exc:
+            raise build_structured_http_exception(structured_exc) from structured_exc
         queue_for_exec = None
         try:
             queue_for_exec = get_request_queue()
@@ -3477,6 +4140,26 @@ async def execute_non_stream_call(
                             raise ValueError(
                                 f"Invalid refreshed params for {fallback_provider}: missing required fields"
                             )
+                        try:
+                            structured_request_context = prepare_structured_response_request(
+                                provider=fallback_provider,
+                                response_format=refreshed_args.get("response_format"),
+                                requested_response_format=(
+                                    structured_request_context.requested_response_format
+                                    if structured_request_context is not None
+                                    else refreshed_args.get("_structured_requested_response_format")
+                                ),
+                            )
+                        except (
+                            StructuredGenerationCapabilityError,
+                            StructuredGenerationParseError,
+                            StructuredGenerationSchemaError,
+                        ) as structured_exc:
+                            raise build_structured_http_exception(structured_exc) from structured_exc
+                        apply_structured_response_request(
+                            cleaned_args=refreshed_args,
+                            structured_request_context=structured_request_context,
+                        )
                     except _CHAT_NONCRITICAL_EXCEPTIONS as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
                         raise
@@ -3543,6 +4226,7 @@ async def execute_non_stream_call(
                 await log_llm_usage(
                     user_id=user_id,
                     key_id=api_key_id,
+                    request=request,
                     endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
                     operation="chat",
                     provider=selected_provider,
@@ -3553,6 +4237,7 @@ async def execute_non_stream_call(
                     completion_tokens=completion_tokens,
                     total_tokens=int((usage.get("total_tokens") or 0) or (prompt_tokens + completion_tokens)),
                     request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
+                    conversation_id=(str(final_conversation_id) if final_conversation_id is not None else None),
                 )
             except _CHAT_NONCRITICAL_EXCEPTIONS:
                 pass
@@ -3577,6 +4262,7 @@ async def execute_non_stream_call(
                 await log_llm_usage(
                     user_id=user_id,
                     key_id=api_key_id,
+                    request=request,
                     endpoint=(f"{request.method}:{request.url.path}" if request else "POST:/api/v1/chat/completions"),
                     operation="chat",
                     provider=selected_provider,
@@ -3587,6 +4273,7 @@ async def execute_non_stream_call(
                     completion_tokens=int(ct_est),
                     total_tokens=int(pt_est + ct_est),
                     request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
+                    conversation_id=(str(final_conversation_id) if final_conversation_id is not None else None),
                     estimated=True,
                 )
             except _CHAT_NONCRITICAL_EXCEPTIONS:
@@ -3775,30 +4462,55 @@ async def execute_non_stream_call(
     assistant_message_id: str | None = None
     tool_execution_payload: list[dict[str, Any]] | None = None
     tool_auto_continue_meta: dict[str, bool] | None = None
+    defer_structured_persistence = bool(
+        structured_request_context is not None
+        and should_run_legacy_tool_autoexec(cleaned_args)
+        and isinstance(tool_calls_to_save, list)
+        and tool_calls_to_save
+        and should_auto_continue_tools_once()
+    )
+    if structured_request_context is not None and not defer_structured_persistence:
+        try:
+            structured_metadata = validate_structured_response(
+                raw_text=content_to_save,
+                structured_request_context=structured_request_context,
+            )
+        except (
+            StructuredGenerationCapabilityError,
+            StructuredGenerationParseError,
+            StructuredGenerationSchemaError,
+        ) as structured_exc:
+            raise build_structured_http_exception(structured_exc) from structured_exc
+
     should_save_response = (
         should_persist
         and final_conversation_id
         and (content_to_save or tool_calls_to_save or function_call_to_save)
     )
-    if should_save_response:
-        asst_name = sanitize_sender_name(
-            character_card_for_context.get("name") if character_card_for_context else None
+    if should_save_response and not defer_structured_persistence:
+        message_payload = _build_assistant_message_payload(
+            character_card_for_context=character_card_for_context,
+            assistant_parent_message_id=assistant_parent_message_id,
+            content=content_to_save,
+            tool_calls=tool_calls_to_save,
+            function_call=function_call_to_save,
         )
-        message_payload: dict[str, Any] = {"role": "assistant", "name": asst_name}
-        if content_to_save is not None:
-            message_payload["content"] = content_to_save
-        if tool_calls_to_save is not None:
-            message_payload["tool_calls"] = tool_calls_to_save
-        if function_call_to_save is not None:
-            message_payload["function_call"] = function_call_to_save
         assistant_message_id = await save_message_fn(
             chat_db,
             final_conversation_id,
             message_payload,
             use_transaction=True,
         )
+    elif should_save_response and defer_structured_persistence:
+        pending_assistant_payload = _build_assistant_message_payload(
+            character_card_for_context=character_card_for_context,
+            assistant_parent_message_id=assistant_parent_message_id,
+            content=content_to_save,
+            tool_calls=tool_calls_to_save,
+            function_call=function_call_to_save,
+        )
 
-    if should_auto_execute_tools() and isinstance(tool_calls_to_save, list) and tool_calls_to_save:
+    if should_run_legacy_tool_autoexec(cleaned_args) and isinstance(tool_calls_to_save, list) and tool_calls_to_save:
         try:
             req_user_id = None
             try:
@@ -3834,13 +4546,16 @@ async def execute_non_stream_call(
             )
 
             if should_persist and final_conversation_id:
-                for tool_message in tool_messages:
-                    await save_message_fn(
-                        chat_db,
-                        final_conversation_id,
-                        tool_message,
-                        use_transaction=True,
-                    )
+                if defer_structured_persistence:
+                    pending_tool_messages = list(tool_messages)
+                else:
+                    for tool_message in tool_messages:
+                        await save_message_fn(
+                            chat_db,
+                            final_conversation_id,
+                            tool_message,
+                            use_transaction=True,
+                        )
 
             if should_auto_continue_tools_once() and tool_messages:
                 tool_auto_continue_meta = {"attempted": True, "succeeded": False}
@@ -3879,26 +4594,53 @@ async def execute_non_stream_call(
                         continuation_content = continuation_response
 
                     if continuation_response is not None:
+                        try:
+                            continuation_structured_metadata = validate_structured_response(
+                                raw_text=continuation_content,
+                                structured_request_context=structured_request_context,
+                            )
+                        except (
+                            StructuredGenerationCapabilityError,
+                            StructuredGenerationParseError,
+                            StructuredGenerationSchemaError,
+                        ) as structured_exc:
+                            raise build_structured_http_exception(structured_exc) from structured_exc
                         llm_response = continuation_response
                         content_to_save = continuation_content
                         tool_calls_to_save = continuation_tool_calls
                         function_call_to_save = continuation_function_call
+                        if continuation_structured_metadata is not None:
+                            structured_metadata = continuation_structured_metadata
 
                         if (
                             should_persist
                             and final_conversation_id
                             and (content_to_save or tool_calls_to_save or function_call_to_save)
                         ):
-                            asst_name = sanitize_sender_name(
-                                character_card_for_context.get("name") if character_card_for_context else None
+                            if pending_assistant_payload is not None:
+                                assistant_message_id = await save_message_fn(
+                                    chat_db,
+                                    final_conversation_id,
+                                    pending_assistant_payload,
+                                    use_transaction=True,
+                                )
+                                pending_assistant_payload = None
+                            if pending_tool_messages:
+                                for tool_message in pending_tool_messages:
+                                    await save_message_fn(
+                                        chat_db,
+                                        final_conversation_id,
+                                        tool_message,
+                                        use_transaction=True,
+                                    )
+                                pending_tool_messages = []
+                            continuation_payload = _build_assistant_message_payload(
+                                character_card_for_context=character_card_for_context,
+                                assistant_parent_message_id=None,
+                                content=content_to_save,
+                                tool_calls=tool_calls_to_save,
+                                function_call=function_call_to_save,
                             )
-                            continuation_payload: dict[str, Any] = {"role": "assistant", "name": asst_name}
-                            if content_to_save is not None:
-                                continuation_payload["content"] = content_to_save
-                            if tool_calls_to_save is not None:
-                                continuation_payload["tool_calls"] = tool_calls_to_save
-                            if function_call_to_save is not None:
-                                continuation_payload["function_call"] = function_call_to_save
                             continuation_message_id = await save_message_fn(
                                 chat_db,
                                 final_conversation_id,
@@ -3908,10 +4650,43 @@ async def execute_non_stream_call(
                             if continuation_message_id:
                                 assistant_message_id = continuation_message_id
                         tool_auto_continue_meta["succeeded"] = True
+                except HTTPException:
+                    raise
                 except _CHAT_NONCRITICAL_EXCEPTIONS as continue_err:
                     logger.warning("Chat tool auto-continue skipped due to error: {}", continue_err)
         except _CHAT_NONCRITICAL_EXCEPTIONS as autoexec_err:
             logger.warning("Chat tool auto-execution skipped due to error: {}", autoexec_err)
+
+    if structured_request_context is not None and structured_metadata is None:
+        try:
+            structured_metadata = validate_structured_response(
+                raw_text=content_to_save,
+                structured_request_context=structured_request_context,
+            )
+        except (
+            StructuredGenerationCapabilityError,
+            StructuredGenerationParseError,
+            StructuredGenerationSchemaError,
+        ) as structured_exc:
+            raise build_structured_http_exception(structured_exc) from structured_exc
+
+    if pending_assistant_payload is not None and should_persist and final_conversation_id:
+        assistant_message_id = await save_message_fn(
+            chat_db,
+            final_conversation_id,
+            pending_assistant_payload,
+            use_transaction=True,
+        )
+        pending_assistant_payload = None
+    if pending_tool_messages and should_persist and final_conversation_id:
+        for tool_message in pending_tool_messages:
+            await save_message_fn(
+                chat_db,
+                final_conversation_id,
+                tool_message,
+                use_transaction=True,
+            )
+        pending_tool_messages = []
 
     if INJECT_ASSISTANT_NAME and isinstance(llm_response, dict):
         try:
@@ -3957,6 +4732,10 @@ async def execute_non_stream_call(
             encoded_payload["tldw_tool_results"] = tool_execution_payload
         if tool_auto_continue_meta is not None:
             encoded_payload["tldw_tool_auto_continue"] = tool_auto_continue_meta
+        if normalized_continuation_metadata is not None:
+            encoded_payload["tldw_continuation"] = normalized_continuation_metadata
+        if structured_metadata is not None:
+            encoded_payload["tldw_structured"] = structured_metadata
 
     # Audit success
     if audit_service and audit_context:

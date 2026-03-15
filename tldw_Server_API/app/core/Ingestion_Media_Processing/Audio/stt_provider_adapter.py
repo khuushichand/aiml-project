@@ -52,6 +52,11 @@ def _parse_transcription_model(model_name: str) -> tuple[str, str, str | None]:
         return _fallback_parse_transcription_model(model_name)
 
 
+def parse_transcription_model(model_name: str) -> tuple[str, str, str | None]:
+    """Public parser hook kept for test monkeypatch/backwards compatibility."""
+    return _parse_transcription_model(model_name)
+
+
 _SUPPORTED_PARAKEET_VARIANTS = {"standard", "onnx", "mlx", "cuda"}
 _STT_PROVIDER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
@@ -893,7 +898,7 @@ class SttProviderRegistry:
                 provider = SttProviderName.EXTERNAL.value
                 return provider, normalized_name, None
 
-            raw_provider, model, variant = _parse_transcription_model(normalized_name)
+            raw_provider, model, variant = parse_transcription_model(normalized_name)
         except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
             # Defensive: treat unknown models as Whisper-family
             raw_provider, model, variant = "whisper", (model_name or "").strip(), None

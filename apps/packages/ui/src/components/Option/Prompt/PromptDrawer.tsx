@@ -4,10 +4,13 @@ import { useTranslation } from "react-i18next"
 import { ChevronDown, ChevronUp, Info, Cloud, Plus, Trash2 } from "lucide-react"
 import type {
   FewShotExample,
+  PromptFormat,
   PromptSyncStatus,
-  PromptSourceSystem
+  PromptSourceSystem,
+  StructuredPromptDefinition
 } from "@/db/dexie/types"
 import { useFormDraft, formatDraftAge } from "@/hooks/useFormDraft"
+import { previewStructuredPromptServer, type StructuredPromptPreviewResponse } from "@/services/prompts-api"
 import {
   estimatePromptTokens,
   getPromptTokenBudgetState
@@ -17,6 +20,13 @@ import {
   tokenizeTemplateVariableHighlights,
   validateTemplateVariableSyntax
 } from "./prompt-template-variable-utils"
+import { StructuredPromptEditor } from "./Structured/StructuredPromptEditor"
+import {
+  convertLegacyPromptToStructuredDefinition,
+  createDefaultStructuredPromptDefinition,
+  renderStructuredPromptLegacySnapshot,
+  stableSerializePromptSnapshot
+} from "./structured-prompt-utils"
 import { VersionHistoryDrawer } from "./Studio/Prompts/VersionHistoryDrawer"
 
 type DrawerFewShotExample = {
@@ -82,7 +92,7 @@ const normalizeFewShotExamplesForForm = (
           ? candidate.output
           : readExampleRecordValue(candidate.outputs, "output")
 
-      return {
+      const normalizedExample: DrawerFewShotExample = {
         input,
         output,
         explanation:
@@ -90,6 +100,7 @@ const normalizeFewShotExamplesForForm = (
             ? candidate.explanation
             : null
       }
+      return normalizedExample
     })
     .filter((example): example is DrawerFewShotExample => {
       if (!example) return false
@@ -130,6 +141,8 @@ const normalizePromptDraftSnapshot = (values: {
   details?: unknown
   system_prompt?: unknown
   user_prompt?: unknown
+  promptFormat?: unknown
+  structuredPromptDefinition?: unknown
   keywords?: unknown
   fewShotExamples?: unknown
 }) => {
@@ -162,6 +175,13 @@ const normalizePromptDraftSnapshot = (values: {
     details: normalizeString(values?.details),
     system_prompt: normalizeString(values?.system_prompt),
     user_prompt: normalizeString(values?.user_prompt),
+    promptFormat: values?.promptFormat === "structured" ? "structured" : "legacy",
+    structuredPromptDefinition:
+      values?.promptFormat === "structured" &&
+      values?.structuredPromptDefinition &&
+      typeof values.structuredPromptDefinition === "object"
+        ? values.structuredPromptDefinition
+        : null,
     keywords,
     fewShotExamples
   }
@@ -178,6 +198,9 @@ interface PromptDrawerProps {
     details?: string
     system_prompt?: string
     user_prompt?: string
+    promptFormat?: PromptFormat
+    promptSchemaVersion?: number | null
+    structuredPromptDefinition?: StructuredPromptDefinition | null
     keywords?: string[]
     // Sync fields
     serverId?: number | null
@@ -223,6 +246,15 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
   const [showUserHelp, setShowUserHelp] = React.useState(false)
   const [versionHistoryOpen, setVersionHistoryOpen] = React.useState(false)
   const [closeConfirmOpen, setCloseConfirmOpen] = React.useState(false)
+  const [promptFormat, setPromptFormat] = React.useState<PromptFormat>("legacy")
+  const [structuredPromptDefinition, setStructuredPromptDefinition] =
+    React.useState<StructuredPromptDefinition>(
+      createDefaultStructuredPromptDefinition()
+    )
+  const [structuredPreviewResult, setStructuredPreviewResult] =
+    React.useState<StructuredPromptPreviewResponse | null>(null)
+  const [structuredPreviewLoading, setStructuredPreviewLoading] =
+    React.useState(false)
   const systemPromptValue = Form.useWatch("system_prompt", form)
   const userPromptValue = Form.useWatch("user_prompt", form)
   const systemTemplateVariables = React.useMemo(
@@ -269,13 +301,47 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
     if (open && initialValues) {
       form.setFieldsValue({
         ...initialValues,
-        fewShotExamples: normalizeFewShotExamplesForForm(initialValues.fewShotExamples)
+        fewShotExamples: normalizeFewShotExamplesForForm(initialValues.fewShotExamples),
+        promptFormat: initialValues.promptFormat || "legacy",
+        promptSchemaVersion:
+          initialValues.promptSchemaVersion ??
+          (initialValues.promptFormat === "structured" ? 1 : null),
+        structuredPromptDefinition:
+          initialValues.structuredPromptDefinition ||
+          createDefaultStructuredPromptDefinition()
       })
+      setPromptFormat(initialValues.promptFormat || "legacy")
+      setStructuredPromptDefinition(
+        initialValues.structuredPromptDefinition ||
+          createDefaultStructuredPromptDefinition()
+      )
+      setStructuredPreviewResult(null)
     }
     if (open && mode === "create") {
       form.resetFields()
+      setPromptFormat(
+        (initialValues?.promptFormat as PromptFormat | undefined) || "legacy"
+      )
+      setStructuredPromptDefinition(
+        initialValues?.structuredPromptDefinition ||
+          createDefaultStructuredPromptDefinition()
+      )
+      setStructuredPreviewResult(null)
     }
   }, [open, initialValues, mode, form])
+
+  React.useEffect(() => {
+    if (!open) return
+    form.setFieldValue("promptFormat", promptFormat)
+    form.setFieldValue(
+      "promptSchemaVersion",
+      promptFormat === "structured" ? 1 : null
+    )
+    form.setFieldValue(
+      "structuredPromptDefinition",
+      promptFormat === "structured" ? structuredPromptDefinition : null
+    )
+  }, [form, open, promptFormat, structuredPromptDefinition])
 
   React.useEffect(() => {
     if (!open) {
@@ -289,21 +355,70 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
     if (!open) return
     const interval = setInterval(() => {
       const values = form.getFieldsValue()
-      const hasContent = values.name || values.system_prompt || values.user_prompt
+      const hasContent =
+        values.name ||
+        values.system_prompt ||
+        values.user_prompt ||
+        (promptFormat === "structured" &&
+          Array.isArray(structuredPromptDefinition?.blocks) &&
+          structuredPromptDefinition.blocks.length > 0)
       if (hasContent) {
         saveDraft(values)
       }
     }, 30000)
     return () => clearInterval(interval)
-  }, [open, form, saveDraft])
+  }, [open, form, promptFormat, saveDraft, structuredPromptDefinition])
 
   const handleFinish = (values: any) => {
     clearDraft()
+    const structuredSnapshot =
+      promptFormat === "structured"
+        ? renderStructuredPromptLegacySnapshot(structuredPromptDefinition)
+        : null
     onSubmit({
       ...values,
+      promptFormat,
+      promptSchemaVersion: promptFormat === "structured" ? 1 : null,
+      structuredPromptDefinition:
+        promptFormat === "structured" ? structuredPromptDefinition : null,
+      system_prompt:
+        structuredSnapshot?.systemPrompt ?? values?.system_prompt,
+      user_prompt: structuredSnapshot?.userPrompt ?? values?.user_prompt,
       fewShotExamples: mapFewShotExamplesForSubmit(values?.fewShotExamples)
     })
   }
+
+  const handleConvertToStructured = React.useCallback(() => {
+    const currentValues = form.getFieldsValue(true)
+    setPromptFormat("structured")
+    setStructuredPromptDefinition(
+      convertLegacyPromptToStructuredDefinition(
+        currentValues?.system_prompt,
+        currentValues?.user_prompt
+      )
+    )
+    setStructuredPreviewResult(null)
+  }, [form])
+
+  const handleStructuredPreview = React.useCallback(
+    async (variables: Record<string, string>) => {
+      try {
+        setStructuredPreviewLoading(true)
+        const result = await previewStructuredPromptServer({
+          prompt_format: "structured",
+          prompt_schema_version: 1,
+          prompt_definition: structuredPromptDefinition,
+          variables
+        })
+        setStructuredPreviewResult(result)
+      } catch {
+        setStructuredPreviewResult(null)
+      } finally {
+        setStructuredPreviewLoading(false)
+      }
+    },
+    [structuredPromptDefinition]
+  )
 
   const closeWithoutSaving = React.useCallback(() => {
     clearDraft()
@@ -317,7 +432,8 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
     )
     const hasDirtyValues =
       form.isFieldsTouched(true) ||
-      JSON.stringify(currentSnapshot) !== JSON.stringify(initialSnapshot)
+      stableSerializePromptSnapshot(currentSnapshot) !==
+        stableSerializePromptSnapshot(initialSnapshot)
 
     if (hasDirtyValues) {
       setCloseConfirmOpen(true)
@@ -824,10 +940,28 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
 
         {/* Section: Prompt Content */}
         <div className="mb-6">
-          <h3 className="text-sm font-medium text-text-muted mb-3">
-            {t("managePrompts.drawer.sectionContent", { defaultValue: "Prompt Content" })}
-          </h3>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-medium text-text-muted">
+              {t("managePrompts.drawer.sectionContent", { defaultValue: "Prompt Content" })}
+            </h3>
+            {promptFormat === "legacy" && (
+              <Button
+                type="default"
+                onClick={handleConvertToStructured}
+              >
+                Convert to structured
+              </Button>
+            )}
+          </div>
           <div className="space-y-4">
+            {promptFormat === "structured" && (
+              <Alert
+                type="info"
+                showIcon
+                title="Structured prompt"
+                description="Raw text fields are now locked for compatibility. Edit the block builder below; save and preview use the structured definition."
+              />
+            )}
             <Form.Item
               name="system_prompt"
               rules={[
@@ -877,6 +1011,7 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
                 })}
                 autoSize={{ minRows: 3, maxRows: 10 }}
                 data-testid="prompt-drawer-system"
+                disabled={promptFormat === "structured"}
               />
             </Form.Item>
 
@@ -953,6 +1088,7 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
                 })}
                 autoSize={{ minRows: 3, maxRows: 10 }}
                 data-testid="prompt-drawer-user"
+                disabled={promptFormat === "structured"}
               />
             </Form.Item>
 
@@ -978,6 +1114,16 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
                   {`Please review the following code and provide:\n1. A brief summary\n2. Potential issues\n3. Suggestions for improvement\n\nCode:\n{paste your code here}`}
                 </pre>
               </div>
+            )}
+
+            {promptFormat === "structured" && (
+              <StructuredPromptEditor
+                value={structuredPromptDefinition}
+                onChange={setStructuredPromptDefinition}
+                previewResult={structuredPreviewResult}
+                previewLoading={structuredPreviewLoading}
+                onPreview={handleStructuredPreview}
+              />
             )}
           </div>
         </div>

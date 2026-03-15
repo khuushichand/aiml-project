@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useRef } from "react"
+import React, { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Button } from "antd"
-import { FileText, AlertCircle } from "lucide-react"
+import { Button, Spin } from "antd"
+import { FileText, AlertCircle, Highlighter, MessageSquare, Lightbulb, HelpCircle, X } from "lucide-react"
 import type { PdfDocumentProxy } from "@/hooks/document-workspace/usePdfSearch"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { ViewerToolbar } from "./ViewerToolbar"
@@ -12,6 +12,7 @@ import type { DocumentType } from "../types"
 
 interface DocumentViewerProps {
   className?: string
+  loadingDocumentId?: number | null
   onOpenLibrary?: () => void
   onOpenUpload?: () => void
   onReloadDocument?: (mediaId: number, docTypeHint?: DocumentType | null) => Promise<void> | void
@@ -34,6 +35,7 @@ const shouldRetryBlobLoad = (error: Error, url?: string): boolean => {
 
 export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   className,
+  loadingDocumentId,
   onOpenLibrary,
   onOpenUpload,
   onReloadDocument
@@ -62,6 +64,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const setSearchOpen = useDocumentWorkspaceStore((s) => s.setSearchOpen)
   const searchOpen = useDocumentWorkspaceStore((s) => s.searchOpen)
   const currentPercentage = useDocumentWorkspaceStore((s) => s.currentPercentage)
+  const currentChapterTitle = useDocumentWorkspaceStore((s) => s.currentChapterTitle)
 
   const activeDocument = openDocuments.find((d) => d.id === activeDocumentId)
 
@@ -70,19 +73,65 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!activeDocumentId) return
 
+      const mod = e.metaKey || e.ctrlKey
+
       // Cmd/Ctrl+F to open search (always handle, even in inputs)
-      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+      if (mod && e.key === "f") {
         e.preventDefault()
         setSearchOpen(true)
         return
       }
 
-      // Don't handle navigation if focus is in an input (but search already handled above)
+      // Cmd+G → focus page input for "go to page"
+      if (mod && (e.key === "g" || e.key === "G")) {
+        e.preventDefault()
+        const pageInput = document.querySelector<HTMLInputElement>(
+          '[data-testid="document-page-input"] input, [data-testid="document-page-input"]'
+        )
+        if (pageInput) {
+          pageInput.focus()
+          pageInput.select()
+        }
+        return
+      }
+
+      // Zoom shortcuts (work even in inputs)
+      if (mod && (e.key === "=" || e.key === "+")) {
+        e.preventDefault()
+        setZoomLevel(Math.min(zoomLevel + 25, 400))
+        return
+      }
+      if (mod && e.key === "-") {
+        e.preventDefault()
+        setZoomLevel(Math.max(zoomLevel - 25, 25))
+        return
+      }
+      if (mod && e.key === "0") {
+        e.preventDefault()
+        setZoomLevel(100)
+        return
+      }
+
+      // Don't handle navigation if focus is in an input
       if (
         document.activeElement?.tagName === "INPUT" ||
         document.activeElement?.tagName === "TEXTAREA"
       ) {
         return
+      }
+
+      // F → toggle fullscreen on the viewer
+      if (e.key === "f" || e.key === "F") {
+        if (!e.shiftKey && !mod) {
+          e.preventDefault()
+          if (document.fullscreenElement) {
+            document.exitFullscreen()
+          } else {
+            const viewer = document.querySelector('[data-testid="document-viewer"]')
+            viewer?.requestFullscreen?.()
+          }
+          return
+        }
       }
 
       switch (e.key) {
@@ -114,10 +163,12 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   }, [
     activeDocumentId,
     totalPages,
+    zoomLevel,
     goToNextPage,
     goToPreviousPage,
     setCurrentPage,
-    setSearchOpen
+    setSearchOpen,
+    setZoomLevel
   ])
 
   const handleLoadSuccess = useCallback(
@@ -162,7 +213,41 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     [activeDocument, activeDocumentId, activeDocumentType, onReloadDocument]
   )
 
+  // Onboarding cards - dismissed via localStorage
+  const ONBOARDING_KEY = "document-workspace-onboarding-dismissed"
+  const [onboardingDismissed, setOnboardingDismissed] = useState(() => {
+    try { return localStorage.getItem(ONBOARDING_KEY) === "true" } catch { return false }
+  })
+
+  const dismissOnboarding = useCallback(() => {
+    setOnboardingDismissed(true)
+    try { localStorage.setItem(ONBOARDING_KEY, "true") } catch { /* noop */ }
+  }, [])
+
   if (!activeDocumentId || !activeDocument) {
+    const featureCards = [
+      {
+        icon: <Highlighter className="h-5 w-5 text-yellow-500" />,
+        title: t("option:documentWorkspace.featureHighlight", "Highlight & Annotate"),
+        description: t("option:documentWorkspace.featureHighlightDesc", "Select text to highlight in multiple colors and add notes.")
+      },
+      {
+        icon: <MessageSquare className="h-5 w-5 text-blue-500" />,
+        title: t("option:documentWorkspace.featureChat", "Chat with Documents"),
+        description: t("option:documentWorkspace.featureChatDesc", "Ask AI questions about your document with RAG-powered answers.")
+      },
+      {
+        icon: <Lightbulb className="h-5 w-5 text-amber-500" />,
+        title: t("option:documentWorkspace.featureInsights", "AI Insights"),
+        description: t("option:documentWorkspace.featureInsightsDesc", "Get AI-generated summaries, key findings, and analysis.")
+      },
+      {
+        icon: <HelpCircle className="h-5 w-5 text-green-500" />,
+        title: t("option:documentWorkspace.featureQuiz", "Quiz Yourself"),
+        description: t("option:documentWorkspace.featureQuizDesc", "Generate quizzes from document content to test your understanding.")
+      }
+    ]
+
     return (
       <div
         className={`flex h-full flex-col items-center justify-center gap-4 p-8 text-center ${className || ""}`}
@@ -191,6 +276,38 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                 {t("option:documentWorkspace.openDocument", "Open document")}
               </Button>
             )}
+          </div>
+        )}
+
+        {/* Feature discovery cards */}
+        {!onboardingDismissed && (
+          <div className="mt-4 w-full max-w-xl">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-text-muted">
+                {t("option:documentWorkspace.whatYouCanDo", "What you can do")}
+              </span>
+              <button
+                onClick={dismissOnboarding}
+                className="rounded p-1 text-text-muted hover:text-text hover:bg-hover"
+                aria-label={t("common:dismiss", "Dismiss")}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {featureCards.map((card) => (
+                <div
+                  key={card.title}
+                  className="flex items-start gap-3 rounded-lg border border-border bg-surface p-3 text-left"
+                >
+                  <div className="mt-0.5 shrink-0">{card.icon}</div>
+                  <div>
+                    <p className="text-sm font-medium">{card.title}</p>
+                    <p className="mt-0.5 text-xs text-text-muted">{card.description}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -235,7 +352,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   }
 
   return (
-    <div className={`flex h-full min-h-0 flex-col ${className || ""}`}>
+    <div data-testid="document-viewer" className={`flex h-full min-h-0 flex-col ${className || ""}`}>
       <ViewerToolbar
         currentPage={currentPage}
         totalPages={totalPages}
@@ -243,6 +360,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         viewMode={viewMode}
         documentType={activeDocumentType}
         percentage={currentPercentage}
+        chapterTitle={currentChapterTitle}
         onPageChange={setCurrentPage}
         onZoomChange={setZoomLevel}
         onViewModeChange={setViewMode}
@@ -250,6 +368,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         onNextPage={goToNextPage}
       />
       <div className="relative min-h-0 flex-1 overflow-hidden bg-surface2">
+        {loadingDocumentId !== null && loadingDocumentId !== undefined && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-surface2/80 backdrop-blur-sm">
+            <Spin size="large" />
+            <p className="text-sm text-text-muted">
+              {t("option:documentWorkspace.loadingDocument", "Loading document...")}
+            </p>
+          </div>
+        )}
         {activeDocumentType === "pdf" && (
           <PdfSearch pdfDocumentRef={pdfDocumentRef} />
         )}

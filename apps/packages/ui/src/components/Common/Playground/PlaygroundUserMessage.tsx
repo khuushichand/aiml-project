@@ -164,7 +164,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
       data-index={props.currentMessageIndex}
       data-message-id={props.messageId}
       data-server-message-id={props.serverMessageId}
-      className={`group gap-2 relative flex w-full max-w-3xl flex-col items-end justify-center pb-2 md:px-4 text-text ${checkWideMode ? "max-w-none" : ""}`}>
+      className={`group gap-2 relative flex w-full max-w-5xl flex-col items-end justify-center pb-2 md:px-4 text-text ${checkWideMode ? "max-w-none" : ""}`}>
       <div className="flex w-full flex-wrap items-center justify-end gap-2">
         <div className="flex flex-wrap items-center gap-2">
           {isSystemMessage ? (
@@ -232,7 +232,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
         <div
           dir="auto"
           data-is-not-editable={!editMode}
-          className={`message-bubble ${bubbleToneClass} shadow-sm rounded-3xl prose dark:prose-invert break-words min-h-7 prose-p:opacity-95 prose-strong:opacity-100 border max-w-[100%] sm:max-w-[90%] px-4 py-3 rounded-br-lg ${userTextClass} ${
+          className={`message-bubble ${bubbleToneClass} shadow-sm rounded-3xl prose max-w-none dark:prose-invert break-words min-h-7 prose-p:opacity-95 prose-strong:opacity-100 border max-w-[calc(100%-1.75rem)] px-4 py-3 rounded-br-lg ${userTextClass} ${
             props.message_type && !editMode ? "italic" : ""
           }`}>
           <HumanMessage message={props.message} />
@@ -242,7 +242,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
       {editMode && (
         <div
           dir="auto"
-          className={`message-bubble ${bubbleToneClass} shadow-sm rounded-3xl prose dark:prose-invert break-words min-h-7 prose-p:opacity-95 prose-strong:opacity-100 border max-w-[100%] sm:max-w-[90%] px-4 py-3 rounded-br-lg ${userTextClass} ${
+          className={`message-bubble ${bubbleToneClass} shadow-sm rounded-3xl prose max-w-none dark:prose-invert break-words min-h-7 prose-p:opacity-95 prose-strong:opacity-100 border max-w-[calc(100%-1.75rem)] px-4 py-3 rounded-br-lg ${userTextClass} ${
             props.message_type && !editMode ? "italic" : ""
           }`}>
           <div className="w-screen max-w-[100%]">

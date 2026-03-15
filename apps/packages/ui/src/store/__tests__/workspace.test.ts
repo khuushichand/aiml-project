@@ -37,6 +37,10 @@ const resetWorkspaceStore = () => {
     workspaceChatReferenceId: "",
     sources: [],
     selectedSourceIds: [],
+    sourceFolders: [],
+    sourceFolderMemberships: [],
+    selectedSourceFolderIds: [],
+    activeFolderId: null,
     sourceSearchQuery: "",
     sourceFocusTarget: null,
     sourcesLoading: false,
@@ -63,6 +67,7 @@ const resetWorkspaceStore = () => {
     audioSettings: { ...DEFAULT_AUDIO_SETTINGS },
     savedWorkspaces: [],
     archivedWorkspaces: [],
+    workspaceCollections: [],
     workspaceSnapshots: {},
     workspaceChatSessions: {}
   })
@@ -211,15 +216,97 @@ describe("workspace store snapshot persistence", () => {
   it("creates workspaces with empty workspaceBanner defaults", () => {
     useWorkspaceStore.getState().initializeWorkspace("Banner Test")
     const state = useWorkspaceStore.getState()
-    const snapshot = state.workspaceSnapshots[state.workspaceId] as
-      | Record<string, unknown>
-      | undefined
+    const snapshot = state.workspaceSnapshots[state.workspaceId]
 
     expect(snapshot?.workspaceBanner).toEqual({
       title: "",
       subtitle: "",
       image: null
     })
+  })
+
+  it("initializes empty organization defaults for source folders and collections", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Organized Workspace")
+    const state = useWorkspaceStore.getState() as typeof useWorkspaceStore extends {
+      getState: () => infer T
+    }
+      ? T & {
+          sourceFolders?: unknown[]
+          sourceFolderMemberships?: unknown[]
+          selectedSourceFolderIds?: unknown[]
+          activeFolderId?: string | null
+          workspaceCollections?: unknown[]
+        }
+      : never
+
+    expect(state.sourceFolders).toEqual([])
+    expect(state.sourceFolderMemberships).toEqual([])
+    expect(state.selectedSourceFolderIds).toEqual([])
+    expect(state.activeFolderId).toBeNull()
+    expect(state.workspaceCollections).toEqual([])
+    expect((state.savedWorkspaces[0] as { collectionId?: string | null } | undefined)?.collectionId ?? null).toBeNull()
+  })
+
+  it("retains saved workspace metadata beyond ten workspaces", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Workspace 1")
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    for (let index = 2; index <= 12; index += 1) {
+      useWorkspaceStore.getState().createNewWorkspace(`Workspace ${index}`)
+      useWorkspaceStore.getState().saveCurrentWorkspace()
+    }
+
+    expect(useWorkspaceStore.getState().savedWorkspaces).toHaveLength(12)
+    expect(
+      useWorkspaceStore
+        .getState()
+        .savedWorkspaces.map((workspace) => workspace.name)
+    ).toContain("Workspace 1")
+  })
+
+  it("creates collections, assigns workspaces, and unassigns members on delete", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Alpha")
+    const alphaId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    useWorkspaceStore.getState().createNewWorkspace("Beta")
+    const betaId = useWorkspaceStore.getState().workspaceId
+    useWorkspaceStore.getState().saveCurrentWorkspace()
+
+    const collection = useWorkspaceStore
+      .getState()
+      .createWorkspaceCollection("Topic A")
+
+    useWorkspaceStore
+      .getState()
+      .assignWorkspaceToCollection(alphaId, collection.id)
+    useWorkspaceStore
+      .getState()
+      .assignWorkspaceToCollection(betaId, collection.id)
+
+    let state = useWorkspaceStore.getState()
+    expect(state.workspaceCollections).toHaveLength(1)
+    expect(
+      state.savedWorkspaces.find((workspace) => workspace.id === alphaId)?.collectionId
+    ).toBe(collection.id)
+    expect(
+      state.savedWorkspaces.find((workspace) => workspace.id === betaId)?.collectionId
+    ).toBe(collection.id)
+
+    useWorkspaceStore
+      .getState()
+      .deleteWorkspaceCollection(collection.id)
+
+    state = useWorkspaceStore.getState()
+    expect(state.workspaceCollections).toEqual([])
+    expect(
+      state.savedWorkspaces.find((workspace) => workspace.id === alphaId)?.collectionId ??
+        null
+    ).toBeNull()
+    expect(
+      state.savedWorkspaces.find((workspace) => workspace.id === betaId)?.collectionId ??
+        null
+    ).toBeNull()
   })
 
   it("preserves workspaceBanner when switching workspaces", () => {
@@ -1412,6 +1499,82 @@ describe("workspace store snapshot persistence", () => {
     expect(state.selectedSourceIds).toEqual([readySource.id])
   })
 
+  it("creates, renames, moves, and deletes source folders safely", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Folders Workspace")
+
+    const root = useWorkspaceStore.getState().createSourceFolder("Root")
+    const child = useWorkspaceStore
+      .getState()
+      .createSourceFolder("Child", root.id)
+    const grandchild = useWorkspaceStore
+      .getState()
+      .createSourceFolder("Grandchild", child.id)
+
+    useWorkspaceStore.getState().renameSourceFolder(child.id, "Evidence")
+    useWorkspaceStore.getState().moveSourceFolder(child.id, null)
+    useWorkspaceStore.getState().moveSourceFolder(child.id, root.id)
+    useWorkspaceStore.getState().setActiveFolder(root.id)
+    useWorkspaceStore.getState().toggleSourceFolderSelection(root.id)
+    useWorkspaceStore.getState().deleteSourceFolder(root.id)
+
+    const state = useWorkspaceStore.getState()
+    expect(state.sourceFolders.find((folder) => folder.id === child.id)?.name).toBe(
+      "Evidence"
+    )
+    expect(
+      state.sourceFolders.find((folder) => folder.id === child.id)?.parentFolderId
+    ).toBeNull()
+    expect(
+      state.sourceFolders.find((folder) => folder.id === grandchild.id)?.parentFolderId
+    ).toBe(child.id)
+    expect(state.selectedSourceFolderIds).toEqual([])
+    expect(state.activeFolderId).toBeNull()
+  })
+
+  it("deduplicates folder memberships, rejects cycles, and derives effective source selection", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Folders Selection")
+
+    const root = useWorkspaceStore.getState().createSourceFolder("Root")
+    const child = useWorkspaceStore
+      .getState()
+      .createSourceFolder("Child", root.id)
+    const alpha = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 4101, title: "Alpha", type: "pdf", status: "ready" })
+    const beta = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 4102, title: "Beta", type: "pdf", status: "ready" })
+    const gamma = useWorkspaceStore
+      .getState()
+      .addSource({
+        mediaId: 4103,
+        title: "Gamma",
+        type: "pdf",
+        status: "processing"
+      })
+
+    useWorkspaceStore
+      .getState()
+      .assignSourceToFolders(alpha.id, [root.id, root.id])
+    useWorkspaceStore.getState().assignSourceToFolders(beta.id, [child.id])
+    useWorkspaceStore.getState().toggleSourceFolderSelection(root.id)
+    useWorkspaceStore.getState().setSelectedSourceIds([beta.id, gamma.id])
+
+    expect(() =>
+      useWorkspaceStore.getState().moveSourceFolder(root.id, child.id)
+    ).toThrow()
+
+    const state = useWorkspaceStore.getState()
+    expect(state.sourceFolderMemberships).toHaveLength(2)
+    expect(
+      state.getEffectiveSelectedSources().map((source) => source.id)
+    ).toEqual([alpha.id, beta.id])
+    expect(state.getEffectiveSelectedMediaIds().sort((a, b) => a - b)).toEqual([
+      4101,
+      4102
+    ])
+  })
+
   it("reorders sources and restores that order after rehydration", async () => {
     useWorkspaceStore.getState().initializeWorkspace("Reorder Workspace")
 
@@ -1515,6 +1678,12 @@ describe("workspace store snapshot persistence", () => {
       .getState()
       .addSource({ mediaId: 9301, title: "Export source", type: "pdf" })
     useWorkspaceStore.getState().setSelectedSourceIds([source.id])
+    const folder = useWorkspaceStore.getState().createSourceFolder("Evidence")
+    useWorkspaceStore
+      .getState()
+      .assignSourceToFolders(source.id, [folder.id])
+    useWorkspaceStore.getState().toggleSourceFolderSelection(folder.id)
+    useWorkspaceStore.getState().setActiveFolder(folder.id)
 
     const baseArtifact = useWorkspaceStore
       .getState()
@@ -1587,6 +1756,15 @@ describe("workspace store snapshot persistence", () => {
       .exportWorkspaceBundle(originalWorkspaceId)
     expect(bundle).not.toBeNull()
     expect(bundle?.workspace.snapshot.sources[0]?.title).toBe("Export source")
+    expect(bundle?.workspace.snapshot.sourceFolders[0]?.name).toBe("Evidence")
+    expect(bundle?.workspace.snapshot.sourceFolderMemberships).toEqual([
+      {
+        folderId: folder.id,
+        sourceId: source.id
+      }
+    ])
+    expect(bundle?.workspace.snapshot.selectedSourceFolderIds).toEqual([folder.id])
+    expect(bundle?.workspace.snapshot.activeFolderId).toBe(folder.id)
     expect(bundle?.workspace.chatSession?.historyId).toBe("history-export")
     expect(bundle?.workspace.snapshot.generatedArtifacts[0]?.previousVersionId).toBe(
       baseArtifact.id
@@ -1611,6 +1789,17 @@ describe("workspace store snapshot persistence", () => {
     expect(importedState.sources).toHaveLength(1)
     expect(importedState.sources[0]?.title).toBe("Export source")
     expect(importedState.selectedSourceIds).toEqual([source.id])
+    expect(importedState.sourceFolders).toHaveLength(1)
+    expect(importedState.sourceFolders[0]?.name).toBe("Evidence")
+    expect(importedState.sourceFolders[0]?.workspaceId).toBe(importedWorkspaceId)
+    expect(importedState.sourceFolderMemberships).toEqual([
+      {
+        folderId: folder.id,
+        sourceId: source.id
+      }
+    ])
+    expect(importedState.selectedSourceFolderIds).toEqual([folder.id])
+    expect(importedState.activeFolderId).toBe(folder.id)
     expect(importedState.generatedArtifacts).toHaveLength(2)
     expect(importedState.generatedArtifacts[0]?.previousVersionId).toBe(
       baseArtifact.id
@@ -1631,6 +1820,41 @@ describe("workspace store snapshot persistence", () => {
       .getWorkspaceChatSession(importedWorkspaceId as string)
     expect(importedSession?.historyId).toBe("history-export")
     expect(importedSession?.messages[0]?.message).toBe("Export this workspace")
+  })
+
+  it("imports workspace bundles as unassigned even when bundle metadata includes a collection id", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Collection Source")
+    const originalWorkspaceId = useWorkspaceStore.getState().workspaceId
+    const collection = useWorkspaceStore
+      .getState()
+      .createWorkspaceCollection("Topic A")
+
+    useWorkspaceStore
+      .getState()
+      .assignWorkspaceToCollection(originalWorkspaceId, collection.id)
+
+    const bundle = useWorkspaceStore
+      .getState()
+      .exportWorkspaceBundle(originalWorkspaceId)
+
+    expect(bundle).not.toBeNull()
+    if (!bundle) {
+      throw new Error("Expected workspace export bundle")
+    }
+
+    bundle.workspace.collectionId = collection.id
+
+    const importedWorkspaceId = useWorkspaceStore
+      .getState()
+      .importWorkspaceBundle(bundle)
+
+    expect(importedWorkspaceId).toBeTruthy()
+
+    const importedSavedWorkspace = useWorkspaceStore
+      .getState()
+      .savedWorkspaces.find((workspace) => workspace.id === importedWorkspaceId)
+
+    expect(importedSavedWorkspace?.collectionId ?? null).toBeNull()
   })
 
   it("clears invalid imported workspaceBanner image payload while preserving text", () => {

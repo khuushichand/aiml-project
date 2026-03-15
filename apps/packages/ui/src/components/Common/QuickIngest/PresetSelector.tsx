@@ -1,7 +1,7 @@
 import React from "react"
-import { Select, Space, Typography } from "antd"
-import type { IngestPreset } from "./types"
-import { PRESET_META, PRESET_ORDER, DEFAULT_PRESET } from "./presets"
+import type { IngestPreset, WizardQueueItem } from "./types"
+import { PRESET_META, DEFAULT_PRESET } from "./presets"
+import { estimateTotalSeconds, formatEstimate } from "./timeEstimation"
 
 type PresetSelectorProps = {
   /**
@@ -24,15 +24,94 @@ type PresetSelectorProps = {
    * Whether the selector is disabled.
    */
   disabled?: boolean
+  /**
+   * Queue items for time estimation.
+   */
+  queueItems?: WizardQueueItem[]
 }
 
-type PresetOption = {
-  value: IngestPreset
-  label: React.ReactNode
-  searchLabel: string
-  description: string
-  icon: React.ReactNode
-  isRecommended: boolean
+/**
+ * Card presets displayed in order. "custom" is not a card.
+ */
+const CARD_PRESETS: Exclude<IngestPreset, "custom">[] = ["quick", "standard", "deep"]
+
+/**
+ * Plain-language descriptions used as fallback when i18n key is empty.
+ */
+const CARD_DESCRIPTIONS: Record<Exclude<IngestPreset, "custom">, string> = {
+  quick: "Basic transcript only",
+  standard: "Transcript + analysis + chunking",
+  deep: "Full analysis + diarization",
+}
+
+const PresetCard: React.FC<{
+  preset: Exclude<IngestPreset, "custom">
+  selected: boolean
+  disabled: boolean
+  timeEstimate: string
+  qi: PresetSelectorProps["qi"]
+  onClick: () => void
+}> = ({ preset, selected, disabled, timeEstimate, qi, onClick }) => {
+  const meta = PRESET_META[preset]
+  const isRecommended = preset === DEFAULT_PRESET
+
+  const label = qi(
+    meta.labelKey,
+    preset.charAt(0).toUpperCase() + preset.slice(1)
+  )
+  const description = qi(meta.descriptionKey, CARD_DESCRIPTIONS[preset])
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={selected}
+      aria-label={`${label} preset${isRecommended ? " (Recommended)" : ""}`}
+      className={[
+        "relative flex flex-col items-center gap-2 rounded-lg border-2 px-4 py-4 text-center",
+        "transition-colors duration-150 cursor-pointer",
+        "min-w-[140px] flex-1",
+        selected
+          ? "border-primary bg-primary/5 ring-2 ring-primary/30"
+          : "border-border-default bg-bg-surface hover:border-primary/50",
+        disabled ? "opacity-50 cursor-not-allowed" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      {/* Icon */}
+      <span className="text-2xl" aria-hidden="true">
+        {meta.icon}
+      </span>
+
+      {/* Label */}
+      <span className="text-sm font-semibold text-text-default">{label}</span>
+
+      {/* Recommended badge */}
+      {isRecommended && (
+        <span className="absolute -top-2.5 right-2 rounded-full bg-primary px-2 py-0.5 text-[10px] font-medium text-white">
+          {qi("preset.recommended", "Recommended")}
+        </span>
+      )}
+
+      {/* Selected indicator */}
+      {selected && (
+        <span
+          className="absolute top-2 left-2 h-2.5 w-2.5 rounded-full bg-primary"
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Description */}
+      <span className="text-xs leading-snug text-text-muted">{description}</span>
+
+      {/* Time estimate */}
+      <span className="mt-auto pt-1 text-xs font-medium text-text-subtle">
+        {timeEstimate}
+      </span>
+    </button>
+  )
 }
 
 export const PresetSelector: React.FC<PresetSelectorProps> = ({
@@ -40,113 +119,63 @@ export const PresetSelector: React.FC<PresetSelectorProps> = ({
   value,
   onChange,
   onReset,
-  disabled = false
+  disabled = false,
+  queueItems,
 }) => {
-  const recommendedLabel = React.useMemo(
-    () => qi("preset.recommended", "(Recommended)"),
-    [qi]
-  )
-
-  const handleChange = React.useCallback(
-    (newValue: IngestPreset) => {
-      onChange(newValue)
-    },
-    [onChange]
-  )
-
-  const handleReset = React.useCallback(() => {
-    onReset?.()
-  }, [onReset])
-
-  const options = React.useMemo<PresetOption[]>(() => {
-    return PRESET_ORDER.map((presetKey) => {
-      const meta = PRESET_META[presetKey]
-      const label = qi(
-        meta.labelKey,
-        presetKey.charAt(0).toUpperCase() + presetKey.slice(1)
-      )
-      const description = qi(meta.descriptionKey, "")
-      const isRecommended = presetKey === DEFAULT_PRESET
-
-      return {
-        value: presetKey,
-        label: (
-          <div className="flex items-center gap-2">
-            <span aria-hidden="true">{meta.icon}</span>
-            <span>
-              {label}
-              {isRecommended && (
-                <span className="ml-1 text-xs text-text-muted">
-                  {recommendedLabel}
-                </span>
-              )}
-            </span>
-          </div>
-        ),
-        // For search filtering
-        searchLabel: label,
-        description,
-        icon: meta.icon,
-        isRecommended
+  const handleCardClick = React.useCallback(
+    (preset: Exclude<IngestPreset, "custom">) => {
+      if (!disabled) {
+        onChange(preset)
       }
-    })
-  }, [qi, recommendedLabel])
+    },
+    [onChange, disabled]
+  )
+
+  const timeEstimates = React.useMemo(() => {
+    const items = queueItems ?? []
+    return Object.fromEntries(
+      CARD_PRESETS.map((preset) => {
+        const totalSeconds = estimateTotalSeconds(items, preset)
+        return [preset, items.length > 0 ? formatEstimate(totalSeconds) : qi("preset.noItems", "Add items")]
+      })
+    ) as Record<Exclude<IngestPreset, "custom">, string>
+  }, [queueItems, qi])
 
   return (
-    <div className="flex items-center gap-3">
-      <Space align="center" size="small">
-        <Typography.Text className="text-sm">
-          {qi("preset.label", "Preset")}:
-        </Typography.Text>
-        <Select<IngestPreset>
-          value={value}
-          onChange={handleChange}
-          disabled={disabled}
-          className="min-w-48"
-          popupMatchSelectWidth={false}
-          aria-label={qi("preset.ariaLabel", "Select processing preset")}
-          optionLabelProp="label"
-          options={options}
-          optionRender={(option) => {
-            const data = option.data as PresetOption | undefined
-            if (!data) return option.label as React.ReactNode
-            const label = data.searchLabel
-            const description = data.description
-            const isRecommended = data.isRecommended
+    <div className="flex flex-col gap-3">
+      {/* Card grid */}
+      <div className="grid grid-cols-3 gap-3">
+        {CARD_PRESETS.map((preset) => (
+          <PresetCard
+            key={preset}
+            preset={preset}
+            selected={value === preset}
+            disabled={disabled}
+            timeEstimate={timeEstimates[preset]}
+            qi={qi}
+            onClick={() => handleCardClick(preset)}
+          />
+        ))}
+      </div>
 
-            return (
-              <div className="py-1">
-                <div className="flex items-center gap-2">
-                  <span aria-hidden="true" className="text-base">
-                    {data.icon}
-                  </span>
-                  <span className="font-medium">
-                    {label}
-                    {isRecommended && (
-                      <span className="ml-1 text-xs font-normal text-text-muted">
-                        {recommendedLabel}
-                      </span>
-                    )}
-                  </span>
-                </div>
-                {description && (
-                  <div className="ml-6 text-xs text-text-muted">{description}</div>
-                )}
-              </div>
-            )
-          }}
-        />
-      </Space>
-      {value !== "custom" && onReset && (
-        <button
-          type="button"
-          onClick={handleReset}
-          disabled={disabled}
-          className="text-xs text-primary hover:text-primaryStrong underline underline-offset-2 disabled:opacity-50"
-        >
-          {qi("preset.reset", "Reset to defaults")}
-        </button>
-      )}
+      {/* Custom preset info line + reset */}
+      <div className="flex items-center justify-between">
+        {value === "custom" && (
+          <span className="text-xs text-text-muted">
+            {qi("preset.custom.active", "Using custom settings (no preset match)")}
+          </span>
+        )}
+        {value !== "custom" && onReset && (
+          <button
+            type="button"
+            onClick={onReset}
+            disabled={disabled}
+            className="text-xs text-primary hover:text-primaryStrong underline underline-offset-2 disabled:opacity-50"
+          >
+            {qi("preset.reset", "Reset to defaults")}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

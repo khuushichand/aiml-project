@@ -1,3 +1,4 @@
+import React from "react"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { FlashcardsManager } from "../FlashcardsManager"
@@ -54,7 +55,41 @@ vi.mock("../tabs", () => ({
       <span data-testid="mock-open-create-signal">{String(props.openCreateSignal ?? 0)}</span>
     </div>
   ),
-  ImportExportTab: () => <div data-testid="mock-transfer-tab">Transfer panel</div>
+  ImportExportTab: () => <div data-testid="mock-transfer-tab">Transfer panel</div>,
+  SchedulerTab: (props: {
+    onDirtyChange?: (dirty: boolean) => void
+    discardSignal?: number
+  }) => {
+    const [draftState, setDraftState] = React.useState("clean")
+
+    React.useEffect(() => {
+      setDraftState("clean")
+      props.onDirtyChange?.(false)
+    }, [props.discardSignal, props.onDirtyChange])
+
+    return (
+      <div data-testid="mock-scheduler-tab">
+        Scheduler panel
+        <span data-testid="mock-scheduler-draft-state">{draftState}</span>
+        <button
+          onClick={() => {
+            setDraftState("dirty")
+            props.onDirtyChange?.(true)
+          }}
+        >
+          Mark Scheduler Dirty
+        </button>
+        <button
+          onClick={() => {
+            setDraftState("clean")
+            props.onDirtyChange?.(false)
+          }}
+        >
+          Mark Scheduler Clean
+        </button>
+      </div>
+    )
+  }
 }))
 
 vi.mock("../components", () => ({
@@ -101,13 +136,14 @@ describe("FlashcardsManager consistency standards", () => {
     expect(screen.getByTestId("mock-transfer-tab")).toBeInTheDocument()
   })
 
-  it("uses Study/Manage/Transfer tab labels", () => {
+  it("uses Study/Manage/Transfer/Scheduler tab labels", () => {
     window.history.replaceState({}, "", "/flashcards")
     render(<FlashcardsManager />)
 
     expect(screen.getByText("Study")).toBeInTheDocument()
     expect(screen.getByText("Manage")).toBeInTheDocument()
     expect(screen.getByText("Transfer")).toBeInTheDocument()
+    expect(screen.getByText("Scheduler")).toBeInTheDocument()
   })
 
   it("routes secondary create CTA to the Manage tab create entry point", () => {
@@ -130,5 +166,31 @@ describe("FlashcardsManager consistency standards", () => {
     fireEvent.click(screen.getByTestId("flashcards-to-quiz-cta"))
 
     expect(mocks.navigate).toHaveBeenCalledWith("/quiz?tab=take&source=flashcards")
+  })
+
+  it("prompts before leaving the Scheduler tab when its draft is dirty", () => {
+    const confirmSpy = vi.spyOn(window, "confirm")
+    confirmSpy.mockReturnValue(false)
+
+    window.history.replaceState({}, "", "/flashcards")
+    render(<FlashcardsManager />)
+
+    fireEvent.click(screen.getByText("Scheduler"))
+    expect(screen.getByTestId("mock-scheduler-tab")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText("Mark Scheduler Dirty"))
+    expect(screen.getByTestId("mock-scheduler-draft-state")).toHaveTextContent("dirty")
+    fireEvent.click(screen.getByText("Manage"))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(screen.getByTestId("mock-scheduler-tab")).toBeInTheDocument()
+
+    confirmSpy.mockReturnValue(true)
+    fireEvent.click(screen.getByText("Manage"))
+    expect(screen.getByTestId("mock-manage-tab")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("Scheduler"))
+    expect(screen.getByTestId("mock-scheduler-draft-state")).toHaveTextContent("clean")
+
+    confirmSpy.mockRestore()
   })
 })

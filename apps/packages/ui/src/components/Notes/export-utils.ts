@@ -16,7 +16,13 @@ const normalizeKeywords = (keywords: string[]) =>
     .map((keyword) => String(keyword || "").trim())
     .filter((keyword) => keyword.length > 0)
 
-const escapeYamlString = (value: string) => value.replace(/"/g, '\\"')
+const escapeYamlString = (value: string) =>
+  String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/\t/g, "\\t")
+    .replace(/"/g, '\\"')
 
 export const buildSingleNoteMarkdown = (note: SingleNoteExportData): string => {
   const title = String(note.title || "").trim()

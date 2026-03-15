@@ -33,11 +33,14 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     WeakPasswordError,
 )
 from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection_async,
+)
 
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime, is_test_mode
 
 _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -165,6 +168,10 @@ def _apply_single_user_fallback(url: str, auth_mode: Optional[str] = None) -> st
         scheme = ""
 
     if mode == "single_user" and scheme and not scheme.startswith("sqlite") and not scheme.startswith("file"):
+        # Keep integration tests free to exercise Postgres-backed single-user bootstrap
+        # behavior. Production/runtime safety still applies outside explicit tests.
+        if is_test_mode() or is_explicit_pytest_runtime():
+            return url
         with suppress(_AUTHNZ_DB_NONCRITICAL_EXCEPTIONS):
             logger.warning(
                 "Single-user mode: ignoring non-sqlite DATABASE_URL '{}'; using sqlite:///./Databases/users.db",
@@ -384,9 +391,7 @@ class DatabasePool:
 
         try:
             async with aiosqlite.connect(self.db_path, uri=self._sqlite_uri) as conn:
-                # Enable WAL mode for better concurrency
-                await conn.execute("PRAGMA journal_mode=WAL")
-                await conn.execute("PRAGMA busy_timeout=5000")
+                await configure_sqlite_connection_async(conn)
 
                 # Check if users table exists
                 cursor = await conn.execute(
@@ -443,10 +448,9 @@ class DatabasePool:
             conn = None
             try:
                 conn = await aiosqlite.connect(self.db_path, uri=self._sqlite_uri)
-                await conn.execute("PRAGMA busy_timeout=5000")
-                await conn.execute("PRAGMA foreign_keys = ON")
+                await configure_sqlite_connection_async(conn)
                 conn.row_factory = aiosqlite.Row
-                await conn.execute("BEGIN")
+                await conn.execute("BEGIN IMMEDIATE")
 
                 try:
                     # Yield a shim that normalizes execute() parameter passing for SQLite
@@ -510,8 +514,7 @@ class DatabasePool:
             conn = None
             try:
                 conn = await aiosqlite.connect(self.db_path, uri=self._sqlite_uri)
-                await conn.execute("PRAGMA busy_timeout=5000")
-                await conn.execute("PRAGMA foreign_keys = ON")
+                await configure_sqlite_connection_async(conn)
                 conn.row_factory = aiosqlite.Row
                 # Yield a shim with normalized execute() signature (see transaction())
                 class _SQLiteConnShim:

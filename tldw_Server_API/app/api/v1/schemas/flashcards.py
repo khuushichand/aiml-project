@@ -1,13 +1,73 @@
 import json
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
 
+DeckSchedulerType = Literal["sm2_plus", "fsrs"]
+
+
+class DeckSchedulerSettings(BaseModel):
+    new_steps_minutes: list[int] = Field(default_factory=lambda: [1, 10])
+    relearn_steps_minutes: list[int] = Field(default_factory=lambda: [10])
+    graduating_interval_days: int = 1
+    easy_interval_days: int = 4
+    easy_bonus: float = 1.3
+    interval_modifier: float = 1.0
+    max_interval_days: int = 36500
+    leech_threshold: int = 8
+    enable_fuzz: bool = False
+
+
+class FsrsSchedulerSettings(BaseModel):
+    target_retention: float = Field(0.9, gt=0, lt=1)
+    maximum_interval_days: int = Field(36500, ge=1)
+    enable_fuzz: bool = False
+
+
+class DeckSchedulerSettingsEnvelope(BaseModel):
+    sm2_plus: DeckSchedulerSettings = Field(default_factory=DeckSchedulerSettings)
+    fsrs: FsrsSchedulerSettings = Field(default_factory=FsrsSchedulerSettings)
+
+
+def _coerce_scheduler_settings_envelope(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return raw
+    if "sm2_plus" in raw or "fsrs" in raw:
+        return raw
+    return {"sm2_plus": raw}
+
+
 class DeckCreate(BaseModel):
     name: str = Field(..., description="Deck name (unique)")
     description: Optional[str] = Field(None, description="Deck description")
+    scheduler_type: DeckSchedulerType = "sm2_plus"
+    scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
+
+    @model_validator(mode="before")
+    def _normalize_scheduler_settings(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if "scheduler_settings" in data:
+            data["scheduler_settings"] = _coerce_scheduler_settings_envelope(data.get("scheduler_settings"))
+        return data
+
+
+class DeckUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    scheduler_type: Optional[DeckSchedulerType] = None
+    scheduler_settings: Optional[DeckSchedulerSettingsEnvelope] = None
+    expected_version: Optional[int] = Field(None, ge=1)
+
+    @model_validator(mode="before")
+    def _normalize_scheduler_settings(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if "scheduler_settings" in data:
+            data["scheduler_settings"] = _coerce_scheduler_settings_envelope(data.get("scheduler_settings"))
+        return data
 
 
 class Deck(BaseModel):
@@ -19,6 +79,32 @@ class Deck(BaseModel):
     deleted: bool
     client_id: str
     version: int
+    scheduler_type: DeckSchedulerType = "sm2_plus"
+    scheduler_settings_json: Optional[str] = None
+    scheduler_settings: DeckSchedulerSettingsEnvelope = Field(default_factory=DeckSchedulerSettingsEnvelope)
+
+    @model_validator(mode="before")
+    def _populate_scheduler_settings(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if data.get("scheduler_settings") is not None:
+            return data
+        raw = data.get("scheduler_settings_json")
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    data["scheduler_settings"] = _coerce_scheduler_settings_envelope(parsed)
+            except Exception:
+                data["scheduler_settings"] = DeckSchedulerSettingsEnvelope().model_dump()
+        return data
+
+
+class FlashcardReviewIntervalPreviews(BaseModel):
+    again: str
+    hard: str
+    good: str
+    easy: str
 
 
 class FlashcardCreate(BaseModel):
@@ -56,6 +142,9 @@ class Flashcard(BaseModel):
     lapses: int
     due_at: Optional[str] = None
     last_reviewed_at: Optional[str] = None
+    queue_state: Literal["new", "learning", "review", "relearning", "suspended"] = "new"
+    step_index: Optional[int] = None
+    suspended_reason: Optional[Literal["manual", "leech"]] = None
     created_at: Optional[str] = None
     last_modified: Optional[str] = None
     deleted: bool
@@ -63,6 +152,8 @@ class Flashcard(BaseModel):
     version: int
     model_type: Literal['basic','basic_reverse','cloze']
     reverse: bool
+    scheduler_type: Optional[DeckSchedulerType] = None
+    next_intervals: Optional[FlashcardReviewIntervalPreviews] = None
 
     @model_validator(mode="before")
     def _populate_tags(cls, data):
@@ -107,6 +198,16 @@ class FlashcardReviewResponse(BaseModel):
     last_reviewed_at: Optional[str] = None
     last_modified: Optional[str] = None
     version: int
+    scheduler_type: DeckSchedulerType
+    queue_state: Literal["new", "learning", "review", "relearning", "suspended"]
+    step_index: Optional[int] = None
+    suspended_reason: Optional[Literal["manual", "leech"]] = None
+    next_intervals: FlashcardReviewIntervalPreviews
+
+
+class FlashcardNextReviewResponse(BaseModel):
+    card: Optional[Flashcard] = None
+    selection_reason: Optional[Literal["learning_due", "review_due", "new", "none"]] = None
 
 
 class FlashcardGenerateRequest(BaseModel):
@@ -166,8 +267,138 @@ class FlashcardUpdate(BaseModel):
     reverse: Optional[bool] = None
 
 
+class FlashcardBulkUpdateItem(FlashcardUpdate):
+    uuid: str
+
+
+class FlashcardBulkUpdateError(BaseModel):
+    code: Literal["validation_error", "not_found", "conflict"]
+    message: str
+    invalid_fields: list[str] = Field(default_factory=list)
+    invalid_deck_ids: list[int] = Field(default_factory=list)
+
+
+class FlashcardBulkUpdateResult(BaseModel):
+    uuid: str
+    status: Literal["updated", "validation_error", "not_found", "conflict"]
+    flashcard: Optional[Flashcard] = None
+    error: Optional[FlashcardBulkUpdateError] = None
+
+
+class FlashcardBulkUpdateResponse(BaseModel):
+    results: list[FlashcardBulkUpdateResult] = Field(default_factory=list)
+
+
+class FlashcardAssetMetadata(BaseModel):
+    asset_uuid: UUID
+    reference: str
+    markdown_snippet: str
+    mime_type: str
+    byte_size: int
+    width: Optional[int] = None
+    height: Optional[int] = None
+    original_filename: Optional[str] = None
+
+
 class FlashcardResetSchedulingRequest(BaseModel):
     expected_version: int = Field(..., ge=1)
+
+
+class StudyAssistantThreadSummary(BaseModel):
+    id: int
+    context_type: Literal["flashcard", "quiz_attempt_question"]
+    flashcard_uuid: Optional[str] = None
+    quiz_attempt_id: Optional[int] = None
+    question_id: Optional[int] = None
+    last_message_at: Optional[str] = None
+    message_count: int = 0
+    deleted: bool
+    client_id: str
+    version: int
+    created_at: Optional[str] = None
+    last_modified: Optional[str] = None
+
+
+class StudyAssistantMessage(BaseModel):
+    id: int
+    thread_id: int
+    role: Literal["user", "assistant"]
+    action_type: Literal["explain", "mnemonic", "follow_up", "fact_check", "freeform"]
+    input_modality: Literal["text", "voice_transcript"]
+    content: str
+    structured_payload: dict[str, Any] = Field(default_factory=dict)
+    context_snapshot: dict[str, Any] = Field(default_factory=dict)
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    created_at: Optional[str] = None
+    client_id: str
+
+    @model_validator(mode="before")
+    def _populate_json_fields(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        for source_field, target_field in (
+            ("structured_payload_json", "structured_payload"),
+            ("context_snapshot_json", "context_snapshot"),
+        ):
+            if data.get(target_field) is not None:
+                continue
+            raw = data.get(source_field)
+            if isinstance(raw, dict):
+                data[target_field] = raw
+                continue
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    parsed = {}
+                data[target_field] = parsed if isinstance(parsed, dict) else {}
+
+        if data.get("structured_payload") is None:
+            data["structured_payload"] = {}
+        if data.get("context_snapshot") is None:
+            data["context_snapshot"] = {}
+        return data
+
+
+class StudyAssistantHistoryResponse(BaseModel):
+    thread: StudyAssistantThreadSummary
+    messages: list[StudyAssistantMessage] = Field(default_factory=list)
+
+
+StudyAssistantAction = Literal["explain", "mnemonic", "follow_up", "fact_check", "freeform"]
+
+
+class StudyAssistantFactCheckPayload(BaseModel):
+    verdict: Literal["correct", "partially_correct", "incorrect"]
+    corrections: list[str] = Field(default_factory=list)
+    missing_points: list[str] = Field(default_factory=list)
+    next_prompt: str = Field(default="What part would you like to review next?")
+
+
+class StudyAssistantRespondRequest(BaseModel):
+    action: StudyAssistantAction
+    message: Optional[str] = None
+    input_modality: Literal["text", "voice_transcript"] = "text"
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    expected_thread_version: Optional[int] = Field(None, ge=1)
+
+
+class StudyAssistantContextResponse(BaseModel):
+    thread: StudyAssistantThreadSummary
+    messages: list[StudyAssistantMessage] = Field(default_factory=list)
+    context_snapshot: dict[str, Any] = Field(default_factory=dict)
+    available_actions: list[StudyAssistantAction] = Field(default_factory=list)
+
+
+class StudyAssistantRespondResponse(BaseModel):
+    thread: StudyAssistantThreadSummary
+    user_message: StudyAssistantMessage
+    assistant_message: StudyAssistantMessage
+    structured_payload: dict[str, Any] = Field(default_factory=dict)
+    context_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
 class FlashcardTagsUpdate(BaseModel):
@@ -188,3 +419,29 @@ class FlashcardsImportRequest(BaseModel):
     content: str = Field(..., description="TSV content: Deck, Front, Back, Tags, Notes per line")
     delimiter: Optional[str] = Field('\t', description="Field delimiter; default tab")
     has_header: Optional[bool] = Field(False, description="Whether the first line is a header")
+
+
+class StructuredQaImportPreviewRequest(BaseModel):
+    content: str = Field(..., min_length=1, description="Labeled Q&A content for preview parsing")
+
+
+class StructuredQaImportPreviewDraft(BaseModel):
+    front: str
+    back: str
+    line_start: int
+    line_end: int
+    notes: Optional[str] = None
+    extra: Optional[str] = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class StructuredQaImportPreviewError(BaseModel):
+    line: Optional[int] = None
+    error: str
+
+
+class StructuredQaImportPreviewResponse(BaseModel):
+    drafts: list[StructuredQaImportPreviewDraft] = Field(default_factory=list)
+    errors: list[StructuredQaImportPreviewError] = Field(default_factory=list)
+    detected_format: Literal["qa_labels"] = "qa_labels"
+    skipped_blocks: int = 0

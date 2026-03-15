@@ -116,3 +116,20 @@ curl -s "http://127.0.0.1:8000/api/v1/rag/capabilities" | jq
 Notes:
 - Capability labels “fulltext” and “semantic” correspond to request values `"fts"` and `"vector"` for `search_mode`.
 - Source values `"characters"` and `"chats"` both map to the `character_db` datastore internally.
+
+## Switchable Profiles
+
+The unified RAG request supports optional switchable profile defaults via `rag_profile`:
+
+- `fast`
+- `balanced`
+- `accuracy`
+
+When provided, profile defaults are resolved with strict precedence:
+
+1. Explicit request field
+2. Profile default
+3. Search-Agent env/config defaults
+4. Schema default
+
+Generation token limits now support up to `4000` (`max_generation_tokens <= 4000`).

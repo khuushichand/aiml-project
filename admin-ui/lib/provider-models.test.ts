@@ -148,14 +148,6 @@ describe('Provider Models Catalog', () => {
       expect(modelValues).toContain('gemini-2.0-flash-lite');
     });
 
-    it('should have Gemini 1.5 models', () => {
-      const models = PROVIDER_MODELS.gemini.models;
-      const modelValues = models.map(m => m.value);
-
-      expect(modelValues).toContain('gemini-1.5-pro');
-      expect(modelValues).toContain('gemini-1.5-flash');
-    });
-
     it('should have accurate pricing for Gemini 2.5 Pro', () => {
       const gemini25pro = PROVIDER_MODELS.gemini.models.find(
         m => m.value === 'gemini-2.5-pro'

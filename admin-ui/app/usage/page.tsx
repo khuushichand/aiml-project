@@ -1,1395 +1,695 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, BarChart3, Calendar, Download } from 'lucide-react';
-import { api } from '@/lib/api-client';
-import { downloadExportFile } from '@/lib/export-download';
-import { formatBytes, formatDateTime, formatLatency } from '@/lib/format';
-import { buildUsageCostForecast, normalizeDailyCostPoints, type DailyCostPoint, type UsageCostForecast } from '@/lib/usage-forecast';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { formatLatency } from '@/lib/format';
 import {
-  parseEndpointUsageMetrics,
-  parseMediaTypeStorageBreakdown,
-  parseUserStorageMetrics,
-  type EndpointUsageMetricsRow,
-  type MediaTypeStorageBreakdownRow,
-} from '@/lib/usage-insights';
-import { normalizeRateLimitEventsPayload, parseRateLimitEventsFromMetricsText, type RateLimitEvent } from '@/lib/rate-limit-events';
-import { useOrgContext } from '@/components/OrgContextSwitcher';
-import { useToast } from '@/components/ui/toast';
-import Link from 'next/link';
+  getRouterAnalyticsAccess,
+  getRouterAnalyticsConversations,
+  getRouterAnalyticsLog,
+  getRouterAnalyticsMeta,
+  getRouterAnalyticsModels,
+  getRouterAnalyticsNetwork,
+  getRouterAnalyticsProviders,
+  getRouterAnalyticsQuota,
+  getRouterAnalyticsStatus,
+  getRouterAnalyticsStatusBreakdowns,
+} from '@/lib/router-analytics-client';
+import type {
+  RouterAnalyticsAccessResponse,
+  RouterAnalyticsBreakdownRow,
+  RouterAnalyticsBreakdownsResponse,
+  RouterAnalyticsConversationsResponse,
+  RouterAnalyticsLogResponse,
+  RouterAnalyticsMetaResponse,
+  RouterAnalyticsModelsResponse,
+  RouterAnalyticsNetworkResponse,
+  RouterAnalyticsProvidersResponse,
+  RouterAnalyticsQuotaMetric,
+  RouterAnalyticsQuotaResponse,
+  RouterAnalyticsRange,
+  RouterAnalyticsStatusResponse,
+} from '@/lib/router-analytics-types';
 
-interface UsageDailyRow {
-  user_id: number;
-  day: string;
+type UsageTab = 'status' | 'quota' | 'providers' | 'access' | 'network' | 'models' | 'conversations' | 'log';
+
+type UsageTabConfig = {
+  value: UsageTab;
+  label: string;
+  implemented: boolean;
+};
+
+const TABS: UsageTabConfig[] = [
+  { value: 'status', label: 'Status', implemented: true },
+  { value: 'quota', label: 'Quota', implemented: true },
+  { value: 'providers', label: 'Providers', implemented: true },
+  { value: 'access', label: 'Access', implemented: true },
+  { value: 'network', label: 'Network', implemented: true },
+  { value: 'models', label: 'Models', implemented: true },
+  { value: 'conversations', label: 'Conversations', implemented: true },
+  { value: 'log', label: 'Log', implemented: true },
+];
+
+const RANGE_OPTIONS: RouterAnalyticsRange[] = ['realtime', '1h', '8h', '24h', '7d', '30d'];
+
+type TimelineBucket = {
+  ts: string;
   requests: number;
-  errors: number;
-  bytes_total: number;
-  bytes_in_total?: number | null;
-  latency_avg_ms?: number | null;
-}
-
-interface UsageTopRow {
-  user_id: number;
-  requests: number;
-  errors: number;
-  bytes_total: number;
-  bytes_in_total?: number | null;
-  latency_avg_ms?: number | null;
-}
-
-interface LlmSummaryRow {
-  group_value: string;
-  requests: number;
-  errors: number;
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-  total_cost_usd: number;
-  latency_avg_ms?: number | null;
-}
-
-interface LlmTopSpenderRow {
-  user_id: number;
-  total_cost_usd: number;
-  requests: number;
-}
-
-type ExportKey = 'daily' | 'top' | 'llm';
-type LlmGroupBy = 'user' | 'provider' | 'model' | 'operation' | 'day' | 'organization';
-const VALID_LLM_GROUP_BY = new Set<LlmGroupBy>(['user', 'provider', 'model', 'operation', 'day', 'organization']);
-type EndpointSortKey = 'endpoint' | 'method' | 'requests' | 'avgLatency' | 'errorRate' | 'p95';
-type SortDirection = 'asc' | 'desc';
-type RateLimitEventsSource = 'endpoint' | 'metrics_text' | 'unavailable';
-
-type OrgCostAttributionRow = {
-  orgId: number | null;
-  orgName: string;
-  requests: number;
-  inputTokens: number;
-  outputTokens: number;
   totalTokens: number;
-  totalCostUsd: number;
-  percentOfTotal: number;
-  latencyAvgMs: number | null;
+  topModel: string;
 };
 
-type StorageUserRow = {
-  userId: number;
-  username: string;
-  email: string;
-  storageUsedMb: number;
-  storageQuotaMb: number | null;
+const normalizeErrorMessage = (error: unknown): string => {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  return 'Failed to load router analytics usage data.';
 };
 
-const toDateInput = (date: Date) => date.toISOString().slice(0, 10);
-
-const defaultEnd = () => toDateInput(new Date());
-const defaultStart = () => {
-  const date = new Date();
-  date.setDate(date.getDate() - 7);
-  return toDateInput(date);
+const formatNumber = (value?: number | null): string => {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—';
+  return Number(value).toLocaleString();
 };
 
-const formatBytesDisplay = (value?: number | null) =>
-  formatBytes(value, { fallback: '—' });
-
-const formatLatencyDisplay = (value?: number | null) =>
-  formatLatency(value, { fallback: '—' });
-
-const formatPercentDisplay = (value?: number | null) => (
-  value === null || value === undefined || !Number.isFinite(value)
-    ? '—'
-    : `${value.toFixed(2)}%`
-);
-
-const formatStorageMbDisplay = (value?: number | null) => (
-  value === null || value === undefined || !Number.isFinite(value)
-    ? '—'
-    : `${value.toFixed(2)} MB`
-);
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null;
-
-const getErrorMessage = (reason: unknown, fallback: string) => {
-  if (reason instanceof Error && reason.message) return reason.message;
-  if (typeof reason === 'string' && reason.trim().length > 0) return reason;
-  if (isRecord(reason) && typeof reason.message === 'string' && reason.message.trim().length > 0) {
-    return reason.message;
-  }
-  return fallback;
+const formatTokensPerSecond = (value?: number | null): string => {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—';
+  return value.toFixed(2);
 };
 
-const ORG_ATTRIBUTION_USER_LIMIT = 100;
-const STORAGE_USERS_PAGE_LIMIT = 200;
-const TOP_THROTTLED_LIMIT = 3;
-
-const normalizeOrganizations = (value: unknown): Array<{ id: number; name: string }> => {
-  if (Array.isArray(value)) {
-    return value
-      .filter((entry): entry is { id: number; name: string } =>
-        isRecord(entry) && typeof entry.id === 'number' && typeof entry.name === 'string')
-      .map((entry) => ({ id: entry.id, name: entry.name }));
-  }
-  if (!isRecord(value)) return [];
-  const items = Array.isArray(value.items)
-    ? value.items
-    : (Array.isArray(value.orgs) ? value.orgs : []);
-  return items
-    .filter((entry): entry is { id: number; name: string } =>
-      isRecord(entry) && typeof entry.id === 'number' && typeof entry.name === 'string')
-    .map((entry) => ({ id: entry.id, name: entry.name }));
+const formatPercent = (value?: number | null): string => {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—';
+  return `${value.toFixed(1)}%`;
 };
 
-const normalizeOrgMembershipIds = (value: unknown): number[] => {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry) => (isRecord(entry) && typeof entry.org_id === 'number' ? entry.org_id : null))
-    .filter((orgId): orgId is number => typeof orgId === 'number');
+const formatQuotaMetric = (metric?: RouterAnalyticsQuotaMetric | null): string => {
+  if (!metric) return '—';
+  return `${formatNumber(metric.used)} / ${formatNumber(metric.limit)} (${formatPercent(metric.utilization_pct)})`;
 };
 
-const normalizeStorageUsers = (value: unknown): StorageUserRow[] => {
-  if (!isRecord(value) || !Array.isArray(value.items)) return [];
-
-  return value.items
-    .map((entry) => {
-      if (!isRecord(entry)) return null;
-      const userId = Number(entry.id);
-      if (!Number.isFinite(userId)) return null;
-      const used = Number(entry.storage_used_mb);
-      const quota = Number(entry.storage_quota_mb);
-      const username = typeof entry.username === 'string' ? entry.username : `User ${userId}`;
-      const email = typeof entry.email === 'string' ? entry.email : '';
-      return {
-        userId,
-        username,
-        email,
-        storageUsedMb: Number.isFinite(used) ? Math.max(0, used) : 0,
-        storageQuotaMb: Number.isFinite(quota) ? Math.max(0, quota) : null,
-      };
-    })
-    .filter((row): row is StorageUserRow => row !== null);
+const formatBucketTime = (value: string): string => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
-const extractMonthlyBudgetUsd = (value: unknown, selectedOrgId?: number): number | null => {
-  const items = Array.isArray(value)
-    ? value
-    : (isRecord(value) && Array.isArray(value.items) ? value.items : []);
-  if (!Array.isArray(items)) return null;
-
-  if (selectedOrgId) {
-    const row = items.find((entry) => isRecord(entry) && Number(entry.org_id) === selectedOrgId);
-    const budgetValue = isRecord(row) && isRecord(row.budgets)
-      ? Number(row.budgets.budget_month_usd)
-      : Number.NaN;
-    return Number.isFinite(budgetValue) && budgetValue > 0 ? budgetValue : null;
-  }
-
-  const total = items.reduce((sum, entry) => {
-    if (!isRecord(entry) || !isRecord(entry.budgets)) return sum;
-    const candidate = Number(entry.budgets.budget_month_usd);
-    return Number.isFinite(candidate) && candidate > 0 ? sum + candidate : sum;
-  }, 0);
-  return total > 0 ? total : null;
+const formatDateTime = (value?: string | null): string => {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
 };
 
-const buildOrgAttributionRows = async (rows: LlmSummaryRow[]): Promise<OrgCostAttributionRow[]> => {
-  const userRows = rows
-    .filter((row) => /^\d+$/.test(String(row.group_value)))
-    .slice(0, ORG_ATTRIBUTION_USER_LIMIT);
-  if (userRows.length === 0) return [];
-
-  const organizationsResponse = await api.getOrganizations({ limit: '500' });
-  const organizations = normalizeOrganizations(organizationsResponse);
-  const orgNameById = new Map(organizations.map((org) => [org.id, org.name]));
-
-  const membershipResults = await Promise.allSettled(
-    userRows.map(async (row) => {
-      const userId = Number(row.group_value);
-      const memberships = await api.getUserOrgMemberships(String(userId));
-      return {
-        row,
-        orgIds: normalizeOrgMembershipIds(memberships),
-      };
-    })
+function BreakdownCard({ title, rows, keyLabel }: { title: string; rows: RouterAnalyticsBreakdownRow[]; keyLabel: string }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-lg">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{keyLabel}</TableHead>
+              <TableHead className="text-right">Requests</TableHead>
+              <TableHead className="text-right">PP</TableHead>
+              <TableHead className="text-right">TG</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={4} className="text-center text-muted-foreground">
+                  No data
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((row) => (
+                <TableRow key={`${title}-${row.key}`}>
+                  <TableCell className="font-medium">{row.label || row.key}</TableCell>
+                  <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                  <TableCell className="text-right">{formatNumber(row.prompt_tokens)}</TableCell>
+                  <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
-
-  const aggregates = new Map<string, OrgCostAttributionRow>();
-  let totalCost = 0;
-
-  membershipResults.forEach((result) => {
-    if (result.status !== 'fulfilled') return;
-    const { row, orgIds } = result.value;
-    const primaryOrgId = orgIds.length > 0 ? orgIds[0] : null;
-    const orgName = primaryOrgId !== null
-      ? (orgNameById.get(primaryOrgId) ?? `Org ${primaryOrgId}`)
-      : 'Unassigned';
-    const key = primaryOrgId !== null ? String(primaryOrgId) : 'unassigned';
-    const existing = aggregates.get(key) ?? {
-      orgId: primaryOrgId,
-      orgName,
-      requests: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      totalCostUsd: 0,
-      percentOfTotal: 0,
-      latencyAvgMs: 0,
-    };
-
-    const nextRequests = existing.requests + row.requests;
-    const weightedLatency = (
-      (existing.latencyAvgMs ?? 0) * existing.requests
-      + (Number(row.latency_avg_ms ?? 0) * row.requests)
-    ) / Math.max(1, nextRequests);
-
-    existing.requests = nextRequests;
-    existing.inputTokens += row.input_tokens;
-    existing.outputTokens += row.output_tokens;
-    existing.totalTokens += row.total_tokens;
-    existing.totalCostUsd += row.total_cost_usd;
-    existing.latencyAvgMs = Number.isFinite(weightedLatency) ? weightedLatency : null;
-    aggregates.set(key, existing);
-    totalCost += row.total_cost_usd;
-  });
-
-  return [...aggregates.values()]
-    .map((row) => ({
-      ...row,
-      percentOfTotal: totalCost > 0 ? (row.totalCostUsd / totalCost) * 100 : 0,
-    }))
-    .sort((a, b) => b.totalCostUsd - a.totalCostUsd);
-};
+}
 
 export default function UsagePage() {
-  const { selectedOrg } = useOrgContext();
-  const { success, error: showError } = useToast();
-  const [usageDaily, setUsageDaily] = useState<UsageDailyRow[]>([]);
-  const [usageTop, setUsageTop] = useState<UsageTopRow[]>([]);
-  const [llmSummary, setLlmSummary] = useState<LlmSummaryRow[]>([]);
-  const [llmTop, setLlmTop] = useState<LlmTopSpenderRow[]>([]);
-  const [orgAttribution, setOrgAttribution] = useState<OrgCostAttributionRow[]>([]);
-  const [dailyCostTrend, setDailyCostTrend] = useState<DailyCostPoint[]>([]);
-  const [endpointUsage, setEndpointUsage] = useState<EndpointUsageMetricsRow[]>([]);
-  const [endpointSortKey, setEndpointSortKey] = useState<EndpointSortKey>('requests');
-  const [endpointSortDirection, setEndpointSortDirection] = useState<SortDirection>('desc');
-  const [endpointMethodFilter, setEndpointMethodFilter] = useState('ALL');
-  const [storageUsers, setStorageUsers] = useState<StorageUserRow[]>([]);
-  const [mediaTypeBreakdown, setMediaTypeBreakdown] = useState<MediaTypeStorageBreakdownRow[]>([]);
-  const [rateLimitEvents, setRateLimitEvents] = useState<RateLimitEvent[]>([]);
-  const [rateLimitEventsSource, setRateLimitEventsSource] = useState<RateLimitEventsSource>('unavailable');
-  const [forecast, setForecast] = useState<UsageCostForecast | null>(null);
-  const [monthlyBudgetUsd, setMonthlyBudgetUsd] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [exporting, setExporting] = useState<Record<ExportKey, boolean>>({
-    daily: false,
-    top: false,
-    llm: false,
-  });
+  const [activeTab, setActiveTab] = useState<UsageTab>('status');
+  const [range, setRange] = useState<RouterAnalyticsRange>('8h');
+  const [provider, setProvider] = useState('');
+  const [model, setModel] = useState('');
+  const [tokenFilterValue, setTokenFilterValue] = useState('');
 
-  const [startDate, setStartDate] = useState(defaultStart());
-  const [endDate, setEndDate] = useState(defaultEnd());
-  const [topMetric, setTopMetric] = useState('requests');
-  const [groupBy, setGroupBy] = useState<LlmGroupBy>('provider');
-  const [providerFilter, setProviderFilter] = useState('');
-  const dateSuffix = `${startDate || 'all'}_${endDate || 'all'}`;
-  const summaryGroupBy: Exclude<LlmGroupBy, 'organization'> = groupBy === 'organization' ? 'user' : groupBy;
+  const [statusPayload, setStatusPayload] = useState<RouterAnalyticsStatusResponse | null>(null);
+  const [breakdownsPayload, setBreakdownsPayload] = useState<RouterAnalyticsBreakdownsResponse | null>(null);
+  const [quotaPayload, setQuotaPayload] = useState<RouterAnalyticsQuotaResponse | null>(null);
+  const [providersPayload, setProvidersPayload] = useState<RouterAnalyticsProvidersResponse | null>(null);
+  const [accessPayload, setAccessPayload] = useState<RouterAnalyticsAccessResponse | null>(null);
+  const [networkPayload, setNetworkPayload] = useState<RouterAnalyticsNetworkResponse | null>(null);
+  const [modelsPayload, setModelsPayload] = useState<RouterAnalyticsModelsResponse | null>(null);
+  const [conversationsPayload, setConversationsPayload] = useState<RouterAnalyticsConversationsResponse | null>(null);
+  const [logPayload, setLogPayload] = useState<RouterAnalyticsLogResponse | null>(null);
+  const [metaPayload, setMetaPayload] = useState<RouterAnalyticsMetaResponse | null>(null);
 
-  const toIsoStart = (value: string) => (value ? `${value}T00:00:00Z` : undefined);
-  const toIsoEnd = (value: string) => (value ? `${value}T23:59:59Z` : undefined);
+  const [statusLoading, setStatusLoading] = useState<boolean>(true);
+  const [statusError, setStatusError] = useState<string>('');
+  const [quotaLoading, setQuotaLoading] = useState<boolean>(false);
+  const [quotaError, setQuotaError] = useState<string>('');
+  const [providersLoading, setProvidersLoading] = useState<boolean>(false);
+  const [providersError, setProvidersError] = useState<string>('');
+  const [accessLoading, setAccessLoading] = useState<boolean>(false);
+  const [accessError, setAccessError] = useState<string>('');
+  const [networkLoading, setNetworkLoading] = useState<boolean>(false);
+  const [networkError, setNetworkError] = useState<string>('');
+  const [modelsLoading, setModelsLoading] = useState<boolean>(false);
+  const [modelsError, setModelsError] = useState<string>('');
+  const [conversationsLoading, setConversationsLoading] = useState<boolean>(false);
+  const [conversationsError, setConversationsError] = useState<string>('');
+  const [logLoading, setLogLoading] = useState<boolean>(false);
+  const [logError, setLogError] = useState<string>('');
+  const [refreshTick, setRefreshTick] = useState<number>(0);
 
-  const usageParams = useMemo(() => {
-    const params: Record<string, string> = {};
-    if (startDate) params.start = startDate;
-    if (endDate) params.end = endDate;
-    if (selectedOrg) params.org_id = String(selectedOrg.id);
-    return params;
-  }, [startDate, endDate, selectedOrg]);
+  const selectedTokenId = useMemo<number | undefined>(() => {
+    const rawValue = tokenFilterValue && tokenFilterValue !== '__all__' ? tokenFilterValue : '';
+    if (!rawValue) return undefined;
+    const parsed = Number(rawValue);
+    if (!Number.isInteger(parsed) || parsed <= 0) return undefined;
+    return parsed;
+  }, [tokenFilterValue]);
 
-  const llmParams = useMemo(() => {
-    const params: Record<string, string> = { group_by: summaryGroupBy };
-    const isoStart = toIsoStart(startDate);
-    const isoEnd = toIsoEnd(endDate);
-    if (isoStart) params.start = isoStart;
-    if (isoEnd) params.end = isoEnd;
-    if (selectedOrg) params.org_id = String(selectedOrg.id);
-    if (providerFilter) params.provider = providerFilter;
-    return params;
-  }, [startDate, endDate, summaryGroupBy, selectedOrg, providerFilter]);
+  const statusQuery = useMemo(
+    () => ({
+      range,
+      provider: provider || undefined,
+      model: model || undefined,
+      tokenId: selectedTokenId,
+    }),
+    [range, provider, model, selectedTokenId]
+  );
 
-  const dayTrendParams = useMemo(() => {
-    const params: Record<string, string> = { group_by: 'day' };
-    const isoStart = toIsoStart(startDate);
-    const isoEnd = toIsoEnd(endDate);
-    if (isoStart) params.start = isoStart;
-    if (isoEnd) params.end = isoEnd;
-    if (selectedOrg) params.org_id = String(selectedOrg.id);
-    if (providerFilter) params.provider = providerFilter;
-    return params;
-  }, [startDate, endDate, selectedOrg, providerFilter]);
+  const loadStatusData = useCallback(async () => {
+    setStatusLoading(true);
+    setStatusError('');
+    try {
+      const [statusResponse, breakdownsResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsStatus(statusQuery),
+        getRouterAnalyticsStatusBreakdowns(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setStatusPayload(statusResponse);
+      setBreakdownsPayload(breakdownsResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setStatusError(normalizeErrorMessage(loadError));
+    } finally {
+      setStatusLoading(false);
+    }
+  }, [statusQuery]);
 
-  const orgAttributionParams = useMemo(() => {
-    const params: Record<string, string> = { group_by: 'user' };
-    const isoStart = toIsoStart(startDate);
-    const isoEnd = toIsoEnd(endDate);
-    if (isoStart) params.start = isoStart;
-    if (isoEnd) params.end = isoEnd;
-    if (selectedOrg) params.org_id = String(selectedOrg.id);
-    return params;
-  }, [startDate, endDate, selectedOrg]);
+  const loadQuotaData = useCallback(async () => {
+    setQuotaLoading(true);
+    setQuotaError('');
+    try {
+      const [quotaResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsQuota(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setQuotaPayload(quotaResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setQuotaError(normalizeErrorMessage(loadError));
+    } finally {
+      setQuotaLoading(false);
+    }
+  }, [statusQuery]);
 
-  const llmExportParams = useMemo(() => {
-    const params: Record<string, string> = {};
-    const isoStart = toIsoStart(startDate);
-    const isoEnd = toIsoEnd(endDate);
-    if (isoStart) params.start = isoStart;
-    if (isoEnd) params.end = isoEnd;
-    if (selectedOrg?.id) params.org_id = String(selectedOrg.id);
-    return params;
-  }, [startDate, endDate, selectedOrg]);
+  const loadProvidersData = useCallback(async () => {
+    setProvidersLoading(true);
+    setProvidersError('');
+    try {
+      const [providersResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsProviders(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setProvidersPayload(providersResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setProvidersError(normalizeErrorMessage(loadError));
+    } finally {
+      setProvidersLoading(false);
+    }
+  }, [statusQuery]);
 
-  const filteredLlmSummary = useMemo(() => {
-    if (!providerFilter || summaryGroupBy !== 'provider') return llmSummary;
-    return llmSummary.filter((row) => row.group_value?.toLowerCase() === providerFilter);
-  }, [summaryGroupBy, llmSummary, providerFilter]);
+  const loadAccessData = useCallback(async () => {
+    setAccessLoading(true);
+    setAccessError('');
+    try {
+      const [accessResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsAccess(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setAccessPayload(accessResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setAccessError(normalizeErrorMessage(loadError));
+    } finally {
+      setAccessLoading(false);
+    }
+  }, [statusQuery]);
 
-  const organizationSummaryRows = useMemo<LlmSummaryRow[]>(() => {
-    return orgAttribution.map((row) => ({
-      group_value: row.orgName,
-      requests: row.requests,
-      errors: 0,
-      input_tokens: row.inputTokens,
-      output_tokens: row.outputTokens,
-      total_tokens: row.totalTokens,
-      total_cost_usd: row.totalCostUsd,
-      latency_avg_ms: row.latencyAvgMs,
-    }));
-  }, [orgAttribution]);
+  const loadNetworkData = useCallback(async () => {
+    setNetworkLoading(true);
+    setNetworkError('');
+    try {
+      const [networkResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsNetwork(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setNetworkPayload(networkResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setNetworkError(normalizeErrorMessage(loadError));
+    } finally {
+      setNetworkLoading(false);
+    }
+  }, [statusQuery]);
 
-  const summaryRows = groupBy === 'organization' ? organizationSummaryRows : filteredLlmSummary;
-  const orgIdByName = useMemo(() => {
-    return new Map(orgAttribution.map((row) => [row.orgName, row.orgId]));
-  }, [orgAttribution]);
-  const endpointMethodOptions = useMemo(() => {
-    const methods = new Set<string>();
-    endpointUsage.forEach((row) => methods.add(row.method));
-    return ['ALL', ...[...methods].sort()];
-  }, [endpointUsage]);
+  const loadModelsData = useCallback(async () => {
+    setModelsLoading(true);
+    setModelsError('');
+    try {
+      const [modelsResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsModels(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setModelsPayload(modelsResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setModelsError(normalizeErrorMessage(loadError));
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [statusQuery]);
 
-  const endpointRows = useMemo(() => {
-    const directionFactor = endpointSortDirection === 'asc' ? 1 : -1;
-    const filteredRows = endpointMethodFilter === 'ALL'
-      ? endpointUsage
-      : endpointUsage.filter((row) => row.method === endpointMethodFilter);
+  const loadConversationsData = useCallback(async () => {
+    setConversationsLoading(true);
+    setConversationsError('');
+    try {
+      const [conversationsResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsConversations(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setConversationsPayload(conversationsResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setConversationsError(normalizeErrorMessage(loadError));
+    } finally {
+      setConversationsLoading(false);
+    }
+  }, [statusQuery]);
 
-    return [...filteredRows].sort((a, b) => {
-      switch (endpointSortKey) {
-        case 'endpoint':
-          return a.endpoint.localeCompare(b.endpoint) * directionFactor;
-        case 'method':
-          return a.method.localeCompare(b.method) * directionFactor;
-        case 'avgLatency':
-          return ((a.avgLatencyMs ?? -1) - (b.avgLatencyMs ?? -1)) * directionFactor;
-        case 'errorRate':
-          return ((a.errorRatePct ?? -1) - (b.errorRatePct ?? -1)) * directionFactor;
-        case 'p95':
-          return ((a.p95LatencyMs ?? -1) - (b.p95LatencyMs ?? -1)) * directionFactor;
-        case 'requests':
-        default:
-          return (a.requestCount - b.requestCount) * directionFactor;
-      }
-    });
-  }, [endpointMethodFilter, endpointSortDirection, endpointSortKey, endpointUsage]);
-
-  const topStorageUsers = useMemo(() => {
-    return [...storageUsers]
-      .sort((a, b) => b.storageUsedMb - a.storageUsedMb)
-      .slice(0, 10);
-  }, [storageUsers]);
-
-  const maxStorageUserMb = useMemo(() => {
-    const maxValue = topStorageUsers.reduce((current, row) => Math.max(current, row.storageUsedMb), 0);
-    return maxValue > 0 ? maxValue : 1;
-  }, [topStorageUsers]);
-
-  const maxMediaTypeBytes = useMemo(() => {
-    const maxValue = mediaTypeBreakdown.reduce((current, row) => Math.max(current, row.bytesTotal), 0);
-    return maxValue > 0 ? maxValue : 1;
-  }, [mediaTypeBreakdown]);
-
-  const topThrottledKeys = useMemo(() => {
-    return new Set(
-      rateLimitEvents
-        .slice(0, TOP_THROTTLED_LIMIT)
-        .map((event) => `${event.actor}|${event.policy}|${event.resourceType ?? ''}|${event.reason ?? ''}`)
-    );
-  }, [rateLimitEvents]);
+  const loadLogData = useCallback(async () => {
+    setLogLoading(true);
+    setLogError('');
+    try {
+      const [logResponse, metaResponse] = await Promise.all([
+        getRouterAnalyticsLog(statusQuery),
+        getRouterAnalyticsMeta(),
+      ]);
+      setLogPayload(logResponse);
+      setMetaPayload(metaResponse);
+    } catch (loadError) {
+      setLogError(normalizeErrorMessage(loadError));
+    } finally {
+      setLogLoading(false);
+    }
+  }, [statusQuery]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    const queryGroupBy = params.get('group_by');
-    const nextGroupBy = queryGroupBy && VALID_LLM_GROUP_BY.has(queryGroupBy as LlmGroupBy)
-      ? (queryGroupBy as LlmGroupBy)
-      : 'provider';
-    const nextProviderFilter = (params.get('provider') ?? '').trim().toLowerCase();
-    setGroupBy(nextGroupBy);
-    setProviderFilter(nextProviderFilter);
-  }, []);
-
-  const handleExport = useCallback(async (
-    key: ExportKey,
-    endpoint: string,
-    params: Record<string, string>,
-    fallbackFilename: string
-  ) => {
-    setExporting((prev) => ({ ...prev, [key]: true }));
-    try {
-      await downloadExportFile({
-        endpoint,
-        params,
-        fallbackFilename,
-        defaultError: 'Failed to download CSV',
-      });
-      success('Export ready', 'CSV download started.');
-    } catch (err: unknown) {
-      const message = err instanceof Error && err.message ? err.message : 'Failed to export CSV';
-      showError('Export failed', message);
-    } finally {
-      setExporting((prev) => ({ ...prev, [key]: false }));
-    }
-  }, [success, showError]);
-
-  const handleEndpointSort = useCallback((key: EndpointSortKey) => {
-    if (endpointSortKey === key) {
-      setEndpointSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    if (activeTab === 'status') {
+      void loadStatusData();
       return;
     }
-    setEndpointSortKey(key);
-    setEndpointSortDirection('desc');
-  }, [endpointSortKey]);
-
-  const getEndpointSortIndicator = useCallback((key: EndpointSortKey) => {
-    if (endpointSortKey !== key) return '↕';
-    return endpointSortDirection === 'asc' ? '↑' : '↓';
-  }, [endpointSortDirection, endpointSortKey]);
-
-  const fetchStorageUsers = useCallback(async (): Promise<StorageUserRow[]> => {
-    const rows: StorageUserRow[] = [];
-    let page = 1;
-    let totalPages = 1;
-
-    while (page <= totalPages) {
-      const payload = await api.getUsersPage({
-        page: String(page),
-        limit: String(STORAGE_USERS_PAGE_LIMIT),
-      });
-      rows.push(...normalizeStorageUsers(payload));
-
-      if (isRecord(payload) && Number.isFinite(Number(payload.pages))) {
-        totalPages = Math.max(1, Number(payload.pages));
-      }
-
-      if (rows.length === 0) break;
-      if (page >= totalPages) break;
-      page += 1;
+    if (activeTab === 'quota') {
+      void loadQuotaData();
+      return;
     }
-
-    return rows;
-  }, []);
-
-  const loadData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      setErrors({});
-
-      const topSpenderParams: Record<string, string> = { limit: '10' };
-      if (llmParams.start) topSpenderParams.start = llmParams.start;
-      if (llmParams.end) topSpenderParams.end = llmParams.end;
-      if (selectedOrg) topSpenderParams.org_id = String(selectedOrg.id);
-
-      const [
-        dailyResult,
-        topResult,
-        summaryResult,
-        topSpendersResult,
-        dayTrendResult,
-        orgAttributionResult,
-        budgetsResult,
-        metricsTextResult,
-        storageUsersResult,
-        rateLimitEventsResult,
-      ] = await Promise.allSettled([
-        api.getUsageDaily({ ...usageParams, limit: '50' }),
-        api.getUsageTop({ ...usageParams, metric: topMetric, limit: '10' }),
-        api.getLlmUsageSummary(llmParams),
-        api.getLlmTopSpenders(topSpenderParams),
-        api.getLlmUsageSummary(dayTrendParams),
-        api.getLlmUsageSummary(orgAttributionParams),
-        api.getBudgets(selectedOrg ? { org_id: String(selectedOrg.id), limit: '200' } : { limit: '200' }),
-        api.getMetricsText(),
-        fetchStorageUsers(),
-        api.getRateLimitEvents({ hours: '24' }),
-      ]);
-
-      const nextErrors: Record<string, string> = {};
-
-      if (dailyResult.status === 'fulfilled' && isRecord(dailyResult.value)) {
-        const items = dailyResult.value.items;
-        setUsageDaily(Array.isArray(items) ? (items as UsageDailyRow[]) : []);
-      } else {
-        setUsageDaily([]);
-        const reason = dailyResult.status === 'rejected' ? dailyResult.reason : null;
-        nextErrors.daily = getErrorMessage(reason, 'Failed to load daily usage');
-      }
-
-      if (topResult.status === 'fulfilled' && isRecord(topResult.value)) {
-        const items = topResult.value.items;
-        setUsageTop(Array.isArray(items) ? (items as UsageTopRow[]) : []);
-      } else {
-        setUsageTop([]);
-        const reason = topResult.status === 'rejected' ? topResult.reason : null;
-        nextErrors.top = getErrorMessage(reason, 'Failed to load top users');
-      }
-
-      if (summaryResult.status === 'fulfilled' && isRecord(summaryResult.value)) {
-        const items = summaryResult.value.items;
-        setLlmSummary(Array.isArray(items) ? (items as LlmSummaryRow[]) : []);
-      } else {
-        setLlmSummary([]);
-        const reason = summaryResult.status === 'rejected' ? summaryResult.reason : null;
-        nextErrors.summary = getErrorMessage(reason, 'Failed to load LLM usage summary');
-      }
-
-      if (topSpendersResult.status === 'fulfilled' && isRecord(topSpendersResult.value)) {
-        const items = topSpendersResult.value.items;
-        setLlmTop(Array.isArray(items) ? (items as LlmTopSpenderRow[]) : []);
-      } else {
-        setLlmTop([]);
-        const reason = topSpendersResult.status === 'rejected' ? topSpendersResult.reason : null;
-        nextErrors.topSpenders = getErrorMessage(reason, 'Failed to load top spenders');
-      }
-
-      let budgetCapUsd: number | null = null;
-      if (budgetsResult.status === 'fulfilled') {
-        budgetCapUsd = extractMonthlyBudgetUsd(budgetsResult.value, selectedOrg?.id);
-      }
-      setMonthlyBudgetUsd(budgetCapUsd);
-
-      if (dayTrendResult.status === 'fulfilled' && isRecord(dayTrendResult.value)) {
-        const items = dayTrendResult.value.items;
-        const rows = Array.isArray(items) ? (items as LlmSummaryRow[]) : [];
-        const points = normalizeDailyCostPoints(rows);
-        setDailyCostTrend(points);
-        setForecast(buildUsageCostForecast(points, budgetCapUsd));
-      } else {
-        setDailyCostTrend([]);
-        setForecast(null);
-        const reason = dayTrendResult.status === 'rejected' ? dayTrendResult.reason : null;
-        nextErrors.forecast = getErrorMessage(reason, 'Failed to load forecast data');
-      }
-
-      if (orgAttributionResult.status === 'fulfilled' && isRecord(orgAttributionResult.value)) {
-        const items = orgAttributionResult.value.items;
-        const rows = Array.isArray(items) ? (items as LlmSummaryRow[]) : [];
-        try {
-          const attributionRows = await buildOrgAttributionRows(rows);
-          setOrgAttribution(attributionRows);
-        } catch (orgError: unknown) {
-          setOrgAttribution([]);
-          nextErrors.orgAttribution = getErrorMessage(orgError, 'Failed to build organization attribution');
-        }
-      } else {
-        setOrgAttribution([]);
-        const reason = orgAttributionResult.status === 'rejected' ? orgAttributionResult.reason : null;
-        nextErrors.orgAttribution = getErrorMessage(reason, 'Failed to load organization attribution');
-      }
-
-      const metricsText = metricsTextResult.status === 'fulfilled' && typeof metricsTextResult.value === 'string'
-        ? metricsTextResult.value
-        : '';
-      if (metricsText) {
-        setEndpointUsage(parseEndpointUsageMetrics(metricsText));
-        setMediaTypeBreakdown(parseMediaTypeStorageBreakdown(metricsText));
-      } else {
-        setEndpointUsage([]);
-        setMediaTypeBreakdown([]);
-        const reason = metricsTextResult.status === 'rejected'
-          ? metricsTextResult.reason
-          : new Error('Metrics text response was not in the expected format');
-        nextErrors.endpoints = getErrorMessage(reason, 'Failed to load endpoint metrics');
-        nextErrors.storage = getErrorMessage(reason, 'Failed to load storage breakdown metrics');
-      }
-
-      if (storageUsersResult.status === 'fulfilled') {
-        const users = storageUsersResult.value;
-        if (users.length > 0) {
-          setStorageUsers(users);
-        } else if (metricsText) {
-          const metricRows = parseUserStorageMetrics(metricsText);
-          setStorageUsers(metricRows.map((row) => ({
-            userId: Number(row.userId) || 0,
-            username: `User ${row.userId}`,
-            email: '',
-            storageUsedMb: row.usedMb,
-            storageQuotaMb: row.quotaMb,
-          })));
-        } else {
-          setStorageUsers([]);
-        }
-      } else if (metricsText) {
-        const metricRows = parseUserStorageMetrics(metricsText);
-        setStorageUsers(metricRows.map((row) => ({
-          userId: Number(row.userId) || 0,
-          username: `User ${row.userId}`,
-          email: '',
-          storageUsedMb: row.usedMb,
-          storageQuotaMb: row.quotaMb,
-        })));
-      } else {
-        setStorageUsers([]);
-        const reason = storageUsersResult.reason;
-        nextErrors.storage = getErrorMessage(reason, 'Failed to load top storage users');
-      }
-
-      if (rateLimitEventsResult.status === 'fulfilled') {
-        setRateLimitEvents(normalizeRateLimitEventsPayload(rateLimitEventsResult.value));
-        setRateLimitEventsSource('endpoint');
-      } else if (metricsText) {
-        setRateLimitEvents(parseRateLimitEventsFromMetricsText(metricsText));
-        setRateLimitEventsSource('metrics_text');
-      } else {
-        setRateLimitEvents([]);
-        setRateLimitEventsSource('unavailable');
-        const reason = rateLimitEventsResult.reason;
-        nextErrors.rateLimits = getErrorMessage(reason, 'Failed to load rate limit events');
-      }
-
-      setErrors(nextErrors);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to load usage data';
-      setError(message);
-      setUsageDaily([]);
-      setUsageTop([]);
-      setLlmSummary([]);
-      setLlmTop([]);
-      setOrgAttribution([]);
-      setDailyCostTrend([]);
-      setForecast(null);
-      setMonthlyBudgetUsd(null);
-      setEndpointUsage([]);
-      setStorageUsers([]);
-      setMediaTypeBreakdown([]);
-      setRateLimitEvents([]);
-      setRateLimitEventsSource('unavailable');
-      setErrors({
-        daily: 'Failed to load daily usage',
-        top: 'Failed to load top users',
-        summary: 'Failed to load LLM usage summary',
-        topSpenders: 'Failed to load top spenders',
-        forecast: 'Failed to load forecast data',
-        orgAttribution: 'Failed to load organization attribution',
-        endpoints: 'Failed to load endpoint metrics',
-        storage: 'Failed to load storage breakdown',
-        rateLimits: 'Failed to load rate limit events',
-      });
-    } finally {
-      setLoading(false);
+    if (activeTab === 'providers') {
+      void loadProvidersData();
+      return;
     }
-  }, [dayTrendParams, fetchStorageUsers, llmParams, orgAttributionParams, selectedOrg, topMetric, usageParams]);
+    if (activeTab === 'access') {
+      void loadAccessData();
+      return;
+    }
+    if (activeTab === 'network') {
+      void loadNetworkData();
+      return;
+    }
+    if (activeTab === 'models') {
+      void loadModelsData();
+      return;
+    }
+    if (activeTab === 'conversations') {
+      void loadConversationsData();
+      return;
+    }
+    if (activeTab === 'log') {
+      void loadLogData();
+    }
+  }, [
+    activeTab,
+    loadStatusData,
+    loadQuotaData,
+    loadProvidersData,
+    loadAccessData,
+    loadNetworkData,
+    loadModelsData,
+    loadConversationsData,
+    loadLogData,
+    refreshTick,
+  ]);
 
-  useEffect(() => {
-    void loadData();
-  }, [loadData]);
+  const timelineBuckets = useMemo<TimelineBucket[]>(() => {
+    if (!statusPayload?.series?.length) return [];
+
+    const map = new Map<string, { requests: number; totalTokens: number; models: Map<string, number> }>();
+
+    statusPayload.series.forEach((point) => {
+      const ts = point.ts;
+      const modelKey = point.model && point.model.trim().length > 0 ? point.model : 'unknown';
+      const existing = map.get(ts) ?? { requests: 0, totalTokens: 0, models: new Map<string, number>() };
+      existing.requests += Number(point.requests || 0);
+      existing.totalTokens += Number(point.total_tokens || 0);
+      existing.models.set(modelKey, (existing.models.get(modelKey) || 0) + Number(point.total_tokens || 0));
+      map.set(ts, existing);
+    });
+
+    return [...map.entries()]
+      .sort((a, b) => new Date(a[0]).getTime() - new Date(b[0]).getTime())
+      .map(([ts, value]) => {
+        let topModel = 'unknown';
+        let topValue = -1;
+        value.models.forEach((tokenCount, modelName) => {
+          if (tokenCount > topValue) {
+            topModel = modelName;
+            topValue = tokenCount;
+          }
+        });
+
+        return {
+          ts,
+          requests: value.requests,
+          totalTokens: value.totalTokens,
+          topModel,
+        };
+      });
+  }, [statusPayload]);
+
+  const maxTimelineTokens = useMemo(() => {
+    if (!timelineBuckets.length) return 0;
+    return Math.max(...timelineBuckets.map((bucket) => bucket.totalTokens));
+  }, [timelineBuckets]);
+
+  const currentTabLabel = useMemo(() => {
+    return TABS.find((tab) => tab.value === activeTab)?.label || 'Tab';
+  }, [activeTab]);
 
   return (
-    <PermissionGuard variant="route" requireAuth role="admin">
+    <PermissionGuard role="admin">
       <ResponsiveLayout>
-        <div className="p-4 lg:p-8">
-          <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="text-3xl font-bold">Usage Analytics</h1>
-              <p className="text-muted-foreground">Track API consumption and LLM costs.</p>
+        <div className="space-y-6" data-testid="usage-router-analytics-page">
+          <div className="rounded-lg border bg-card p-4">
+            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <h1 className="text-2xl font-semibold">Usage Stats</h1>
+                <p className="text-sm text-muted-foreground">
+                  Router analytics overview for status operations.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                <div className="space-y-1">
+                  <Label htmlFor="usage-time-range">Time Range</Label>
+                  <Select
+                    id="usage-time-range"
+                    aria-label="Time Range"
+                    value={range}
+                    onChange={(event) => setRange(event.target.value as RouterAnalyticsRange)}
+                  >
+                    {RANGE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="usage-provider-filter">Provider</Label>
+                  <Select
+                    id="usage-provider-filter"
+                    aria-label="Provider"
+                    value={provider || '__all__'}
+                    onChange={(event) => setProvider(event.target.value === '__all__' ? '' : event.target.value)}
+                  >
+                    <option value="__all__">All providers</option>
+                    {(metaPayload?.providers || []).map((entry) => (
+                      <option key={entry.value} value={entry.value}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="usage-model-filter">Model</Label>
+                  <Select
+                    id="usage-model-filter"
+                    aria-label="Model"
+                    value={model || '__all__'}
+                    onChange={(event) => setModel(event.target.value === '__all__' ? '' : event.target.value)}
+                  >
+                    <option value="__all__">All models</option>
+                    {(metaPayload?.models || []).map((entry) => (
+                      <option key={entry.value} value={entry.value}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="usage-token-filter">Token</Label>
+                  <Select
+                    id="usage-token-filter"
+                    aria-label="Token"
+                    value={tokenFilterValue || '__all__'}
+                    onChange={(event) => setTokenFilterValue(event.target.value === '__all__' ? '' : event.target.value)}
+                  >
+                    <option value="__all__">All tokens</option>
+                    {(metaPayload?.tokens || []).map((entry) => (
+                      <option key={entry.value} value={entry.value}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => setRefreshTick((value) => value + 1)}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Refresh
+                  </Button>
+                </div>
+              </div>
             </div>
-            <Button variant="outline" onClick={() => { void loadData(); }} loading={loading} loadingText="Refreshing...">
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Refresh
-            </Button>
           </div>
 
-          {error && (
-            <Alert variant="destructive" className="mb-6">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-
-          <Card className="mb-6">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calendar className="h-5 w-5" />
-                Date range
-              </CardTitle>
-              <CardDescription>Filter usage across API and LLM metrics.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="space-y-2">
-                  <Label htmlFor="usage-start">Start date</Label>
-                  <Input
-                    id="usage-start"
-                    type="date"
-                    value={startDate}
-                    onChange={(event) => setStartDate(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="usage-end">End date</Label>
-                  <Input
-                    id="usage-end"
-                    type="date"
-                    value={endDate}
-                    onChange={(event) => setEndDate(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="usage-metric">Top metric</Label>
-                  <Select
-                    id="usage-metric"
-                    value={topMetric}
-                    onChange={(event) => setTopMetric(event.target.value)}
-                  >
-                    <option value="requests">Requests</option>
-                    <option value="bytes_total">Bytes out</option>
-                    <option value="bytes_in_total">Bytes in</option>
-                    <option value="errors">Errors</option>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="usage-group">LLM group by</Label>
-                  <Select
-                    id="usage-group"
-                    value={groupBy}
-                    onChange={(event) => setGroupBy(event.target.value as LlmGroupBy)}
-                  >
-                    <option value="user">User</option>
-                    <option value="provider">Provider</option>
-                    <option value="model">Model</option>
-                    <option value="operation">Operation</option>
-                    <option value="day">Day</option>
-                    <option value="organization">Organization</option>
-                  </Select>
-                </div>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <Button onClick={() => { void loadData(); }} loading={loading} loadingText="Applying...">
-                  Apply filters
-                </Button>
-                {providerFilter ? (
-                  <>
-                    <Badge variant="secondary">Provider filter: {providerFilter}</Badge>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setProviderFilter('')}
-                    >
-                      Clear provider filter
-                    </Button>
-                  </>
-                ) : null}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Tabs defaultValue="api" className="space-y-6">
-            <TabsList>
-              <TabsTrigger value="api">API Usage</TabsTrigger>
-              <TabsTrigger value="endpoints">Endpoints</TabsTrigger>
-              <TabsTrigger value="llm">LLM Usage</TabsTrigger>
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as UsageTab)}>
+            <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-md border bg-muted/40 p-1">
+              {TABS.map((tab) => (
+                <TabsTrigger key={tab.value} value={tab.value} className="relative min-w-fit px-3 py-2">
+                  {tab.label}
+                  {!tab.implemented && (
+                    <Badge variant="secondary" className="ml-2 text-[10px]">
+                      Soon
+                    </Badge>
+                  )}
+                </TabsTrigger>
+              ))}
             </TabsList>
 
-            <TabsContent value="api" className="space-y-6">
-              <Card>
-                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-1">
-                    <CardTitle className="flex items-center gap-2">
-                      <BarChart3 className="h-5 w-5" />
-                      Daily usage
+            <TabsContent value="status" className="space-y-4">
+              {statusError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{statusError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Requests</CardDescription>
+                    <CardTitle>{formatNumber(statusPayload?.kpis.requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Prompt / Generated</CardDescription>
+                    <CardTitle>
+                      {formatNumber(statusPayload?.kpis.prompt_tokens)} / {formatNumber(statusPayload?.kpis.generated_tokens)}
                     </CardTitle>
-                    <CardDescription>Requests, errors, and bandwidth by day.</CardDescription>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleExport(
-                      'daily',
-                      '/admin/usage/daily/export.csv',
-                      { ...usageParams, limit: '1000' },
-                      `usage_daily_${dateSuffix}.csv`
-                    )}
-                    disabled={loading || exporting.daily}
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Export CSV
-                  </Button>
-                </CardHeader>
-                <CardContent>
-                  {loading ? (
-                    <div className="text-muted-foreground">Loading usage…</div>
-                  ) : errors.daily ? (
-                    <Alert variant="destructive" className="mb-4">
-                      <AlertDescription>{errors.daily}</AlertDescription>
-                    </Alert>
-                  ) : usageDaily.length === 0 ? (
-                    <div className="text-muted-foreground">No usage data for this range.</div>
-                  ) : (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Day</TableHead>
-                          <TableHead>User</TableHead>
-                          <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right">Errors</TableHead>
-                          <TableHead className="text-right">Bytes out</TableHead>
-                          <TableHead className="text-right">Bytes in</TableHead>
-                          <TableHead className="text-right">Avg latency</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {usageDaily.map((row) => (
-                          <TableRow key={`${row.user_id}-${row.day}`}>
-                            <TableCell>{row.day}</TableCell>
-                            <TableCell>{row.user_id}</TableCell>
-                            <TableCell className="text-right">{row.requests}</TableCell>
-                            <TableCell className="text-right">{row.errors}</TableCell>
-                            <TableCell className="text-right">{formatBytesDisplay(row.bytes_total)}</TableCell>
-                            <TableCell className="text-right">{formatBytesDisplay(row.bytes_in_total ?? undefined)}</TableCell>
-                            <TableCell className="text-right">{formatLatencyDisplay(row.latency_avg_ms)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-1">
-                    <CardTitle>Top users</CardTitle>
-                    <CardDescription>Top consumers for the selected metric.</CardDescription>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleExport(
-                      'top',
-                      '/admin/usage/top/export.csv',
-                      { ...usageParams, metric: topMetric, limit: '100' },
-                      `usage_top_${topMetric}_${dateSuffix}.csv`
-                    )}
-                    disabled={loading || exporting.top}
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Export CSV
-                  </Button>
-                </CardHeader>
-                <CardContent>
-                  {loading ? (
-                    <div className="text-muted-foreground">Loading top users…</div>
-                  ) : errors.top ? (
-                    <Alert variant="destructive" className="mb-4">
-                      <AlertDescription>{errors.top}</AlertDescription>
-                    </Alert>
-                  ) : usageTop.length === 0 ? (
-                    <div className="text-muted-foreground">No top-user data for this range.</div>
-                  ) : (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>User</TableHead>
-                          <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right">Errors</TableHead>
-                          <TableHead className="text-right">Bytes out</TableHead>
-                          <TableHead className="text-right">Bytes in</TableHead>
-                          <TableHead className="text-right">Avg latency</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {usageTop.map((row) => (
-                          <TableRow key={row.user_id}>
-                            <TableCell>{row.user_id}</TableCell>
-                            <TableCell className="text-right">{row.requests}</TableCell>
-                            <TableCell className="text-right">{row.errors}</TableCell>
-                            <TableCell className="text-right">{formatBytesDisplay(row.bytes_total)}</TableCell>
-                            <TableCell className="text-right">{formatBytesDisplay(row.bytes_in_total ?? undefined)}</TableCell>
-                            <TableCell className="text-right">{formatLatencyDisplay(row.latency_avg_ms)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="endpoints" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Endpoint usage</CardTitle>
-                  <CardDescription>
-                    Per-endpoint HTTP request, latency, and error metrics from Prometheus text metrics.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {loading ? (
-                    <div className="text-muted-foreground">Loading endpoint metrics…</div>
-                  ) : errors.endpoints ? (
-                    <Alert variant="destructive" className="mb-4">
-                      <AlertDescription>{errors.endpoints}</AlertDescription>
-                    </Alert>
-                  ) : endpointRows.length === 0 ? (
-                    <div className="text-muted-foreground">No endpoint metrics available for the current source.</div>
-                  ) : (
-                    <>
-                      <div className="mb-4 flex flex-wrap items-end gap-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="endpoint-method-filter">Method filter</Label>
-                          <Select
-                            id="endpoint-method-filter"
-                            value={endpointMethodFilter}
-                            onChange={(event) => setEndpointMethodFilter(event.target.value)}
-                          >
-                            {endpointMethodOptions.map((option) => (
-                              <option key={option} value={option}>{option}</option>
-                            ))}
-                          </Select>
-                        </div>
-                        <Badge variant="outline">Rows: {endpointRows.length}</Badge>
-                      </div>
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>
-                              <button type="button" className="inline-flex items-center gap-1" onClick={() => handleEndpointSort('endpoint')}>
-                                Endpoint {getEndpointSortIndicator('endpoint')}
-                              </button>
-                            </TableHead>
-                            <TableHead>
-                              <button type="button" className="inline-flex items-center gap-1" onClick={() => handleEndpointSort('method')}>
-                                Method {getEndpointSortIndicator('method')}
-                              </button>
-                            </TableHead>
-                            <TableHead className="text-right">
-                              <button type="button" className="inline-flex items-center gap-1" onClick={() => handleEndpointSort('requests')}>
-                                Requests {getEndpointSortIndicator('requests')}
-                              </button>
-                            </TableHead>
-                            <TableHead className="text-right">
-                              <button type="button" className="inline-flex items-center gap-1" onClick={() => handleEndpointSort('avgLatency')}>
-                                Avg latency {getEndpointSortIndicator('avgLatency')}
-                              </button>
-                            </TableHead>
-                            <TableHead className="text-right">
-                              <button type="button" className="inline-flex items-center gap-1" onClick={() => handleEndpointSort('errorRate')}>
-                                Error rate {getEndpointSortIndicator('errorRate')}
-                              </button>
-                            </TableHead>
-                            <TableHead className="text-right">
-                              <button type="button" className="inline-flex items-center gap-1" onClick={() => handleEndpointSort('p95')}>
-                                p95 latency {getEndpointSortIndicator('p95')}
-                              </button>
-                            </TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {endpointRows.map((row) => (
-                            <TableRow key={`${row.method}-${row.endpoint}`}>
-                              <TableCell className="max-w-[320px] truncate font-mono text-xs">{row.endpoint}</TableCell>
-                              <TableCell>
-                                <Badge variant="outline">{row.method}</Badge>
-                              </TableCell>
-                              <TableCell className="text-right">{row.requestCount}</TableCell>
-                              <TableCell className="text-right">{formatLatencyDisplay(row.avgLatencyMs)}</TableCell>
-                              <TableCell className="text-right">{formatPercentDisplay(row.errorRatePct)}</TableCell>
-                              <TableCell className="text-right">{formatLatencyDisplay(row.p95LatencyMs)}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Avg latency ms</CardDescription>
+                    <CardTitle>{formatLatency(statusPayload?.kpis.avg_latency_ms, { fallback: '—', precision: 1 })}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Avg gen tok/s</CardDescription>
+                    <CardTitle>{formatTokensPerSecond(statusPayload?.kpis.avg_gen_toks_per_s)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
 
               <Card>
                 <CardHeader>
-                  <CardTitle>Storage breakdown</CardTitle>
+                  <CardTitle>Usage by model (tokens / bucket)</CardTitle>
                   <CardDescription>
-                    Top storage consumers by user and upload volume by media type.
+                    Providers available: {statusPayload?.providers_available ?? 0} • Online: {statusPayload?.providers_online ?? 0}
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-6">
-                  {loading ? (
-                    <div className="text-muted-foreground">Loading storage breakdown…</div>
-                  ) : errors.storage ? (
-                    <Alert variant="destructive" className="mb-4">
-                      <AlertDescription>{errors.storage}</AlertDescription>
-                    </Alert>
+                <CardContent>
+                  {statusLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading status timeline...</p>
+                  ) : timelineBuckets.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No usage data in this window.</p>
                   ) : (
-                    <div className="grid gap-6 lg:grid-cols-2">
-                      <div className="space-y-3">
-                        <h3 className="text-sm font-semibold">Top storage consumers</h3>
-                        {topStorageUsers.length === 0 ? (
-                          <div className="text-sm text-muted-foreground">No per-user storage data available.</div>
-                        ) : (
-                          topStorageUsers.map((row) => (
-                            <div key={row.userId} className="space-y-1">
-                              <div className="flex items-center justify-between text-sm">
-                                <span className="truncate">{row.username}</span>
-                                <span className="text-muted-foreground">{formatStorageMbDisplay(row.storageUsedMb)}</span>
-                              </div>
-                              <div className="h-2 rounded bg-muted">
-                                <div
-                                  className="h-2 rounded bg-primary"
-                                  style={{ width: `${Math.min((row.storageUsedMb / maxStorageUserMb) * 100, 100)}%` }}
-                                />
-                              </div>
+                    <div className="space-y-3">
+                      {timelineBuckets.map((bucket) => {
+                        const widthPercent = maxTimelineTokens > 0
+                          ? Math.max(6, Math.round((bucket.totalTokens / maxTimelineTokens) * 100))
+                          : 0;
+                        return (
+                          <div key={bucket.ts} className="space-y-1">
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                              <span>{formatBucketTime(bucket.ts)}</span>
+                              <span>{bucket.topModel}</span>
                             </div>
-                          ))
-                        )}
-                      </div>
-                      <div className="space-y-3">
-                        <h3 className="text-sm font-semibold">Media type upload volume</h3>
-                        {mediaTypeBreakdown.length === 0 ? (
-                          <div className="text-sm text-muted-foreground">No media-type storage data available.</div>
-                        ) : (
-                          mediaTypeBreakdown.map((row) => (
-                            <div key={row.mediaType} className="space-y-1">
-                              <div className="flex items-center justify-between text-sm">
-                                <span className="truncate capitalize">{row.mediaType}</span>
-                                <span className="text-muted-foreground">{formatBytesDisplay(row.bytesTotal)}</span>
-                              </div>
-                              <div className="h-2 rounded bg-muted">
-                                <div
-                                  className="h-2 rounded bg-primary"
-                                  style={{ width: `${Math.min((row.bytesTotal / maxMediaTypeBytes) * 100, 100)}%` }}
-                                />
-                              </div>
+                            <div className="h-2 rounded bg-muted">
+                              <div className="h-2 rounded bg-blue-500" style={{ width: `${widthPercent}%` }} />
                             </div>
-                          ))
-                        )}
-                      </div>
+                            <div className="text-xs text-muted-foreground">
+                              {formatNumber(bucket.totalTokens)} tokens • {formatNumber(bucket.requests)} requests
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </CardContent>
               </Card>
 
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                <BreakdownCard title="Providers" rows={breakdownsPayload?.providers || []} keyLabel="Provider" />
+                <BreakdownCard title="Models" rows={breakdownsPayload?.models || []} keyLabel="Model" />
+                <BreakdownCard title="Token Names" rows={breakdownsPayload?.token_names || []} keyLabel="Token Name" />
+                <BreakdownCard title="Remote IPs" rows={breakdownsPayload?.remote_ips || []} keyLabel="Remote IP" />
+                <BreakdownCard title="User Agents" rows={breakdownsPayload?.user_agents || []} keyLabel="User-Agent" />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="quota" className="space-y-4">
+              {quotaError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{quotaError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Keys tracked</CardDescription>
+                    <CardTitle>{formatNumber(quotaPayload?.summary.keys_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Keys over budget</CardDescription>
+                    <CardTitle>{formatNumber(quotaPayload?.summary.keys_over_budget)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Budgeted keys</CardDescription>
+                    <CardTitle>{formatNumber(quotaPayload?.summary.budgeted_keys)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
               <Card>
-                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-1">
-                    <CardTitle>Rate limit monitoring</CardTitle>
-                    <CardDescription>
-                      Rejection counts and recent throttle activity by actor and policy.
-                    </CardDescription>
-                  </div>
-                  <Badge variant={rateLimitEventsSource === 'endpoint' ? 'default' : 'secondary'}>
-                    Source: {rateLimitEventsSource}
-                  </Badge>
+                <CardHeader>
+                  <CardTitle>Quota utilization</CardTitle>
+                  <CardDescription>Day and 30-day budget usage for active keys in the selected filter window.</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {loading ? (
-                    <div className="text-muted-foreground">Loading rate limit events…</div>
-                  ) : errors.rateLimits ? (
-                    <Alert variant="destructive" className="mb-4">
-                      <AlertDescription>{errors.rateLimits}</AlertDescription>
-                    </Alert>
-                  ) : rateLimitEvents.length === 0 ? (
-                    <div className="text-muted-foreground">No rate limit rejections found in current data sources.</div>
+                  {quotaLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading quota data...</p>
+                  ) : (quotaPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No quota-linked key usage in this window.</p>
                   ) : (
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Actor</TableHead>
-                          <TableHead>Policy</TableHead>
-                          <TableHead className="text-right">Rejections (24h)</TableHead>
-                          <TableHead className="text-right">Rejections (7d)</TableHead>
-                          <TableHead className="text-right">Last rejection</TableHead>
+                          <TableHead>Token</TableHead>
+                          <TableHead className="text-right">Requests</TableHead>
+                          <TableHead className="text-right">Tokens</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Day Tokens</TableHead>
+                          <TableHead className="text-right">30d Tokens</TableHead>
+                          <TableHead className="text-right">Day USD</TableHead>
+                          <TableHead className="text-right">30d USD</TableHead>
                           <TableHead className="text-right">Status</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {rateLimitEvents.map((event) => {
-                          const rowKey = `${event.actor}|${event.policy}|${event.resourceType ?? ''}|${event.reason ?? ''}`;
-                          const isTopThrottled = topThrottledKeys.has(rowKey);
-                          return (
-                            <TableRow key={rowKey} className={isTopThrottled ? 'bg-red-50/40 dark:bg-red-950/20' : undefined}>
-                              <TableCell>{event.actor}</TableCell>
-                              <TableCell>
-                                <div className="flex flex-col gap-1">
-                                  <span>{event.policy}</span>
-                                  {event.resourceType ? (
-                                    <span className="text-xs text-muted-foreground">resource: {event.resourceType}</span>
-                                  ) : null}
-                                </div>
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">{event.rejections24h}</TableCell>
-                              <TableCell className="text-right tabular-nums">{event.rejections7d}</TableCell>
-                              <TableCell className="text-right">{formatDateTime(event.lastRejectedAt, { fallback: '—' })}</TableCell>
-                              <TableCell className="text-right">
-                                {isTopThrottled ? <Badge variant="destructive">Top throttled</Badge> : <Badge variant="outline">Normal</Badge>}
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="llm" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Cost forecast</CardTitle>
-                  <CardDescription>
-                    Linear-regression projection for the next 7, 30, and 90 days.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {loading ? (
-                    <div className="text-muted-foreground">Loading forecast…</div>
-                  ) : errors.forecast ? (
-                    <Alert variant="destructive" className="mb-4">
-                      <AlertDescription>{errors.forecast}</AlertDescription>
-                    </Alert>
-                  ) : !forecast || dailyCostTrend.length === 0 ? (
-                    <div className="text-muted-foreground">Not enough daily cost data to forecast.</div>
-                  ) : (
-                    <div className="space-y-4">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Horizon</TableHead>
-                            <TableHead className="text-right">Low estimate</TableHead>
-                            <TableHead className="text-right">Expected</TableHead>
-                            <TableHead className="text-right">High estimate</TableHead>
-                            <TableHead className="text-right">Confidence</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {forecast.bands.map((band) => (
-                            <TableRow key={band.horizonDays}>
-                              <TableCell>{band.horizonDays} days</TableCell>
-                              <TableCell className="text-right">${band.lowEstimateUsd.toFixed(2)}</TableCell>
-                              <TableCell className="text-right font-medium">${band.expectedCostUsd.toFixed(2)}</TableCell>
-                              <TableCell className="text-right">${band.highEstimateUsd.toFixed(2)}</TableCell>
-                              <TableCell className="text-right">
-                                <Badge variant={band.confidence === 'high' ? 'default' : band.confidence === 'medium' ? 'secondary' : 'outline'}>
-                                  {band.confidence}
-                                </Badge>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                      <div className="flex flex-wrap items-center gap-2 text-sm">
-                        <Badge variant="outline">Monthly run rate: ${forecast.monthlyRunRateUsd.toFixed(2)}</Badge>
-                        <Badge variant="outline">Trend slope/day: ${forecast.slopePerDayUsd.toFixed(4)}</Badge>
-                        <Badge variant="outline">R²: {forecast.rSquared.toFixed(3)}</Badge>
-                        {monthlyBudgetUsd ? (
-                          <Badge variant="secondary">Monthly budget: ${monthlyBudgetUsd.toFixed(2)}</Badge>
-                        ) : null}
-                      </div>
-                      {forecast.budgetExceededByDate ? (
-                        <Alert variant="destructive">
-                          <AlertDescription>
-                            At this rate, monthly budget will be exceeded by <strong>{forecast.budgetExceededByDate}</strong>.
-                          </AlertDescription>
-                        </Alert>
-                      ) : monthlyBudgetUsd ? (
-                        <Alert>
-                          <AlertDescription>
-                            Forecast remains within the current monthly budget cap.
-                          </AlertDescription>
-                        </Alert>
-                      ) : null}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-1">
-                    <CardTitle>LLM usage summary</CardTitle>
-                    <CardDescription>
-                      Grouped usage for the selected dimension.
-                    </CardDescription>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleExport(
-                      'llm',
-                      '/admin/llm-usage/export.csv',
-                      { ...llmExportParams, limit: '1000' },
-                      `llm_usage_${dateSuffix}.csv`
-                    )}
-                    disabled={loading || exporting.llm}
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Export CSV
-                  </Button>
-                </CardHeader>
-                <CardContent>
-                  {loading ? (
-                    <div className="text-muted-foreground">Loading LLM summary…</div>
-                  ) : errors.summary ? (
-                    <Alert variant="destructive" className="mb-4">
-                      <AlertDescription>{errors.summary}</AlertDescription>
-                    </Alert>
-                  ) : summaryRows.length === 0 ? (
-                    <div className="text-muted-foreground">No LLM usage data for this range.</div>
-                  ) : (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{groupBy === 'organization' ? 'Organization' : 'Group'}</TableHead>
-                          <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right">Errors</TableHead>
-                          <TableHead className="text-right">Input tokens</TableHead>
-                          <TableHead className="text-right">Output tokens</TableHead>
-                          <TableHead className="text-right">Total tokens</TableHead>
-                          <TableHead className="text-right">Cost (USD)</TableHead>
-                          <TableHead className="text-right">Avg latency</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {summaryRows.map((row) => {
-                          const orgId = groupBy === 'organization' ? (orgIdByName.get(row.group_value) ?? null) : null;
-                          return (
-                          <TableRow key={row.group_value}>
-                            <TableCell>
-                              {groupBy === 'organization' && orgId ? (
-                                <Link href={`/organizations/${orgId}`} className="text-primary underline">
-                                  {row.group_value}
-                                </Link>
-                              ) : (
-                                row.group_value
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">{row.requests}</TableCell>
-                            <TableCell className="text-right">{row.errors}</TableCell>
-                            <TableCell className="text-right">{row.input_tokens}</TableCell>
-                            <TableCell className="text-right">{row.output_tokens}</TableCell>
-                            <TableCell className="text-right">{row.total_tokens}</TableCell>
-                            <TableCell className="text-right">${row.total_cost_usd.toFixed(4)}</TableCell>
-                            <TableCell className="text-right">{formatLatencyDisplay(row.latency_avg_ms)}</TableCell>
-                          </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Per-organization cost attribution</CardTitle>
-                  <CardDescription>
-                    Requests, tokens, and cost contribution by organization.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {loading ? (
-                    <div className="text-muted-foreground">Loading organization attribution…</div>
-                  ) : errors.orgAttribution ? (
-                    <Alert variant="destructive" className="mb-4">
-                      <AlertDescription>{errors.orgAttribution}</AlertDescription>
-                    </Alert>
-                  ) : orgAttribution.length === 0 ? (
-                    <div className="text-muted-foreground">No organization attribution data for this range.</div>
-                  ) : (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Organization</TableHead>
-                          <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right">Total tokens</TableHead>
-                          <TableHead className="text-right">Cost (USD)</TableHead>
-                          <TableHead className="text-right">% of total</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {orgAttribution.map((row) => (
-                          <TableRow key={`${row.orgId ?? 'unassigned'}-${row.orgName}`}>
-                            <TableCell>
-                              {row.orgId ? (
-                                <Link href={`/organizations/${row.orgId}`} className="text-primary underline">
-                                  {row.orgName}
-                                </Link>
-                              ) : (
-                                row.orgName
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">{row.requests}</TableCell>
-                            <TableCell className="text-right">{row.totalTokens}</TableCell>
-                            <TableCell className="text-right">${row.totalCostUsd.toFixed(4)}</TableCell>
-                            <TableCell className="text-right">{row.percentOfTotal.toFixed(2)}%</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Top spenders</CardTitle>
-                  <CardDescription>Users with the highest LLM costs.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {loading ? (
-                    <div className="text-muted-foreground">Loading top spenders…</div>
-                  ) : errors.topSpenders ? (
-                    <Alert variant="destructive" className="mb-4">
-                      <AlertDescription>{errors.topSpenders}</AlertDescription>
-                    </Alert>
-                  ) : llmTop.length === 0 ? (
-                    <div className="text-muted-foreground">No spend data for this range.</div>
-                  ) : (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>User</TableHead>
-                          <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right">Total cost (USD)</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {llmTop.map((row) => (
-                          <TableRow key={row.user_id}>
-                            <TableCell>{row.user_id}</TableCell>
-                            <TableCell className="text-right">{row.requests}</TableCell>
+                        {(quotaPayload?.items || []).map((row) => (
+                          <TableRow key={`quota-${row.key_id}`}>
+                            <TableCell className="font-medium">{row.token_name}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">{formatQuotaMetric(row.day_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatQuotaMetric(row.month_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatQuotaMetric(row.day_usd)}</TableCell>
+                            <TableCell className="text-right">{formatQuotaMetric(row.month_usd)}</TableCell>
                             <TableCell className="text-right">
-                              <Badge variant="outline">${row.total_cost_usd.toFixed(4)}</Badge>
+                              {row.over_budget ? (
+                                <Badge variant="destructive">Exceeded</Badge>
+                              ) : (
+                                <Badge variant="secondary">OK</Badge>
+                              )}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -1399,6 +699,455 @@ export default function UsagePage() {
                 </CardContent>
               </Card>
             </TabsContent>
+
+            <TabsContent value="providers" className="space-y-4">
+              {providersError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{providersError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Total providers</CardDescription>
+                    <CardTitle>{formatNumber(providersPayload?.summary.providers_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Providers online</CardDescription>
+                    <CardTitle>{formatNumber(providersPayload?.summary.providers_online)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Failover events</CardDescription>
+                    <CardTitle>{formatNumber(providersPayload?.summary.failover_events)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Provider health and load</CardTitle>
+                  <CardDescription>Request volume, latency, and success rate by provider in the selected window.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {providersLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading provider analytics...</p>
+                  ) : (providersPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No provider usage in this window.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Provider</TableHead>
+                          <TableHead className="text-right">Requests</TableHead>
+                          <TableHead className="text-right">PP</TableHead>
+                          <TableHead className="text-right">TG</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Latency ms</TableHead>
+                          <TableHead className="text-right">Errors</TableHead>
+                          <TableHead className="text-right">Success</TableHead>
+                          <TableHead className="text-right">Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(providersPayload?.items || []).map((row) => (
+                          <TableRow key={`providers-${row.provider}`}>
+                            <TableCell className="font-medium">{row.provider}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.prompt_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">{formatLatency(row.avg_latency_ms, { fallback: '—', precision: 1 })}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.errors)}</TableCell>
+                            <TableCell className="text-right">{formatPercent(row.success_rate_pct)}</TableCell>
+                            <TableCell className="text-right">
+                              {row.online ? (
+                                <Badge variant="secondary">Online</Badge>
+                              ) : (
+                                <Badge variant="destructive">Offline</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="access" className="space-y-4">
+              {accessError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{accessError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Token names</CardDescription>
+                    <CardTitle>{formatNumber(accessPayload?.summary.token_names_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Remote IPs</CardDescription>
+                    <CardTitle>{formatNumber(accessPayload?.summary.remote_ips_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>User agents</CardDescription>
+                    <CardTitle>{formatNumber(accessPayload?.summary.user_agents_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Anonymous requests</CardDescription>
+                    <CardTitle>{formatNumber(accessPayload?.summary.anonymous_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              {accessLoading ? (
+                <Card>
+                  <CardContent className="pt-6">
+                    <p className="text-sm text-muted-foreground">Loading access analytics...</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <BreakdownCard title="Token Names (Access)" rows={accessPayload?.token_names || []} keyLabel="Token Name" />
+                  <BreakdownCard title="Remote IPs (Access)" rows={accessPayload?.remote_ips || []} keyLabel="Remote IP" />
+                  <BreakdownCard title="User Agents (Access)" rows={accessPayload?.user_agents || []} keyLabel="User-Agent" />
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="network" className="space-y-4">
+              {networkError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{networkError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Remote IPs</CardDescription>
+                    <CardTitle>{formatNumber(networkPayload?.summary.remote_ips_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Endpoints</CardDescription>
+                    <CardTitle>{formatNumber(networkPayload?.summary.endpoints_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Operations</CardDescription>
+                    <CardTitle>{formatNumber(networkPayload?.summary.operations_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Error requests</CardDescription>
+                    <CardTitle>{formatNumber(networkPayload?.summary.error_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              {networkLoading ? (
+                <Card>
+                  <CardContent className="pt-6">
+                    <p className="text-sm text-muted-foreground">Loading network analytics...</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <BreakdownCard title="Remote IPs (Network)" rows={networkPayload?.remote_ips || []} keyLabel="Remote IP" />
+                  <BreakdownCard title="Endpoints (Network)" rows={networkPayload?.endpoints || []} keyLabel="Endpoint" />
+                  <BreakdownCard title="Operations (Network)" rows={networkPayload?.operations || []} keyLabel="Operation" />
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="models" className="space-y-4">
+              {modelsError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{modelsError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Total models</CardDescription>
+                    <CardTitle>{formatNumber(modelsPayload?.summary.models_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Models online</CardDescription>
+                    <CardTitle>{formatNumber(modelsPayload?.summary.models_online)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Providers covered</CardDescription>
+                    <CardTitle>{formatNumber(modelsPayload?.summary.providers_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Error requests</CardDescription>
+                    <CardTitle>{formatNumber(modelsPayload?.summary.error_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Model health and load</CardTitle>
+                  <CardDescription>Request volume and quality metrics by model/provider pair.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {modelsLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading model analytics...</p>
+                  ) : (modelsPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No model usage in this window.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Model</TableHead>
+                          <TableHead>Provider</TableHead>
+                          <TableHead className="text-right">Requests</TableHead>
+                          <TableHead className="text-right">PP</TableHead>
+                          <TableHead className="text-right">TG</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Latency ms</TableHead>
+                          <TableHead className="text-right">Errors</TableHead>
+                          <TableHead className="text-right">Success</TableHead>
+                          <TableHead className="text-right">Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(modelsPayload?.items || []).map((row) => (
+                          <TableRow key={`models-${row.provider}-${row.model}`}>
+                            <TableCell className="font-medium">{row.model}</TableCell>
+                            <TableCell>{row.provider}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.prompt_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">{formatLatency(row.avg_latency_ms, { fallback: '—', precision: 1 })}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.errors)}</TableCell>
+                            <TableCell className="text-right">{formatPercent(row.success_rate_pct)}</TableCell>
+                            <TableCell className="text-right">
+                              {row.online ? (
+                                <Badge variant="secondary">Online</Badge>
+                              ) : (
+                                <Badge variant="destructive">Offline</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="conversations" className="space-y-4">
+              {conversationsError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{conversationsError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Total conversations</CardDescription>
+                    <CardTitle>{formatNumber(conversationsPayload?.summary.conversations_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Active conversations</CardDescription>
+                    <CardTitle>{formatNumber(conversationsPayload?.summary.active_conversations)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Avg requests/conversation</CardDescription>
+                    <CardTitle>{formatNumber(conversationsPayload?.summary.avg_requests_per_conversation)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Error requests</CardDescription>
+                    <CardTitle>{formatNumber(conversationsPayload?.summary.error_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Conversation activity</CardTitle>
+                  <CardDescription>Per-conversation request volume and health in the selected filter window.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {conversationsLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading conversation analytics...</p>
+                  ) : (conversationsPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No conversation activity in this window.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Conversation</TableHead>
+                          <TableHead className="text-right">Requests</TableHead>
+                          <TableHead className="text-right">PP</TableHead>
+                          <TableHead className="text-right">TG</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Latency ms</TableHead>
+                          <TableHead className="text-right">Errors</TableHead>
+                          <TableHead className="text-right">Success</TableHead>
+                          <TableHead className="text-right">Last Seen</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(conversationsPayload?.items || []).map((row) => (
+                          <TableRow key={`conversations-${row.conversation_id}`}>
+                            <TableCell className="font-medium">{row.conversation_id}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.prompt_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">{formatLatency(row.avg_latency_ms, { fallback: '—', precision: 1 })}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.errors)}</TableCell>
+                            <TableCell className="text-right">{formatPercent(row.success_rate_pct)}</TableCell>
+                            <TableCell className="text-right">{formatDateTime(row.last_seen_at)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="log" className="space-y-4">
+              {logError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{logError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Requests in window</CardDescription>
+                    <CardTitle>{formatNumber(logPayload?.summary.requests_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Error requests</CardDescription>
+                    <CardTitle>{formatNumber(logPayload?.summary.error_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Estimated requests</CardDescription>
+                    <CardTitle>{formatNumber(logPayload?.summary.estimated_requests)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Distinct request IDs</CardDescription>
+                    <CardTitle>{formatNumber(logPayload?.summary.request_ids_total)}</CardTitle>
+                  </CardHeader>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Request log</CardTitle>
+                  <CardDescription>Recent router usage entries matching current filters.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {logLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading request log...</p>
+                  ) : (logPayload?.items.length || 0) === 0 ? (
+                    <p className="text-sm text-muted-foreground">No requests in this window.</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Time</TableHead>
+                          <TableHead>Req ID</TableHead>
+                          <TableHead>Provider / Model</TableHead>
+                          <TableHead className="text-right">Status</TableHead>
+                          <TableHead className="text-right">Latency ms</TableHead>
+                          <TableHead className="text-right">Tokens</TableHead>
+                          <TableHead className="text-right">Cost USD</TableHead>
+                          <TableHead className="text-right">Estimated</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(logPayload?.items || []).map((row) => (
+                          <TableRow key={`log-${row.ts}-${row.request_id || 'unknown'}`}>
+                            <TableCell>{formatDateTime(row.ts)}</TableCell>
+                            <TableCell className="font-mono text-xs">{row.request_id || '—'}</TableCell>
+                            <TableCell className="text-sm">
+                              <div className="font-medium">{row.provider}</div>
+                              <div className="text-muted-foreground">{row.model}</div>
+                            </TableCell>
+                            <TableCell className="text-right">{row.status ?? '—'}</TableCell>
+                            <TableCell className="text-right">{formatLatency(row.latency_ms, { fallback: '—', precision: 1 })}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_tokens)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.total_cost_usd)}</TableCell>
+                            <TableCell className="text-right">
+                              {row.estimated ? (
+                                <Badge variant="secondary">Yes</Badge>
+                              ) : (
+                                <Badge variant="outline">No</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {TABS.filter((tab) => !tab.implemented).map((tab) => (
+              <TabsContent key={tab.value} value={tab.value}>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>{tab.label}</CardTitle>
+                    <CardDescription>{tab.label} tab is coming soon.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground">
+                      {currentTabLabel} will be delivered as part of the router analytics staged rollout.
+                    </p>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            ))}
           </Tabs>
         </div>
       </ResponsiveLayout>

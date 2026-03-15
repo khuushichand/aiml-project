@@ -395,6 +395,9 @@ class GoogleCountOnlyHTTPAdapter:
         header_auth = dict(headers)
         if self.api_key:
             header_auth["x-goog-api-key"] = self.api_key
+        allow_query_key_fallback = _truthy(
+            str(os.getenv("GOOGLE_COUNTTOKENS_ALLOW_QUERY_KEY_FALLBACK", "")).strip().lower()
+        )
         payload = {
             "contents": [
                 {
@@ -406,53 +409,60 @@ class GoogleCountOnlyHTTPAdapter:
 
         last_error: Exception | None = None
         for url in self._candidate_urls():
-            attempts: list[tuple[str, dict[str, str]]] = [(url, header_auth)]
-            if self.api_key:
+            try:
+                response = _http_post(
+                    url=url,
+                    payload=payload,
+                    headers=header_auth,
+                    timeout=self.timeout_seconds,
+                )
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            if response.status_code == 404:
+                continue
+
+            # Optional compatibility mode for deployments that require key in query params.
+            # Disabled by default to avoid leaking secrets in URL logs.
+            if (
+                response.status_code in {401, 403}
+                and allow_query_key_fallback
+                and self.api_key
+            ):
                 separator = "&" if "?" in url else "?"
                 query_url = f"{url}{separator}key={quote_plus(self.api_key)}"
-                attempts.append((query_url, headers))
-
-            for attempt_index, (attempt_url, attempt_headers) in enumerate(attempts):
                 try:
                     response = _http_post(
-                        url=attempt_url,
+                        url=query_url,
                         payload=payload,
-                        headers=attempt_headers,
+                        headers=headers,
                         timeout=self.timeout_seconds,
                     )
                 except Exception as exc:
                     last_error = exc
                     continue
-
                 if response.status_code == 404:
                     continue
 
-                # Some Gemini deployments accept API keys only as query params.
-                if (
-                    response.status_code in {401, 403}
-                    and attempt_index == 0
-                    and len(attempts) > 1
-                ):
-                    continue
-
-                if response.status_code >= 400:
-                    raise TokenizerUnavailable(
-                        f"Provider tokenizer endpoint error ({response.status_code})"
-                    )
-                try:
-                    data = response.json()
-                except Exception as exc:
-                    raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid JSON") from exc
-                if not isinstance(data, dict):
-                    raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid payload")
-
-                parsed = _extract_int_value(
-                    data,
-                    ("totalTokens", "total_tokens", "token_count", "count", "promptTokenCount"),
+            if response.status_code >= 400:
+                raise TokenizerUnavailable(
+                    f"Provider tokenizer endpoint error ({response.status_code})"
                 )
-                if parsed is None or parsed < 0:
-                    raise TokenizerUnavailable("Google countTokens response missing token count")
-                return int(parsed)
+            try:
+                data = response.json()
+            except Exception as exc:
+                raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid JSON") from exc
+            if not isinstance(data, dict):
+                raise TokenizerUnavailable("Provider tokenizer endpoint returned invalid payload")
+
+            parsed = _extract_int_value(
+                data,
+                ("totalTokens", "total_tokens", "token_count", "count", "promptTokenCount"),
+            )
+            if parsed is None or parsed < 0:
+                raise TokenizerUnavailable("Google countTokens response missing token count")
+            return int(parsed)
 
         if last_error is not None:
             raise TokenizerUnavailable("Provider tokenizer endpoint unavailable") from last_error
@@ -1436,28 +1446,55 @@ def _get_active_mlx_tokenizer(model: str) -> tuple[Any, str] | None:
         return None
 
 
+def _trusted_mlx_model_root() -> Path:
+    model_root = os.getenv("MLX_MODEL_DIR", "").strip()
+    root = Path(model_root).expanduser() if model_root else Path.cwd()
+    return root.resolve(strict=False)
+
+
+def _normalize_mlx_model_path(model: str) -> Path | None:
+    raw = str(model or "").strip()
+    if not raw:
+        return None
+
+    # Disallow absolute paths entirely; all MLX models must reside under the trusted root.
+    raw_path = Path(raw).expanduser()
+    if raw_path.is_absolute():
+        return None
+
+    # Normalize the path string to eliminate redundant separators.
+    normalized_str = os.path.normpath(raw)
+    # Reject no-op / current-directory paths.
+    if normalized_str in ("", "."):
+        return None
+    # Prevent leading separators that could escape the trusted root when joined.
+    if normalized_str.startswith(os.path.sep) or normalized_str.startswith("/"):
+        return None
+    # Construct a Path object from the normalized string.
+    normalized = Path(normalized_str)
+    # Reject any path components that indicate traversal or current directory.
+    if any(part in ("", ".", "..") for part in normalized.parts):
+        return None
+
+    return normalized
+
+
 def _mlx_candidate_paths(model: str) -> list[Path]:
-    normalized = str(model or "").strip()
-    if not normalized:
+    trusted_root = _trusted_mlx_model_root()
+    normalized = _normalize_mlx_model_path(model)
+    if normalized is None:
         return []
 
-    candidates: list[Path] = []
-    raw_path = Path(normalized).expanduser()
-    candidates.append(raw_path)
+    # At this point, normalized is guaranteed to be a safe, relative path segment.
+    candidate = (trusted_root / normalized).resolve(strict=False)
 
-    model_root = os.getenv("MLX_MODEL_DIR", "").strip()
-    if model_root and not raw_path.is_absolute():
-        candidates.append(Path(model_root).expanduser() / normalized)
+    try:
+        # Ensure the resolved candidate remains under the trusted root directory.
+        candidate.relative_to(trusted_root)
+    except ValueError:
+        return []
 
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(candidate)
-    return unique
+    return [candidate]
 
 
 @lru_cache(maxsize=32)
@@ -1477,7 +1514,10 @@ def _load_mlx_artifact_tokenizer(model: str) -> Any:
             resolved = candidate.expanduser()
             if not resolved.exists() or not resolved.is_dir():
                 continue
-            return AutoTokenizer.from_pretrained(str(resolved), local_files_only=True)
+            return AutoTokenizer.from_pretrained(
+                str(resolved),
+                local_files_only=True,
+            )  # nosec B615
         except Exception as exc:
             last_error = exc
             continue

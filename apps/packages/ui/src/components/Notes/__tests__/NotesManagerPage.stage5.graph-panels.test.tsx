@@ -236,7 +236,7 @@ describe('NotesManagerPage graph stage 1 related/backlinks panels', () => {
     })
   })
 
-  it('respects unsaved-change guard before opening a related note', async () => {
+  it('auto-saves unsaved changes before opening a related note', async () => {
     mockBgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
       const path = String(request.path || '')
       const method = String(request.method || 'GET').toUpperCase()
@@ -259,6 +259,9 @@ describe('NotesManagerPage graph stage 1 related/backlinks panels', () => {
           version: 1,
           last_modified: '2026-02-18T10:00:00.000Z'
         }
+      }
+      if (path.startsWith('/api/v1/notes/note-a') && method === 'PUT') {
+        return { id: 'note-a', version: 2, last_modified: '2026-02-18T10:01:00.000Z' }
       }
       if (path.startsWith('/api/v1/notes/note-a/neighbors')) {
         return {
@@ -288,20 +291,19 @@ describe('NotesManagerPage graph stage 1 related/backlinks panels', () => {
     fireEvent.change(screen.getByPlaceholderText('Write your note here... (Markdown supported)'), {
       target: { value: 'Unsaved changes present' }
     })
-    mockConfirmDanger.mockResolvedValueOnce(false)
 
     const relatedList = await screen.findByTestId('notes-related-list')
     fireEvent.click(within(relatedList).getByRole('button', { name: 'Linked note' }))
 
+    // Auto-save triggers a PUT instead of showing a confirm dialog
     await waitFor(() => {
-      expect(mockConfirmDanger).toHaveBeenCalled()
+      const putCalled = mockBgRequest.mock.calls.some(
+        ([request]) =>
+          String(request?.path || '').startsWith('/api/v1/notes/note-a') &&
+          String(request?.method || '').toUpperCase() === 'PUT'
+      )
+      expect(putCalled).toBe(true)
     })
-
-    const called = mockBgRequest.mock.calls.some(([request]) => String(request?.path || '') === '/api/v1/notes/note-b')
-    expect(called).toBe(false)
-    expect(screen.getByPlaceholderText('Write your note here... (Markdown supported)')).toHaveValue(
-      'Unsaved changes present'
-    )
   })
 
   it('shows loading and empty states for relation panels', async () => {

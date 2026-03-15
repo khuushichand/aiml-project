@@ -46,7 +46,6 @@ export const launchWithExtensionOrSkip = async (
 ): Promise<LaunchWithExtensionResult> => {
   try {
     return await launchWithExtension(extensionPath, {
-      launchTimeoutMs: 30000,
       ...(options || {})
     })
   } catch (error) {
@@ -64,7 +63,6 @@ export const launchWithBuiltExtensionOrSkip = async (
 ): Promise<Awaited<ReturnType<typeof launchWithBuiltExtension>>> => {
   try {
     return await launchWithBuiltExtension({
-      launchTimeoutMs: 30000,
       ...(options || {})
     })
   } catch (error) {

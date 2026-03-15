@@ -3,8 +3,10 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.tests.Characters.test_character_functionality_db import sample_card_data
 
 
 pytestmark = pytest.mark.unit
@@ -67,9 +69,15 @@ def test_migration_v25_to_latest_creates_persona_tables(db_path: Path):
     assert "idx_persona_profiles_user_active" in profile_indexes
     profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
     assert "use_persona_state_context_default" in profile_columns
+    assert "origin_character_id" in profile_columns
+    assert "origin_character_name" in profile_columns
+    assert "origin_character_snapshot_at" in profile_columns
     memory_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_memory_entries')").fetchall()}
     assert "scope_snapshot_id" in memory_columns
     assert "session_id" in memory_columns
+    session_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_sessions')").fetchall()}
+    assert "activity_surface" in session_columns
+    assert "preferences_json" in session_columns
     memory_indexes = {row["name"] for row in conn.execute("PRAGMA index_list('persona_memory_entries')").fetchall()}
     assert "idx_persona_memory_scope" in memory_indexes
     assert "idx_persona_memory_session" in memory_indexes
@@ -77,14 +85,72 @@ def test_migration_v25_to_latest_creates_persona_tables(db_path: Path):
     migrated.close_connection()
 
 
+def test_migration_v36_to_latest_adds_voice_command_persona_columns(db_path: Path):
+    db = CharactersRAGDB(db_path, "voice-command-seed-client")
+    db.close_connection()
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            "UPDATE db_schema_version SET version = ? WHERE schema_name = ?",
+            (36, CharactersRAGDB._SCHEMA_NAME),
+        )
+        conn.execute("DROP TABLE IF EXISTS voice_commands")
+        conn.execute(
+            """
+            CREATE TABLE voice_commands (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                phrases TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                action_config TEXT NOT NULL,
+                priority INTEGER DEFAULT 0,
+                enabled INTEGER DEFAULT 1,
+                requires_confirmation INTEGER DEFAULT 0,
+                description TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                deleted INTEGER DEFAULT 0
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_voice_commands_user_id ON voice_commands(user_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voice_commands_enabled ON voice_commands(enabled, deleted)"
+        )
+        conn.commit()
+
+    migrated = CharactersRAGDB(db_path, "voice-command-migration-check-client")
+    conn = migrated.get_connection()
+
+    version = conn.execute(
+        "SELECT version FROM db_schema_version WHERE schema_name = ?",
+        (CharactersRAGDB._SCHEMA_NAME,),
+    ).fetchone()["version"]
+    assert version == CharactersRAGDB._CURRENT_SCHEMA_VERSION
+
+    voice_columns = {row["name"] for row in conn.execute("PRAGMA table_info('voice_commands')").fetchall()}
+    assert "persona_id" in voice_columns
+    assert "connection_id" in voice_columns
+
+    voice_indexes = {row["name"] for row in conn.execute("PRAGMA index_list('voice_commands')").fetchall()}
+    assert "idx_voice_commands_user_persona_enabled" in voice_indexes
+
+    migrated.close_connection()
+
+
 def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB):
+    character_id = db_instance.add_character_card(sample_card_data(name="Research Persona Source"))
+    assert character_id is not None
+
     persona_id = db_instance.create_persona_profile(
         {
             "user_id": "user-1",
             "name": "Research Persona",
             "mode": "session_scoped",
             "system_prompt": "You are a focused assistant.",
-            "character_card_id": 1,
+            "character_card_id": character_id,
             "is_active": True,
         }
     )
@@ -94,8 +160,12 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     assert profile is not None
     assert profile["name"] == "Research Persona"
     assert profile["mode"] == "session_scoped"
+    assert profile["character_card_id"] == character_id
     assert profile["is_active"] is True
     assert profile["use_persona_state_context_default"] is True
+    assert profile["origin_character_id"] == character_id
+    assert profile["origin_character_name"] == "Research Persona Source"
+    assert profile["origin_character_snapshot_at"]
     expected_version = int(profile["version"])
 
     assert db_instance.update_persona_profile(
@@ -153,6 +223,11 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
             "reuse_allowed": True,
             "status": "active",
             "scope_snapshot_json": {"conversations": ["conv-a"], "media_tags": ["physics"]},
+            "preferences_json": {
+                "use_memory_context": True,
+                "use_companion_context": False,
+                "memory_top_k": 4,
+            },
         }
     )
     session = db_instance.get_persona_session(session_id, user_id="user-1")
@@ -160,17 +235,33 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     assert session["persona_id"] == persona_id
     assert session["reuse_allowed"] is True
     assert session["scope_snapshot"]["conversations"] == ["conv-a"]
+    assert session["activity_surface"] == "api.persona"
+    assert session["preferences"]["use_memory_context"] is True
+    assert session["preferences"]["use_companion_context"] is False
+    assert session["preferences"]["memory_top_k"] == 4
     session_version = int(session["version"])
 
     assert db_instance.update_persona_session(
         session_id=session_id,
         user_id="user-1",
-        update_data={"status": "paused"},
+        update_data={
+            "status": "paused",
+            "activity_surface": "companion.conversation",
+            "preferences_json": {
+                "use_memory_context": False,
+                "use_companion_context": True,
+                "memory_top_k": 7,
+            },
+        },
         expected_version=session_version,
     )
     paused_session = db_instance.get_persona_session(session_id, user_id="user-1")
     assert paused_session is not None
     assert paused_session["status"] == "paused"
+    assert paused_session["activity_surface"] == "companion.conversation"
+    assert paused_session["preferences"]["use_memory_context"] is False
+    assert paused_session["preferences"]["use_companion_context"] is True
+    assert paused_session["preferences"]["memory_top_k"] == 7
 
     memory_id = db_instance.add_persona_memory_entry(
         {
@@ -230,11 +321,123 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     )
     assert visible_memories == []
 
+    source_character = db_instance.get_character_card_by_id(character_id)
+    assert source_character is not None
+    assert db_instance.soft_delete_character_card(character_id, expected_version=int(source_character["version"])) is True
+    assert db_instance.get_character_card_by_id(character_id) is None
+
+    profile_after_source_delete = db_instance.get_persona_profile(persona_id, user_id="user-1")
+    assert profile_after_source_delete is not None
+    assert profile_after_source_delete["origin_character_id"] == character_id
+    assert profile_after_source_delete["origin_character_name"] == "Research Persona Source"
+    assert profile_after_source_delete["origin_character_snapshot_at"]
+
     assert db_instance.get_persona_profile(persona_id, user_id="user-2") is None
     assert db_instance.list_persona_profiles(user_id="user-2") == []
     assert db_instance.get_persona_session(session_id, user_id="user-2") is None
     assert db_instance.list_persona_sessions(user_id="user-2") == []
     assert not db_instance.set_persona_memory_archived(entry_id=memory_id, user_id="user-2", archived=False)
+
+
+def test_get_persona_session_logs_warning_for_malformed_preferences_json(db_instance: CharactersRAGDB):
+    persona_id = db_instance.create_persona_profile(
+        {
+            "id": "persona_invalid_prefs",
+            "user_id": "user-1",
+            "name": "Persona Invalid Prefs",
+            "mode": "session_scoped",
+            "system_prompt": "Test",
+            "is_active": True,
+        }
+    )
+    session_id = db_instance.create_persona_session(
+        {
+            "id": "sess_invalid_prefs",
+            "persona_id": persona_id,
+            "user_id": "user-1",
+            "mode": "session_scoped",
+            "reuse_allowed": True,
+            "status": "active",
+            "preferences_json": {"use_memory_context": True},
+            "scope_snapshot_json": {"conversation_ids": ["conv-1"]},
+        }
+    )
+
+    with db_instance.transaction():
+        db_instance.execute_query(
+            "UPDATE persona_sessions SET preferences_json = ? WHERE id = ?",
+            ('{"use_memory_context": true', session_id),
+        )
+
+    messages: list[str] = []
+    sink_id = logger.add(
+        lambda msg: messages.append(str(msg.record.get("message") or "")),
+        level="WARNING",
+        format="{message}",
+    )
+    try:
+        session = db_instance.get_persona_session(session_id, user_id="user-1")
+    finally:
+        logger.remove(sink_id)
+
+    assert session is not None
+    assert session["preferences"] == {}
+    assert session["scope_snapshot"] == {"conversation_ids": ["conv-1"]}
+    assert any(
+        "preferences_json" in message and session_id in message
+        for message in messages
+    )
+
+
+def test_list_persona_sessions_logs_warning_for_malformed_scope_snapshot_json(db_instance: CharactersRAGDB):
+    persona_id = db_instance.create_persona_profile(
+        {
+            "id": "persona_invalid_scope",
+            "user_id": "user-1",
+            "name": "Persona Invalid Scope",
+            "mode": "session_scoped",
+            "system_prompt": "Test",
+            "is_active": True,
+        }
+    )
+    session_id = db_instance.create_persona_session(
+        {
+            "id": "sess_invalid_scope",
+            "persona_id": persona_id,
+            "user_id": "user-1",
+            "mode": "session_scoped",
+            "reuse_allowed": True,
+            "status": "active",
+            "preferences_json": {"use_memory_context": True},
+            "scope_snapshot_json": {"workspace_ids": ["ws-1"]},
+        }
+    )
+
+    with db_instance.transaction():
+        db_instance.execute_query(
+            "UPDATE persona_sessions SET scope_snapshot_json = ? WHERE id = ?",
+            ('{"workspace_ids": ["ws-1"]', session_id),
+        )
+
+    messages: list[str] = []
+    sink_id = logger.add(
+        lambda msg: messages.append(str(msg.record.get("message") or "")),
+        level="WARNING",
+        format="{message}",
+    )
+    try:
+        sessions = db_instance.list_persona_sessions(user_id="user-1")
+    finally:
+        logger.remove(sink_id)
+
+    assert len(sessions) == 1
+    assert sessions[0]["id"] == session_id
+    assert sessions[0]["scope_snapshot"] == {}
+    assert sessions[0]["preferences"] == {"use_memory_context": True}
+    assert any(
+        "scope_snapshot_json" in message and session_id in message
+        for message in messages
+    )
 
 
 def test_backfill_persona_memory_scope_namespace_updates_only_missing_scope(db_instance: CharactersRAGDB):

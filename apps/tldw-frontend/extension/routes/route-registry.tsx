@@ -175,11 +175,22 @@ const OptionWatchlists = lazy(() => import("./option-watchlists"))
 const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
 const OptionDataTables = lazy(() => import("./option-data-tables"))
 const OptionCollections = lazy(() => import("./option-collections"))
+const OptionSources = lazy(() => import("./option-sources"))
+const OptionSourcesNew = lazy(() => import("./option-sources-new"))
+const OptionSourcesDetail = lazy(() => import("./option-sources-detail"))
 const OptionWritingPlayground = lazy(() => import("./option-writing-playground"))
 const OptionModerationPlayground = lazy(() => import("./option-moderation-playground"))
+const OptionFamilyGuardrailsWizard = lazy(
+  () => import("./option-family-guardrails-wizard")
+)
+const OptionGuardianSettings = createSettingsRoute(
+  () => import("~/components/Option/Settings/GuardianSettings"),
+  "GuardianSettings"
+)
 const OptionWorkspacePlayground = lazy(
   () => import("./option-workspace-playground")
 )
+const OptionAdminSources = lazy(() => import("./option-admin-sources"))
 
 const ERROR_BOUNDARY_TEST_ENABLED = process.env.NODE_ENV !== "production"
 
@@ -502,6 +513,30 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 12
     }
   },
+  {
+    kind: "options",
+    path: "/settings/family-guardrails",
+    element: <OptionFamilyGuardrailsWizard />,
+    nav: {
+      group: "server",
+      labelToken: "settings:familyGuardrailsWizardNav",
+      icon: ShieldCheck,
+      order: 8,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/guardian",
+    element: <OptionGuardianSettings />,
+    nav: {
+      group: "server",
+      labelToken: "settings:guardianNav",
+      icon: ShieldCheck,
+      order: 9,
+      beta: true
+    }
+  },
   { kind: "options", path: "/chatbooks", element: <OptionChatbooksPlayground /> },
   { kind: "options", path: "/watchlists", element: <OptionWatchlists /> },
   { kind: "options", path: "/kanban", element: <OptionKanbanPlayground /> },
@@ -529,6 +564,21 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       beta: true
     }
   },
+  {
+    kind: "options",
+    path: "/sources",
+    element: <OptionSources />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.sources",
+      icon: Layers,
+      order: 9.5,
+      beta: true
+    }
+  },
+  { kind: "options", path: "/sources/new", element: <OptionSourcesNew /> },
+  { kind: "options", path: "/sources/:sourceId", element: <OptionSourcesDetail /> },
+  { kind: "options", path: "/admin/sources", element: <OptionAdminSources /> },
   {
     kind: "options",
     path: "/media",

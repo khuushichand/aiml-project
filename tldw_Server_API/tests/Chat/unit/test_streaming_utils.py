@@ -71,6 +71,19 @@ class TestStreamingResponseHandler:
         handler.cancel()
         assert handler.is_cancelled is True
 
+    def test_parse_save_callback_result_accepts_loop_events_alias(self):
+        handler = StreamingResponseHandler("conv_123", "gpt-4")
+        message_id, events = handler._parse_save_callback_result(
+            {
+                "saved_message_id": "m-1",
+                "loop_events": [{"event": "run_started", "data": {"run_id": "run_1", "seq": 1}}],
+            }
+        )
+
+        assert message_id == "m-1"
+        assert len(events) == 1
+        assert events[0]["event"] == "run_started"
+
     @pytest.mark.asyncio
     async def test_heartbeat_generator(self):
         """Test heartbeat message generation."""
@@ -346,6 +359,11 @@ class TestSafeStreamGenerator:
         """Test stream metadata messages."""
         handler = StreamingResponseHandler("conv_123", "gpt-4")
         handler.system_message_id = "sys_123"
+        handler.continuation_metadata = {
+            "applied": True,
+            "mode": "branch",
+            "from_message_id": "anchor-123",
+        }
 
         async def mock_stream():
             yield "Content"
@@ -366,6 +384,7 @@ class TestSafeStreamGenerator:
         start_payload = json.loads(start_lines[0][6:])
         assert start_payload.get("tldw_system_message_id") == "sys_123"
         assert start_payload.get("tldw_conversation_id") == "conv_123"
+        assert start_payload.get("tldw_continuation", {}).get("mode") == "branch"
 
         # Check stream_end event
         end_msgs = [m for m in messages if "stream_end" in m]
@@ -377,6 +396,7 @@ class TestSafeStreamGenerator:
         assert end_payload.get("tldw_message_id") == "msg_456"
         assert end_payload.get("tldw_system_message_id") == "sys_123"
         assert end_payload.get("tldw_conversation_id") == "conv_123"
+        assert end_payload.get("tldw_continuation", {}).get("from_message_id") == "anchor-123"
 
     async def test_save_callback_can_emit_additional_events(self):
         handler = StreamingResponseHandler("conv_events", "gpt-4")
@@ -510,6 +530,33 @@ class TestCreateStreamingResponseWithTimeout:
         assert len(messages) > 0
         assert save_called is True
         assert saved_content == "Hello World"
+
+    @pytest.mark.asyncio
+    async def test_create_streaming_response_attaches_continuation_metadata(self):
+        async def mock_stream():
+            yield "Hello"
+
+        generator = create_streaming_response_with_timeout(
+            stream=mock_stream(),
+            conversation_id="conv_meta",
+            model_name="gpt-4",
+            continuation_metadata={
+                "applied": True,
+                "mode": "append",
+                "from_message_id": "anchor-meta",
+            },
+        )
+
+        first = await generator.__anext__()
+        assert "event: stream_start" in first
+        data_line = next(line for line in first.splitlines() if line.startswith("data: "))
+        payload = json.loads(data_line[6:])
+        assert payload["tldw_continuation"]["mode"] == "append"
+
+        try:
+            await generator.aclose()
+        except Exception:
+            _ = None
 
     @pytest.mark.skip(reason="Complex async coordination test - may be flaky")
     async def test_heartbeat_integration(self):

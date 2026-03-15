@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-from loguru import logger
-
-_WARNED: set[str] = set()
+from tldw_Server_API.app.core.deprecations import log_runtime_deprecation
 
 
 def log_legacy_once(key: str, message: str) -> None:
-    if key in _WARNED:
-        return
-    _WARNED.add(key)
-    logger.warning(message)
+    log_runtime_deprecation(key, message=message)

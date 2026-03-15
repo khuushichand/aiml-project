@@ -1,0 +1,194 @@
+"""Tests for Agent Orchestration API endpoints (Phase 4.2)."""
+from __future__ import annotations
+
+import pytest
+
+from tldw_Server_API.app.core.Agent_Orchestration.orchestration_service import (
+    OrchestrationService,
+)
+from tldw_Server_API.app.core.Agent_Orchestration.models import TaskStatus
+
+pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+
+
+@pytest.fixture
+def svc():
+    return OrchestrationService()
+
+
+# ---- Project API scenarios ----
+
+
+async def test_create_and_list_projects(svc):
+    """Create multiple projects and verify listing."""
+    await svc.create_project(name="Alpha", user_id=1)
+    await svc.create_project(name="Beta", user_id=1)
+    await svc.create_project(name="Gamma", user_id=2)
+
+    user1_projects = await svc.list_projects(user_id=1)
+    assert len(user1_projects) == 2
+    names = {p.name for p in user1_projects}
+    assert names == {"Alpha", "Beta"}
+
+
+async def test_get_project_not_found(svc):
+    """Getting a nonexistent project returns None."""
+    assert await svc.get_project(999) is None
+
+
+async def test_delete_nonexistent_project(svc):
+    """Deleting a nonexistent project returns False."""
+    assert await svc.delete_project(999) is False
+
+
+# ---- Task API scenarios ----
+
+
+async def test_create_task_with_all_fields(svc):
+    """Create a task with all optional fields."""
+    project = await svc.create_project(name="P1", user_id=1)
+    task = await svc.create_task(
+        project.id,
+        title="Full Task",
+        description="A comprehensive task",
+        agent_type="codex",
+        max_review_attempts=5,
+        user_id=1,
+    )
+    assert task.description == "A comprehensive task"
+    assert task.agent_type == "codex"
+    assert task.max_review_attempts == 5
+
+
+async def test_list_tasks_all_statuses(svc):
+    """List tasks returns all statuses when no filter."""
+    project = await svc.create_project(name="P1", user_id=1)
+    await svc.create_task(project.id, title="T1", user_id=1)
+    t2 = await svc.create_task(project.id, title="T2", user_id=1)
+    await svc.transition_task(t2.id, TaskStatus.IN_PROGRESS)
+    t3 = await svc.create_task(project.id, title="T3", user_id=1)
+    await svc.transition_task(t3.id, TaskStatus.IN_PROGRESS)
+    await svc.transition_task(t3.id, TaskStatus.REVIEW)
+
+    all_tasks = await svc.list_tasks(project.id)
+    assert len(all_tasks) == 3
+
+
+# ---- Run dispatch scenarios ----
+
+
+async def test_run_inherits_agent_type(svc):
+    """Run should inherit agent_type from its parent task."""
+    project = await svc.create_project(name="P1", user_id=1)
+    task = await svc.create_task(
+        project.id, title="T1", agent_type="codex", user_id=1
+    )
+    run = await svc.create_run(task.id, session_id="sess-1")
+    assert run.agent_type == "codex"
+
+
+async def test_multiple_runs_per_task(svc):
+    """Multiple runs can be created for the same task."""
+    project = await svc.create_project(name="P1", user_id=1)
+    task = await svc.create_task(project.id, title="T1", user_id=1)
+
+    r1 = await svc.create_run(task.id, session_id="s1")
+    r2 = await svc.create_run(task.id, session_id="s2")
+    r3 = await svc.create_run(task.id, session_id="s3")
+
+    runs = await svc.list_runs(task.id)
+    assert len(runs) == 3
+    assert {r.session_id for r in runs} == {"s1", "s2", "s3"}
+
+
+# ---- Review gate edge cases ----
+
+
+async def test_review_approval_after_rejection(svc):
+    """Approve should work after a previous rejection."""
+    project = await svc.create_project(name="P1", user_id=1)
+    task = await svc.create_task(
+        project.id, title="T1", max_review_attempts=5, user_id=1
+    )
+
+    # First cycle: reject
+    await svc.transition_task(task.id, TaskStatus.IN_PROGRESS)
+    await svc.transition_task(task.id, TaskStatus.REVIEW)
+    await svc.submit_review(task.id, approved=False)
+    assert (await svc.get_task(task.id)).status == TaskStatus.IN_PROGRESS
+
+    # Second cycle: approve
+    await svc.transition_task(task.id, TaskStatus.REVIEW)
+    result = await svc.submit_review(task.id, approved=True)
+    assert result.status == TaskStatus.COMPLETE
+    assert result.review_count == 2
+
+
+# ---- Dependency chain ----
+
+
+async def test_three_level_dependency_chain(svc):
+    """Three-level dependency chain: T3 → T2 → T1."""
+    project = await svc.create_project(name="P1", user_id=1)
+    t1 = await svc.create_task(project.id, title="T1", user_id=1)
+    t2 = await svc.create_task(
+        project.id, title="T2", dependency_id=t1.id, user_id=1
+    )
+    t3 = await svc.create_task(
+        project.id, title="T3", dependency_id=t2.id, user_id=1
+    )
+
+    # T3 not ready because T2 not complete
+    assert await svc.check_dependency_ready(t3.id) is False
+
+    # Complete T1
+    await svc.transition_task(t1.id, TaskStatus.IN_PROGRESS)
+    await svc.transition_task(t1.id, TaskStatus.REVIEW)
+    await svc.transition_task(t1.id, TaskStatus.COMPLETE)
+
+    # T2 is ready, T3 still not (T2 not complete)
+    assert await svc.check_dependency_ready(t2.id) is True
+    assert await svc.check_dependency_ready(t3.id) is False
+
+    # Complete T2
+    await svc.transition_task(t2.id, TaskStatus.IN_PROGRESS)
+    await svc.transition_task(t2.id, TaskStatus.REVIEW)
+    await svc.transition_task(t2.id, TaskStatus.COMPLETE)
+
+    # Now T3 is ready
+    assert await svc.check_dependency_ready(t3.id) is True
+
+
+# ---- Summary ----
+
+
+async def test_project_summary_includes_all_statuses(svc):
+    """Project summary should include all task status categories."""
+    project = await svc.create_project(name="P1", user_id=1)
+    t1 = await svc.create_task(project.id, title="T1", user_id=1)
+    t2 = await svc.create_task(project.id, title="T2", user_id=1)
+    t3 = await svc.create_task(project.id, title="T3", user_id=1)
+
+    await svc.transition_task(t1.id, TaskStatus.IN_PROGRESS)
+    await svc.transition_task(t2.id, TaskStatus.IN_PROGRESS)
+    await svc.transition_task(t2.id, TaskStatus.REVIEW)
+    await svc.transition_task(t3.id, TaskStatus.IN_PROGRESS)
+    await svc.transition_task(t3.id, TaskStatus.TRIAGE)
+
+    summary = await svc.get_project_summary(project.id)
+    assert summary["total_tasks"] == 3
+    counts = summary["status_counts"]
+    assert counts.get("inprogress", 0) == 1
+    assert counts.get("review", 0) == 1
+    assert counts.get("triage", 0) == 1
+
+
+async def test_get_task_not_found(svc):
+    """Getting a nonexistent task returns None."""
+    assert await svc.get_task(999) is None
+
+
+async def test_transition_nonexistent_task_raises(svc):
+    """Transitioning a nonexistent task raises ValueError."""
+    with pytest.raises(ValueError, match="Task 999 not found"):
+        await svc.transition_task(999, TaskStatus.IN_PROGRESS)

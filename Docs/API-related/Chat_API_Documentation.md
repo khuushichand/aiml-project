@@ -5,7 +5,7 @@
 - Endpoint: `POST /api/v1/chat/completions` (OpenAI-compatible)
 - Purpose: Route chat requests to configured LLM providers with optional streaming and persistence.
 - Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
-- OpenAPI tags: `chat`, `chat-dictionaries`, `chat-documents`
+- OpenAPI tags: `chat`, `chat-grammars`, `chat-dictionaries`, `chat-documents`
 
 ## Conversation Metadata Endpoints
 Conversation list/search, lifecycle updates, message trees, analytics, and knowledge-save endpoints live under `/api/v1/chat`. Session CRUD for character chats remains under `/api/v1/chats`.
@@ -16,6 +16,11 @@ Endpoints:
 - `GET /api/v1/chat/conversations/{id}/tree` — root-thread tree view with `max_depth` + truncation.
 - `GET /api/v1/chat/analytics` — UTC histogram buckets by date/topic/state.
 - `POST /api/v1/chat/knowledge/save` — save a snippet to Notes/Flashcards with backlinks.
+- `GET /api/v1/chat/grammars` — list saved user-scoped GBNF grammars for llama.cpp.
+- `POST /api/v1/chat/grammars` — create a saved user-scoped GBNF grammar.
+- `GET /api/v1/chat/grammars/{grammar_id}` — fetch one saved grammar.
+- `PATCH /api/v1/chat/grammars/{grammar_id}` — update grammar text or metadata.
+- `DELETE /api/v1/chat/grammars/{grammar_id}` — soft-delete by default; use `hard_delete=true` to permanently remove it.
 
 Note:
 - `/api/v1/chats` continues to serve character chat session CRUD and exports.
@@ -64,12 +69,43 @@ Key fields:
 - Tools: `tools`, `tool_choice` (provider-dependent tool/function calling). `tool_choice` requires `tools` or the request is rejected.
 - `response_format`: `{ "type": "text" | "json_object" }` (provider-dependent).
 - Chat extensions: `character_id`, `conversation_id` (context hooks), `save_to_db` (persistence toggle).
+- Continuation controls (tldw extension): `tldw_continuation` (optional).
+  - Shape:
+    - `from_message_id` (string, required): anchor message ID (max 128 chars).
+    - `mode` (`branch` | `append`, required):
+      - `branch`: rebuilds history from anchor ancestry (root -> ... -> anchor), excluding sibling/descendant branches past anchor.
+      - `append`: anchor must be the current conversation tip; otherwise request fails with `409`.
+    - `assistant_prefill` (string, optional): assistant prefix injected before generation (provider behavior may vary).
+  - Requirements:
+    - `conversation_id` is required when `tldw_continuation` is present.
+    - `conversation_id` must reference an existing conversation.
+  - Persistence behavior:
+    - When `save_to_db=true`, the generated assistant message is saved with `parent_message_id=<from_message_id>`.
+    - `assistant_prefill` is context-only and is not saved as a separate message turn.
 
 Provider-specific extensions:
 - Bedrock guardrails:
   - `extra_headers`: include Bedrock guardrail headers like `X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, optional `X-Amzn-Bedrock-Trace`.
   - `extra_body`: include `amazon-bedrock-guardrailConfig` object when needed.
   - Merge behavior: `extra_headers`/`extra_body` are additive; explicit headers/body keys in the request win on conflicts.
+- llama.cpp advanced controls (`/api/v1/chat/completions` only in v1):
+  - `thinking_budget_tokens` (int, optional): app-level thinking budget. Only accepted when the resolved provider is llama.cpp and the deployment has a configured mapping for the upstream request key.
+  - `grammar_mode` (`none` | `library` | `inline`, optional): selects how the outbound GBNF grammar is resolved.
+  - `grammar_id` (string, optional): required when `grammar_mode=library`.
+  - `grammar_inline` (string, optional): required when `grammar_mode=inline`.
+  - `grammar_override` (string, optional): optional request-only override when using a saved grammar.
+  - Guardrails:
+    - These fields are rejected with `400` if the resolved provider is not llama.cpp.
+    - These fields are rejected with `400` when `strict_openai_compat` is active for the local-provider runtime.
+    - First-class llama.cpp controls override reserved `extra_body` keys such as `grammar` and the configured thinking-budget request key.
+  - Scope boundary:
+    - v1 support is limited to `POST /api/v1/chat/completions`.
+    - `/api/v1/messages` does not yet accept these first-class llama.cpp fields.
+
+Saved grammar resource notes:
+- Grammars are user-scoped and stored in the chat domain.
+- Grammar records expose `validation_status` as `unchecked | valid | invalid`.
+- `DELETE /api/v1/chat/grammars/{grammar_id}` soft-deletes unless `hard_delete=true` is sent.
 
 Minimal example (non-streaming):
 ```bash
@@ -137,6 +173,54 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   }'
 ```
 
+Continuation example (branch):
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "conversation_id": "conv_123",
+    "save_to_db": true,
+    "messages": [{"role":"user","content":"Continue from this point."}],
+    "tldw_continuation": {
+      "from_message_id": "msg_anchor_456",
+      "mode": "branch"
+    }
+  }'
+```
+
+Continuation example (append + assistant prefill):
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "conversation_id": "conv_123",
+    "messages": [{"role":"user","content":"Refine the draft."}],
+    "tldw_continuation": {
+      "from_message_id": "msg_latest_tip",
+      "mode": "append",
+      "assistant_prefill": "Draft: "
+    }
+  }'
+```
+
+llama.cpp grammar example (inline):
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $API_KEY" \
+  -d '{
+    "api_provider": "llama.cpp",
+    "model": "llama.cpp/local-model",
+    "messages": [{"role":"user","content":"Reply with ok only."}],
+    "grammar_mode": "inline",
+    "grammar_inline": "root ::= \"ok\""
+  }'
+```
+
 ## Provider Selection
 - If `model` includes a provider prefix (`provider/model`), that provider is used unless `api_provider` is explicitly set.
 - If no provider is specified, the server uses `DEFAULT_LLM_PROVIDER`.
@@ -171,6 +255,8 @@ data: [DONE]
 
 Errors during streaming are emitted as SSE `data:` frames with an `{"error": {"message": "..."}}` payload; the server then terminates with a single `data: [DONE]`.
 
+When continuation is active, stream metadata payloads include `tldw_continuation` (for example in `stream_start`, chunk payload metadata, `tool_results`, `stream_end`, and stream error frames).
+
 Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum client compatibility.
 
 ### Streaming Event Format
@@ -186,6 +272,11 @@ Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum cl
 
 ## Responses
 - Non-streaming JSON uses OpenAI’s `choices` shape and includes `tldw_conversation_id` to help clients track state.
+- When continuation is applied, non-streaming responses include `tldw_continuation`, for example:
+  - `applied: true`
+  - `mode: "branch" | "append"`
+  - `from_message_id: "<anchor_id>"`
+  - `assistant_prefill` and `assistant_prefill_applied` when prefill was used
 
 ## Persistence
 - Default behavior is ephemeral (no DB writes).
@@ -235,8 +326,8 @@ Image message example:
 ### Non-streaming (`stream = false`)
 - `400` Invalid request (schema, limits, bad params)
 - `401` Missing/invalid authentication
-- `404` Resource not found (e.g., invalid character reference)
-- `409` Conflict while persisting
+- `404` Resource not found (e.g., invalid character reference, continuation anchor not found, or anchor not in the requested conversation)
+- `409` Conflict while persisting or continuation constraint conflict (for example `append` anchor is not latest message)
 - `413` Request payload too large (e.g., too many messages/images, text too long)
 - `429` Rate limit exceeded (endpoint or upstream)
 - `500` Internal server error (unexpected failure)

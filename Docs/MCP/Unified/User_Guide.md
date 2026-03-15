@@ -383,7 +383,83 @@ Catalog membership affects discovery, not execution rights.
 
 Reference: `Docs/MCP/mcp_tool_catalogs.md`
 
-## 11. Troubleshooting
+## 11. Kanban Workflow Control (Safe Orchestrators)
+
+The Kanban MCP module now exposes a workflow control plane intended for safe orchestrator loops.
+
+### Canonical state model
+
+- `card.workflow_status` is the canonical orchestrator state (`kanban_card_workflow_state.workflow_status_key`).
+- Card list placement is a projection side effect (`auto_move_list_id`) and can be strict (`strict_projection=true`) or best-effort (`false`).
+- Do not infer workflow status from list placement.
+
+### Workflow tools
+
+- `kanban.workflow.policy.get`
+- `kanban.workflow.policy.upsert`
+- `kanban.workflow.statuses.list`
+- `kanban.workflow.transitions.list`
+- `kanban.workflow.task.state.get`
+- `kanban.workflow.task.state.patch`
+- `kanban.workflow.task.claim`
+- `kanban.workflow.task.release`
+- `kanban.workflow.task.transition`
+- `kanban.workflow.task.approval.decide`
+- `kanban.workflow.task.events.list`
+- `kanban.workflow.control.pause` (admin)
+- `kanban.workflow.control.resume` (admin)
+- `kanban.workflow.control.drain` (admin)
+- `kanban.workflow.recovery.list_stale_claims`
+- `kanban.workflow.recovery.force_reassign` (admin)
+
+### Write safety contract
+
+For orchestrator writes, use optimistic concurrency and idempotency consistently:
+
+- Always pass `expected_version` on status mutation calls.
+- Always pass a unique `idempotency_key` per intent.
+- Pass `correlation_id` for traceability across multi-step runs (required on transition, approval, and force-reassign).
+- Re-read state (`kanban.workflow.task.state.get`) before retries.
+
+### Stable conflict codes
+
+Workflow conflict responses surface machine-readable codes in `detail.code`:
+
+- `version_conflict`
+- `lease_required`
+- `lease_mismatch`
+- `policy_paused`
+- `transition_not_allowed`
+- `approval_required`
+- `projection_failed`
+- `idempotency_conflict`
+
+Recommended handling:
+
+- `version_conflict`: refresh state and retry once with new `expected_version`.
+- `lease_required`: claim lease, then retry transition.
+- `policy_paused`: stop writes; wait for admin resume.
+- `transition_not_allowed`/`approval_required`: treat as logic/state errors, not transient retries.
+- `projection_failed`: repair target list mapping or disable strict projection if appropriate.
+
+### Recommended loop (explicit, not implicit)
+
+There is no built-in autonomous multi-stage agent loop. The safe pattern is explicit orchestration:
+
+1. Get state (`kanban.workflow.task.state.get`).
+2. Claim lease (`kanban.workflow.task.claim`) when required by policy edge.
+3. Transition (`kanban.workflow.task.transition`) with `expected_version`, `idempotency_key`, and `correlation_id`.
+4. If `approval_state=awaiting_approval`, decide (`kanban.workflow.task.approval.decide`) explicitly.
+5. Inspect audit trail (`kanban.workflow.task.events.list`) for deterministic recovery.
+6. Release lease (`kanban.workflow.task.release`) when work completes.
+
+### Control and recovery
+
+- Use `pause`/`resume`/`drain` to gate orchestrator writes during incidents, migrations, or maintenance.
+- Use stale-claim listing plus force-reassign to recover orphaned leases.
+- Keep privileged operations behind admin-only identities.
+
+## 12. Troubleshooting
 
 ### `503 Server not initialized` on `/health`
 
@@ -411,7 +487,7 @@ Reference: `Docs/MCP/mcp_tool_catalogs.md`
 - If close reason is auth related, verify token/key and `MCP_WS_AUTH_REQUIRED`
 - If close reason is origin/IP related, review `MCP_WS_ALLOWED_ORIGINS`, `MCP_ALLOWED_IPS`, and proxy setup
 
-## 12. Next Docs
+## 13. Next Docs
 
 - Architecture and internals: `Docs/MCP/Unified/Developer_Guide.md`
 - Deployment and hardening: `Docs/MCP/Unified/System_Admin_Guide.md`

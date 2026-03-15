@@ -24,7 +24,7 @@ def _enable_adapters(monkeypatch):
 
 
 def _payload(provider: str, *, stream: bool) -> dict:
-    model = "gemini-1.5-pro" if provider == "google" else "mistral-large-latest"
+    model = "gemini-2.5-pro" if provider == "google" else "mistral-large-latest"
     return {
         "api_provider": provider,
         "model": model,

@@ -60,24 +60,25 @@ def test_media_rls_enforces_scope_postgres():
     bootstrap_db = MediaDatabase(db_path=":memory:", client_id="bootstrap", backend=admin_backend)
     test_role = TEST_RLS_ROLE
     test_password = "ContentRlsR3g!"
+    escaped_password = test_password.replace("'", "''")
     ident = admin_backend.escape_identifier  # type: ignore[attr-defined]
 
     with admin_backend.transaction() as conn:
-        ensure_role_sql = """
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s::text) THEN
-                    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', %s, %s);
-                ELSE
-                    EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', %s, %s);
-                END IF;
-            END$$;
-            """
-        admin_backend.execute(
-            ensure_role_sql,
-            (test_role, test_role, test_password, test_role, test_password),
+        role_exists = admin_backend.execute(
+            "SELECT 1 FROM pg_roles WHERE rolname = %s::text LIMIT 1",
+            (test_role,),
             connection=conn,
-        )
+        ).scalar is not None
+        if not role_exists:
+            admin_backend.execute(
+                f"CREATE ROLE {ident(test_role)} LOGIN PASSWORD '{escaped_password}'",
+                connection=conn,
+            )
+        else:
+            admin_backend.execute(
+                f"ALTER ROLE {ident(test_role)} WITH LOGIN PASSWORD '{escaped_password}'",
+                connection=conn,
+            )
         admin_backend.execute(
             f"GRANT USAGE ON SCHEMA public TO {ident(test_role)}",
             connection=conn,

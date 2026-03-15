@@ -177,12 +177,9 @@ describe("NotesManagerPage stage 11 search filtering", () => {
     })
   })
 
-  it("shows full-text and AND helper copy under search input", () => {
+  it("shows search input", () => {
     renderPage()
     expect(screen.getByPlaceholderText("Search titles & content...")).toBeInTheDocument()
-    expect(screen.getByTestId("notes-search-helper-text")).toHaveTextContent(
-      "Full-text search across titles and content. Text + keyword filters use AND."
-    )
   })
 
   it("opens search tips popover with phrase and AND guidance", async () => {
@@ -251,7 +248,7 @@ describe("NotesManagerPage stage 11 search filtering", () => {
     expect(String(finalSearchCall?.[0]?.path || "")).toContain("query=alpha")
   })
 
-  it("tracks request metrics for active search sessions and clears metrics when filters reset", async () => {
+  it("sends search requests for search queries", async () => {
     renderPage()
     const input = screen.getByPlaceholderText("Search titles & content...")
 
@@ -265,11 +262,6 @@ describe("NotesManagerPage stage 11 search filtering", () => {
       },
       { timeout: 1500 }
     )
-    await waitFor(() => {
-      expect(screen.getByTestId("notes-search-request-metrics")).toHaveTextContent(
-        "Requests in this filter session: 1"
-      )
-    })
 
     fireEvent.change(input, { target: { value: "alpha beta" } })
     await waitFor(
@@ -281,15 +273,5 @@ describe("NotesManagerPage stage 11 search filtering", () => {
       },
       { timeout: 1500 }
     )
-    await waitFor(() => {
-      expect(screen.getByTestId("notes-search-request-metrics")).toHaveTextContent(
-        "Requests in this filter session: 2"
-      )
-    })
-
-    fireEvent.change(input, { target: { value: "" } })
-    await waitFor(() => {
-      expect(screen.queryByTestId("notes-search-request-metrics")).not.toBeInTheDocument()
-    })
   })
 })

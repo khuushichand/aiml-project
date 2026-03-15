@@ -20,6 +20,9 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
 from tldw_Server_API.app.core.Evaluations.config_manager import get_config
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
@@ -65,19 +68,11 @@ class PooledConnection:
         """Configure connection with optimal settings."""
         with self._lock:
             try:
-                # Enable WAL mode for better concurrency
-                self.connection.execute("PRAGMA journal_mode=WAL")
-
-                # Set reasonable timeout
-                self.connection.execute("PRAGMA busy_timeout=30000")  # 30 seconds
-
-                # Optimize for performance
-                self.connection.execute("PRAGMA synchronous=NORMAL")
-                self.connection.execute("PRAGMA temp_store=MEMORY")
+                configure_sqlite_connection(
+                    self.connection,
+                    busy_timeout_ms=30000,
+                )
                 self.connection.execute("PRAGMA mmap_size=268435456")  # 256MB
-
-                # Enable foreign keys
-                self.connection.execute("PRAGMA foreign_keys=ON")
 
                 self.connection.commit()
 

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { AddSourceModal } from "../SourcesPane/AddSourceModal"
+import type { AddSourceTab } from "@/types/workspace"
 
 const ADD_SOURCE_TAB_USAGE_STORAGE_KEY =
   "tldw:workspace-playground:add-source-tab-usage:v1"
@@ -23,7 +24,7 @@ const {
 
 const workspaceStoreState = {
   addSourceModalOpen: true,
-  addSourceModalTab: "upload" as const,
+  addSourceModalTab: "upload" as AddSourceTab,
   addSourceProcessing: false,
   addSourceError: null as string | null,
   sources: [] as Array<{ mediaId: number }>,
@@ -100,10 +101,10 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
 
     expect(tabLabels).toEqual([
       "Upload",
-      "Library",
+      "My Media",
       "URL",
       "Paste",
-      "Search"
+      "Search Server"
     ])
   })
 
@@ -127,9 +128,9 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
 
     expect(tabLabels).toEqual([
       "Upload",
-      "Search",
+      "Search Server",
       "URL",
-      "Library",
+      "My Media",
       "Paste"
     ])
   })
@@ -137,7 +138,7 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
   it("persists updated tab usage when switching tabs", async () => {
     render(<AddSourceModal />)
 
-    fireEvent.click(screen.getByRole("tab", { name: "Search" }))
+    fireEvent.click(screen.getByRole("tab", { name: "Search Server" }))
 
     await waitFor(() => {
       const raw = window.localStorage.getItem(ADD_SOURCE_TAB_USAGE_STORAGE_KEY)

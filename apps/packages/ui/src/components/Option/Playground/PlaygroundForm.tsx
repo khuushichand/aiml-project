@@ -87,6 +87,7 @@ import { PASTED_TEXT_CHAR_LIMIT } from "@/utils/constant"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
+import { ChatQueuePanel } from "@/components/Common/ChatQueuePanel"
 import { useConnectionState } from "@/hooks/useConnectionState"
 import { ConnectionPhase, deriveConnectionUxState } from "@/types/connection"
 import { Link, useNavigate } from "react-router-dom"
@@ -110,6 +111,10 @@ import {
   normalizeMediaChatHandoffPayload,
   parseMediaIdAsNumber
 } from "@/services/tldw/media-chat-handoff"
+import {
+  normalizeWatchlistChatHandoffPayload,
+  buildWatchlistChatHint
+} from "@/services/tldw/watchlist-chat-handoff"
 import {
   getImageBackendConfigs,
   normalizeImageBackendConfig,
@@ -135,11 +140,15 @@ import { VoiceChatIndicator } from "./VoiceChatIndicator"
 import { VoiceModeSelector } from "./VoiceModeSelector"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { clearSetting, getSetting } from "@/services/settings/registry"
-import { DISCUSS_MEDIA_PROMPT_SETTING } from "@/services/settings/ui-settings"
+import { DISCUSS_MEDIA_PROMPT_SETTING, DISCUSS_WATCHLIST_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import { Button as TldwButton } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useStoreMessageOption } from "@/store/option"
+import {
+  shouldEnableOptionalResource,
+  useChatSurfaceCoordinatorStore
+} from "@/store/chat-surface-coordinator"
 import { trackOnboardingChatSubmitSuccess } from "@/utils/onboarding-ingestion-telemetry"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import { withTemplateFallback } from "@/utils/template-guards"
@@ -166,10 +175,13 @@ import {
   usePersistenceMode,
   useSlashCommands,
   useMessageCollapse,
+  useDeferredComposerInput,
   useMcpToolsControl,
   type CollapsedRange,
   type ModelSortMode
 } from "@/hooks/playground"
+import { useQueuedRequests } from "@/hooks/chat/useQueuedRequests"
+import type { ChatDocuments } from "@/models/ChatTypes"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 import { formatCost } from "@/utils/model-pricing"
 import {
@@ -217,6 +229,7 @@ import {
   buildImagePromptRefineMessages,
   extractImagePromptRefineCandidate
 } from "@/utils/image-prompt-refinement"
+import type { QueuedRequest } from "@/utils/chat-request-queue"
 import {
   createImagePromptDraftFromStrategy,
   deriveImagePromptRawContext,
@@ -227,6 +240,8 @@ import {
   computeResponseDiffPreview,
   type CompareResponseDiff
 } from "./compare-response-diff"
+import { createComposerPerfTracker } from "@/utils/perf/composer-perf"
+import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
 
 type Props = {
   droppedFiles: File[]
@@ -237,6 +252,9 @@ type DefaultCharacterPreferenceQueryResult = {
 }
 
 const CONTEXT_FOOTPRINT_THRESHOLD_PERCENT = 40
+
+const toText = (value: unknown): string =>
+  typeof value === "string" ? value : String(value)
 
 const estimateTokensFromText = (value: string): number => {
   const normalized = value.trim()
@@ -266,6 +284,12 @@ const collectStringSegments = (
       collectStringSegments(entry, segments, depth + 1)
     )
   }
+}
+
+type PlaygroundQueuedSourceContext = {
+  documents?: ChatDocuments
+  imageBackendOverride?: string
+  isImageCommand?: boolean
 }
 
 export const PlaygroundForm = ({ droppedFiles }: Props) => {
@@ -330,8 +354,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     removeUploadedFile,
     clearUploadedFiles,
     queuedMessages,
-    addQueuedMessage,
-    clearQueuedMessages,
+    setQueuedMessages,
     serverChatId,
     setServerChatId,
     serverChatState,
@@ -348,8 +371,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     documentContext,
     selectedKnowledge,
     ragMediaIds,
-    compareAutoDisabledFlag,
-    setCompareAutoDisabledFlag
+    chatLoopState = {
+      status: "idle",
+      pendingApprovals: [],
+      inflightToolCallIds: []
+    }
   } = useMessageOption()
   const setRagMediaIds = useStoreMessageOption((s) => s.setRagMediaIds)
   const setRagPinnedResults = useStoreMessageOption((s) => s.setRagPinnedResults)
@@ -393,6 +419,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     apiProvider: state.apiProvider,
     extraHeaders: state.extraHeaders,
     extraBody: state.extraBody,
+    llamaThinkingBudgetTokens: state.llamaThinkingBudgetTokens,
+    llamaGrammarMode: state.llamaGrammarMode,
+    llamaGrammarId: state.llamaGrammarId,
+    llamaGrammarInline: state.llamaGrammarInline,
+    llamaGrammarOverride: state.llamaGrammarOverride,
     jsonMode: state.jsonMode
   }))
   const numCtx = useStoreChatModelSettings((state) => state.numCtx)
@@ -437,6 +468,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     () => deriveConnectionUxState(connectionState),
     [connectionState]
   )
+  const setOptionalPanelVisible = useChatSurfaceCoordinatorStore(
+    (state) => state.setPanelVisible
+  )
+  const markOptionalPanelEngaged = useChatSurfaceCoordinatorStore(
+    (state) => state.markPanelEngaged
+  )
+  const mcpToolsEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "mcp-tools")
+  )
+  const audioHealthEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "audio-health")
+  )
+  const modelCatalogEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "model-catalog")
+  )
   const isConnectionReady = isConnected && phase === ConnectionPhase.CONNECTED
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const {
@@ -456,7 +502,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setToolCatalogId,
     setToolModules,
     setToolCatalogStrict
-  } = useMcpTools()
+  } = useMcpTools({ enabled: mcpToolsEnabled })
   const mcpCtrl = useMcpToolsControl({
     hasMcp,
     mcpHealthState,
@@ -486,7 +532,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     isConnectionReady &&
     !capsLoading &&
     Boolean(capabilities?.hasStt)
-  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus()
+  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus({
+    enabled: audioHealthEnabled
+  })
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"
   const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
@@ -519,7 +567,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   })
   const [hasShownConnectBanner, setHasShownConnectBanner] = React.useState(false)
   const [showConnectBanner, setShowConnectBanner] = React.useState(false)
-  const [showQueuedBanner, setShowQueuedBanner] = React.useState(true)
   const [documentGeneratorOpen, setDocumentGeneratorOpen] =
     React.useState(false)
   const [voiceModeSelectorOpen, setVoiceModeSelectorOpen] = React.useState(false)
@@ -808,7 +855,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const { data: composerModels } = useQuery({
     queryKey: ["playground:chatModels"],
     queryFn: () => fetchChatModels({ returnEmpty: true }),
-    enabled: true
+    enabled: modelCatalogEnabled
   })
   const { data: imageModels = [] } = useQuery({
     queryKey: ["playground:imageModels"],
@@ -846,6 +893,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     navigate
   })
 
+  React.useEffect(() => {
+    setOptionalPanelVisible("model-catalog", modelDropdownOpen)
+    if (modelDropdownOpen) {
+      markOptionalPanelEngaged("model-catalog")
+    }
+
+    return () => {
+      setOptionalPanelVisible("model-catalog", false)
+    }
+  }, [markOptionalPanelEngaged, modelDropdownOpen, setOptionalPanelVisible])
+
+  React.useEffect(() => {
+    setOptionalPanelVisible("audio-health", voiceChatEnabled)
+    if (voiceChatEnabled) {
+      markOptionalPanelEngaged("audio-health")
+    }
+
+    return () => {
+      setOptionalPanelVisible("audio-health", false)
+    }
+  }, [markOptionalPanelEngaged, setOptionalPanelVisible, voiceChatEnabled])
+
   // Ensure compare selection has a sensible default when enabling compare mode
   React.useEffect(() => {
     if (
@@ -869,23 +938,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       setCompareMode(false)
     }
   }, [compareFeatureEnabled, compareMode, setCompareMode])
-
-  React.useEffect(() => {
-    if (compareAutoDisabledFlag) {
-      notificationApi.info({
-        message: t(
-          "playground:compareDisabledNotice",
-          "Compare mode was turned off"
-        ),
-        description: t(
-          "playground:compareDisabledNoticeDesc",
-          "The compare feature was disabled. Your model selections are saved."
-        ),
-        duration: 4
-      })
-      setCompareAutoDisabledFlag(false)
-    }
-  }, [compareAutoDisabledFlag, setCompareAutoDisabledFlag, notificationApi, t])
 
   // Auto-select model on initial load when no model is selected
   // Priority: 1) First favorite model, 2) First available model
@@ -1120,9 +1172,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           ? t(`playground:presets.${currentPreset.key}.label`, currentPreset.label)
           : currentPresetKey
         setModeAnnouncement(
-          t("playground:composer.presetChanged", "{{preset}} preset applied.", {
-            preset: presetLabel
-          } as any)
+          toText(
+            t("playground:composer.presetChanged", "{{preset}} preset applied.", {
+              preset: presetLabel
+            } as any)
+          )
         )
       }
     }
@@ -1177,6 +1231,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
     return t("playground:composer.providerStatusHealthy", "Healthy")
   }, [connectionUxState, isConnectionReady, t])
+  const isSessionDegraded = React.useMemo(
+    () =>
+      !isConnectionReady || connectionUxState === "connected_degraded",
+    [connectionUxState, isConnectionReady]
+  )
   const currentContextSnapshot = React.useMemo(
     () => ({
       model: selectedModel || null,
@@ -1447,6 +1506,85 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       image: ""
     }
   })
+  const { deferredInput: deferredComposerInput } = useDeferredComposerInput(
+    form.values.message || ""
+  )
+  const composerPerfTrackerRef = React.useRef(
+    createComposerPerfTracker({
+      enabled: Boolean((globalThis as any).__TLDW_CHAT_PERF__)
+    })
+  )
+  const renderPerfTrackerRef = React.useRef(
+    createRenderPerfTracker({
+      enabled: Boolean((globalThis as any).__TLDW_CHAT_PERF__)
+    })
+  )
+  const markComposerPerf = React.useCallback((label: string) => {
+    return composerPerfTrackerRef.current.start(label)
+  }, [])
+  const onComposerRenderProfile = React.useCallback<React.ProfilerOnRenderCallback>(
+    (id, phase, actualDuration, baseDuration, startTime, commitTime) => {
+      renderPerfTrackerRef.current.onRender(
+        String(id),
+        phase,
+        actualDuration,
+        baseDuration,
+        startTime,
+        commitTime
+      )
+    },
+    []
+  )
+  const measureComposerPerf = React.useCallback(
+    <T,>(label: string, fn: () => T): T => {
+      const end = markComposerPerf(label)
+      try {
+        return fn()
+      } finally {
+        end()
+      }
+    },
+    [markComposerPerf]
+  )
+  const wrapComposerProfile = React.useCallback(
+    (id: string, node: React.ReactNode): React.ReactNode => {
+      if (!renderPerfTrackerRef.current.isEnabled()) {
+        return node
+      }
+      return (
+        <React.Profiler id={id} onRender={onComposerRenderProfile}>
+          {node}
+        </React.Profiler>
+      )
+    },
+    [onComposerRenderProfile]
+  )
+
+  React.useEffect(() => {
+    const inputTracker = composerPerfTrackerRef.current
+    const renderTracker = renderPerfTrackerRef.current
+    if (!inputTracker.isEnabled() || typeof window === "undefined") {
+      return
+    }
+    ;(window as any).__TLDW_CHAT_PERF_SNAPSHOT__ = () => inputTracker.snapshot()
+    ;(window as any).__TLDW_CHAT_PERF_CLEAR__ = () => {
+      inputTracker.clear()
+      renderTracker.clear()
+    }
+    ;(window as any).__TLDW_CHAT_RENDER_PERF_SNAPSHOT__ = () =>
+      renderTracker.snapshot()
+    ;(window as any).__TLDW_CHAT_RENDER_PERF_SUMMARY__ = () =>
+      renderTracker.summarize()
+    ;(window as any).__TLDW_CHAT_RENDER_PERF_CLEAR__ = () =>
+      renderTracker.clear()
+    return () => {
+      delete (window as any).__TLDW_CHAT_PERF_SNAPSHOT__
+      delete (window as any).__TLDW_CHAT_PERF_CLEAR__
+      delete (window as any).__TLDW_CHAT_RENDER_PERF_SNAPSHOT__
+      delete (window as any).__TLDW_CHAT_RENDER_PERF_SUMMARY__
+      delete (window as any).__TLDW_CHAT_RENDER_PERF_CLEAR__
+    }
+  }, [])
 
   const setFieldValueRef = React.useRef(form.setFieldValue)
   React.useEffect(() => {
@@ -1684,20 +1822,23 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   )
   const modelRecommendations = React.useMemo(
     () =>
-      buildModelRecommendations({
-        draftText: String(form.values.message || ""),
-        selectedModel,
-        modelCapabilities,
-        webSearch,
-        jsonMode: Boolean(currentChatModelSettings.jsonMode),
-        hasImageAttachment: Boolean(form.values.image),
-        tokenBudgetRiskLevel: tokenBudgetRisk.level,
-        sessionInsights
-      }),
+      measureComposerPerf("derive:model-recommendations", () =>
+        buildModelRecommendations({
+          draftText: deferredComposerInput,
+          selectedModel,
+          modelCapabilities,
+          webSearch,
+          jsonMode: Boolean(currentChatModelSettings.jsonMode),
+          hasImageAttachment: Boolean(form.values.image),
+          tokenBudgetRiskLevel: tokenBudgetRisk.level,
+          sessionInsights
+        })
+      ),
     [
       currentChatModelSettings.jsonMode,
+      deferredComposerInput,
       form.values.image,
-      form.values.message,
+      measureComposerPerf,
       modelCapabilities,
       selectedModel,
       sessionInsights,
@@ -2060,7 +2201,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </Dropdown>
   )
 
-  const modelUsageBadge = (
+  const modelUsageBadge = wrapComposerProfile(
+    "token-progress",
     <TokenProgressBar
       conversationTokens={conversationTokenCount}
       draftTokens={draftTokenCount}
@@ -2223,6 +2365,55 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [applyDiscussMediaPayload])
 
+  const applyDiscussWatchlistPayload = React.useCallback(
+    (
+      rawPayload: unknown,
+      options?: { clearAfterUse?: boolean }
+    ) => {
+      const payload = normalizeWatchlistChatHandoffPayload(rawPayload)
+      if (!payload) {
+        if (options?.clearAfterUse) {
+          void clearSetting(DISCUSS_WATCHLIST_PROMPT_SETTING)
+        }
+        return
+      }
+      if (options?.clearAfterUse) {
+        void clearSetting(DISCUSS_WATCHLIST_PROMPT_SETTING)
+      }
+      setChatMode("normal")
+      setRagMediaIds(null)
+      const hint = buildWatchlistChatHint(payload)
+      if (!hint) return
+      setMessageValue(hint, { collapseLarge: true, forceCollapse: true })
+      textAreaFocus()
+    },
+    [setChatMode, setMessageValue, setRagMediaIds, textAreaFocus]
+  )
+
+  // Seed composer when a watchlist item requests discussion
+  React.useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const payload = await getSetting(DISCUSS_WATCHLIST_PROMPT_SETTING)
+      if (cancelled || !payload) return
+      applyDiscussWatchlistPayload(payload, { clearAfterUse: true })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [applyDiscussWatchlistPayload])
+
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail
+      applyDiscussWatchlistPayload(detail)
+    }
+    window.addEventListener("tldw:discuss-watchlist", handler as any)
+    return () => {
+      window.removeEventListener("tldw:discuss-watchlist", handler as any)
+    }
+  }, [applyDiscussWatchlistPayload])
+
   React.useEffect(() => {
     textAreaFocus()
   }, [textAreaFocus])
@@ -2239,11 +2430,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       setShowConnectBanner(false)
     }
   }, [isConnectionReady])
-
-  React.useEffect(() => {
-    const next = queuedMessages.length > 0
-    setShowQueuedBanner((prev) => (prev === next ? prev : next))
-  }, [queuedMessages.length])
 
   const notifyImageAttachmentDisabled = React.useCallback(() => {
     notificationApi.warning({
@@ -2713,16 +2899,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const handleTextareaChange = React.useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      if (isMessageCollapsed) return
-      form.getInputProps("message").onChange(e)
-      if (tabMentionsEnabled && textareaRef.current) {
-        handleTextChange(
-          e.target.value,
-          textareaRef.current.selectionStart || 0
-        )
+      const endPerf = markComposerPerf("input:textarea-change")
+      try {
+        if (isMessageCollapsed) return
+        form.getInputProps("message").onChange(e)
+        if (tabMentionsEnabled && textareaRef.current) {
+          handleTextChange(
+            e.target.value,
+            textareaRef.current.selectionStart || 0
+          )
+        }
+      } finally {
+        endPerf()
       }
     },
-    [isMessageCollapsed, form, tabMentionsEnabled, textareaRef, handleTextChange]
+    [
+      isMessageCollapsed,
+      form,
+      tabMentionsEnabled,
+      textareaRef,
+      handleTextChange,
+      markComposerPerf
+    ]
   )
 
   const handleTextareaSelect = React.useCallback(() => {
@@ -2804,6 +3002,45 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const handleMentionRefetch = React.useCallback(async () => {
     await reloadTabs()
   }, [reloadTabs])
+
+  const handleKnowledgeInsert = React.useCallback(
+    (text: string) => {
+      const current = textareaRef.current?.value || ""
+      const next = current ? `${current}\n\n${text}` : text
+      setMessageValue(next, { collapseLarge: true })
+      textAreaFocus()
+    },
+    [setMessageValue, textAreaFocus, textareaRef]
+  )
+  const submitFormRef = React.useRef<
+    (options?: { ignorePinnedResults?: boolean }) => void
+  >(() => undefined)
+
+  const handleKnowledgeAsk = React.useCallback(
+    (text: string, options?: { ignorePinnedResults?: boolean }) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      setMessageValue(trimmed, { collapseLarge: true })
+      queueMicrotask(() =>
+        submitFormRef.current({
+          ignorePinnedResults: options?.ignorePinnedResults
+        })
+      )
+    },
+    [setMessageValue]
+  )
+  const handleKnowledgePanelOpenChange = React.useCallback(
+    (nextOpen: boolean) => {
+      setContextToolsOpen(nextOpen)
+    },
+    []
+  )
+  const handleKnowledgeRemoveImage = React.useCallback(() => {
+    form.setFieldValue("image", "")
+  }, [form.setFieldValue])
+  const handleKnowledgeAddFile = React.useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
 
   // Match sidepanel textarea sizing: Pro mode gets more space
   const textareaMaxHeight = isProMode ? 160 : 120
@@ -3125,6 +3362,391 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     [availableChatModelIds, form, t]
   )
 
+  const buildQueuedDocuments = React.useCallback(
+    (): ChatDocuments =>
+      selectedDocuments.map((doc) => ({
+        type: "tab",
+        tabId: doc.id,
+        title: doc.title,
+        url: doc.url,
+        favIconUrl: doc.favIconUrl
+      })),
+    [selectedDocuments]
+  )
+
+  const buildQueuedRequestSnapshot = React.useCallback(
+    () => ({
+      selectedModel,
+      chatMode,
+      webSearch,
+      compareMode: compareModeActive,
+      compareSelectedModels,
+      selectedSystemPrompt,
+      selectedQuickPrompt,
+      toolChoice,
+      useOCR
+    }),
+    [
+      chatMode,
+      compareModeActive,
+      compareSelectedModels,
+      selectedModel,
+      selectedQuickPrompt,
+      selectedSystemPrompt,
+      toolChoice,
+      useOCR,
+      webSearch
+    ]
+  )
+
+  const isQueuedDispatchBlockedByComposerState = React.useMemo(
+    () =>
+      uploadedFiles.length > 0 ||
+      contextFiles.length > 0 ||
+      (Array.isArray(documentContext) && documentContext.length > 0),
+    [contextFiles.length, documentContext, uploadedFiles.length]
+  )
+
+  const validateQueuedRequest = React.useCallback(
+    (item: QueuedRequest) => {
+      if (isQueuedDispatchBlockedByComposerState) {
+        return t(
+          "playground:composer.queue.currentDraftAttachmentConflict",
+          "Clear the current draft attachments/context before sending queued requests."
+        )
+      }
+
+      const sourceContext = (item.sourceContext ??
+        null) as PlaygroundQueuedSourceContext | null
+
+      if (!sourceContext?.isImageCommand) {
+        if (!item.snapshot.compareMode) {
+          const normalizedSelectedModel = normalizeChatModelId(
+            item.snapshot.selectedModel
+          )
+          if (!normalizedSelectedModel) {
+            return t("formError.noModel")
+          }
+          const unavailableModel = findUnavailableChatModel(
+            [normalizedSelectedModel],
+            availableChatModelIds
+          )
+          if (unavailableModel) {
+            return t(
+              "playground:composer.validationModelUnavailableInline",
+              "Selected model is not available on this server. Refresh models or choose a different model."
+            )
+          }
+        } else if (
+          !item.snapshot.compareSelectedModels ||
+          item.snapshot.compareSelectedModels.length < 2
+        ) {
+          return t(
+            "playground:composer.validationCompareMinModelsInline",
+            "Select at least two models for Compare mode."
+          )
+        } else {
+          const unavailableModel = findUnavailableChatModel(
+            item.snapshot.compareSelectedModels,
+            availableChatModelIds
+          )
+          if (unavailableModel) {
+            return t(
+              "playground:composer.validationModelUnavailableInline",
+              "Selected model is not available on this server. Refresh models or choose a different model."
+            )
+          }
+        }
+
+        if (
+          item.snapshot.compareMode &&
+          item.image.length > 0 &&
+          !compareModelsSupportCapability(
+            item.snapshot.compareSelectedModels,
+            "vision"
+          )
+        ) {
+          return t(
+            "playground:composer.validationCompareVisionInline",
+            "One or more selected compare models do not support image input."
+          )
+        }
+      }
+
+      return null
+    },
+    [
+      availableChatModelIds,
+      compareModelsSupportCapability,
+      isQueuedDispatchBlockedByComposerState,
+      t
+    ]
+  )
+
+  const sendQueuedRequest = React.useCallback(
+    async (item: QueuedRequest) => {
+      const validationError = validateQueuedRequest(item)
+      if (validationError) {
+        form.setFieldError("message", validationError)
+        throw new Error(validationError)
+      }
+
+      setSelectedModel(item.snapshot.selectedModel)
+      setChatMode(item.snapshot.chatMode)
+      setWebSearch(item.snapshot.webSearch)
+      setCompareMode(item.snapshot.compareMode)
+      setCompareSelectedModels(item.snapshot.compareSelectedModels)
+      setSelectedSystemPrompt(item.snapshot.selectedSystemPrompt ?? "")
+      setSelectedQuickPrompt(item.snapshot.selectedQuickPrompt ?? "")
+      if (
+        item.snapshot.toolChoice === "auto" ||
+        item.snapshot.toolChoice === "required" ||
+        item.snapshot.toolChoice === "none"
+      ) {
+        setToolChoice(item.snapshot.toolChoice)
+      }
+      setUseOCR(item.snapshot.useOCR)
+
+      const sourceContext = (item.sourceContext ??
+        null) as PlaygroundQueuedSourceContext | null
+      const documents = Array.isArray(sourceContext?.documents)
+        ? sourceContext.documents
+        : []
+
+      const projectedForSubmission = projectTokenBudget({
+        conversationTokens: conversationTokenCount,
+        draftTokens: estimateTokensForText(item.promptText),
+        maxTokens: resolvedMaxContext
+      })
+      if (
+        projectedForSubmission.isOverLimit ||
+        projectedForSubmission.isNearLimit
+      ) {
+        notificationApi.warning({
+          message: t(
+            "playground:tokens.preSendWarningTitle",
+            "Context budget warning"
+          ),
+          description: projectedForSubmission.isOverLimit
+            ? t(
+                "playground:tokens.preSendOverLimit",
+                "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
+              )
+            : t(
+                "playground:tokens.preSendNearLimit",
+                "Projected send is near the context window limit."
+              )
+        })
+      }
+
+      setLastSubmittedContext(currentContextSnapshot)
+      await sendMessage({
+        image: sourceContext?.isImageCommand ? "" : item.image,
+        message: item.promptText,
+        docs: sourceContext?.isImageCommand ? [] : documents,
+        requestOverrides: {
+          selectedModel: item.snapshot.selectedModel,
+          selectedSystemPrompt: item.snapshot.selectedSystemPrompt,
+          toolChoice:
+            item.snapshot.toolChoice === "auto" ||
+            item.snapshot.toolChoice === "required" ||
+            item.snapshot.toolChoice === "none"
+              ? item.snapshot.toolChoice
+              : undefined,
+          useOCR: item.snapshot.useOCR,
+          webSearch: item.snapshot.webSearch
+        },
+        imageBackendOverride: sourceContext?.isImageCommand
+          ? sourceContext.imageBackendOverride
+          : undefined,
+        userMessageType: sourceContext?.isImageCommand
+          ? IMAGE_GENERATION_USER_MESSAGE_TYPE
+          : undefined,
+        assistantMessageType: sourceContext?.isImageCommand
+          ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
+          : undefined,
+        imageGenerationSource: sourceContext?.isImageCommand
+          ? "slash-command"
+          : undefined
+      })
+    },
+    [
+      conversationTokenCount,
+      currentContextSnapshot,
+      form,
+      notificationApi,
+      resolvedMaxContext,
+      sendMessage,
+      setChatMode,
+      setCompareMode,
+      setCompareSelectedModels,
+      setLastSubmittedContext,
+      setSelectedModel,
+      setSelectedQuickPrompt,
+      setSelectedSystemPrompt,
+      setToolChoice,
+      setUseOCR,
+      setWebSearch,
+      t,
+      validateQueuedRequest
+    ]
+  )
+
+  const queuedRequestActions = useQueuedRequests({
+    isConnectionReady,
+    isStreaming: isSending,
+    queue: queuedMessages,
+    setQueue: setQueuedMessages,
+    sendQueuedRequest,
+    stopStreamingRequest
+  })
+
+  const queueSubmission = React.useCallback(
+    ({
+      promptText,
+      image,
+      intent
+    }: {
+      promptText: string
+      image: string
+      intent: ReturnType<typeof resolveSubmissionIntent>
+    }) => {
+      if (isQueuedDispatchBlockedByComposerState) {
+        notificationApi.warning({
+          message: t(
+            "playground:composer.queue.attachmentsNeedManualRepairTitle",
+            "Queue needs a simpler draft"
+          ),
+          description: t(
+            "playground:composer.queue.attachmentsNeedManualRepairBody",
+            "Queued requests currently support text, images, and tab mentions. Clear attached files/context before queueing this draft."
+          )
+        })
+        return null
+      }
+
+      const documents = buildQueuedDocuments()
+      const queuedItem = queuedRequestActions.enqueue({
+        conversationId: historyId ?? serverChatId ?? null,
+        promptText,
+        image: intent.isImageCommand ? "" : image,
+        attachments: documents,
+        sourceContext: {
+          documents,
+          imageBackendOverride: intent.isImageCommand
+            ? intent.imageBackendOverride
+            : undefined,
+          isImageCommand: intent.isImageCommand
+        },
+        snapshot: buildQueuedRequestSnapshot()
+      })
+
+      form.reset()
+      clearSelectedDocuments()
+      clearUploadedFiles()
+      textAreaFocus()
+      notificationApi.info({
+        message: t("playground:composer.queue.requestQueued", "Request queued"),
+        description: isSending
+          ? t(
+              "playground:composer.queue.requestQueuedWhileBusy",
+              "We'll run it after the current response finishes."
+            )
+          : t(
+              "playground:composer.queue.requestQueuedWhileOffline",
+              "We'll send it when your tldw server reconnects."
+            )
+      })
+      return queuedItem
+    },
+    [
+      buildQueuedDocuments,
+      buildQueuedRequestSnapshot,
+      clearSelectedDocuments,
+      clearUploadedFiles,
+      form,
+      historyId,
+      isQueuedDispatchBlockedByComposerState,
+      isSending,
+      notificationApi,
+      queuedRequestActions,
+      serverChatId,
+      t,
+      textAreaFocus
+    ]
+  )
+
+  const cancelCurrentAndRunDisabledReason =
+    isSending && serverChatId
+      ? t(
+          "playground:composer.queue.cancelAndRunDisabled",
+          "Cancel current & run now is not available for server-backed turns yet."
+        )
+      : null
+
+  const handleRunQueuedRequest = React.useCallback(
+    async (requestId: string) => {
+      if (isSending && cancelCurrentAndRunDisabledReason) {
+        return
+      }
+      await queuedRequestActions.runNow(requestId)
+      if (!isSending && isConnectionReady) {
+        await queuedRequestActions.flushNext()
+      }
+    },
+    [
+      cancelCurrentAndRunDisabledReason,
+      isConnectionReady,
+      isSending,
+      queuedRequestActions
+    ]
+  )
+
+  const handleRunNextQueuedRequest = React.useCallback(async () => {
+    const next = queuedMessages[0]
+    if (!next) return
+    if (isSending && cancelCurrentAndRunDisabledReason) {
+      return
+    }
+    if (next.status === "blocked") {
+      await handleRunQueuedRequest(next.id)
+      return
+    }
+    await queuedRequestActions.flushNext()
+  }, [
+    cancelCurrentAndRunDisabledReason,
+    handleRunQueuedRequest,
+    isSending,
+    queuedMessages,
+    queuedRequestActions
+  ])
+
+  const autoDrainingQueuedRequestsRef = React.useRef(false)
+  React.useEffect(() => {
+    const next = queuedMessages[0]
+    if (
+      autoDrainingQueuedRequestsRef.current ||
+      !next ||
+      !isConnectionReady ||
+      isSending ||
+      next.status !== "queued" ||
+      isQueuedDispatchBlockedByComposerState
+    ) {
+      return
+    }
+
+    autoDrainingQueuedRequestsRef.current = true
+    void queuedRequestActions.flushNext().finally(() => {
+      autoDrainingQueuedRequestsRef.current = false
+    })
+  }, [
+    isConnectionReady,
+    isQueuedDispatchBlockedByComposerState,
+    isSending,
+    queuedMessages,
+    queuedRequestActions
+  ])
+
   const submitForm = (options?: { ignorePinnedResults?: boolean }) => {
     form.onSubmit(async (value) => {
       const intent = resolveSubmissionIntent(value.message)
@@ -3160,17 +3782,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       ) {
         return
       }
-      if (!isConnectionReady) {
-        addQueuedMessage({
-          message: trimmed,
-          image: value.image
-        })
-        form.reset()
-        clearSelectedDocuments()
-        clearUploadedFiles()
-        return
-      }
-      const defaultEM = await defaultEmbeddingModelForRag()
+      const shouldQueueInsteadOfSend = isSending || !isConnectionReady
       if (!intent.isImageCommand) {
         if (!compareModeActive) {
           const normalizedSelectedModel = normalizeChatModelId(selectedModel)
@@ -3209,18 +3821,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               "playground:composer.validationCompareVisionInline",
               "One or more selected compare models do not support image input."
             )
-          )
+            )
           return
         }
       }
 
-      if (!intent.isImageCommand && webSearch) {
-        const simpleSearch = await getIsSimpleInternetSearch()
-        if (!defaultEM && !simpleSearch) {
-          form.setFieldError("message", t("formError.noEmbeddingModel"))
-          return
-        }
-      }
       if (intent.isImageCommand && trimmed.length === 0) {
         notificationApi.error({
           message: t("error", { defaultValue: "Error" }),
@@ -3230,6 +3835,24 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           )
         })
         return
+      }
+
+      if (shouldQueueInsteadOfSend) {
+        queueSubmission({
+          promptText: trimmed,
+          image: value.image,
+          intent
+        })
+        return
+      }
+
+      const defaultEM = await defaultEmbeddingModelForRag()
+      if (!intent.isImageCommand && webSearch) {
+        const simpleSearch = await getIsSimpleInternetSearch()
+        if (!defaultEM && !simpleSearch) {
+          form.setFieldError("message", t("formError.noEmbeddingModel"))
+          return
+        }
       }
       form.reset()
       clearSelectedDocuments()
@@ -3282,153 +3905,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       })
     })()
   }
-
-  const submitFormFromQueued = (message: string, image: string) => {
-    if (!isConnectionReady) {
-      return
-    }
-    form.onSubmit(async () => {
-      const intent = resolveSubmissionIntent(message)
-      if (intent.invalidImageCommand) {
-        notificationApi.error({
-          message: t("error", { defaultValue: "Error" }),
-          description: intent.imageCommandMissingProvider
-            ? t(
-                "imageCommand.missingProvider",
-                "Pick an Image provider in More tools or use /generate-image:<provider> <prompt>."
-              )
-            : t(
-                "imageCommand.invalidUsage",
-                "Use /generate-image:<provider> <prompt>."
-              )
-        })
-        return
-      }
-      const nextMessage = intent.message
-      const combinedMessage = intent.isImageCommand
-        ? nextMessage
-        : buildPinnedMessage(nextMessage)
-      const trimmed = combinedMessage.trim()
-      if (
-        !intent.isImageCommand &&
-        trimmed.length === 0 &&
-        image.length === 0 &&
-        selectedDocuments.length === 0 &&
-        uploadedFiles.length === 0
-      ) {
-        return
-      }
-      const defaultEM = await defaultEmbeddingModelForRag()
-      if (!intent.isImageCommand) {
-        if (!compareModeActive) {
-          const normalizedSelectedModel = normalizeChatModelId(selectedModel)
-          if (!normalizedSelectedModel) {
-            form.setFieldError("message", t("formError.noModel"))
-            return
-          }
-          if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
-            return
-          }
-        } else if (
-          !compareSelectedModels ||
-          compareSelectedModels.length < 2
-        ) {
-          form.setFieldError(
-            "message",
-            t(
-              "playground:composer.validationCompareMinModelsInline",
-              "Select at least two models for Compare mode."
-            )
-          )
-          return
-        } else if (
-          !validateSelectedChatModelsAvailability(compareSelectedModels)
-        ) {
-          return
-        }
-        if (
-          compareModeActive &&
-          image.length > 0 &&
-          !compareModelsSupportCapability(compareSelectedModels, "vision")
-        ) {
-          form.setFieldError(
-            "message",
-            t(
-              "playground:composer.validationCompareVisionInline",
-              "One or more selected compare models do not support image input."
-            )
-          )
-          return
-        }
-      }
-      if (!intent.isImageCommand && webSearch) {
-        const simpleSearch = await getIsSimpleInternetSearch()
-        if (!defaultEM && !simpleSearch) {
-          form.setFieldError("message", t("formError.noEmbeddingModel"))
-          return
-        }
-      }
-      if (intent.isImageCommand && trimmed.length === 0) {
-        notificationApi.error({
-          message: t("error", { defaultValue: "Error" }),
-          description: t(
-            "imageCommand.missingPrompt",
-            "Image prompt is required."
-          )
-        })
-        return
-      }
-      form.reset()
-      clearSelectedDocuments()
-      clearUploadedFiles()
-      textAreaFocus()
-      const projectedForSubmission = projectTokenBudget({
-        conversationTokens: conversationTokenCount,
-        draftTokens: estimateTokensForText(trimmed),
-        maxTokens: resolvedMaxContext
-      })
-      if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
-        notificationApi.warning({
-          message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
-          description: projectedForSubmission.isOverLimit
-            ? t(
-                "playground:tokens.preSendOverLimit",
-                "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
-              )
-            : t(
-                "playground:tokens.preSendNearLimit",
-                "Projected send is near the context window limit."
-              )
-        })
-      }
-      setLastSubmittedContext(currentContextSnapshot)
-      await sendMessage({
-        image: intent.isImageCommand ? "" : image,
-        message: trimmed,
-        docs: intent.isImageCommand
-          ? []
-          : selectedDocuments.map((doc) => ({
-              type: "tab",
-              tabId: doc.id,
-              title: doc.title,
-              url: doc.url,
-              favIconUrl: doc.favIconUrl
-            })),
-        imageBackendOverride: intent.isImageCommand
-          ? intent.imageBackendOverride
-          : undefined,
-        userMessageType: intent.isImageCommand
-          ? IMAGE_GENERATION_USER_MESSAGE_TYPE
-          : undefined,
-        assistantMessageType: intent.isImageCommand
-          ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
-          : undefined,
-        imageGenerationSource: intent.isImageCommand
-          ? "slash-command"
-          : undefined
-      })
-    })()
-  }
+  React.useEffect(() => {
+    submitFormRef.current = submitForm
+  }, [submitForm])
 
   const privateChatLocked = temporaryChat && history.length > 0
 
@@ -3903,6 +4382,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const handleToggleWebSearch = React.useCallback(() => {
     setWebSearch(!webSearch)
   }, [setWebSearch, webSearch])
+  const handleOpenModelSettings = React.useCallback(() => {
+    setOpenModelSettings(true)
+  }, [setOpenModelSettings])
+  const handleDismissServerPersistenceHint = React.useCallback(() => {
+    setShowServerPersistenceHint(false)
+  }, [setShowServerPersistenceHint])
 
   const handleImageUpload = React.useCallback(() => {
     inputRef.current?.click()
@@ -4247,6 +4732,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [imageGenerateSubmitting, setImageGenerateSubmitting] =
     React.useState(false)
   const { mcpSettingsOpen, setMcpSettingsOpen } = mcpCtrl
+  React.useEffect(() => {
+    setOptionalPanelVisible("mcp-tools", mcpSettingsOpen)
+    if (mcpSettingsOpen || toolChoice !== "none") {
+      markOptionalPanelEngaged("mcp-tools")
+    }
+
+    return () => {
+      setOptionalPanelVisible("mcp-tools", false)
+    }
+  }, [
+    markOptionalPanelEngaged,
+    mcpSettingsOpen,
+    setOptionalPanelVisible,
+    toolChoice
+  ])
 
   const parseJsonObject = React.useCallback((value?: string) => {
     if (!value || typeof value !== "string") return undefined
@@ -4811,6 +5311,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         api_provider: resolvedProvider || undefined,
         extra_headers: parseJsonObject(currentChatModelSettings.extraHeaders),
         extra_body: parseJsonObject(currentChatModelSettings.extraBody),
+        thinking_budget_tokens:
+          currentChatModelSettings.llamaThinkingBudgetTokens,
+        grammar_mode: currentChatModelSettings.llamaGrammarMode,
+        grammar_id: currentChatModelSettings.llamaGrammarId,
+        grammar_inline: currentChatModelSettings.llamaGrammarInline,
+        grammar_override: currentChatModelSettings.llamaGrammarOverride,
         response_format: currentChatModelSettings.jsonMode
           ? { type: "json_object" }
           : undefined
@@ -4824,6 +5330,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       currentChatModelSettings.frequencyPenalty,
       currentChatModelSettings.historyMessageLimit,
       currentChatModelSettings.historyMessageOrder,
+      currentChatModelSettings.llamaGrammarId,
+      currentChatModelSettings.llamaGrammarInline,
+      currentChatModelSettings.llamaGrammarMode,
+      currentChatModelSettings.llamaGrammarOverride,
+      currentChatModelSettings.llamaThinkingBudgetTokens,
       currentChatModelSettings.jsonMode,
       currentChatModelSettings.numPredict,
       currentChatModelSettings.presencePenalty,
@@ -5106,6 +5617,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           </span>
           <button
             type="button"
+            onClick={() => {
+              setToolsPopoverOpen(false)
+              openImageGenerateModal()
+            }}
+            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+          >
+            <span>{t("playground:imageGeneration.modalTitle", "Generate image")}</span>
+            <WandSparkles className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
             onClick={() => openKnowledgePanel("context")}
             className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
           >
@@ -5378,6 +5900,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       defaultInternetSearchOn,
       handleClearContext,
       openKnowledgePanel,
+      openImageGenerateModal,
       handleVoiceChatToggle,
       history.length,
       imageProviderControl,
@@ -5469,7 +5992,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         e,
         sendWhenEnter,
         typing,
-        isSending
+        isSending: false
       })
     ) {
       e.preventDefault()
@@ -5486,7 +6009,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         e,
         sendWhenEnter,
         typing,
-        isSending
+        isSending: false
       })
       if (shouldSend) return false
 
@@ -5736,74 +6259,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       tone: selectedModel ? "active" : "warning",
       onClick: openModelApiSelector
     })
-    const capabilityLabels: string[] = []
-    if (modelCapabilities.includes("vision")) {
-      capabilityLabels.push(t("playground:composer.context.capabilityVision", "Vision"))
-    }
-    if (modelCapabilities.includes("tools")) {
-      capabilityLabels.push(t("playground:composer.context.capabilityTools", "Tools"))
-    }
-    if (modelCapabilities.includes("streaming")) {
-      capabilityLabels.push(t("playground:composer.context.capabilityStreaming", "Streaming"))
-    }
-    if (
-      typeof modelContextLength === "number" &&
-      Number.isFinite(modelContextLength) &&
-      modelContextLength > 0
-    ) {
-      capabilityLabels.push(
-        t("playground:composer.context.capabilityContext", {
-          defaultValue: "{{count}}k ctx",
-          count: Math.max(1, Math.round(modelContextLength / 1000))
-        } as any) as string
-      )
-    }
-    if (capabilityLabels.length > 0) {
+    if (isSessionDegraded) {
       items.push({
-        id: "modelCapabilities",
-        label: t("playground:composer.context.capabilities", "Capabilities"),
-        value: capabilityLabels.slice(0, 3).join(" • "),
-        tone: "neutral",
-        onClick: () => setOpenModelSettings(true)
+        id: "sessionStatus",
+        label: t("playground:composer.context.sessionStatus", "Session status"),
+        value: connectionStatusLabel,
+        tone: "warning",
+        onClick: focusConnectionCard
       })
     }
-    items.push({
-      id: "providerStatus",
-      label: t("playground:composer.context.providerStatus", "Provider"),
-      value: connectionStatusLabel,
-      tone:
-        !isConnectionReady || connectionUxState === "connected_degraded"
-          ? "warning"
-          : "active",
-      onClick: focusConnectionCard
-    })
-    const routingPolicyValue =
-      typeof currentChatModelSettings.apiProvider === "string" &&
-      currentChatModelSettings.apiProvider.trim().length > 0
-        ? String(
-            t("playground:composer.context.routingPinned", "{{provider}} pinned", {
-              provider: getProviderDisplayName(
-                currentChatModelSettings.apiProvider.trim()
-              )
-            } as any)
-          )
-        : String(
-            t(
-              "playground:composer.context.routingAuto",
-              "Auto fallback"
-            )
-          )
-    items.push({
-      id: "routingPolicy",
-      label: t("playground:composer.context.routing", "Routing"),
-      value: routingPolicyValue,
-      tone:
-        currentChatModelSettings.apiProvider &&
-        currentChatModelSettings.apiProvider.trim().length > 0
-          ? "neutral"
-          : "active",
-      onClick: () => setOpenModelSettings(true)
-    })
 
     if (compareModeActive) {
       items.push({
@@ -5826,10 +6290,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (currentPreset && currentPreset.key !== "custom") {
       items.push({
         id: "preset",
-        label: t("playground:composer.context.preset", "Preset"),
-        value: t(
-          `playground:presets.${currentPreset.key}.label`,
-          currentPreset.label
+        label: toText(t("playground:composer.context.preset", "Preset")),
+        value: toText(
+          t(
+            `playground:presets.${currentPreset.key}.label`,
+            currentPreset.label
+          )
         ),
         tone: "active",
         onClick: () => setOpenModelSettings(true)
@@ -5839,12 +6305,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (selectedCharacter?.name) {
       items.push({
         id: "character",
-        label: t("playground:composer.context.character", "Character"),
+        label: toText(t("playground:composer.context.character", "Character")),
         value: characterPendingApply
-          ? t(
-              "playground:composer.context.characterNextTurn",
-              "{{name}} (next turn)",
-              { name: selectedCharacter.name } as any
+          ? toText(
+              t(
+                "playground:composer.context.characterNextTurn",
+                "{{name}} (next turn)",
+                { name: selectedCharacter.name } as any
+              )
             )
           : selectedCharacter.name,
         tone: "active",
@@ -5855,8 +6323,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (contextToolsOpen) {
       items.push({
         id: "knowledge",
-        label: t("playground:composer.context.knowledge", "Knowledge"),
-        value: t("common:open", "Open"),
+        label: toText(t("playground:composer.context.knowledge", "Knowledge")),
+        value: toText(t("common:open", "Open")),
         tone: "active",
         onClick: () => setContextToolsOpen(false)
       })
@@ -5865,8 +6333,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (ragPinnedResults.length > 0) {
       items.push({
         id: "ragPinned",
-        label: t("playground:composer.context.pinnedSources", "Pinned"),
-        value: String(
+        label: toText(t("playground:composer.context.pinnedSources", "Pinned")),
+        value: toText(
           t("playground:composer.context.pinnedCount", {
             defaultValue: "{{count}} sources",
             count: ragPinnedResults.length
@@ -5880,8 +6348,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (webSearch) {
       items.push({
         id: "webSearch",
-        label: t("playground:composer.context.webSearch", "Web search"),
-        value: t("common:on", "On"),
+        label: toText(t("playground:composer.context.webSearch", "Web search")),
+        value: toText(t("common:on", "On")),
         tone: "active",
         onClick: handleToggleWebSearch
       })
@@ -5889,30 +6357,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (sessionUsageSummary.totalTokens > 0) {
       items.push({
         id: "sessionUsage",
-        label: t("playground:composer.context.session", "Session"),
+        label: toText(t("playground:composer.context.session", "Session")),
         value: sessionUsageLabel,
         tone: "neutral",
         onClick: openSessionInsightsModal
       })
     }
-    if (messages.length >= 2) {
-      items.push({
-        id: "summaryCheckpoint",
-        label: t("playground:composer.context.checkpoint", "Checkpoint"),
-        value: summaryCheckpointSuggestion.shouldSuggest
-          ? t(
-              "playground:composer.context.checkpointSuggested",
-              "Suggested now"
-            )
-          : t(
-              "playground:composer.context.checkpointManual",
-              "Summarize thread"
-            ),
-        tone: summaryCheckpointSuggestion.shouldSuggest ? "warning" : "neutral",
-        onClick: insertSummaryCheckpointPrompt
-      })
-    }
-
     if (
       selectedSystemPrompt ||
       selectedQuickPrompt ||
@@ -5920,7 +6370,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ) {
       items.push({
         id: "prompt",
-        label: t("playground:composer.context.prompt", "Prompt"),
+        label: toText(t("playground:composer.context.prompt", "Prompt")),
         value: promptSummaryLabel,
         tone: "active"
       })
@@ -5929,10 +6379,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (currentChatModelSettings.jsonMode) {
       items.push({
         id: "json",
-        label: t("playground:composer.context.json", "JSON mode"),
-        value: t(
-          "playground:composer.context.jsonShort",
-          "Object responses"
+        label: toText(t("playground:composer.context.json", "JSON mode")),
+        value: toText(
+          t(
+            "playground:composer.context.jsonShort",
+            "Object responses"
+          )
         ),
         tone: "active",
         onClick: () => updateChatModelSetting("jsonMode", undefined)
@@ -5942,7 +6394,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (showTokenBudgetWarning) {
       items.push({
         id: "budget",
-        label: t("playground:composer.context.budget", "Budget"),
+        label: toText(t("playground:composer.context.budget", "Budget")),
         value: `${tokenBudgetRiskLabel}${
           projectedBudget.utilizationPercent != null
             ? ` • ${Math.round(projectedBudget.utilizationPercent)}%`
@@ -5955,7 +6407,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (tokenBudgetRisk.level !== "unknown" && !showTokenBudgetWarning) {
       items.push({
         id: "truncationRisk",
-        label: t("playground:composer.context.truncationRisk", "Truncation"),
+        label: toText(t("playground:composer.context.truncationRisk", "Truncation")),
         value: tokenBudgetRiskLabel,
         tone:
           tokenBudgetRisk.level === "high" || tokenBudgetRisk.level === "critical"
@@ -5967,46 +6419,26 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (nonMessageContextPercent != null) {
       items.push({
         id: "contextMix",
-        label: t("playground:composer.context.contextMix", "Context mix"),
-        value: t(
-          "playground:composer.context.nonMessageShare",
-          "{{percent}}% non-message",
-          {
-            percent: Math.max(0, Math.round(nonMessageContextPercent))
-          } as any
+        label: toText(t("playground:composer.context.contextMix", "Context mix")),
+        value: toText(
+          t(
+            "playground:composer.context.nonMessageShare",
+            "{{percent}}% non-message",
+            {
+              percent: Math.max(0, Math.round(nonMessageContextPercent))
+            } as any
+          )
         ),
         tone: showNonMessageContextWarning ? "warning" : "neutral",
         onClick: openContextWindowModal
       })
     }
 
-    if (serverChatState) {
-      items.push({
-        id: "conversationState",
-        label: t("playground:composer.context.chatState", "State"),
-        value: serverChatState,
-        tone: "neutral"
-      })
-    }
-
-    if (!temporaryChat) {
-      items.push({
-        id: "imageEventSync",
-        label: t("playground:composer.context.imageSync", "Image sync"),
-        value:
-          imageEventSyncBaselineMode === "on"
-            ? t("playground:composer.context.imageSyncOn", "Mirror on")
-            : t("playground:composer.context.imageSyncOff", "Local only"),
-        tone: imageEventSyncBaselineMode === "on" ? "active" : "neutral",
-        onClick: openImageGenerateModal
-      })
-    }
-
     if (temporaryChat) {
       items.push({
         id: "temporary",
-        label: t("playground:composer.context.temporary", "Temporary"),
-        value: t("playground:composer.context.notSaved", "Not saved"),
+        label: toText(t("playground:composer.context.temporary", "Temporary")),
+        value: toText(t("playground:composer.context.notSaved", "Not saved")),
         tone: "warning"
       })
     }
@@ -6016,16 +6448,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     compareModeActive,
     compareSelectedModels.length,
     connectionStatusLabel,
-    connectionUxState,
     contextToolsOpen,
     currentPreset,
-    currentChatModelSettings.apiProvider,
     currentChatModelSettings.jsonMode,
     focusConnectionCard,
     handleToggleWebSearch,
-    isConnectionReady,
-    modelCapabilities,
-    modelContextLength,
+    isSessionDegraded,
     modelSummaryLabel,
     openModelApiSelector,
     openKnowledgePanel,
@@ -6038,16 +6466,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ragPinnedResults.length,
     selectedCharacter?.name,
     selectedModel,
-    summaryCheckpointSuggestion.shouldSuggest,
     selectedQuickPrompt,
     selectedSystemPrompt,
-    serverChatState,
-    imageEventSyncBaselineMode,
     sessionUsageLabel,
     sessionUsageSummary.totalTokens,
     openSessionInsightsModal,
-    openImageGenerateModal,
-    messages.length,
     setContextToolsOpen,
     setOpenModelSettings,
     showTokenBudgetWarning,
@@ -6055,7 +6478,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     showNonMessageContextWarning,
     systemPrompt,
     t,
-    insertSummaryCheckpointPrompt,
     temporaryChat,
     updateChatModelSetting
   ])
@@ -6221,12 +6643,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       if (compareModeActive && compareCapabilityIncompatibilities.length > 0) {
         warnings.push({
           id: "compare-capability",
-          text: t(
-            "playground:composer.conflict.compareCapabilities",
-            "Compare models have incompatible capabilities: {{details}}. Outputs may not be directly comparable.",
-            {
-              details: compareCapabilityIncompatibilities.join(", ")
-            } as any
+          text: toText(
+            t(
+              "playground:composer.conflict.compareCapabilities",
+              "Compare models have incompatible capabilities: {{details}}. Outputs may not be directly comparable.",
+              {
+                details: compareCapabilityIncompatibilities.join(", ")
+              } as any
+            )
           ),
           actionLabel: t(
             "playground:composer.conflict.reviewModels",
@@ -6270,12 +6694,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       if (showNonMessageContextWarning) {
         warnings.push({
           id: "context-footprint",
-          text: t(
-            "playground:composer.conflict.contextFootprint",
-            "Non-message context is using {{percent}}% of the context window. Trim character/prompt/source context before sending.",
-            {
-              percent: Math.round(nonMessageContextPercent || 0)
-            } as any
+          text: toText(
+            t(
+              "playground:composer.conflict.contextFootprint",
+              "Non-message context is using {{percent}}% of the context window. Trim character/prompt/source context before sending.",
+              {
+                percent: Math.round(nonMessageContextPercent || 0)
+              } as any
+            )
           ),
           actionLabel: largestContextContributor
             ? t(
@@ -6504,9 +6930,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const {
     actionBarVisible,
+    composerFocusWithin,
     actionBarVisibilityClass,
     handlers: actionBarHandlers
   } = useActionBarVisibility({ externalPinSources })
+  const shouldCompactComposerTextarea =
+    !composerFocusWithin &&
+    !contextToolsOpen &&
+    !showSlashMenu &&
+    !showMentions &&
+    !isSending &&
+    !isMessageCollapsed &&
+    messageDisplayValue.trim().length === 0
   const composerShellRef = React.useRef<HTMLDivElement>(null)
 
   const keepComposerBottomInView = React.useCallback(() => {
@@ -6664,6 +7099,25 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [isMobileViewport, isSending, keepComposerBottomInView])
 
+  const toolRunStatusLabel = React.useMemo(() => {
+    if (chatLoopState.pendingApprovals.length > 0) {
+      return t("playground:composer.toolRunPending", "Pending approval")
+    }
+    if (
+      chatLoopState.inflightToolCallIds.length > 0 ||
+      chatLoopState.status === "running"
+    ) {
+      return t("playground:composer.toolRunRunning", "Running")
+    }
+    if (chatLoopState.status === "error") {
+      return t("playground:composer.toolRunFailed", "Failed")
+    }
+    if (chatLoopState.status === "complete") {
+      return t("playground:composer.toolRunDone", "Done")
+    }
+    return t("playground:composer.toolRunIdle", "Idle")
+  }, [chatLoopState, t])
+
   const mcpControlContent = (
     <div className="flex w-64 flex-col gap-2 p-2">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
@@ -6697,6 +7151,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             {t("playground:composer.toolChoiceNone", "None")}
           </Radio.Button>
         </Radio.Group>
+        <div className="text-[11px] text-text-muted">
+          {t("playground:composer.toolRunStatus", "Tool run")}: {toolRunStatusLabel}
+        </div>
         <button
           type="button"
           onClick={() => {
@@ -6781,53 +7238,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </button>
     </Tooltip>
   ) : null
-
-  const generateButton = (
-    <Dropdown
-      trigger={["click"]}
-      placement="topRight"
-      menu={{
-        items: [
-          {
-            key: "image",
-            label: (
-              <span className="inline-flex items-center gap-2">
-                <ImageIcon className="h-4 w-4" />
-                <span>{t("playground:generate.image", "Image")}</span>
-              </span>
-            ),
-            onClick: () => {
-              openImageGenerateModal()
-            }
-          }
-        ]
-      }}
-    >
-      <TldwButton
-        variant="outline"
-        size={isMobileViewport ? "lg" : "sm"}
-        shape={isProMode ? "rounded" : "pill"}
-        iconOnly={!isProMode}
-        ariaLabel={t("playground:generate.open", "Generate") as string}
-        title={t("playground:generate.open", "Generate") as string}
-        data-testid="composer-generate-button"
-      >
-        {isProMode ? (
-          <span className="inline-flex items-center gap-1.5">
-            <WandSparkles className="h-4 w-4" aria-hidden="true" />
-            <span>{t("playground:generate.open", "Generate")}</span>
-          </span>
-        ) : (
-          <>
-            <WandSparkles className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">
-              {t("playground:generate.open", "Generate")}
-            </span>
-          </>
-        )}
-      </TldwButton>
-    </Dropdown>
-  )
 
   const toolsButton = (
     <Popover
@@ -6960,138 +7370,157 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </div>
   )
 
-  const sendControl = !isSending ? (
-    <Space.Compact
-      className={`!justify-end !w-auto ${
-        isProMode ? "" : "!h-9 !rounded-full !px-3 !text-xs"
-      }`}
-    >
-      <Button
-        size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
-        htmlType="submit"
-        disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
-        className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
-        title={
-          !isConnectionReady
-            ? (t(
-                "playground:composer.connectToSend",
-                "Connect to your tldw server to start chatting."
-              ) as string)
-            : compareNeedsMoreModels
-              ? (t(
-                  "playground:composer.validationCompareMinModelsInline",
-                  "Select at least two models for Compare mode."
-                ) as string)
-            : sendWhenEnter
-              ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
-              : (t(
-                  "playground:composer.submitAriaModEnter",
-                  isMac ? "Send message (⌘+Enter)" : "Send message (Ctrl+Enter)"
-                ) as string)
-        }
-        aria-label={
-          t("playground:composer.submitAria", "Send message") as string
-        }
-      >
-        <div
-          className={`inline-flex items-center ${
-            isProMode ? "gap-2" : "gap-1"
-          }`}
-        >
-          {sendWhenEnter ? (
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              className="h-5 w-5"
-              viewBox="0 0 24 24">
-              <path d="M9 10L4 15 9 20"></path>
-              <path d="M20 4v7a4 4 0 01-4 4H4"></path>
-            </svg>
-          ) : null}
-          <span
-            className={
-              isProMode
-                ? ""
-                : "text-[11px] font-semibold uppercase tracking-[0.12em]"
-            }>
-            {sendLabel}
-          </span>
-        </div>
-      </Button>
-      <Dropdown
-        open={sendMenuOpen}
-        onOpenChange={(open) => setSendMenuOpen(open)}
-        disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
-        trigger={["click"]}
-        menu={{
-          items: [
-            {
-              key: 1,
-              label: (
-                <Checkbox
-                  checked={sendWhenEnter}
-                  onChange={(e) =>
-                    setSendWhenEnter(e.target.checked)
-                  }>
-                  {t("sendWhenEnter")}
-                </Checkbox>
-              )
-            }
-          ]
-        }}
+  const shouldQueuePrimaryAction = isSending || !isConnectionReady
+  const primaryActionLabel = shouldQueuePrimaryAction
+    ? t("common:queue", "Queue")
+    : sendLabel
+  const primaryActionTitle = compareNeedsMoreModels
+    ? (t(
+        "playground:composer.validationCompareMinModelsInline",
+        "Select at least two models for Compare mode."
+      ) as string)
+    : shouldQueuePrimaryAction
+      ? (isSending
+          ? t(
+              "playground:composer.queue.primaryWhileBusy",
+              "Queue this request to run after the current response."
+            )
+          : t(
+              "playground:composer.queue.primaryWhileOffline",
+              "Queue this request until your tldw server reconnects."
+            )) as string
+      : sendWhenEnter
+        ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
+        : (t(
+            "playground:composer.submitAriaModEnter",
+            isMac ? "Send message (⌘+Enter)" : "Send message (Ctrl+Enter)"
+          ) as string)
+
+  const sendControl = (
+    <div className="flex items-center gap-2">
+      <Space.Compact
+        className={`!justify-end !w-auto ${
+          isProMode ? "" : "!h-9 !rounded-full !px-3 !text-xs"
+        }`}
       >
         <Button
           size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
-          disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
+          htmlType={shouldQueuePrimaryAction ? "button" : "submit"}
+          onClick={
+            shouldQueuePrimaryAction
+              ? () => {
+                  stopListening()
+                  submitForm()
+                }
+              : undefined
+          }
+          disabled={compareNeedsMoreModels}
           className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
+          title={primaryActionTitle}
           aria-label={
-            t(
-              "playground:composer.sendOptions",
-              "Open send options"
-            ) as string
+            shouldQueuePrimaryAction
+              ? (t("playground:composer.queue.primaryAria", "Queue request") as string)
+              : (t("playground:composer.submitAria", "Send message") as string)
           }
-          title={
-            t(
-              "playground:composer.sendOptions",
-              "Open send options"
-            ) as string
-          }
-          icon={
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={1.5}
-              stroke="currentColor"
-              className={isProMode ? "w-5 h-5" : "w-4 h-4"}>
-              <path
+        >
+          <div
+            className={`inline-flex items-center ${
+              isProMode ? "gap-2" : "gap-1"
+            }`}
+          >
+            {!shouldQueuePrimaryAction && sendWhenEnter ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                stroke="currentColor"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                d="m19.5 8.25-7.5 7.5-7.5-7.5"
-              />
-            </svg>
-          }
-        />
-      </Dropdown>
-    </Space.Compact>
-  ) : (
-    <Tooltip
-      title={
-        t("tooltip.stopStreaming") as string
-      }>
-      <TldwButton
-        variant="outline"
-        size={isMobileViewport ? "lg" : "md"}
-        iconOnly
-        onClick={stopStreamingRequest}
-        ariaLabel={t("tooltip.stopStreaming") as string}>
-        <StopCircleIcon className="size-5 sm:size-4" />
-      </TldwButton>
-    </Tooltip>
+                strokeWidth="2"
+                className="h-5 w-5"
+                viewBox="0 0 24 24">
+                <path d="M9 10L4 15 9 20"></path>
+                <path d="M20 4v7a4 4 0 01-4 4H4"></path>
+              </svg>
+            ) : null}
+            <span
+              className={
+                isProMode
+                  ? ""
+                  : "text-[11px] font-semibold uppercase tracking-[0.12em]"
+              }>
+              {primaryActionLabel}
+            </span>
+          </div>
+        </Button>
+        <Dropdown
+          open={sendMenuOpen}
+          onOpenChange={(open) => setSendMenuOpen(open)}
+          disabled={compareNeedsMoreModels}
+          trigger={["click"]}
+          menu={{
+            items: [
+              {
+                key: 1,
+                label: (
+                  <Checkbox
+                    checked={sendWhenEnter}
+                    onChange={(e) =>
+                      setSendWhenEnter(e.target.checked)
+                    }>
+                    {t("sendWhenEnter")}
+                  </Checkbox>
+                )
+              }
+            ]
+          }}
+        >
+          <Button
+            size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
+            disabled={compareNeedsMoreModels}
+            className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
+            aria-label={
+              t(
+                "playground:composer.sendOptions",
+                "Open send options"
+              ) as string
+            }
+            title={
+              t(
+                "playground:composer.sendOptions",
+                "Open send options"
+              ) as string
+            }
+            icon={
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={1.5}
+                stroke="currentColor"
+                className={isProMode ? "w-5 h-5" : "w-4 h-4"}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="m19.5 8.25-7.5 7.5-7.5-7.5"
+                />
+              </svg>
+            }
+          />
+        </Dropdown>
+      </Space.Compact>
+      {isSending ? (
+        <Tooltip title={t("tooltip.stopStreaming") as string}>
+          <TldwButton
+            variant="outline"
+            size={isMobileViewport ? "lg" : "md"}
+            iconOnly
+            onClick={stopStreamingRequest}
+            ariaLabel={t("tooltip.stopStreaming") as string}>
+            <StopCircleIcon className="size-5 sm:size-4" />
+          </TldwButton>
+        </Tooltip>
+      ) : null}
+    </div>
   )
 
   const startupTemplatePromptResolution = startupTemplatePreview
@@ -7105,11 +7534,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     : undefined
 
   return (
-    <div className="flex w-full flex-col items-center px-4 pb-6">
+    <React.Profiler
+      id="playground-form-root"
+      onRender={onComposerRenderProfile}
+    >
+      <div className="flex w-full flex-col items-center px-4 pb-6">
       <div
         data-checkwidemode={checkWideMode}
         data-ui-mode={uiMode}
-        className="relative z-10 flex w-full max-w-[52rem] flex-col items-center justify-center gap-2 text-base data-[checkwidemode='true']:max-w-none">
+        className="relative z-10 flex w-full max-w-[64rem] flex-col items-center justify-center gap-2 text-base data-[checkwidemode='true']:max-w-none">
         <div className="relative flex w-full flex-row justify-center">
           <div
             ref={composerShellRef}
@@ -7141,164 +7574,30 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               !isConnectionReady ? "opacity-80" : ""
             }`}>
             {/* Attachments summary (collapsed context management) */}
-            <AttachmentsSummary
-              image={form.values.image}
-              documents={selectedDocuments}
-              files={uploadedFiles}
-              onRemoveImage={() => form.setFieldValue("image", "")}
-              onRemoveDocument={removeDocument}
-              onClearDocuments={clearSelectedDocuments}
-              onRemoveFile={removeUploadedFile}
-              onClearFiles={clearUploadedFiles}
-              onOpenKnowledgePanel={() => openKnowledgePanel("context")}
-              readOnly
-            />
+            {wrapComposerProfile(
+              "attachments-summary",
+              <AttachmentsSummary
+                image={form.values.image}
+                documents={selectedDocuments}
+                files={uploadedFiles}
+                onRemoveImage={() => form.setFieldValue("image", "")}
+                onRemoveDocument={removeDocument}
+                onClearDocuments={clearSelectedDocuments}
+                onRemoveFile={removeUploadedFile}
+                onClearFiles={clearUploadedFiles}
+                onOpenKnowledgePanel={() => openKnowledgePanel("context")}
+                readOnly
+              />
+            )}
             {/* Link to Model Playground for Compare mode */}
             <div>
               <div className="flex w-full min-w-0 bg-transparent">
                 <form
-                  onSubmit={form.onSubmit(async (value) => {
+                  onSubmit={(event) => {
+                    event.preventDefault()
                     stopListening()
-                    const intent = resolveSubmissionIntent(value.message)
-                    if (intent.handled && !intent.invalidImageCommand) {
-                      form.setFieldValue("message", intent.message)
-                    }
-                    if (intent.invalidImageCommand) {
-                      notificationApi.error({
-                        message: t("error", { defaultValue: "Error" }),
-                        description: intent.imageCommandMissingProvider
-                          ? t(
-                              "imageCommand.missingProvider",
-                              "Pick an Image provider in More tools or use /generate-image:<provider> <prompt>."
-                            )
-                          : t(
-                              "imageCommand.invalidUsage",
-                              "Use /generate-image:<provider> <prompt>."
-                            )
-                      })
-                      return
-                    }
-                    if (!intent.isImageCommand) {
-                      if (!compareModeActive) {
-                        const normalizedSelectedModel = normalizeChatModelId(selectedModel)
-                        if (!normalizedSelectedModel) {
-                          form.setFieldError("message", t("formError.noModel"))
-                          return
-                        }
-                        if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
-                          return
-                        }
-                      } else if (
-                        !compareSelectedModels ||
-                        compareSelectedModels.length < 2
-                      ) {
-                        form.setFieldError(
-                          "message",
-                          t(
-                            "playground:composer.validationCompareMinModelsInline",
-                            "Select at least two models for Compare mode."
-                          )
-                        )
-                        return
-                      } else if (
-                        !validateSelectedChatModelsAvailability(compareSelectedModels)
-                      ) {
-                        return
-                      }
-                      if (
-                        value.image.length > 0 &&
-                        !compareModelsSupportCapability(compareSelectedModels, "vision")
-                      ) {
-                        form.setFieldError(
-                          "message",
-                          t(
-                            "playground:composer.validationCompareVisionInline",
-                            "One or more selected compare models do not support image input."
-                          )
-                        )
-                        return
-                      }
-                    }
-                    const defaultEM = await defaultEmbeddingModelForRag()
-
-                    if (!intent.isImageCommand && webSearch) {
-                      const simpleSearch = await getIsSimpleInternetSearch()
-                      if (!defaultEM && !simpleSearch) {
-                        form.setFieldError(
-                          "message",
-                          t("formError.noEmbeddingModel")
-                        )
-                        return
-                      }
-                    }
-                    if (
-                      !intent.isImageCommand &&
-                      intent.message.trim().length === 0 &&
-                      value.image.length === 0 &&
-                      selectedDocuments.length === 0 &&
-                      uploadedFiles.length === 0
-                    ) {
-                      return
-                    }
-                    if (intent.isImageCommand && intent.message.trim().length === 0) {
-                      notificationApi.error({
-                        message: t("error", { defaultValue: "Error" }),
-                        description: t(
-                          "imageCommand.missingPrompt",
-                          "Image prompt is required."
-                        )
-                      })
-                      return
-                    }
-                    form.reset()
-                    clearSelectedDocuments()
-                    clearUploadedFiles()
-                    textAreaFocus()
-                    const projectedForSubmission = projectTokenBudget({
-                      conversationTokens: conversationTokenCount,
-                      draftTokens: estimateTokensForText(intent.message.trim()),
-                      maxTokens: resolvedMaxContext
-                    })
-                    if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
-                      notificationApi.warning({
-                        message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
-                        description: projectedForSubmission.isOverLimit
-                          ? t(
-                              "playground:tokens.preSendOverLimit",
-                              "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
-                            )
-                          : t(
-                              "playground:tokens.preSendNearLimit",
-                              "Projected send is near the context window limit."
-                            )
-                      })
-                    }
-                    setLastSubmittedContext(currentContextSnapshot)
-                    await sendMessage({
-                      image: intent.isImageCommand ? "" : value.image,
-                      message: intent.message.trim(),
-                      docs: intent.isImageCommand
-                        ? []
-                        : selectedDocuments.map((doc) => ({
-                            type: "tab",
-                            tabId: doc.id,
-                            title: doc.title,
-                            url: doc.url
-                          })),
-                      imageBackendOverride: intent.isImageCommand
-                        ? intent.imageBackendOverride
-                        : undefined,
-                      userMessageType: intent.isImageCommand
-                        ? IMAGE_GENERATION_USER_MESSAGE_TYPE
-                        : undefined,
-                      assistantMessageType: intent.isImageCommand
-                        ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
-                        : undefined,
-                      imageGenerationSource: intent.isImageCommand
-                        ? "slash-command"
-                        : undefined
-                    })
-                  })}
+                    submitForm()
+                  }}
                   className="flex w-full min-w-0 flex-col items-center">
                   <input
                     id="file-upload"
@@ -7346,46 +7645,37 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                                 "Search & Context"
                               )}
                             </div>
-                            <KnowledgePanel
-                              onInsert={(text) => {
-                                const current = form.values.message || ""
-                                const next = current ? `${current}\n\n${text}` : text
-                                setMessageValue(next, { collapseLarge: true })
-                                textAreaFocus()
-                              }}
-                              onAsk={(text, options) => {
-                                const trimmed = text.trim()
-                                if (!trimmed) return
-                                form.setFieldValue("message", trimmed)
-                                queueMicrotask(() =>
-                                  submitForm({ ignorePinnedResults: options?.ignorePinnedResults })
-                                )
-                              }}
-                              isConnected={isConnectionReady}
-                              open={contextToolsOpen}
-                              onOpenChange={(nextOpen) => setContextToolsOpen(nextOpen)}
-                              openTab={knowledgePanelTab}
-                              openTabRequestId={knowledgePanelTabRequestId}
-                              autoFocus
-                              showToggle={false}
-                              variant="embedded"
-                              currentMessage={form.values.message}
-                              showAttachedContext
-                              attachedImage={form.values.image}
-                              attachedTabs={selectedDocuments}
-                              availableTabs={availableTabs}
-                              attachedFiles={uploadedFiles}
-                              onRemoveImage={() => form.setFieldValue("image", "")}
-                              onRemoveTab={removeDocument}
-                              onAddTab={addDocument}
-                              onClearTabs={clearSelectedDocuments}
-                              onRefreshTabs={reloadTabs}
-                              onAddFile={() => fileInputRef.current?.click()}
-                              onRemoveFile={removeUploadedFile}
-                              onClearFiles={clearUploadedFiles}
-                              fileRetrievalEnabled={fileRetrievalEnabled}
-                              onFileRetrievalChange={setFileRetrievalEnabled}
-                            />
+                            {wrapComposerProfile(
+                              "knowledge-panel",
+                              <KnowledgePanel
+                                onInsert={handleKnowledgeInsert}
+                                onAsk={handleKnowledgeAsk}
+                                isConnected={isConnectionReady}
+                                open={contextToolsOpen}
+                                onOpenChange={handleKnowledgePanelOpenChange}
+                                openTab={knowledgePanelTab}
+                                openTabRequestId={knowledgePanelTabRequestId}
+                                autoFocus
+                                showToggle={false}
+                                variant="embedded"
+                                currentMessage={contextToolsOpen ? deferredComposerInput : ""}
+                                showAttachedContext
+                                attachedImage={form.values.image}
+                                attachedTabs={selectedDocuments}
+                                availableTabs={availableTabs}
+                                attachedFiles={uploadedFiles}
+                                onRemoveImage={handleKnowledgeRemoveImage}
+                                onRemoveTab={removeDocument}
+                                onAddTab={addDocument}
+                                onClearTabs={clearSelectedDocuments}
+                                onRefreshTabs={reloadTabs}
+                                onAddFile={handleKnowledgeAddFile}
+                                onRemoveFile={removeUploadedFile}
+                                onClearFiles={clearUploadedFiles}
+                                fileRetrievalEnabled={fileRetrievalEnabled}
+                                onFileRetrievalChange={setFileRetrievalEnabled}
+                              />
+                            )}
                           </div>
                         </div>
                       </div>
@@ -7415,54 +7705,58 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           </button>
                         </div>
                       )}
-                      <ComposerTextarea
-                        textareaRef={textareaRef}
-                        value={form.values.message}
-                        displayValue={messageDisplayValue}
-                        onChange={handleTextareaChange}
-                        onKeyDown={handleTextareaKeyDown}
-                        onPaste={handlePaste}
-                        onFocus={handleTextareaFocus}
-                        onSelect={handleTextareaSelect}
-                        onCompositionStart={handleCompositionStart}
-                        onCompositionEnd={handleCompositionEnd}
-                        onMouseDown={handleTextareaMouseDown}
-                        onMouseUp={handleTextareaMouseUp}
-                        placeholder={
-                          isConnectionReady
-                            ? t(
-                                "playground:composer.placeholderWithMentions",
-                                "Type a message... (/ commands, @ mentions)"
-                              )
-                            : t(
-                                "playground:composer.connectionPlaceholder",
-                                "Connect to tldw to start chatting."
-                              )
-                        }
-                        isProMode={isProMode}
-                        isMobile={isMobileViewport}
-                        isConnectionReady={isConnectionReady}
-                        isCollapsed={isMessageCollapsed}
-                        ariaExpanded={!isMessageCollapsed}
-                        formInputProps={form.getInputProps("message")}
-                        showSlashMenu={showSlashMenu}
-                        slashCommands={filteredSlashCommands}
-                        slashActiveIndex={slashActiveIndex}
-                        onSlashSelect={handleSlashCommandSelect}
-                        onSlashActiveIndexChange={setSlashActiveIndex}
-                        slashEmptyLabel={t(
-                          "common:commandPalette.noResults",
-                          "No results found"
-                        )}
-                        showMentions={showMentions}
-                        filteredTabs={filteredTabs}
-                        mentionPosition={mentionPosition}
-                        onMentionSelect={handleMentionSelect}
-                        onMentionsClose={closeMentions}
-                        onMentionRefetch={handleMentionRefetch}
-                        onMentionsOpen={handleMentionsOpen}
-                        draftSaved={draftSaved}
-                      />
+                      {wrapComposerProfile(
+                        "composer-textarea",
+                        <ComposerTextarea
+                          textareaRef={textareaRef}
+                          value={form.values.message}
+                          displayValue={messageDisplayValue}
+                          onChange={handleTextareaChange}
+                          onKeyDown={handleTextareaKeyDown}
+                          onPaste={handlePaste}
+                          onFocus={handleTextareaFocus}
+                          onSelect={handleTextareaSelect}
+                          onCompositionStart={handleCompositionStart}
+                          onCompositionEnd={handleCompositionEnd}
+                          onMouseDown={handleTextareaMouseDown}
+                          onMouseUp={handleTextareaMouseUp}
+                          placeholder={
+                            isConnectionReady
+                              ? t(
+                                  "playground:composer.placeholderWithMentions",
+                                  "Type a message... (/ commands, @ mentions)"
+                                )
+                              : t(
+                                  "playground:composer.connectionPlaceholder",
+                                  "Connect to tldw to start chatting."
+                                )
+                          }
+                          isProMode={isProMode}
+                          isMobile={isMobileViewport}
+                          isConnectionReady={isConnectionReady}
+                          isCollapsed={isMessageCollapsed}
+                          ariaExpanded={!isMessageCollapsed}
+                          compactWhenInactive={shouldCompactComposerTextarea}
+                          formInputProps={form.getInputProps("message")}
+                          showSlashMenu={showSlashMenu}
+                          slashCommands={filteredSlashCommands}
+                          slashActiveIndex={slashActiveIndex}
+                          onSlashSelect={handleSlashCommandSelect}
+                          onSlashActiveIndexChange={setSlashActiveIndex}
+                          slashEmptyLabel={t(
+                            "common:commandPalette.noResults",
+                            "No results found"
+                          )}
+                          showMentions={showMentions}
+                          filteredTabs={filteredTabs}
+                          mentionPosition={mentionPosition}
+                          onMentionSelect={handleMentionSelect}
+                          onMentionsClose={closeMentions}
+                          onMentionRefetch={handleMentionRefetch}
+                          onMentionsOpen={handleMentionsOpen}
+                          draftSaved={draftSaved}
+                        />
+                      )}
                     </div>
                     {/* Inline error message with shake animation */}
                     {form.errors.message && (
@@ -7575,12 +7869,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                             )}
                           </span>
                           <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] font-medium text-primaryStrong">
-                            {t(
-                              "playground:composer.compareActivationCount",
-                              "{{count}} models",
-                              {
-                                count: compareSelectedModels.length
-                              } as any
+                            {toText(
+                              t(
+                                "playground:composer.compareActivationCount",
+                                "{{count}} models",
+                                {
+                                  count: compareSelectedModels.length
+                                } as any
+                              )
                             )}
                           </span>
                         </div>
@@ -7773,15 +8069,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ))}
                       </div>
                     )}
-                    <ModelRecommendationsPanel
-                      t={t}
-                      recommendations={visibleModelRecommendations}
-                      showOpenInsights={sessionInsights.totals.totalTokens > 0}
-                      onOpenInsights={openSessionInsightsModal}
-                      onRunAction={handleModelRecommendationAction}
-                      onDismiss={dismissModelRecommendation}
-                      getActionLabel={getModelRecommendationActionLabel}
-                    />
+                    {wrapComposerProfile(
+                      "model-recommendations",
+                      <ModelRecommendationsPanel
+                        t={t}
+                        recommendations={visibleModelRecommendations}
+                        showOpenInsights={sessionInsights.totals.totalTokens > 0}
+                        onOpenInsights={openSessionInsightsModal}
+                        onRunAction={handleModelRecommendationAction}
+                        onDismiss={dismissModelRecommendation}
+                        getActionLabel={getModelRecommendationActionLabel}
+                      />
+                    )}
                     {currentChatModelSettings.jsonMode && (
                       <div
                         role="status"
@@ -7906,57 +8205,59 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                       aria-hidden={!actionBarVisible}
                       className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
                     >
-                      <ComposerToolbar
-                        isProMode={isProMode}
-                        isMobile={isMobileViewport}
-                        isConnectionReady={isConnectionReady}
-                        isSending={isSending}
-                        modeLauncherButton={modeLauncherButton}
-                        compareControl={compareControl}
-                        modelSelectButton={modelSelectButton}
-                        mcpControl={mcpControl}
-                        sendControl={sendControl}
-                        attachmentButton={attachmentButton}
-                        generateButton={generateButton}
-                        toolsButton={toolsButton}
-                        voiceChatButton={voiceChatButton}
-                        modelUsageBadge={modelUsageBadge}
-                        selectedSystemPrompt={selectedSystemPrompt}
-                        setSelectedSystemPrompt={setSelectedSystemPrompt}
-                        setSelectedQuickPrompt={setSelectedQuickPrompt}
-                        temporaryChat={temporaryChat}
-                        onToggleTemporaryChat={handleToggleTemporaryChat}
-                        privateChatLocked={privateChatLocked}
-                        isFireFoxPrivateMode={isFireFoxPrivateMode}
-                        persistenceTooltip={persistenceTooltip}
-                        contextToolsOpen={contextToolsOpen}
-                        onToggleKnowledgePanel={toggleKnowledgePanel}
-                        webSearch={webSearch}
-                        onToggleWebSearch={handleToggleWebSearch}
-                        hasWebSearch={!!capabilities?.hasWebSearch}
-                        onOpenModelSettings={() => setOpenModelSettings(true)}
-                        modelSummaryLabel={modelSummaryLabel}
-                        promptSummaryLabel={promptSummaryLabel}
-                        hasDictation={!!(browserSupportsSpeechRecognition || hasServerStt)}
-                        speechAvailable={speechAvailable}
-                        speechUsesServer={speechUsesServer}
-                        isListening={isListening}
-                        isServerDictating={isServerDictating}
-                        voiceChatEnabled={voiceChatEnabled}
-                        speechTooltip={speechTooltipText}
-                        onDictationToggle={handleDictationToggle}
-                        onTemplateSelect={handleTemplateSelect}
-                        selectedModel={selectedModel}
-                        resolvedProviderKey={resolvedProviderKey}
-                        messages={messages}
-                        selectedDocumentsCount={selectedDocuments.length}
-                        uploadedFilesCount={uploadedFiles.length}
-                        serverChatId={serverChatId}
-                        showServerPersistenceHint={showServerPersistenceHint}
-                        onDismissServerPersistenceHint={() => setShowServerPersistenceHint(false)}
-                        onFocusConnectionCard={focusConnectionCard}
-                        contextItems={contextItems}
-                      />
+                      {wrapComposerProfile(
+                        "composer-toolbar",
+                        <ComposerToolbar
+                          isProMode={isProMode}
+                          isMobile={isMobileViewport}
+                          isConnectionReady={isConnectionReady}
+                          isSending={isSending}
+                          modeLauncherButton={modeLauncherButton}
+                          compareControl={compareControl}
+                          modelSelectButton={modelSelectButton}
+                          mcpControl={mcpControl}
+                          sendControl={sendControl}
+                          attachmentButton={attachmentButton}
+                          toolsButton={toolsButton}
+                          voiceChatButton={voiceChatButton}
+                          modelUsageBadge={modelUsageBadge}
+                          selectedSystemPrompt={selectedSystemPrompt}
+                          setSelectedSystemPrompt={setSelectedSystemPrompt}
+                          setSelectedQuickPrompt={setSelectedQuickPrompt}
+                          temporaryChat={temporaryChat}
+                          onToggleTemporaryChat={handleToggleTemporaryChat}
+                          privateChatLocked={privateChatLocked}
+                          isFireFoxPrivateMode={isFireFoxPrivateMode}
+                          persistenceTooltip={persistenceTooltip}
+                          contextToolsOpen={contextToolsOpen}
+                          onToggleKnowledgePanel={toggleKnowledgePanel}
+                          webSearch={webSearch}
+                          onToggleWebSearch={handleToggleWebSearch}
+                          hasWebSearch={!!capabilities?.hasWebSearch}
+                          onOpenModelSettings={handleOpenModelSettings}
+                          modelSummaryLabel={modelSummaryLabel}
+                          promptSummaryLabel={promptSummaryLabel}
+                          hasDictation={!!(browserSupportsSpeechRecognition || hasServerStt)}
+                          speechAvailable={speechAvailable}
+                          speechUsesServer={speechUsesServer}
+                          isListening={isListening}
+                          isServerDictating={isServerDictating}
+                          voiceChatEnabled={voiceChatEnabled}
+                          speechTooltip={speechTooltipText}
+                          onDictationToggle={handleDictationToggle}
+                          onTemplateSelect={handleTemplateSelect}
+                          selectedModel={selectedModel}
+                          resolvedProviderKey={resolvedProviderKey}
+                          messages={messages}
+                          selectedDocumentsCount={selectedDocuments.length}
+                          uploadedFilesCount={uploadedFiles.length}
+                          serverChatId={serverChatId}
+                          showServerPersistenceHint={showServerPersistenceHint}
+                          onDismissServerPersistenceHint={handleDismissServerPersistenceHint}
+                          onFocusConnectionCard={focusConnectionCard}
+                          contextItems={contextItems}
+                        />
+                      )}
                     </div>
                     {showConnectBanner && !isConnectionReady && (
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn">
@@ -7994,78 +8295,19 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         </div>
                       </div>
                     )}
-                    {queuedMessages.length > 0 && showQueuedBanner && (
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
-                        <p className="max-w-xs text-left">
-                          <span className="block font-medium">
-                            {t(
-                              "playground:composer.queuedBanner.title",
-                              "Queued while offline"
-                            )}
-                          </span>
-                          {t(
-                            "playground:composer.queuedBanner.body",
-                            "We’ll hold these messages and send them once your tldw server is connected."
-                          )}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            className={`rounded-md border border-success/30 bg-surface px-2 py-1 text-xs font-medium text-success hover:bg-success/10 ${
-                              !isConnectionReady ? "cursor-not-allowed opacity-60" : ""
-                            }`}
-                            title={t(
-                              "playground:composer.queuedBanner.sendNow",
-                              "Send queued messages"
-                            ) as string}
-                            disabled={!isConnectionReady}
-                            onClick={async () => {
-                              if (!isConnectionReady) return
-                              for (const item of queuedMessages) {
-                                await submitFormFromQueued(item.message, item.image)
-                              }
-                              clearQueuedMessages()
-                            }}>
-                            {t(
-                              "playground:composer.queuedBanner.sendNow",
-                              "Send queued messages"
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            className="text-xs font-medium text-success underline hover:text-success"
-                            title={t(
-                              "playground:composer.queuedBanner.clear",
-                              "Clear queue"
-                            ) as string}
-                            onClick={() => {
-                              clearQueuedMessages()
-                            }}>
-                            {t(
-                              "playground:composer.queuedBanner.clear",
-                              "Clear queue"
-                            )}
-                          </button>
-                          <Link
-                            to="/settings/health"
-                            className="text-xs font-medium text-success underline hover:text-success"
-                          >
-                            {t(
-                              "settings:healthSummary.diagnostics",
-                              "Health & diagnostics"
-                            )}
-                          </Link>
-                          <button
-                            type="button"
-                            onClick={() => setShowQueuedBanner(false)}
-                            className="inline-flex items-center rounded-full p-1 text-success hover:bg-success/10"
-                            aria-label={t("common:close", "Dismiss")}
-                            title={t("common:close", "Dismiss") as string}>
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                    <ChatQueuePanel
+                      queue={queuedMessages}
+                      isConnectionReady={isConnectionReady}
+                      isStreaming={isSending}
+                      onRunNext={handleRunNextQueuedRequest}
+                      onRunNow={handleRunQueuedRequest}
+                      onDelete={queuedRequestActions.remove}
+                      onMove={queuedRequestActions.move}
+                      onUpdate={queuedRequestActions.update}
+                      onClearAll={queuedRequestActions.clear}
+                      onOpenDiagnostics={() => navigate("/settings/health")}
+                      forceRunDisabledReason={cancelCurrentAndRunDisabledReason}
+                    />
                   </div>
                 </form>
               </div>
@@ -8362,23 +8604,27 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                     ) : null}
                     {imagePromptRefineLatencyMs != null ? (
                       <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
-                        {t(
-                          "playground:imageGeneration.refineLatency",
-                          "{{ms}} ms",
-                          { ms: imagePromptRefineLatencyMs } as any
+                        {toText(
+                          t(
+                            "playground:imageGeneration.refineLatency",
+                            "{{ms}} ms",
+                            { ms: imagePromptRefineLatencyMs } as any
+                          )
                         )}
                       </span>
                     ) : null}
                     {imagePromptRefineDiff ? (
                       <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
-                        {t(
-                          "playground:imageGeneration.refineOverlap",
-                          "{{percent}}% overlap",
-                          {
-                            percent: Math.round(
-                              imagePromptRefineDiff.overlapRatio * 100
-                            )
-                          } as any
+                        {toText(
+                          t(
+                            "playground:imageGeneration.refineOverlap",
+                            "{{percent}}% overlap",
+                            {
+                              percent: Math.round(
+                                imagePromptRefineDiff.overlapRatio * 100
+                              )
+                            } as any
+                          )
                         )}
                       </span>
                     ) : null}
@@ -8811,10 +9057,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                 {t("playground:composer.context.pinnedSources", "Pinned")}
               </div>
               <div className="mt-1">
-                {t("playground:composer.context.pinnedCount", {
-                  defaultValue: "{{count}} sources",
-                  count: startupTemplatePreview.ragPinnedResults.length
-                } as any)}
+                {toText(
+                  t("playground:composer.context.pinnedCount", {
+                    defaultValue: "{{count}} sources",
+                    count: startupTemplatePreview.ragPinnedResults.length
+                  } as any)
+                )}
               </div>
               {startupTemplatePromptResolution?.source === "prompt-studio" && (
                 <div className="mt-1 text-[11px] text-text-muted">
@@ -9109,25 +9357,31 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           )}
         </div>
       </Modal>
-      <CurrentChatModelSettings
-        open={openModelSettings}
-        setOpen={setOpenModelSettings}
-        isOCREnabled={useOCR}
-      />
-      <ActorPopout open={openActorSettings} setOpen={setOpenActorSettings} />
-      <DocumentGeneratorDrawer
-        open={documentGeneratorOpen}
-        onClose={() => {
-          setDocumentGeneratorOpen(false)
-          setDocumentGeneratorSeed({})
-        }}
-        conversationId={
-          documentGeneratorSeed?.conversationId ?? serverChatId ?? null
-        }
-        defaultModel={selectedModel || null}
-        seedMessage={documentGeneratorSeed?.message ?? null}
-        seedMessageId={documentGeneratorSeed?.messageId ?? null}
-      />
+      {openModelSettings && (
+        <CurrentChatModelSettings
+          open={openModelSettings}
+          setOpen={setOpenModelSettings}
+          isOCREnabled={useOCR}
+        />
+      )}
+      {openActorSettings && (
+        <ActorPopout open={openActorSettings} setOpen={setOpenActorSettings} />
+      )}
+      {documentGeneratorOpen && (
+        <DocumentGeneratorDrawer
+          open={documentGeneratorOpen}
+          onClose={() => {
+            setDocumentGeneratorOpen(false)
+            setDocumentGeneratorSeed({})
+          }}
+          conversationId={
+            documentGeneratorSeed?.conversationId ?? serverChatId ?? null
+          }
+          defaultModel={selectedModel || null}
+          seedMessage={documentGeneratorSeed?.message ?? null}
+          seedMessageId={documentGeneratorSeed?.messageId ?? null}
+        />
+      )}
       {voiceChatEnabled && voiceChat.state !== "idle" && (
         <VoiceChatIndicator
           state={voiceChat.state}
@@ -9135,14 +9389,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           onStop={handleVoiceChatToggle}
         />
       )}
-      <VoiceModeSelector
-        open={voiceModeSelectorOpen}
-        onClose={() => setVoiceModeSelectorOpen(false)}
-        onSelectDictation={handleDictationToggle}
-        onSelectConversation={handleVoiceChatToggle}
-        dictationAvailable={speechAvailable}
-        conversationAvailable={voiceChatAvailable}
-      />
-    </div>
+        {voiceModeSelectorOpen && (
+          <VoiceModeSelector
+            open={voiceModeSelectorOpen}
+            onClose={() => setVoiceModeSelectorOpen(false)}
+            onSelectDictation={handleDictationToggle}
+            onSelectConversation={handleVoiceChatToggle}
+            dictationAvailable={speechAvailable}
+            conversationAvailable={voiceChatAvailable}
+          />
+        )}
+      </div>
+    </React.Profiler>
   )
 }

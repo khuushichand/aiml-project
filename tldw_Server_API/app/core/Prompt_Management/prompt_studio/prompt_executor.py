@@ -19,6 +19,10 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
+from tldw_Server_API.app.core.Prompt_Management.structured_prompts import (
+    StructuredPromptAssemblyError,
+    assemble_prompt_definition,
+)
 
 ########################################################################################################################
 # Prompt Executor
@@ -98,8 +102,8 @@ class PromptExecutor:
             if prompt.get("signature_id"):
                 signature = self._get_signature(prompt["signature_id"])
 
-            # Build the final prompt
-            final_prompt = self._build_prompt(prompt, signature, test_inputs)
+            # Build the final prompt or canonical message list
+            prompt_request = self._build_prompt_request(prompt, signature, test_inputs)
 
             # Execute with LLM
             provider = model_config.get("provider", "openai")
@@ -108,8 +112,9 @@ class PromptExecutor:
             result = await self._call_llm(
                 provider=provider,
                 model=model,
-                prompt=final_prompt,
-                system_prompt=prompt.get("system_prompt"),
+                prompt=prompt_request.get("prompt"),
+                messages=prompt_request.get("messages"),
+                system_prompt=prompt_request.get("system_prompt"),
                 parameters=model_config.get("parameters", {})
             )
 
@@ -133,6 +138,7 @@ class PromptExecutor:
                     provider, model, result.get("tokens", 0)
                 ),
                 "metadata": {
+                    "assembled_messages": prompt_request.get("assembled_messages", []),
                     "temperature": model_config.get("parameters", {}).get("temperature"),
                     "max_tokens": model_config.get("parameters", {}).get("max_tokens"),
                     "timestamp": datetime.utcnow().isoformat()
@@ -323,9 +329,16 @@ class PromptExecutor:
             return content, tokens
         return str(response), 0
 
-    async def _call_llm(self, provider: str, model: str, prompt: str,
-                       system_prompt: Optional[str] = None,
-                       parameters: dict[str, Any] = None) -> dict[str, Any]:
+    async def _call_llm(
+        self,
+        provider: str,
+        model: str,
+        prompt: Optional[str] = None,
+        *,
+        messages: Optional[list[dict[str, Any]]] = None,
+        system_prompt: Optional[str] = None,
+        parameters: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """
         Call the appropriate LLM provider.
 
@@ -333,6 +346,7 @@ class PromptExecutor:
             provider: Provider name
             model: Model name
             prompt: User prompt
+            messages: Canonical chat messages
             system_prompt: System prompt
             parameters: Additional parameters
 
@@ -345,7 +359,11 @@ class PromptExecutor:
         max_tokens = params.get("max_tokens", 1000)
 
         api_endpoint = self._normalize_provider(provider)
-        messages = [{"role": "user", "content": prompt}]
+        request_messages = list(messages or [])
+        if not request_messages:
+            if prompt is None:
+                raise ValueError("Either prompt or messages must be provided")
+            request_messages = [{"role": "user", "content": prompt}]
 
         # Backoff + retry for transient/provider limit errors
         last_exc = None
@@ -357,7 +375,7 @@ class PromptExecutor:
                     response = await asyncio.to_thread(
                         _legacy_call,
                         api_endpoint=api_endpoint,
-                        messages_payload=messages,
+                        messages_payload=request_messages,
                         system_message=system_prompt,
                         temp=temperature,
                         max_tokens=max_tokens,
@@ -368,7 +386,7 @@ class PromptExecutor:
                     request = self._build_adapter_request(
                         provider=api_endpoint,
                         model=model,
-                        messages=messages,
+                        messages=request_messages,
                         system_prompt=system_prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
@@ -409,6 +427,27 @@ class PromptExecutor:
         if signature and signature.get("deleted"):
             return None
         return signature
+
+    def _build_prompt_request(
+        self,
+        prompt: dict[str, Any],
+        signature: Optional[dict[str, Any]],
+        inputs: dict[str, Any],
+    ) -> dict[str, Any]:
+        prepared_inputs = self._prepare_prompt_inputs(inputs)
+        if prompt.get("prompt_format") == "structured" and prompt.get("prompt_definition"):
+            return self._build_structured_prompt_request(prompt, signature, prepared_inputs)
+
+        final_prompt = self._build_prompt(prompt, signature, prepared_inputs)
+        return {
+            "prompt": final_prompt,
+            "messages": None,
+            "system_prompt": prompt.get("system_prompt"),
+            "assembled_messages": self._build_legacy_assembled_messages(
+                final_prompt,
+                prompt.get("system_prompt"),
+            ),
+        }
 
     def _build_prompt(self, prompt: dict[str, Any], signature: Optional[dict[str, Any]],
                      inputs: dict[str, Any]) -> str:
@@ -467,21 +506,175 @@ class PromptExecutor:
 
         # Add signature instructions if present
         if signature:
-            sig_instruction = signature.get("instruction", "")
-            if sig_instruction:
-                template = f"{sig_instruction}\n\n{template}"
-
-            # Add output format instruction
-            if signature.get("output_schema"):
-                template += "\n\nPlease format your response as JSON with the following structure:\n"
-                template += json.dumps(
-                    {field["name"]: f"<{field.get('type', 'string')}>"
-                     for field in signature["output_schema"]
-                     if isinstance(field, dict)},
-                    indent=2
-                )
+            template = self._apply_signature_to_text(template, signature)
 
         return template
+
+    def _build_structured_prompt_request(
+        self,
+        prompt: dict[str, Any],
+        signature: Optional[dict[str, Any]],
+        inputs: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            assembly = assemble_prompt_definition(
+                prompt["prompt_definition"],
+                inputs,
+                extras={
+                    "few_shot_examples": prompt.get("few_shot_examples"),
+                    "modules_config": prompt.get("modules_config"),
+                },
+            )
+        except StructuredPromptAssemblyError:
+            raise
+        except Exception as exc:
+            raise StructuredPromptAssemblyError(
+                "prompt_assembly_failed",
+                f"Failed to assemble structured prompt: {exc}",
+            ) from exc
+
+        messages = self._apply_signature_to_messages(assembly.messages, signature)
+        messages = self._enforce_messages_length(messages)
+        return {
+            "prompt": None,
+            "messages": messages,
+            "system_prompt": None,
+            "assembled_messages": [message.copy() for message in messages],
+        }
+
+    def _build_legacy_assembled_messages(
+        self,
+        final_prompt: str,
+        system_prompt: Optional[str],
+    ) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": str(system_prompt)})
+        messages.append({"role": "user", "content": final_prompt})
+        return messages
+
+    def _prepare_prompt_inputs(self, inputs: dict[str, Any]) -> dict[str, str]:
+        prepared_inputs: dict[str, str] = {}
+        for key, value in inputs.items():
+            if not key or not isinstance(key, str):
+                logger.warning(f"Skipping invalid variable key: {key!r}")
+                continue
+
+            str_value = str(value) if value is not None else ""
+            if len(str_value) > self.MAX_VARIABLE_VALUE_LENGTH:
+                logger.warning(
+                    f"Variable '{key}' value truncated from {len(str_value)} to {self.MAX_VARIABLE_VALUE_LENGTH} chars"
+                )
+                str_value = str_value[:self.MAX_VARIABLE_VALUE_LENGTH] + "... [truncated]"
+
+            prepared_inputs[key] = str_value
+
+        return prepared_inputs
+
+    @staticmethod
+    def _apply_signature_to_messages(
+        messages: list[dict[str, Any]],
+        signature: Optional[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        rendered_messages = [
+            {"role": str(message.get("role") or "user"), "content": str(message.get("content") or "")}
+            for message in messages
+        ]
+        if not signature:
+            return rendered_messages
+
+        target_index = next(
+            (index for index in range(len(rendered_messages) - 1, -1, -1)
+             if rendered_messages[index]["role"] == "user"),
+            None,
+        )
+
+        target_content = ""
+        if target_index is not None:
+            target_content = rendered_messages[target_index]["content"]
+
+        updated_content = PromptExecutor._apply_signature_to_text(target_content, signature)
+        if target_index is None:
+            rendered_messages.append({"role": "user", "content": updated_content})
+        else:
+            rendered_messages[target_index]["content"] = updated_content
+
+        return rendered_messages
+
+    @staticmethod
+    def _apply_signature_to_text(text: str, signature: dict[str, Any]) -> str:
+        updated_text = text
+        sig_instruction = signature.get("instruction", "")
+        if sig_instruction:
+            updated_text = f"{sig_instruction}\n\n{updated_text}" if updated_text else sig_instruction
+
+        output_instruction = PromptExecutor._render_output_schema_instruction(signature.get("output_schema"))
+        if output_instruction:
+            updated_text = f"{updated_text}\n\n{output_instruction}" if updated_text else output_instruction
+
+        return updated_text
+
+    @staticmethod
+    def _render_output_schema_instruction(output_schema: Any) -> str:
+        if not output_schema:
+            return ""
+
+        if isinstance(output_schema, str):
+            try:
+                output_schema = json.loads(output_schema)
+            except Exception:
+                return ""
+
+        if not isinstance(output_schema, list):
+            return ""
+
+        schema_shape = {
+            field["name"]: f"<{field.get('type', 'string')}>"
+            for field in output_schema
+            if isinstance(field, dict) and field.get("name")
+        }
+        if not schema_shape:
+            return ""
+
+        return (
+            "Please format your response as JSON with the following structure:\n"
+            + json.dumps(schema_shape, indent=2)
+        )
+
+    def _enforce_messages_length(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
+        rendered_messages = [message.copy() for message in messages]
+        total_length = sum(len(message.get("content", "")) for message in rendered_messages)
+        if total_length <= self.MAX_TOTAL_PROMPT_LENGTH or not rendered_messages:
+            return rendered_messages
+
+        logger.warning(
+            f"Structured prompt truncated from {total_length} to {self.MAX_TOTAL_PROMPT_LENGTH} chars"
+        )
+
+        target_index = next(
+            (index for index in range(len(rendered_messages) - 1, -1, -1)
+             if rendered_messages[index]["role"] == "user"),
+            len(rendered_messages) - 1,
+        )
+        preserved_length = total_length - len(rendered_messages[target_index].get("content", ""))
+        remaining_budget = max(self.MAX_TOTAL_PROMPT_LENGTH - preserved_length, 0)
+        notice = "\n... [prompt truncated due to length]"
+
+        if remaining_budget <= 0:
+            rendered_messages[target_index]["content"] = ""
+            return rendered_messages
+
+        if remaining_budget > len(notice):
+            trimmed_length = remaining_budget - len(notice)
+            rendered_messages[target_index]["content"] = (
+                rendered_messages[target_index].get("content", "")[:trimmed_length] + notice
+            )
+            return rendered_messages
+
+        rendered_messages[target_index]["content"] = (
+            rendered_messages[target_index].get("content", "")[:remaining_budget]
+        )
+        return rendered_messages
 
     # Compatibility alias used by tests
     async def execute(self, prompt_id: int, inputs: dict[str, Any], provider: str = "openai", model: str = "gpt-3.5-turbo",
@@ -606,21 +799,12 @@ class PromptExecutor:
                 "gemini-3-pro-preview": 0.007,
                 "gemini-3-flash-preview": 0.00175,
                 "gemini-2.5-pro": 0.005625,
-                "gemini-2.5-pro-high": 0.00875,
                 "gemini-2.5-flash": 0.0014,
-                "gemini-2.5-flash-preview": 0.0014,
-                "gemini-2.5-flash-preview-09-2025": 0.0014,
                 "gemini-2.5-flash-lite": 0.00025,
-                "gemini-2.5-flash-lite-preview": 0.00025,
                 "gemini-2.5-flash-lite-preview-09-2025": 0.00025,
                 "gemini-2.5-computer-use-preview-10-2025": 0.005625,
                 "gemini-2.0-flash": 0.00025,
-                "gemini-2.0-flash-exp": 0.00025,
                 "gemini-2.0-flash-lite": 0.0001875,
-                "gemini-1.5-pro": 0.0035,
-                "gemini-1.5-pro-latest": 0.0035,
-                "gemini-1.5-flash": 0.00075,
-                "gemini-1.5-flash-latest": 0.00075,
             }
         }
 

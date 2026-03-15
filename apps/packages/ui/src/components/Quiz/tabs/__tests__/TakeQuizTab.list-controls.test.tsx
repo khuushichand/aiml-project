@@ -120,6 +120,12 @@ describe("TakeQuizTab list controls and default passing policy", () => {
             time_limit_seconds: 900,
             passing_score: null,
             media_id: 42,
+            source_bundle_json: [
+              { source_type: "media", source_id: "42" },
+              { source_type: "note", source_id: "note-1" },
+              { source_type: "flashcard_deck", source_id: "20" },
+              { source_type: "flashcard_card", source_id: "card-1" }
+            ],
             created_at: "2026-02-16T12:00:00Z"
           }
         ],
@@ -239,5 +245,23 @@ describe("TakeQuizTab list controls and default passing policy", () => {
     )
 
     expect(screen.getByTestId("take-loading-skeleton")).toBeInTheDocument()
+  })
+
+  it("shows source badges for mixed-source quizzes", async () => {
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId("take-quiz-source-media-7")).toBeInTheDocument()
+    })
+    expect(screen.getByTestId("take-quiz-source-notes-7")).toBeInTheDocument()
+    expect(screen.getByTestId("take-quiz-source-flashcards-7")).toBeInTheDocument()
+    expect(screen.getByText("Media 1")).toBeInTheDocument()
+    expect(screen.getByText("Notes 1")).toBeInTheDocument()
+    expect(screen.getByText("Flashcards 2")).toBeInTheDocument()
   })
 })

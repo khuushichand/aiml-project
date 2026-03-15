@@ -1,0 +1,204 @@
+import { isAbortLikeError } from "@/hooks/chat/abort-turn-cleanup";
+import {
+  isImageGenerationMessageType,
+} from "@/utils/image-generation-chat";
+import type { ImageGenerationEventSyncPolicy } from "@/utils/image-generation-chat";
+import type { Message } from "@/store/option";
+import type { ToolChoice } from "@/store/option";
+import type { ImageGenerationEventSyncMode } from "@/utils/image-generation-chat";
+import type { SaveMessageData } from "@/types/chat-modes";
+import type { ChatModelSettings } from "@/store/model";
+import { isGreetingMessageType } from "@/utils/character-greetings";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type ChatModelSettingsStore = ChatModelSettings & {
+  setSystemPrompt?: (prompt: string) => void;
+};
+
+export type ChatModeOverrides = {
+  historyId?: string | null;
+  serverChatId?: string | null;
+  selectedModel?: string | null;
+  selectedSystemPrompt?: string | null;
+  toolChoice?: ToolChoice | null;
+  useOCR?: boolean;
+  webSearch?: boolean;
+  imageEventSyncPolicy?: ImageGenerationEventSyncPolicy;
+} & Record<string, unknown>;
+
+export type SaveMessagePayload = Omit<SaveMessageData, "setHistoryId"> & {
+  setHistoryId?: SaveMessageData["setHistoryId"];
+  conversationId?: string | number | null;
+  message_source?: "copilot" | "web-ui" | "server" | "branch";
+  message_type?: string;
+};
+
+export type TldwChatMeta =
+  | {
+      id?: string | number;
+      chat_id?: string | number;
+      version?: number;
+      state?: string | null;
+      conversation_state?: string | null;
+      topic_label?: string | null;
+      cluster_id?: string | null;
+      source?: string | null;
+      external_ref?: string | null;
+      title?: string | null;
+      character_id?: string | number | null;
+      assistant_kind?: "character" | "persona" | null;
+      assistant_id?: string | number | null;
+      persona_memory_mode?: "read_only" | "read_write" | null;
+    }
+  | string
+  | number
+  | null
+  | undefined;
+
+// ---------------------------------------------------------------------------
+// Pure utility functions
+// ---------------------------------------------------------------------------
+
+export const attemptCharacterStreamRecoveryPersist = async ({
+  chatId,
+  temporaryChat,
+  assistantContent,
+  alreadyPersisted,
+  error,
+  persist,
+}: {
+  chatId: string | null;
+  temporaryChat: boolean;
+  assistantContent: string;
+  alreadyPersisted: boolean;
+  error: unknown;
+  persist: (content: string) => Promise<boolean>;
+}): Promise<boolean> => {
+  if (alreadyPersisted || temporaryChat) return false;
+  if (!chatId || isAbortLikeError(error)) return false;
+  const trimmedContent = assistantContent.trim();
+  if (!trimmedContent) return false;
+  try {
+    return await persist(trimmedContent);
+  } catch {
+    return false;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Compare helpers
+// ---------------------------------------------------------------------------
+
+export const getMessageModelKey = (message: Message) =>
+  message.modelId || message.modelName || message.name;
+
+export const shouldIncludeMessageForModel = (
+  message: Message,
+  modelId: string,
+) => {
+  if (!message.isBot) {
+    if (message.messageType === "compare:perModelUser") {
+      return message.modelId === modelId;
+    }
+    return true;
+  }
+  const messageModel = getMessageModelKey(message);
+  if (!messageModel) {
+    return false;
+  }
+  return messageModel === modelId;
+};
+
+export const getCompareUserMessageId = (
+  items: Message[],
+  clusterId: string,
+) =>
+  items.find(
+    (message) =>
+      message.messageType === "compare:user" &&
+      message.clusterId === clusterId,
+  )?.id || null;
+
+export const getLastThreadMessageId = (
+  items: Message[],
+  clusterId: string,
+  modelId: string,
+) => {
+  const threadMessages = items.filter(
+    (message) =>
+      message.clusterId === clusterId &&
+      getMessageModelKey(message) === modelId,
+  );
+  const lastThreadMessage = threadMessages[threadMessages.length - 1];
+  return lastThreadMessage?.id || getCompareUserMessageId(items, clusterId);
+};
+
+export const getCompareBranchMessageIds = (
+  items: Message[],
+  clusterId: string,
+  modelId: string,
+) => {
+  const userIndex = items.findIndex(
+    (message) =>
+      message.messageType === "compare:user" &&
+      message.clusterId === clusterId,
+  );
+  if (userIndex === -1) {
+    return [];
+  }
+
+  const messageIds = new Set<string>();
+  items.forEach((message, index) => {
+    if (!message.id) {
+      return;
+    }
+    if (index < userIndex) {
+      if (shouldIncludeMessageForModel(message, modelId)) {
+        messageIds.add(message.id);
+      }
+      return;
+    }
+    if (message.clusterId !== clusterId) {
+      return;
+    }
+    if (message.messageType === "compare:user") {
+      messageIds.add(message.id);
+      return;
+    }
+    if (shouldIncludeMessageForModel(message, modelId)) {
+      messageIds.add(message.id);
+    }
+  });
+
+  return Array.from(messageIds);
+};
+
+export const buildHistoryFromMessagesFactory = (greetingEnabled: boolean) => {
+  return (items: Message[]) =>
+    items
+      .filter(
+        (message) =>
+          !isImageGenerationMessageType(message.messageType) &&
+          (greetingEnabled
+            ? true
+            : !isGreetingMessageType(message.messageType)),
+      )
+      .map((message) => ({
+        role: (message.isBot ? "assistant" : "user") as "assistant" | "user",
+        content: message.message,
+        image: message.images?.[0],
+        messageType: message.messageType,
+      }));
+};
+
+export const buildHistoryForModel = (
+  items: Message[],
+  modelId: string,
+  buildHistoryFromMessages: (items: Message[]) => any[],
+) =>
+  buildHistoryFromMessages(
+    items.filter((message) => shouldIncludeMessageForModel(message, modelId)),
+  );

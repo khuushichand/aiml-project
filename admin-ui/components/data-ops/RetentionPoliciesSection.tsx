@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
-import type { RetentionPolicy } from '@/types';
+import type { RetentionPolicy, RetentionPolicyPreviewResponse } from '@/types';
 import { AlertTriangle, ShieldCheck } from 'lucide-react';
 
 type RetentionPoliciesSectionProps = {
@@ -26,7 +26,8 @@ type RetentionImpactPreview = {
   currentDays: number;
   newDays: number;
   counts: RetentionImpactCounts;
-  source: 'backend' | 'estimate';
+  previewSignature: string;
+  notes: string[];
 };
 
 const toNonNegativeNumber = (value: unknown): number | null => {
@@ -69,23 +70,6 @@ const parseImpactCounts = (payload: unknown): RetentionImpactCounts => {
     auditLogEntries: readCount(['audit_log_entries', 'audit_logs', 'audit_entries', 'audit_count']),
     jobRecords: readCount(['job_records', 'jobs', 'job_count']),
     backupFiles: readCount(['backup_files', 'backups', 'backup_count']),
-  };
-};
-
-const estimateImpactCounts = (policyKey: string, currentDays: number, newDays: number): RetentionImpactCounts => {
-  const daysReduced = Math.max(0, currentDays - newDays);
-  if (daysReduced === 0) return { auditLogEntries: 0, jobRecords: 0, backupFiles: 0 };
-
-  const key = policyKey.toLowerCase();
-  const scale = Math.max(1, Math.ceil(daysReduced / 7));
-  const auditWeight = key.includes('audit') || key.includes('log') ? 95 : 25;
-  const jobWeight = key.includes('job') ? 70 : 18;
-  const backupWeight = key.includes('backup') ? 22 : 6;
-
-  return {
-    auditLogEntries: daysReduced * auditWeight * scale,
-    jobRecords: daysReduced * jobWeight * scale,
-    backupFiles: daysReduced * backupWeight * scale,
   };
 };
 
@@ -147,28 +131,28 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
         current_days: currentDays,
         days,
       });
-      const counts = parseImpactCounts(previewResponse);
+      const typedPreview = previewResponse as RetentionPolicyPreviewResponse;
+      const counts = parseImpactCounts(typedPreview.counts);
+      if (!typedPreview.preview_signature?.trim()) {
+        throw new Error('Backend retention preview did not return a preview signature.');
+      }
       setPolicyPreviews((prev) => ({
         ...prev,
         [policy.key]: {
-          currentDays,
-          newDays: days,
+          currentDays: typedPreview.current_days,
+          newDays: typedPreview.new_days,
           counts,
-          source: 'backend',
+          previewSignature: typedPreview.preview_signature,
+          notes: Array.isArray(typedPreview.notes) ? typedPreview.notes : [],
         },
       }));
       setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: false }));
-    } catch {
-      setPolicyPreviews((prev) => ({
-        ...prev,
-        [policy.key]: {
-          currentDays,
-          newDays: days,
-          counts: estimateImpactCounts(policy.key, currentDays, days),
-          source: 'estimate',
-        },
-      }));
-      setPolicyPreviewAcknowledged((prev) => ({ ...prev, [policy.key]: false }));
+    } catch (err: unknown) {
+      clearPolicyPreview(policy.key);
+      const message = err instanceof Error && err.message
+        ? err.message
+        : 'Failed to preview retention policy impact';
+      showError('Preview failed', message);
     } finally {
       setPolicyPreviewLoading((prev) => ({ ...prev, [policy.key]: false }));
     }
@@ -193,7 +177,10 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
 
     setPolicySaving((prev) => ({ ...prev, [policy.key]: true }));
     try {
-      await api.updateRetentionPolicy(policy.key, { days: value });
+      await api.updateRetentionPolicy(policy.key, {
+        days: value,
+        preview_signature: preview.previewSignature,
+      });
       success('Retention updated', `${policy.key} set to ${value} days.`);
       setPolicyEdits((prev) => {
         const next = { ...prev };
@@ -321,11 +308,11 @@ export const RetentionPoliciesSection = ({ refreshSignal }: RetentionPoliciesSec
                               {previewCurrent.counts.auditLogEntries} audit log entries, {previewCurrent.counts.jobRecords}{' '}
                               job records, {previewCurrent.counts.backupFiles} backup files.
                             </p>
-                            {previewCurrent.source === 'estimate' && (
-                              <p className="text-xs text-muted-foreground">
-                                Preview is estimated locally because backend dry-run preview is unavailable.
+                            {previewCurrent.notes.map((note) => (
+                              <p key={note} className="text-xs text-muted-foreground">
+                                {note}
                               </p>
-                            )}
+                            ))}
                             <label
                               htmlFor={`retention-preview-ack-${policy.key}`}
                               className="flex items-start gap-2 text-sm"

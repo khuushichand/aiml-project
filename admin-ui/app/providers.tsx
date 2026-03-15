@@ -6,6 +6,7 @@ import { PermissionProvider } from '@/components/PermissionGuard';
 import { OrgContextProvider } from '@/components/OrgContextSwitcher';
 import { ToastProvider } from '@/components/ui/toast';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
+import { PrivilegedActionDialogProvider } from '@/components/ui/privileged-action-dialog';
 import { KeyboardShortcutsProvider } from '@/components/KeyboardShortcuts';
 
 interface ProvidersProps {
@@ -17,13 +18,15 @@ export function Providers({ children }: ProvidersProps) {
     <ErrorBoundary>
       <ToastProvider>
         <ConfirmProvider>
-          <PermissionProvider>
-            <OrgContextProvider>
-              <KeyboardShortcutsProvider>
-                {children}
-              </KeyboardShortcutsProvider>
-            </OrgContextProvider>
-          </PermissionProvider>
+          <PrivilegedActionDialogProvider>
+            <PermissionProvider>
+              <OrgContextProvider>
+                <KeyboardShortcutsProvider>
+                  {children}
+                </KeyboardShortcutsProvider>
+              </OrgContextProvider>
+            </PermissionProvider>
+          </PrivilegedActionDialogProvider>
         </ConfirmProvider>
       </ToastProvider>
     </ErrorBoundary>

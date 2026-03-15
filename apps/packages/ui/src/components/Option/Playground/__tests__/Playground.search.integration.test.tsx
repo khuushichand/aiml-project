@@ -65,6 +65,10 @@ const storeOptionState = vi.hoisted(() => ({
   }
 }))
 
+const routerState = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, defaultValue?: string, options?: Record<string, unknown>) => {
@@ -83,20 +87,25 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
 }))
 
 vi.mock("@/components/Option/Playground/PlaygroundChat", () => ({
-  PlaygroundChat: (props: {
-    searchQuery?: string
-    matchedMessageIndices?: Set<number>
-    activeSearchMessageIndex?: number | null
-  }) => (
-    <div
-      data-testid="playground-chat"
-      data-search-query={props.searchQuery || ""}
-      data-search-count={props.matchedMessageIndices?.size || 0}
-      data-search-active-index={
-        props.activeSearchMessageIndex == null ? "" : props.activeSearchMessageIndex
-      }
-    />
-  )
+  PlaygroundChat: React.forwardRef(function MockPlaygroundChat(
+    props: {
+      searchQuery?: string
+      matchedMessageIndices?: Set<number>
+      activeSearchMessageIndex?: number | null
+    },
+    _ref
+  ) {
+    return (
+      <div
+        data-testid="playground-chat"
+        data-search-query={props.searchQuery || ""}
+        data-search-count={props.matchedMessageIndices?.size || 0}
+        data-search-active-index={
+          props.activeSearchMessageIndex == null ? "" : props.activeSearchMessageIndex
+        }
+      />
+    )
+  })
 }))
 
 vi.mock("@/components/Sidepanel/Chat/ArtifactsPanel", () => ({
@@ -110,6 +119,7 @@ vi.mock("@/hooks/useMessageOption", () => ({
 vi.mock("@/hooks/usePlaygroundSessionPersistence", () => ({
   usePlaygroundSessionPersistence: () => ({
     restoreSession: vi.fn(async () => false),
+    sessionScopeReady: true,
     hasPersistedSession: false,
     persistedHistoryId: null,
     persistedServerChatId: null
@@ -182,6 +192,16 @@ vi.mock("@/hooks/useCharacterGreeting", () => ({
   useCharacterGreeting: () => undefined
 }))
 
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: () => routerState.navigate
+  }
+})
+
 describe("Playground thread search integration", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -190,7 +210,7 @@ describe("Playground thread search integration", () => {
     storeOptionState.value.compareParentByHistory = {}
   })
 
-  it("opens in-thread search on Cmd/Ctrl+F and forwards query to PlaygroundChat", () => {
+  it("opens in-thread search on Cmd/Ctrl+F and forwards query to PlaygroundChat", async () => {
     render(<Playground />)
 
     fireEvent.keyDown(window, { key: "f", ctrlKey: true })
@@ -206,10 +226,12 @@ describe("Playground thread search integration", () => {
       "data-search-query",
       "beta"
     )
-    expect(screen.getByTestId("playground-chat")).toHaveAttribute(
-      "data-search-count",
-      "1"
-    )
+    await waitFor(() => {
+      expect(screen.getByTestId("playground-chat")).toHaveAttribute(
+        "data-search-count",
+        "1"
+      )
+    })
   })
 
   it("opens shortcut help from the header and closes with Escape", () => {
@@ -235,6 +257,14 @@ describe("Playground thread search integration", () => {
         screen.getByTestId("playground-shortcuts-help-panel")
       ).toBeInTheDocument()
     })
+  })
+
+  it("opens chat workflows from the header action", () => {
+    render(<Playground />)
+
+    fireEvent.click(screen.getByTestId("playground-chat-workflows-trigger"))
+
+    expect(routerState.navigate).toHaveBeenCalledWith("/chat-workflows")
   })
 
   it("shows mobile artifacts sheet context and returns focus to trigger when closing", async () => {

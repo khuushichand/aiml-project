@@ -1,13 +1,3 @@
-import { RoutePlaceholder } from '@web/components/navigation/RoutePlaceholder';
+import dynamic from "next/dynamic"
 
-export default function AdminOrgsRedirectPage() {
-  return (
-    <RoutePlaceholder
-      title="Organization Management Is Coming Soon"
-      description="Organization and tenant administration workflows are planned for this route."
-      plannedPath="/admin/orgs"
-      primaryCtaHref="/admin/server"
-      primaryCtaLabel="Open Server Admin"
-    />
-  );
-}
+export default dynamic(() => import("@/routes/option-admin-orgs"), { ssr: false })

@@ -561,7 +561,11 @@ def process_db_messages_to_rich_ui_history(
         except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS:
             sender_hash = hash(str(sender)) & 0xFFFFFFFF
         logger.warning("Message from unknown sender (hash={:08x}, content_length={})", sender_hash, _len)
-        formatted_content = f"[{sender}] {processed_content}"
+        sender_label = str(sender or "")
+        if sender_label.strip():
+            formatted_content = f"[{sender_label}] {processed_content}"
+        else:
+            formatted_content = processed_content
         detail = {
             "id": msg_data.get("id"),
             "sender": sender_normalized or sender,

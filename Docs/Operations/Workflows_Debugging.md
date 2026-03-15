@@ -12,6 +12,36 @@ Set environment flags before starting the server:
 
 Check application logs for lines prefixed with `Workflows:` or `Artifacts:` hints.
 
+## Investigation-First Triage
+
+For failed or flaky runs, start with the derived diagnostics endpoints before reading raw events:
+
+1. `GET /api/v1/workflows/runs/{run_id}/investigation`
+2. `GET /api/v1/workflows/runs/{run_id}/steps`
+3. `GET /api/v1/workflows/runs/{run_id}/steps/{step_id}/attempts`
+
+Focus on the structured fields first:
+
+- `reason_code_core` and `reason_code_detail`
+- `category`
+- `blame_scope`
+- `retryable`
+- `retry_recommendation`
+
+If investigation generation is incomplete, fall back to `GET /runs/{run_id}/events?limit=200` and artifacts/log excerpts. The attempt ledger is the preferred source for retry history.
+
+## Preflight & Replay Safety
+
+- Use `POST /api/v1/workflows/preflight` before saving or rerunning a changed definition.
+- `validation_mode=block` returns blocking validation errors.
+- `validation_mode=non-block` demotes definition validation issues to warnings so authors can inspect the rest of the payload.
+- Replay safety warnings come from step capability metadata:
+  - `replay_safe`
+  - `idempotency_strategy`
+  - `compensation_supported`
+  - `requires_human_review_for_rerun`
+- Treat `unsafe_replay_step` as a real warning. Side-effecting steps such as `webhook`, `notify`, or external tool calls should be reviewed before rerun even when the original failure looks transient.
+
 ## Artifact Downloads
 
 - Containment: Enforced only when a `workdir` is recorded on the run/step metadata. If strict mode blocks unexpected paths, ensure your step recorded the correct workdir.
@@ -57,6 +87,15 @@ def verify(secret: str, ts: str, body: str, received: str) -> bool:
 Debug checklist:
 - Inspect events stream (`GET /runs/{run_id}/events?limit=200`) for `run_paused`, `run_resumed`, `run_cancelled`, `step_*`.
 - If resume stalls, verify `after_step_id` handling via logs (enabled by `WORKFLOWS_DEBUG`).
+
+## Retry Decisions
+
+- `retryable=true` means the latest failure looked transient, not that replay is automatically safe.
+- Use attempt metadata plus step capability metadata together:
+  - Safe replay: transient failure + replay-safe step.
+  - Conditional replay: transient failure on a side-effecting or human-reviewed step.
+  - Fix-before-rerun: definition/policy/input failures; run preflight after the change.
+- If you need DB-level inspection, look at `workflow_step_attempts` before `workflow_events`; it is the canonical retry ledger.
 
 ## Idempotency
 

@@ -15,6 +15,10 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
+
 
 class DatabaseType(Enum):
     """Supported database types."""
@@ -117,18 +121,8 @@ class SQLiteAdapter(DatabaseAdapter):
         )
         self.conn.row_factory = sqlite3.Row  # Return rows as dictionaries
 
-        # Set optimal pragmas
-        pragmas = [
-            "PRAGMA journal_mode=WAL",
-            "PRAGMA busy_timeout=30000",
-            "PRAGMA synchronous=NORMAL",
-            "PRAGMA temp_store=MEMORY",
-            "PRAGMA mmap_size=268435456",
-            "PRAGMA foreign_keys=ON"
-        ]
-
-        for pragma in pragmas:
-            self.conn.execute(pragma)
+        configure_sqlite_connection(self.conn, busy_timeout_ms=30000)
+        self.conn.execute("PRAGMA mmap_size=268435456")
 
         self.conn.commit()
 

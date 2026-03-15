@@ -20,6 +20,16 @@ def _fake_config_with_local_discovery():
     return cfg
 
 
+def _fake_config_openrouter_mixed():
+    cfg = configparser.ConfigParser()
+    cfg.add_section("API")
+    cfg.set("API", "openrouter_api_key", "sk-or-test")
+    cfg.set("API", "openrouter_model", "openai/gpt-4o-mini")
+    cfg.set("API", "default_api", "openrouter")
+    cfg.add_section("Local-API")
+    return cfg
+
+
 def _patch_llm_providers(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_providers
 
@@ -135,3 +145,49 @@ def test_llm_models_metadata_includes_curated_qwen_models(monkeypatch, client_us
     assert ("qwen", "qwen-max") in provider_and_name
     assert ("qwen", "qwen-plus") in provider_and_name
     assert ("qwen", "qwen-turbo") in provider_and_name
+
+
+def test_llm_models_filter_type_openrouter_image_hints(monkeypatch, client_user_only):
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_providers
+
+    monkeypatch.setattr(llm_providers, "load_comprehensive_config", _fake_config_openrouter_mixed)
+    monkeypatch.setattr(
+        llm_providers,
+        "list_provider_models",
+        lambda provider: (
+            ["black-forest-labs/flux.1-schnell", "openai/gpt-4o-mini"]
+            if provider == "openrouter"
+            else []
+        ),
+    )
+    monkeypatch.setattr(llm_providers, "apply_llm_provider_overrides_to_listing", lambda result: result)
+    monkeypatch.setattr(llm_providers, "get_api_keys", lambda: {"openrouter": "sk-or-test"})
+    monkeypatch.setattr(llm_providers, "discover_openrouter_models", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(llm_providers, "list_image_models_for_catalog", lambda: [])
+    monkeypatch.setattr(
+        llm_providers,
+        "_resolve_model_tokenizer_support",
+        lambda *_args, **_kwargs: {
+            "available": False,
+            "tokenizer": None,
+            "kind": None,
+            "source": None,
+            "detokenize": False,
+            "count_accuracy": "unavailable",
+            "strict_mode_effective": False,
+        },
+    )
+
+    client = client_user_only
+
+    chat_resp = client.get("/api/v1/llm/models?type=chat")
+    assert chat_resp.status_code == 200
+    chat_models = set(chat_resp.json())
+    assert "openrouter/openai/gpt-4o-mini" in chat_models
+    assert "openrouter/black-forest-labs/flux.1-schnell" not in chat_models
+
+    image_resp = client.get("/api/v1/llm/models?type=image")
+    assert image_resp.status_code == 200
+    image_models = set(image_resp.json())
+    assert "openrouter/black-forest-labs/flux.1-schnell" in image_models
+    assert "openrouter/openai/gpt-4o-mini" not in image_models

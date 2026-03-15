@@ -114,6 +114,7 @@ from tldw_Server_API.app.core.Utils.path_utils import safe_join
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 _EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
+    ImportError,
     OSError,
     ValueError,
     TypeError,

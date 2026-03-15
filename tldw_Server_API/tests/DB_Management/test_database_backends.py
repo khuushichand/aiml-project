@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError,
 )
 from tldw_Server_API.app.core.DB_Management.backends.sqlite_backend import SQLiteBackend
+from tldw_Server_API.app.core.DB_Management.backends.sqlite_backend import SQLiteConnectionPool
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.backends.factory import BackendFactory
 
@@ -74,6 +75,58 @@ class TestDatabaseBackends:
         assert result[0] == 1
 
         conn.close()
+
+    def test_sqlite_backend_connect_delegates_pragmas_to_sqlite_policy(self, sqlite_config, monkeypatch):
+        calls: list[dict[str, object]] = []
+
+        def fake_configure(connection, **kwargs):
+            calls.append(kwargs)
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.DB_Management.backends.sqlite_backend.configure_sqlite_connection",
+            fake_configure,
+            raising=False,
+        )
+
+        backend = SQLiteBackend(sqlite_config)
+        conn = backend.connect()
+        conn.close()
+
+        assert calls == [
+            {
+                "use_wal": True,
+                "synchronous": "NORMAL",
+                "foreign_keys": True,
+                "busy_timeout_ms": 10000,
+            }
+        ]
+
+    def test_sqlite_connection_pool_delegates_pragmas_to_sqlite_policy(self, sqlite_config, monkeypatch):
+        calls: list[dict[str, object]] = []
+
+        def fake_configure(connection, **kwargs):
+            calls.append(kwargs)
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.DB_Management.backends.sqlite_backend.configure_sqlite_connection",
+            fake_configure,
+            raising=False,
+        )
+
+        pool = SQLiteConnectionPool(sqlite_config.sqlite_path, sqlite_config)
+        conn = pool.get_connection()
+        pool.close_all()
+
+        assert conn is not None
+        assert calls == [
+            {
+                "use_wal": True,
+                "synchronous": "NORMAL",
+                "foreign_keys": True,
+                "busy_timeout_ms": 10000,
+                "cache_size": -2000,
+            }
+        ]
 
     def test_sqlite_backend_schema_creation(self, sqlite_config):
         """Test that SQLite backend can create schema via create_tables."""
@@ -218,6 +271,30 @@ class TestDatabaseBackends:
         count = cursor.fetchone()[0]
         conn.close()
         assert count == 0
+
+    def test_sqlite_backend_transaction_uses_begin_immediate(self, sqlite_config):
+        """SQLite transactions should take the write lock up front."""
+        backend = SQLiteBackend(sqlite_config)
+
+        class _RecordingConnection:
+            def __init__(self):
+                self.in_transaction = False
+                self.statements: list[str] = []
+
+            def execute(self, sql):
+                self.statements.append(sql)
+                normalized = sql.strip().upper()
+                if normalized.startswith("BEGIN"):
+                    self.in_transaction = True
+                elif normalized in {"COMMIT", "ROLLBACK"}:
+                    self.in_transaction = False
+
+        conn = _RecordingConnection()
+
+        with backend.transaction(connection=conn):
+            pass
+
+        assert conn.statements[0] == "BEGIN IMMEDIATE"
 
 
 class TestPostgreSQLBackend:

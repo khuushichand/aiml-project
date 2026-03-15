@@ -134,3 +134,16 @@ def test_access_log_generates_request_id_when_missing(monkeypatch):
     assert logged_id
     assert response_id
     assert logged_id == response_id
+
+
+def test_access_log_uses_uppercase_level_names(monkeypatch):
+    app = _make_app()
+    captured = _capture_access_log(monkeypatch)
+    client = TestClient(app)
+
+    resp = client.get("/ping")
+    assert resp.status_code == 200
+
+    assert captured, "no access-log record captured"
+    rec = captured[-1]
+    assert rec.get("level") == "INFO"

@@ -94,6 +94,21 @@ describe("useTldwAudioStatus", () => {
     )
   })
 
+  it("does not probe audio health until the surface is explicitly enabled", async () => {
+    const { result } = renderHook(() => useTldwAudioStatus({ enabled: false }), {
+      wrapper: buildWrapper()
+    })
+
+    await waitFor(() => {
+      expect(result.current.sttHealthLoading).toBe(false)
+      expect(result.current.ttsHealthLoading).toBe(false)
+    })
+
+    expect(result.current.sttHealthState).toBe("unknown")
+    expect(result.current.ttsHealthState).toBe("unknown")
+    expect(state.apiSend).not.toHaveBeenCalled()
+  })
+
   it("treats missing STT health endpoint as unknown instead of unhealthy", async () => {
     state.capabilities = {
       hasAudio: true,
@@ -137,6 +152,30 @@ describe("useTldwAudioStatus", () => {
     })
 
     expect(result.current.sttHealthState).toBe("unhealthy")
+  })
+
+  it("treats on-demand Whisper models as healthy for first-use downloads", async () => {
+    state.capabilities = {
+      hasAudio: true,
+      hasStt: true,
+      hasTts: false,
+      hasVoiceChat: false
+    }
+    state.apiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { available: false, provider: "whisper", on_demand: true }
+    })
+
+    const { result } = renderHook(() => useTldwAudioStatus(), {
+      wrapper: buildWrapper()
+    })
+
+    await waitFor(() => {
+      expect(result.current.sttHealthLoading).toBe(false)
+    })
+
+    expect(result.current.sttHealthState).toBe("healthy")
   })
 
   it("fail-opens STT health for non-whisper providers that report not-ready models", async () => {

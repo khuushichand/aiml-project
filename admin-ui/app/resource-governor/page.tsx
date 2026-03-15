@@ -152,9 +152,10 @@ const policyFormSchema = z
     });
   });
 
-type PolicyFormData = z.infer<typeof policyFormSchema>;
+type PolicyFormInput = z.input<typeof policyFormSchema>;
+type PolicyFormData = z.output<typeof policyFormSchema>;
 
-const defaultPolicyFormValues: PolicyFormData = {
+const defaultPolicyFormValues: PolicyFormInput = {
   name: '',
   scope: 'global',
   scope_id: '',
@@ -247,7 +248,7 @@ export default function ResourceGovernorPage() {
   const [rateLimitEventsError, setRateLimitEventsError] = useState('');
   const [rateLimitEventsSource, setRateLimitEventsSource] = useState<RateLimitEventsSource>('unavailable');
 
-  const policyForm = useForm<PolicyFormData>({
+  const policyForm = useForm<PolicyFormInput, unknown, PolicyFormData>({
     resolver: zodResolver(policyFormSchema),
     defaultValues: defaultPolicyFormValues,
   });
@@ -538,11 +539,13 @@ export default function ResourceGovernorPage() {
     if (!isValid) return;
 
     const formData = policyForm.getValues();
+    const scopeId = formData.scope_id?.trim() ?? '';
+    const description = formData.description?.trim() ?? '';
     const simulatedPolicy: ResourcePolicy = {
       id: editingPolicy?.id,
       name: formData.name.trim(),
       scope: formData.scope,
-      scope_id: formData.scope === 'global' ? null : formData.scope_id.trim(),
+      scope_id: formData.scope === 'global' ? null : scopeId,
       resource_type: formData.resource_type,
       enabled: formData.enabled,
       priority: parseOptionalInt(formData.priority) ?? 0,
@@ -551,7 +554,7 @@ export default function ResourceGovernorPage() {
       max_requests_per_day: parseOptionalInt(formData.max_requests_per_day),
       max_tokens_per_request: parseOptionalInt(formData.max_tokens_per_request),
       max_concurrent_requests: parseOptionalInt(formData.max_concurrent_requests),
-      description: formData.description.trim() || null,
+      description: description || null,
     };
 
     try {

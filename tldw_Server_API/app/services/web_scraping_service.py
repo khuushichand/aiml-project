@@ -18,7 +18,9 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import ScrapeMethod
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.deprecations import log_runtime_deprecation
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 # Keep fallback imports for compatibility mode
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
@@ -120,6 +122,10 @@ def _build_fallback_context(
         "degraded_controls_applied": degraded_controls or [],
         "unsupported_controls": list(_FALLBACK_UNSUPPORTED_CONTROLS),
     }
+
+
+def _legacy_web_scraping_fallback_enabled() -> bool:
+    return env_flag_enabled("TLDW_ENABLE_LEGACY_WEB_SCRAPING_FALLBACK")
 
 async def process_web_scraping_task(
     scrape_method: str,
@@ -265,6 +271,22 @@ async def process_web_scraping_task(
         import traceback
         logging.exception(f"Enhanced scraping service failed: {str(e)}")
         logging.exception(f"Full traceback: {traceback.format_exc()}")
+        log_runtime_deprecation(
+            "web_scraping_legacy_fallback",
+            message=(
+                "Enhanced web scraping service failed; using deprecated "
+                "runtime compatibility fallback."
+            ),
+        )
+        if not _legacy_web_scraping_fallback_enabled():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Legacy web scraping fallback is deprecated and disabled. "
+                    "Set TLDW_ENABLE_LEGACY_WEB_SCRAPING_FALLBACK=1 only as a temporary "
+                    "compatibility override while restoring the enhanced scraping service."
+                ),
+            ) from e
         logging.warning("Falling back to compatibility implementation")
         fallback_context = _build_fallback_context(
             fallback_error=e,

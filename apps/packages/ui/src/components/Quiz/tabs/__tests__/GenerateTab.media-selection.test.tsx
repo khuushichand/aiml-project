@@ -6,7 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { GenerateTab } from "../GenerateTab"
 import { useGenerateQuizMutation } from "../../hooks"
 import { tldwClient } from "@/services/tldw"
-import { createDeck, createFlashcard, generateFlashcards } from "@/services/flashcards"
+import {
+  createDeck,
+  createFlashcard,
+  generateFlashcards,
+  listDecks,
+  listFlashcards
+} from "@/services/flashcards"
 
 const navigationMocks = {
   navigate: vi.fn()
@@ -52,14 +58,18 @@ vi.mock("@/services/tldw", () => ({
   tldwClient: {
     listMedia: vi.fn(),
     searchMedia: vi.fn(),
-    getMediaDetails: vi.fn()
+    getMediaDetails: vi.fn(),
+    listNotes: vi.fn(),
+    searchNotes: vi.fn()
   }
 }))
 
 vi.mock("@/services/flashcards", () => ({
   generateFlashcards: vi.fn(),
   createDeck: vi.fn(),
-  createFlashcard: vi.fn()
+  createFlashcard: vi.fn(),
+  listDecks: vi.fn(),
+  listFlashcards: vi.fn()
 }))
 
 if (!(globalThis as any).ResizeObserver) {
@@ -98,10 +108,14 @@ describe("GenerateTab scalable media selection and generation flow", () => {
     navigationMocks.navigate.mockReset()
 
     vi.mocked(tldwClient.getMediaDetails).mockResolvedValue({} as any)
+    vi.mocked(tldwClient.listNotes).mockResolvedValue({ items: [] } as any)
+    vi.mocked(tldwClient.searchNotes).mockResolvedValue({ items: [] } as any)
     vi.mocked(generateFlashcards).mockResolvedValue({
       flashcards: [],
       count: 0
     } as any)
+    vi.mocked(listDecks).mockResolvedValue([] as any)
+    vi.mocked(listFlashcards).mockResolvedValue({ items: [], count: 0 } as any)
     vi.mocked(createDeck).mockResolvedValue({
       id: 100,
       name: "Generated Deck"
@@ -203,6 +217,104 @@ describe("GenerateTab scalable media selection and generation flow", () => {
     })
   }, 20000)
 
+  it("submits mixed sources in generation payload", async () => {
+    vi.mocked(tldwClient.listMedia).mockResolvedValue({
+      items: [{ id: 10, title: "Biology Notes", type: "pdf" }],
+      pagination: { total_items: 1 }
+    } as any)
+    vi.mocked(tldwClient.listNotes).mockResolvedValue({
+      items: [{ id: "note-1", title: "Lecture Notes" }]
+    } as any)
+    vi.mocked(listDecks).mockResolvedValue([
+      { id: 20, name: "Deck One" }
+    ] as any)
+    vi.mocked(listFlashcards).mockResolvedValue({
+      items: [{ uuid: "card-1", deck_id: 20, front: "ATP", back: "Energy currency" }],
+      count: 1
+    } as any)
+
+    const mutateAsync = vi.fn(async () => ({
+      quiz: { id: 42, name: "Cell Biology Checkpoint" },
+      questions: [{ id: 1 }, { id: 2 }, { id: 3 }]
+    }))
+    vi.mocked(useGenerateQuizMutation).mockReturnValue({
+      mutateAsync,
+      isPending: false
+    } as any)
+
+    renderWithQueryClient()
+
+    await waitFor(() => {
+      expect(screen.getByText("1 media items available")).toBeInTheDocument()
+    })
+
+    fireEvent.mouseDown(screen.getAllByRole("combobox")[0])
+    fireEvent.click(await screen.findByText("Biology Notes (pdf)"))
+
+    const noteCombobox = screen.getAllByRole("combobox")[1]
+    fireEvent.mouseDown(noteCombobox)
+    fireEvent.click(await screen.findByText("Lecture Notes"))
+
+    const deckCombobox = screen.getAllByRole("combobox")[2]
+    fireEvent.mouseDown(deckCombobox)
+    fireEvent.click(await screen.findByText("Deck One"))
+
+    await waitFor(() => {
+      expect(listFlashcards).toHaveBeenCalledWith(
+        expect.objectContaining({ deck_id: 20, due_status: "all" })
+      )
+    })
+
+    const cardCombobox = screen.getAllByRole("combobox")[3]
+    fireEvent.mouseDown(cardCombobox)
+    fireEvent.click(await screen.findByText("Deck One: ATP - Energy currency"))
+
+    fireEvent.click(screen.getByRole("button", { name: /Generate Quiz/i }))
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledTimes(1)
+    })
+    expect(mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          sources: expect.arrayContaining([
+            { source_type: "media", source_id: "10" },
+            { source_type: "note", source_id: "note-1" },
+            { source_type: "flashcard_deck", source_id: "20" },
+            { source_type: "flashcard_card", source_id: "card-1" }
+          ])
+        })
+      })
+    )
+  }, 20000)
+
+  it("keeps generate button disabled when no sources are selected", async () => {
+    vi.mocked(tldwClient.listMedia).mockResolvedValue({
+      items: [{ id: 10, title: "Biology Notes", type: "pdf" }],
+      pagination: { total_items: 1 }
+    } as any)
+
+    const mutateAsync = vi.fn(async () => ({
+      quiz: { id: 42, name: "Cell Biology Checkpoint" },
+      questions: [{ id: 1 }]
+    }))
+    vi.mocked(useGenerateQuizMutation).mockReturnValue({
+      mutateAsync,
+      isPending: false
+    } as any)
+
+    renderWithQueryClient()
+
+    await waitFor(() => {
+      expect(screen.getByText("1 media items available")).toBeInTheDocument()
+    })
+
+    const generateButton = screen.getByRole("button", { name: /Generate Quiz/i })
+    expect(generateButton).toBeDisabled()
+    fireEvent.click(generateButton)
+    expect(mutateAsync).not.toHaveBeenCalled()
+  }, 20000)
+
   it("shows preview-first flow and passes focus topics in generation payload", async () => {
     vi.mocked(tldwClient.listMedia).mockResolvedValue({
       items: [{ id: 10, title: "Biology Notes", type: "pdf" }],
@@ -247,7 +359,7 @@ describe("GenerateTab scalable media selection and generation flow", () => {
     expect(mutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         request: expect.objectContaining({
-          media_id: 10,
+          sources: [{ source_type: "media", source_id: "10" }],
           focus_topics: ["cell membrane", "mitosis"]
         }),
         signal: expect.any(AbortSignal)

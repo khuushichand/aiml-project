@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { TFunction } from "i18next"
 
 import { runBulkDelete } from "../useBulkChatOperations"
 
@@ -16,7 +17,10 @@ vi.mock("antd", () => ({
   }
 }))
 
-const t = (_key: string, fallback?: string) => fallback || _key
+const t = (((_key: string, fallback?: string) => fallback || _key) as unknown) as TFunction<
+  "translation",
+  undefined
+>
 
 describe("runBulkDelete", () => {
   beforeEach(() => {

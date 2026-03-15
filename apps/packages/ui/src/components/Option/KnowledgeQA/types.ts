@@ -15,13 +15,13 @@ export type QueryStage =
 
 export type ScopeSnapshot = {
   preset: RagPresetName
-  sources: string[]
+  sources: RagSettings["sources"]
   webFallback: boolean
 }
 
 export type PinnedSourceFilters = {
   mediaIds: number[]
-  noteIds: string[]
+  noteIds: number[]
 }
 
 // Retrieved document with citation info
@@ -71,6 +71,7 @@ export type RagContextData = {
   }>
   generated_answer?: string
   citations?: Array<{
+    index?: number
     text: string
     source: string
     confidence: number

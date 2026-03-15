@@ -302,11 +302,19 @@ def validate_payload(provider: str, payload: Mapping[str, Any]) -> dict[str, Any
             provider=provider_key or None,
         )
     _validate_nested_fields(provider_key, filtered)
+    tools_value = normalized.get("tools")
+    has_tools = isinstance(tools_value, list) and len(tools_value) > 0
+    if isinstance(tools_value, list) and len(tools_value) == 0:
+        normalized["tools"] = None
+
     tool_choice = normalized.get("tool_choice")
     if tool_choice is not None:
         if isinstance(tool_choice, str) and tool_choice.strip().lower() == "none":
             return normalized
-        if not (isinstance(normalized.get("tools"), list) and normalized.get("tools")):
+        if not has_tools and isinstance(tool_choice, str) and tool_choice.strip().lower() == "auto":
+            normalized["tool_choice"] = "none"
+            return normalized
+        if not has_tools:
             _record_validation_rejection(provider_key)
             raise ChatBadRequestError(
                 message="tool_choice requires tools",

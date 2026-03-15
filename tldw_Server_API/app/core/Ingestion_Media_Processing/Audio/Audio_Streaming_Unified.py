@@ -21,6 +21,7 @@ import copy
 import importlib
 import json
 import os
+import sys
 import tempfile
 import time
 from abc import ABC, abstractmethod
@@ -34,6 +35,7 @@ import numpy as np
 from fastapi import WebSocketDisconnect
 from loguru import logger
 
+from tldw_Server_API.app.core.Audio.streaming_exceptions import QuotaExceeded
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.testing import is_truthy
 
@@ -121,57 +123,142 @@ def _safe_temp_subdir(raw: Optional[str]) -> Optional[Path]:
     base = Path(tempfile.gettempdir()) / "tldw_diarization"
     return base / safe
 
-# Expose get_whisper_model at module scope so tests can monkeypatch it
-# (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
-try:  # pragma: no cover - import availability varies in test contexts
-    from .Audio_Transcription_Lib import (
-        WHISPER_COMPUTE_TYPE_OVERRIDE as _WHISPER_COMPUTE_TYPE_OVERRIDE,  # type: ignore
-    )
-    from .Audio_Transcription_Lib import (
-        _resample_audio_if_needed,
-    )
-    from .Audio_Transcription_Lib import (
-        get_whisper_model as get_whisper_model,  # type: ignore
-    )
-except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # Fallback when whisper deps are unavailable; tests may monkeypatch this
-    get_whisper_model = None  # type: ignore[assignment]
+# Expose get_whisper_model at module scope so tests can monkeypatch it.
+# Keep this lazy: importing Audio_Transcription_Lib at module import time can
+# force heavy dependency imports (e.g., torch/faster-whisper) in test contexts.
+get_whisper_model = None  # type: ignore[assignment]
+_WHISPER_COMPUTE_TYPE_OVERRIDE = ""  # type: ignore[assignment]
 
-    def _resample_audio_if_needed(audio, sample_rate, target_sr=16000):  # type: ignore
+
+def _resample_audio_if_needed(audio, sample_rate, target_sr=16000):  # type: ignore
+    """Resample audio while avoiding heavy dependency imports during tests."""
+    if sample_rate == target_sr:
+        return np.asarray(audio, dtype=np.float32)
+
+    lib_mod = sys.modules.get(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib"
+    )
+    if lib_mod is not None:
+        impl = getattr(lib_mod, "_resample_audio_if_needed", None)
+        if callable(impl):
+            try:
+                return impl(audio, sample_rate, target_sr=target_sr)
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                pass
+
+    try:
+        arr = np.asarray(audio, dtype=np.float32)
+        if arr.size == 0:
+            return arr
+        ratio = float(target_sr) / float(sample_rate)
+        new_len = max(1, round(arr.shape[0] * ratio))
+        x_old = np.linspace(0.0, 1.0, num=arr.shape[0], endpoint=False)
+        x_new = np.linspace(0.0, 1.0, num=new_len, endpoint=False)
+        return np.interp(x_new, x_old, arr).astype(np.float32, copy=False)
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
         return audio
 
-    _WHISPER_COMPUTE_TYPE_OVERRIDE = ""  # type: ignore[assignment]
+# Optional torch/torchaudio/Nemo modules for Parakeet RNNT streaming.
+# Keep these lazy so importing this module in unit tests never forces native
+# torch/faster-whisper loads.
+torch = None  # type: ignore[assignment]
+torchaudio = None  # type: ignore[assignment]
+nemo_asr = None  # type: ignore[assignment]
+RNNTDecodingConfig = None  # type: ignore[assignment]
+batched_hyps_to_hypotheses = None  # type: ignore[assignment]
+ContextSize = StreamingBatchedAudioBuffer = None  # type: ignore[assignment]
+_TORCH_IMPORT_ATTEMPTED = False
+_TORCHAUDIO_IMPORT_ATTEMPTED = False
+_NEMO_RNNT_IMPORT_ATTEMPTED = False
 
-try:  # Optional torch/torchaudio/Nemo imports for Parakeet RNNT streaming
-    import torch  # type: ignore
-except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
-    torch = None  # type: ignore
 
-try:  # pragma: no cover
-    import torchaudio  # type: ignore
-except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
-    torchaudio = None  # type: ignore
+def _get_torch_module():
+    global torch, _TORCH_IMPORT_ATTEMPTED
+    if torch is not None:
+        return torch
+    if _TORCH_IMPORT_ATTEMPTED:
+        return None
+    _TORCH_IMPORT_ATTEMPTED = True
+    try:
+        torch = importlib.import_module("torch")  # type: ignore[assignment]
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        torch = None  # type: ignore[assignment]
+    return torch
 
-try:  # pragma: no cover
-    import nemo.collections.asr as nemo_asr  # type: ignore
-    from nemo.collections.asr.parts.submodules.rnnt_decoding import RNNTDecodingConfig  # type: ignore
-    from nemo.collections.asr.parts.utils.rnnt_utils import batched_hyps_to_hypotheses  # type: ignore
-    from nemo.collections.asr.parts.utils.streaming_utils import (  # type: ignore
-        ContextSize,
-        StreamingBatchedAudioBuffer,
+
+def _get_torchaudio_module():
+    global torchaudio, _TORCHAUDIO_IMPORT_ATTEMPTED
+    if torchaudio is not None:
+        return torchaudio
+    if _TORCHAUDIO_IMPORT_ATTEMPTED:
+        return None
+    _TORCHAUDIO_IMPORT_ATTEMPTED = True
+    try:
+        torchaudio = importlib.import_module("torchaudio")  # type: ignore[assignment]
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        torchaudio = None  # type: ignore[assignment]
+    return torchaudio
+
+
+def _ensure_nemo_rnnt_deps() -> None:
+    global nemo_asr
+    global RNNTDecodingConfig
+    global batched_hyps_to_hypotheses
+    global ContextSize
+    global StreamingBatchedAudioBuffer
+    global _NEMO_RNNT_IMPORT_ATTEMPTED
+
+    if (
+        nemo_asr is not None
+        and RNNTDecodingConfig is not None
+        and batched_hyps_to_hypotheses is not None
+        and ContextSize is not None
+        and StreamingBatchedAudioBuffer is not None
+    ):
+        return
+    if _NEMO_RNNT_IMPORT_ATTEMPTED:
+        return
+    _NEMO_RNNT_IMPORT_ATTEMPTED = True
+
+    try:
+        nemo_asr = importlib.import_module("nemo.collections.asr")  # type: ignore[assignment]
+        _rnnt = importlib.import_module(
+            "nemo.collections.asr.parts.submodules.rnnt_decoding"
+        )
+        _rnnt_utils = importlib.import_module(
+            "nemo.collections.asr.parts.utils.rnnt_utils"
+        )
+        _stream_utils = importlib.import_module(
+            "nemo.collections.asr.parts.utils.streaming_utils"
+        )
+        RNNTDecodingConfig = getattr(_rnnt, "RNNTDecodingConfig", None)  # type: ignore[assignment]
+        batched_hyps_to_hypotheses = getattr(
+            _rnnt_utils, "batched_hyps_to_hypotheses", None
+        )  # type: ignore[assignment]
+        ContextSize = getattr(_stream_utils, "ContextSize", None)  # type: ignore[assignment]
+        StreamingBatchedAudioBuffer = getattr(
+            _stream_utils, "StreamingBatchedAudioBuffer", None
+        )  # type: ignore[assignment]
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        nemo_asr = None  # type: ignore[assignment]
+        RNNTDecodingConfig = None  # type: ignore[assignment]
+        batched_hyps_to_hypotheses = None  # type: ignore[assignment]
+        ContextSize = StreamingBatchedAudioBuffer = None  # type: ignore[assignment]
+
+
+def _is_transcription_error_message(text: str) -> bool:
+    """Resolve STT sentinel checks without importing heavy modules."""
+    lib_mod = sys.modules.get(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib"
     )
-except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
-    nemo_asr = None  # type: ignore
-    RNNTDecodingConfig = None  # type: ignore
-    batched_hyps_to_hypotheses = None  # type: ignore
-    ContextSize = StreamingBatchedAudioBuffer = None  # type: ignore
-
-# Shared STT error sentinel detection for streaming paths
-try:  # pragma: no cover - available whenever Audio_Transcription_Lib imports
-    from .Audio_Transcription_Lib import (
-        is_transcription_error_message as _is_transcription_error_message,  # type: ignore
-    )
-except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - degrade gracefully in minimal envs/tests
-    def _is_transcription_error_message(_: str) -> bool:  # type: ignore[override]
+    if lib_mod is None:
+        return False
+    _impl = getattr(lib_mod, "is_transcription_error_message", None)
+    if not callable(_impl):
+        return False
+    try:
+        return bool(_impl(text))
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
         return False
 
 import contextlib
@@ -537,9 +624,10 @@ class SileroTurnDetector:
                     return False
                 audio_in = audio_np
                 # Prefer torch tensor input when available (Silero expects torch tensors)
-                if torch is not None:
+                torch_mod = _get_torch_module()
+                if torch_mod is not None:
                     try:
-                        audio_in = torch.from_numpy(audio_np)  # type: ignore
+                        audio_in = torch_mod.from_numpy(audio_np)  # type: ignore
                     except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         audio_in = audio_np
                 vad_result = self._iterator(audio_in, return_seconds=False)
@@ -891,13 +979,6 @@ class StreamingDiarizer:
         return self._persist_method
 
 
-class QuotaExceeded(Exception):
-    """Raised by on_audio_seconds callback to signal quota exhaustion."""
-    def __init__(self, quota: str):
-        super().__init__(quota)
-        self.quota = quota
-
-
 _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS = _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS + (
     DiarizationError,
     QuotaExceeded,
@@ -1038,17 +1119,24 @@ class _ParakeetRNNTStreamer:
         max_buffer_s: float,
         batch_size: int = 1,
     ) -> None:
+        _ensure_nemo_rnnt_deps()
+        torch_mod = _get_torch_module()
         if nemo_asr is None or RNNTDecodingConfig is None or batched_hyps_to_hypotheses is None or ContextSize is None:
             raise RuntimeError("Nemo RNNT streaming requires nemo_toolkit[asr] and its dependencies")
-        if torch is None:
+        if torch_mod is None:
             raise RuntimeError("PyTorch is required for Parakeet RNNT streaming")
 
-        self.device = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._torch = torch_mod
+        self.device = (
+            torch_mod.device(device)
+            if device
+            else torch_mod.device("cuda" if torch_mod.cuda.is_available() else "cpu")
+        )
         # Avoid mutating global grad/precision state here; the streaming hot
         # path runs under torch.inference_mode() and model parameters are
         # frozen below. We only tune thread count for performance.
         with contextlib.suppress(_AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS):
-            torch.set_num_threads(max(1, torch.get_num_threads() or 1))
+            torch_mod.set_num_threads(max(1, torch_mod.get_num_threads() or 1))
 
         self.model = (
             nemo_asr.models.EncDecRNNTModel.from_pretrained(model_name)
@@ -1132,10 +1220,11 @@ class _ParakeetRNNTStreamer:
             return x.astype(np.float32, copy=False)
         in_sr = int(in_sr)
         cache_key = (in_sr, self.sample_rate)
-        if torchaudio is not None:
+        torchaudio_mod = _get_torchaudio_module()
+        if torchaudio_mod is not None:
             if cache_key not in self._resampler_cache:
                 try:
-                    self._resampler_cache[cache_key] = torchaudio.transforms.Resample(
+                    self._resampler_cache[cache_key] = torchaudio_mod.transforms.Resample(
                         orig_freq=in_sr, new_freq=self.sample_rate
                     )
                 except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
@@ -1143,7 +1232,7 @@ class _ParakeetRNNTStreamer:
             resampler = self._resampler_cache.get(cache_key)
             if resampler is not None:
                 try:
-                    y = resampler(torch.from_numpy(x))
+                    y = resampler(self._torch.from_numpy(x))
                     return y.numpy().astype(np.float32, copy=False)
                 except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     pass
@@ -1168,8 +1257,7 @@ class _ParakeetRNNTStreamer:
     def push(self, audio_np: np.ndarray, input_sr: int) -> str:
         if audio_np is None or audio_np.size == 0:
             return ""
-        if torch is None:
-            raise RuntimeError("PyTorch is required for Parakeet RNNT streaming")
+        torch_mod = self._torch
         y = self._to_mono(audio_np)
         y = self._resample_if_needed(y, input_sr)
 
@@ -1187,15 +1275,20 @@ class _ParakeetRNNTStreamer:
             self._buf = StreamingBatchedAudioBuffer(
                 batch_size=self.batch_size,
                 context_samples=self.ctx_samp,
-                dtype=torch.float32,
+                dtype=torch_mod.float32,
                 device=self.device,
             )
             self._l = 0
             self._r = self.ctx_samp.chunk + self.ctx_samp.right
 
-        a = torch.from_numpy(self._stream_np).unsqueeze(0).to(torch.float32).to(self.device)
+        a = (
+            torch_mod.from_numpy(self._stream_np)
+            .unsqueeze(0)
+            .to(torch_mod.float32)
+            .to(self.device)
+        )
 
-        with torch.inference_mode():
+        with torch_mod.inference_mode():
             while self._l < a.shape[1]:
                 if a.shape[1] < self._r:
                     break
@@ -1204,8 +1297,12 @@ class _ParakeetRNNTStreamer:
                     break
 
                 is_last_chunk = False
-                is_last_b = torch.tensor([False], dtype=torch.bool, device=self.device)
-                clen_b = torch.tensor([clen], dtype=torch.long, device=self.device)
+                is_last_b = torch_mod.tensor(
+                    [False], dtype=torch_mod.bool, device=self.device
+                )
+                clen_b = torch_mod.tensor(
+                    [clen], dtype=torch_mod.long, device=self.device
+                )
 
                 self._buf.add_audio_batch_(
                     a[:, self._l:self._r],
@@ -1864,18 +1961,23 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                 from .Audio_Transcription_Lib import get_whisper_model  # type: ignore[no-redef]
                 logger.debug("Successfully imported get_whisper_model")
 
-            # Determine device and compute type
-            import torch
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            # Determine device and compute type. Handle partial torch stubs that
+            # may not expose a cuda namespace in unit tests.
+            device = 'cpu'
+            try:
+                torch_mod = globals().get("torch") or sys.modules.get("torch")
+                cuda_mod = getattr(torch_mod, "cuda", None)
+                is_available = getattr(cuda_mod, "is_available", None)
+                if callable(is_available) and is_available():
+                    device = 'cuda'
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                device = 'cpu'
 
             # Compute type is primarily determined by device but may be
             # overridden via [STT-Settings].whisper_compute_type when set to a
             # non-empty value other than "auto", mirroring the offline
             # speech_to_text path.
-            try:
-                from .Audio_Transcription_Lib import WHISPER_COMPUTE_TYPE_OVERRIDE as _CT_OVERRIDE  # type: ignore
-            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive; falls back to device-based default
-                _CT_OVERRIDE = ""  # type: ignore
+            _CT_OVERRIDE = globals().get("_WHISPER_COMPUTE_TYPE_OVERRIDE", "")  # type: ignore
 
             if _CT_OVERRIDE and str(_CT_OVERRIDE).strip().lower() != "auto":
                 compute_type = str(_CT_OVERRIDE).strip()
@@ -3059,5 +3161,6 @@ __all__ = [
     'Qwen3ASRStreamingTranscriber',
     'UnifiedStreamingTranscriber',
     'SileroTurnDetector',
+    'QuotaExceeded',
     'handle_unified_websocket'
 ]

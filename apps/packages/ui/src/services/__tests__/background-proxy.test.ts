@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
+  connect: vi.fn(),
   tldwRequest: vi.fn(),
-  storageGet: vi.fn(async () => null),
+  storageGet: vi.fn(async (_key?: string) => null),
   storageSet: vi.fn(async () => undefined)
 }))
 
@@ -12,7 +13,9 @@ vi.mock("wxt/browser", () => ({
     runtime: {
       id: "test-extension",
       sendMessage: (...args: unknown[]) =>
-        (mocks.sendMessage as (...args: unknown[]) => unknown)(...args)
+        (mocks.sendMessage as (...args: unknown[]) => unknown)(...args),
+      connect: (...args: unknown[]) =>
+        (mocks.connect as (...args: unknown[]) => unknown)(...args)
     }
   }
 }))
@@ -38,6 +41,7 @@ describe("background proxy fallback safety", () => {
     vi.resetModules()
     vi.useRealTimers()
     mocks.sendMessage.mockReset()
+    mocks.connect.mockReset()
     mocks.tldwRequest.mockReset()
     mocks.storageGet.mockReset()
     mocks.storageSet.mockReset()
@@ -55,6 +59,68 @@ describe("background proxy fallback safety", () => {
       bgRequest({ path: "/api/v1/health", method: "GET" })
     ).rejects.toMatchObject({ status: 500 })
     expect(mocks.tldwRequest).not.toHaveBeenCalled()
+  })
+
+  it("keeps auth enabled for same-origin absolute URLs in background requests", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true, status: 200, data: { ok: true } })
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "https://api.example.com",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+
+    const { bgRequest } = await importProxy()
+
+    await expect(
+      bgRequest({
+        path: "https://api.example.com/api/v1/health",
+        method: "GET"
+      })
+    ).resolves.toEqual({ ok: true })
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          noAuth: false
+        })
+      })
+    )
+  })
+
+  it("skips auth for cross-origin absolute URLs in background requests", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true, status: 200, data: { ok: true } })
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "https://api.example.com",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+
+    const { bgRequest } = await importProxy()
+
+    await expect(
+      bgRequest({
+        path: "https://other.example.com/api/v1/health",
+        method: "GET"
+      })
+    ).resolves.toEqual({ ok: true })
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          noAuth: true
+        })
+      })
+    )
   })
 
   it("normalizes legacy media listing paths before forwarding request", async () => {
@@ -217,5 +283,550 @@ describe("background proxy fallback safety", () => {
 
     await assertion
     expect(mocks.tldwRequest).not.toHaveBeenCalled()
+  })
+
+  it("falls back to direct stream when port errors before first data chunk", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    const onMessageListeners = new Set<(msg: any) => void>()
+    const onDisconnectListeners = new Set<() => void>()
+    const port = {
+      onMessage: {
+        addListener: (listener: (msg: any) => void) => onMessageListeners.add(listener),
+        removeListener: (listener: (msg: any) => void) => onMessageListeners.delete(listener)
+      },
+      onDisconnect: {
+        addListener: (listener: () => void) => onDisconnectListeners.add(listener),
+        removeListener: (listener: () => void) => onDisconnectListeners.delete(listener)
+      },
+      postMessage: vi.fn(() => {
+        onMessageListeners.forEach((listener) =>
+          listener({
+            event: "error",
+            message: "Could not establish connection. Receiving end does not exist."
+          })
+        )
+      }),
+      disconnect: vi.fn(() => {
+        onDisconnectListeners.forEach((listener) => listener())
+      })
+    }
+    mocks.connect.mockReturnValue(port as any)
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "http://127.0.0.1:8000",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        'data: {"event":"run_started","run_id":"run_1","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(mocks.connect).toHaveBeenCalledTimes(1)
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
+  })
+
+  it("treats post-first-chunk transport disconnect as graceful end", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    const onMessageListeners = new Set<(msg: any) => void>()
+    const onDisconnectListeners = new Set<() => void>()
+    const port = {
+      onMessage: {
+        addListener: (listener: (msg: any) => void) => onMessageListeners.add(listener),
+        removeListener: (listener: (msg: any) => void) => onMessageListeners.delete(listener)
+      },
+      onDisconnect: {
+        addListener: (listener: () => void) => onDisconnectListeners.add(listener),
+        removeListener: (listener: () => void) => onDisconnectListeners.delete(listener)
+      },
+      postMessage: vi.fn(() => {
+        onMessageListeners.forEach((listener) =>
+          listener({
+            event: "data",
+            data: '{"choices":[{"delta":{"content":"H"}}]}'
+          })
+        )
+        onMessageListeners.forEach((listener) =>
+          listener({
+            event: "error",
+            message: "Could not establish connection. Receiving end does not exist."
+          })
+        )
+      }),
+      disconnect: vi.fn(() => {
+        onDisconnectListeners.forEach((listener) => listener())
+      })
+    }
+    mocks.connect.mockReturnValue(port as any)
+    const fetchSpy = vi.fn(async () =>
+      new Response("data: [DONE]\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      })
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chats/abc/complete-v2",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(chunks).toContain('{"choices":[{"delta":{"content":"H"}}]}')
+    expect(
+      chunks.some((chunk) =>
+        chunk.includes('"event":"stream_transport_interrupted"')
+      )
+    ).toBe(true)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("falls back to direct stream when runtime.connect throws", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    mocks.connect.mockImplementation(() => {
+      throw new Error("Could not establish connection. Receiving end does not exist.")
+    })
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "http://127.0.0.1:8000",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        'data: {"event":"run_started","run_id":"run_2","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(mocks.connect).toHaveBeenCalledTimes(1)
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
+  })
+
+  it("does not fall back to direct stream on HTTP status errors from port transport", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    const onMessageListeners = new Set<(msg: any) => void>()
+    const onDisconnectListeners = new Set<() => void>()
+    const port = {
+      onMessage: {
+        addListener: (listener: (msg: any) => void) => onMessageListeners.add(listener),
+        removeListener: (listener: (msg: any) => void) => onMessageListeners.delete(listener)
+      },
+      onDisconnect: {
+        addListener: (listener: () => void) => onDisconnectListeners.add(listener),
+        removeListener: (listener: () => void) => onDisconnectListeners.delete(listener)
+      },
+      postMessage: vi.fn(() => {
+        onMessageListeners.forEach((listener) =>
+          listener({
+            event: "error",
+            status: 401,
+            message: "Unauthorized"
+          })
+        )
+      }),
+      disconnect: vi.fn(() => {
+        onDisconnectListeners.forEach((listener) => listener())
+      })
+    }
+    mocks.connect.mockReturnValue(port as any)
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        'data: {"event":"run_started","run_id":"run_fallback","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const consume = async () => {
+      for await (const _chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        // no-op
+      }
+    }
+
+    try {
+      await expect(consume()).rejects.toMatchObject({
+        message: "Unauthorized",
+        status: 401
+      })
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("blocks unallowlisted absolute URLs in direct stream fallback", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: false })
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "https://api.example.com",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async () =>
+      new Response("data: [DONE]\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      })
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const consume = async () => {
+      for await (const _chunk of bgStream({
+        path:
+          "https://evil.example.net/api/v1/chat/completions" as unknown as `/${string}`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        // no-op
+      }
+    }
+
+    try {
+      await expect(consume()).rejects.toThrow("allowlisted")
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("preserves auth headers for same-origin absolute URLs in direct stream fallback", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: false })
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "https://api.example.com",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        'data: {"event":"run_started","run_id":"run_auth","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+
+    try {
+      for await (const chunk of bgStream({
+        path:
+          "https://api.example.com/api/v1/chat/completions" as unknown as `/${string}`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    const fetchCalls = fetchSpy.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit?]>
+    const requestInit = fetchCalls[0]?.[1]
+    const requestHeaders = (requestInit?.headers || {}) as Record<string, string>
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(requestHeaders["X-API-KEY"]).toBe("test-key-not-placeholder")
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
+  })
+
+  it("does not refresh or re-add auth for cross-origin absolute stream URLs", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: false })
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "https://api.example.com",
+          authMode: "multi-user",
+          accessToken: "secret-access-token",
+          refreshToken: "secret-refresh-token",
+          absoluteUrlAllowlist: ["https://other.example.com"]
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes("/api/v1/auth/refresh")) {
+        return new Response(JSON.stringify({ access_token: "new-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        })
+      }
+      return new Response("Unauthorized", {
+        status: 401,
+        headers: { "content-type": "text/plain" }
+      })
+    })
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const consume = async () => {
+      for await (const _chunk of bgStream({
+        path:
+          "https://other.example.com/api/v1/chat/completions" as unknown as `/${string}`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        // no-op
+      }
+    }
+
+    try {
+      await expect(consume()).rejects.toThrow("Unauthorized")
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(String(fetchSpy.mock.calls[0]?.[0] || "")).toContain(
+        "https://other.example.com/api/v1/chat/completions"
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("falls back directly when runtime ping preflight times out", async () => {
+    vi.useFakeTimers()
+    mocks.sendMessage.mockImplementation(() => new Promise(() => undefined))
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "http://127.0.0.1:8000",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        'data: {"event":"run_started","run_id":"run_3","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+    const streamTask = (async () => {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    })()
+    try {
+      await vi.advanceTimersByTimeAsync(401)
+      await streamTask
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(mocks.connect).not.toHaveBeenCalled()
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
+  })
+
+  it("cooperatively yields while draining large stream queues", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    const onMessageListeners = new Set<(msg: any) => void>()
+    const port = {
+      onMessage: {
+        addListener: (listener: (msg: any) => void) =>
+          onMessageListeners.add(listener),
+        removeListener: (listener: (msg: any) => void) =>
+          onMessageListeners.delete(listener)
+      },
+      onDisconnect: {
+        addListener: vi.fn(),
+        removeListener: vi.fn()
+      },
+      postMessage: vi.fn(() => {
+        for (let i = 0; i < 180; i += 1) {
+          onMessageListeners.forEach((listener) =>
+            listener({
+              event: "data",
+              data: JSON.stringify({
+                choices: [{ delta: { content: String(i % 10) } }]
+              })
+            })
+          )
+        }
+        onMessageListeners.forEach((listener) => listener({ event: "done" }))
+      }),
+      disconnect: vi.fn()
+    }
+    mocks.connect.mockReturnValue(port as any)
+    const rafSpy = vi.fn((cb: FrameRequestCallback) => {
+      cb(0)
+      return 1
+    })
+    vi.stubGlobal("requestAnimationFrame", rafSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(chunks).toHaveLength(180)
+    expect(rafSpy).toHaveBeenCalled()
+  })
+
+  it("preserves chunk ordering when draining queued stream data", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true })
+    const onMessageListeners = new Set<(msg: any) => void>()
+    const port = {
+      onMessage: {
+        addListener: (listener: (msg: any) => void) =>
+          onMessageListeners.add(listener),
+        removeListener: (listener: (msg: any) => void) =>
+          onMessageListeners.delete(listener)
+      },
+      onDisconnect: {
+        addListener: vi.fn(),
+        removeListener: vi.fn()
+      },
+      postMessage: vi.fn(() => {
+        const ordered = ["A", "B", "C", "D", "E"]
+        for (const token of ordered) {
+          onMessageListeners.forEach((listener) =>
+            listener({
+              event: "data",
+              data: JSON.stringify({
+                choices: [{ delta: { content: token } }]
+              })
+            })
+          )
+        }
+        onMessageListeners.forEach((listener) => listener({ event: "done" }))
+      }),
+      disconnect: vi.fn()
+    }
+    mocks.connect.mockReturnValue(port as any)
+    vi.stubGlobal("requestAnimationFrame", ((cb: FrameRequestCallback) => {
+      cb(0)
+      return 1
+    }) as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(chunks).toEqual([
+      '{"choices":[{"delta":{"content":"A"}}]}',
+      '{"choices":[{"delta":{"content":"B"}}]}',
+      '{"choices":[{"delta":{"content":"C"}}]}',
+      '{"choices":[{"delta":{"content":"D"}}]}',
+      '{"choices":[{"delta":{"content":"E"}}]}'
+    ])
   })
 })

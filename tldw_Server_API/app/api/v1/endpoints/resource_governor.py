@@ -572,3 +572,31 @@ async def rg_diag_capabilities():
     except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("rg_diag_capabilities failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
+
+
+# ── Coverage audit ──────────────────────────────────────────────────────────
+
+@router.get(
+    "/diag/coverage",
+    dependencies=[Depends(require_roles("admin"))],
+    summary="Resource Governor endpoint coverage audit",
+)
+async def rg_coverage_audit():
+    """Report which endpoints are governor-protected and which are excluded.
+
+    Returns coverage percentage and lists of protected/unprotected routes.
+    """
+    try:
+        from tldw_Server_API.app.core.Resource_Governance.coverage_audit import (
+            audit_governor_coverage,
+        )
+
+        app = _get_app()
+        result = audit_governor_coverage(app)
+        return JSONResponse(result)
+    except Exception:  # noqa: BLE001 - generic 500 handler
+        logger.exception("rg_coverage_audit failed")
+        return JSONResponse(
+            {"status": "error", "error": "internal server error"},
+            status_code=500,
+        )

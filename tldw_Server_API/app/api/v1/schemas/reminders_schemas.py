@@ -92,7 +92,7 @@ class ReminderTaskDeleteResponse(BaseModel):
     deleted: bool
 
 
-NotificationKind = Literal["reminder_due", "reminder_failed", "job_completed", "job_failed"]
+NotificationKind = Literal["reminder_due", "reminder_failed", "job_completed", "job_failed", "companion_reflection"]
 
 
 class NotificationResponse(BaseModel):

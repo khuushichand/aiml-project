@@ -5,12 +5,14 @@
 import React, { useCallback, useMemo } from "react"
 import {
   FileText,
+  Globe,
   MessageSquare,
   ExternalLink,
   Copy,
   Check,
   Quote,
   Pin,
+  BookOpen,
   ThumbsUp,
   ThumbsDown,
 } from "lucide-react"
@@ -249,7 +251,14 @@ export function SourceCard({
                     {relevanceDescriptor.label} ({relevanceDescriptor.percent}%)
                   </span>
                 )}
-                <span>{sourceTypeLabel}</span>
+                <span className="inline-flex items-center gap-0.5">
+                  {sourceType === "web" ? (
+                    <Globe className="h-3 w-3" />
+                  ) : (
+                    <BookOpen className="h-3 w-3" />
+                  )}
+                  {sourceTypeLabel}
+                </span>
                 {chunkPosition ? <span>{chunkPosition}</span> : null}
                 {freshnessDescriptor ? (
                   <span

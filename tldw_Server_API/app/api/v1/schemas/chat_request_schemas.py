@@ -655,8 +655,51 @@ ChatCompletionMessageParam = Union[
 
 
 # --- Response Format ---
+class ResponseFormatJsonSchemaSpec(BaseModel):
+    """Schema spec for structured output response format."""
+
+    name: str = Field(..., description="Unique schema name for provider-side schema routing.")
+    schema: dict[str, Any] = Field(..., description="JSON Schema object used to validate output.")
+    strict: Optional[bool] = Field(None, description="Provider hint to enforce strict schema adherence.")
+
+
 class ResponseFormat(BaseModel):
-    type: Literal["text", "json_object"] = Field("text", description="Must be one of `text` or `json_object`.")
+    type: Literal["text", "json_object", "json_schema"] = Field(
+        "text", description="Must be one of `text`, `json_object`, or `json_schema`."
+    )
+    json_schema: Optional[ResponseFormatJsonSchemaSpec] = Field(
+        None,
+        description="Required when `type` is `json_schema`; must be omitted otherwise.",
+    )
+
+    @model_validator(mode="after")
+    def validate_json_schema_requirements(self) -> "ResponseFormat":
+        if self.type == "json_schema" and self.json_schema is None:
+            raise ValueError("json_schema must be provided when type is 'json_schema'")
+        if self.type != "json_schema" and self.json_schema is not None:
+            raise ValueError("json_schema is only allowed when type is 'json_schema'")
+        return self
+
+
+# --- Continuation Controls (tldw extension) ---
+class TLDWContinuationSpec(BaseModel):
+    """Optional continuation controls for anchored append/branch generation."""
+
+    from_message_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Anchor message ID to continue from.",
+    )
+    mode: Literal["branch", "append"] = Field(
+        ...,
+        description="Continuation mode: `branch` creates an alternate path; `append` continues at the current tip.",
+    )
+    assistant_prefill: Optional[str] = Field(
+        None,
+        max_length=MAX_MESSAGE_CONTENT_LENGTH,
+        description="Optional assistant text prefix to prefill before generation.",
+    )
 
 
 # --- Main Request Model ---
@@ -723,6 +766,13 @@ class ChatCompletionRequest(BaseModel):
             "if omitted, providers default to their standard behavior (typically `auto`)."
         ),
     )
+    chat_loop_mode: Optional[Literal["legacy", "enabled"]] = Field(
+        None,
+        description=(
+            "[Extension] Optional loop engine routing hint. `enabled` requests server-driven chat loop mode; "
+            "`legacy` keeps existing chat execution behavior."
+        ),
+    )
     user: Optional[str] = Field(None, description="End-user identifier for monitoring.")
 
     # --- Slash Commands Injection Override ---
@@ -752,6 +802,31 @@ class ChatCompletionRequest(BaseModel):
         description="Provider-specific extra body content. For Bedrock guardrails, include"
         " 'amazon-bedrock-guardrailConfig': { 'tagSuffix': '...'} if needed.",
     )
+    thinking_budget_tokens: Optional[int] = Field(
+        None,
+        ge=0,
+        description="[llama.cpp extension] App-level thinking budget in tokens. Only valid when the resolved target provider is llama.cpp.",
+    )
+    grammar_mode: Optional[Literal["none", "library", "inline"]] = Field(
+        None,
+        description="[llama.cpp extension] How to resolve the outbound grammar payload.",
+    )
+    grammar_id: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=128,
+        description="[llama.cpp extension] Saved grammar identifier when grammar_mode='library'.",
+    )
+    grammar_inline: Optional[str] = Field(
+        None,
+        max_length=200_000,
+        description="[llama.cpp extension] Inline grammar when grammar_mode='inline'.",
+    )
+    grammar_override: Optional[str] = Field(
+        None,
+        max_length=200_000,
+        description="[llama.cpp extension] Optional per-request override applied on top of a saved grammar selection.",
+    )
 
     # --- Extended Parameters for chat_api_call ---
     minp: Optional[float] = Field(None, description="[Extension] Minimum probability threshold (provider specific).")
@@ -770,10 +845,18 @@ class ChatCompletionRequest(BaseModel):
         None,
         description=(
             "[Compatibility] Optional persona alias. Accepted only when it can be deterministically resolved to "
-            "a character ID. Deprecated as of 2026-02-09; planned removal date: 2026-07-01."
+            "a character ID. This does not select a Persona Garden persona-backed chat assistant. "
+            "Deprecated as of 2026-02-09; planned removal date: 2026-07-01."
         ),
     )
     conversation_id: Optional[str] = Field(None, description="Optional ID of the conversation to use for context.")
+    tldw_continuation: Optional[TLDWContinuationSpec] = Field(
+        None,
+        description=(
+            "[Extension] Optional continuation controls for anchored generation. "
+            "Requires `conversation_id` when provided."
+        ),
+    )
     persona_exemplar_budget_tokens: Optional[int] = Field(
         None,
         ge=1,
@@ -830,11 +913,28 @@ class ChatCompletionRequest(BaseModel):
 
     @model_validator(mode="before")
     def check_logprobs(cls, values):
+        if isinstance(values, dict):
+            tools = values.get("tools")
+            tool_choice = values.get("tool_choice")
+            if isinstance(tools, list) and len(tools) == 0:
+                values["tools"] = None
+                if isinstance(tool_choice, str) and tool_choice.strip().lower() == "auto":
+                    values["tool_choice"] = "none"
+            if values.get("tldw_continuation") and not values.get("conversation_id"):
+                raise ValueError("conversation_id is required when tldw_continuation is provided")
         logprobs = values.get("logprobs")
         top_logprobs = values.get("top_logprobs")
         if top_logprobs is not None and not logprobs:
             raise ValueError("If top_logprobs is specified, logprobs must be set to true.")
         return values
+
+    @model_validator(mode="after")
+    def validate_llamacpp_grammar_fields(self) -> "ChatCompletionRequest":
+        if self.grammar_mode == "library" and not self.grammar_id:
+            raise ValueError("grammar_id is required when grammar_mode is 'library'")
+        if self.grammar_mode == "inline" and not self.grammar_inline:
+            raise ValueError("grammar_inline is required when grammar_mode is 'inline'")
+        return self
 
 
 #

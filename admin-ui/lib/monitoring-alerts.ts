@@ -274,6 +274,36 @@ export const formatSnoozeCountdown = (snoozedUntil: string, now: Date = new Date
   return `${hours}h ${minutes}m remaining`;
 };
 
+const formatAdminAlertHistoryDetails = (
+  action: AlertHistoryAction,
+  details: Record<string, unknown> | null
+): string => {
+  switch (action) {
+    case 'assigned': {
+      const assignee = toFiniteNumber(details?.assigned_to_user_id);
+      return assignee !== null ? `Assigned to user ${assignee}` : 'Alert assigned';
+    }
+    case 'unassigned':
+      return 'Alert unassigned';
+    case 'snoozed': {
+      const snoozedUntil = coerceString(details?.snoozed_until);
+      return snoozedUntil ? `Snoozed until ${snoozedUntil}` : 'Alert snoozed';
+    }
+    case 'escalated': {
+      const severity = coerceString(details?.severity) || 'critical';
+      return `Severity escalated to ${severity}`;
+    }
+    case 'acknowledged':
+      return 'Alert acknowledged';
+    case 'dismissed':
+      return 'Alert dismissed';
+    case 'triggered':
+      return coerceString(details?.message) || 'Alert triggered';
+    default:
+      return 'Alert updated';
+  }
+};
+
 export const resolveSnoozedUntil = (
   option: SnoozeDurationOption,
   now: Date = new Date()
@@ -296,9 +326,10 @@ export const normalizeMonitoringAlert = (value: unknown): SystemAlert | null => 
   const idRaw = obj.id ?? obj.alert_id;
   if (idRaw === undefined || idRaw === null) return null;
   const id = String(idRaw);
+  const alertIdentity = coerceString(obj.alert_identity) || `alert:${id}`;
 
   const severity = coerceSeverity(
-    obj.severity ?? obj.rule_severity,
+    obj.escalated_severity ?? obj.severity ?? obj.rule_severity,
     'warning'
   );
   const message =
@@ -316,8 +347,16 @@ export const normalizeMonitoringAlert = (value: unknown): SystemAlert | null => 
   const acknowledgedAt = acknowledgedAtRaw && !Number.isNaN(Date.parse(acknowledgedAtRaw))
     ? new Date(acknowledgedAtRaw).toISOString()
     : undefined;
+  const dismissedAtRaw = coerceString(obj.dismissed_at);
+  const dismissedAt = dismissedAtRaw && !Number.isNaN(Date.parse(dismissedAtRaw))
+    ? new Date(dismissedAtRaw).toISOString()
+    : undefined;
   const acknowledgedBy = coerceString(obj.acknowledged_by) || undefined;
-  const assignedTo = coerceString(obj.assigned_to) || undefined;
+  const assignedTo =
+    coerceString(obj.assigned_to)
+    || (toFiniteNumber(obj.assigned_to_user_id) !== null
+      ? String(toFiniteNumber(obj.assigned_to_user_id))
+      : undefined);
   const snoozedUntilRaw = coerceString(obj.snoozed_until);
   const snoozedUntil = snoozedUntilRaw && !Number.isNaN(Date.parse(snoozedUntilRaw))
     ? new Date(snoozedUntilRaw).toISOString()
@@ -327,15 +366,18 @@ export const normalizeMonitoringAlert = (value: unknown): SystemAlert | null => 
 
   return {
     id,
+    alert_identity: alertIdentity,
     severity,
     message,
     source,
     timestamp,
     acknowledged,
     acknowledged_at: acknowledgedAt,
+    dismissed_at: dismissedAt,
     acknowledged_by: acknowledgedBy,
     assigned_to: assignedTo,
     snoozed_until: snoozedUntil,
+    escalated_severity: coerceSeverity(obj.escalated_severity, severity),
     metadata,
   };
 };
@@ -353,6 +395,43 @@ export const normalizeMonitoringAlertsPayload = (payload: unknown): SystemAlert[
   return items
     .map((entry) => normalizeMonitoringAlert(entry))
     .filter((entry): entry is SystemAlert => entry !== null);
+};
+
+export const normalizeAdminAlertHistoryPayload = (payload: unknown): AlertHistoryEntry[] => {
+  const payloadObj = toObject(payload);
+  const items = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payloadObj?.items)
+      ? payloadObj.items
+      : [];
+
+  return sortAlertHistoryEntries(
+    items
+      .map((entry): AlertHistoryEntry | null => {
+        const obj = toObject(entry);
+        if (!obj) return null;
+        const idValue = obj.id;
+        const actionValue = coerceString(obj.action) as AlertHistoryAction;
+        const alertId = coerceString(obj.alert_identity);
+        const timestampValue = coerceString(obj.created_at);
+        if ((idValue === undefined || idValue === null) || !actionValue || !alertId || !timestampValue) {
+          return null;
+        }
+        const details = toObject(obj.details);
+        const actorId = toFiniteNumber(obj.actor_user_id);
+        return {
+          id: String(idValue),
+          alertId,
+          action: actionValue,
+          actor: actorId !== null ? `User ${actorId}` : undefined,
+          details: formatAdminAlertHistoryDetails(actionValue, details),
+          timestamp: !Number.isNaN(Date.parse(timestampValue))
+            ? new Date(timestampValue).toISOString()
+            : new Date().toISOString(),
+        };
+      })
+      .filter((entry): entry is AlertHistoryEntry => entry !== null)
+  );
 };
 
 export const buildAlertHistoryEntry = (
@@ -438,6 +517,8 @@ export const formatAlertHistoryActionLabel = (action: AlertHistoryAction): strin
       return 'Dismissed';
     case 'assigned':
       return 'Assigned';
+    case 'unassigned':
+      return 'Unassigned';
     case 'snoozed':
       return 'Snoozed';
     case 'escalated':

@@ -84,11 +84,19 @@ class LimaSecurityEnforcer:
 
 
 class LinuxLimaEnforcer(LimaSecurityEnforcer):
-    pass
+    """Linux-specific Lima security enforcer.
+
+    Currently inherits all behavior from the base class.  Platform-specific
+    enforcement (e.g. nftables rules) is planned as future work.
+    """
 
 
 class MacOSLimaEnforcer(LimaSecurityEnforcer):
-    pass
+    """macOS-specific Lima security enforcer.
+
+    Currently inherits all behavior from the base class.  Platform-specific
+    enforcement (e.g. pf firewall rules) is planned as future work.
+    """
 
 
 class WindowsLimaEnforcer(LimaSecurityEnforcer):

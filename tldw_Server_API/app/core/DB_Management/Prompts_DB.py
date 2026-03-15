@@ -42,6 +42,11 @@ from typing import Any, Optional, Union
 #
 # Third-Party Libraries
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    begin_immediate_if_needed,
+    configure_sqlite_connection,
+)
 from loguru import logger as logging
 
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -113,7 +118,7 @@ _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # --- Database Class ---
 class PromptsDatabase:
-    _CURRENT_SCHEMA_VERSION = 3
+    _CURRENT_SCHEMA_VERSION = 5
 
     _TABLES_SQL_V1 = """
     PRAGMA foreign_keys = ON;
@@ -342,6 +347,11 @@ class PromptsDatabase:
                 logging.error(f"PromptsDatabase initialization block finished for {self.db_path_str}, but failed.")
 
     # --- Connection Management ---
+    def _sqlite_journal_mode(self) -> str | None:
+        if self.is_memory_db:
+            return None
+        return "WAL"
+
     def _get_thread_connection(self) -> sqlite3.Connection:
         conn = getattr(self._local, 'conn', None)
         is_closed = True
@@ -367,15 +377,18 @@ class PromptsDatabase:
                     timeout=1.0  # seconds; keep short to avoid long blocking on locks
                 )
                 conn.row_factory = sqlite3.Row
-                if not self.is_memory_db:
+                journal_mode = self._sqlite_journal_mode()
+                if journal_mode:
                     try:
-                        conn.execute("PRAGMA journal_mode=WAL;")
+                        conn.execute(f"PRAGMA journal_mode={journal_mode};")
                     except sqlite3.OperationalError as exc:
                         if "database is locked" not in str(exc).lower():
                             raise
-                # Keep lock waits short so concurrent tests don't hang
-                conn.execute("PRAGMA busy_timeout=1000")  # 1000 ms
-                conn.execute("PRAGMA foreign_keys = ON;")
+                configure_sqlite_connection(
+                    conn,
+                    use_wal=False,
+                    busy_timeout_ms=1000,
+                )
                 self._local.conn = conn
                 logging.debug(
                     f"Opened/Reopened SQLite connection to {self.db_path_str} [Client: {self.client_id}, Thread: {threading.current_thread().name}]")
@@ -519,7 +532,7 @@ class PromptsDatabase:
         in_outer = conn.in_transaction
         try:
             if not in_outer:
-                conn.execute("BEGIN")
+                begin_immediate_if_needed(conn)
                 logging.debug("Started transaction.")
             yield conn  # yield connection
             if not in_outer:
@@ -550,6 +563,8 @@ class PromptsDatabase:
     _SCHEMA_UPDATE_VERSION_SQL_V1 = "UPDATE schema_version SET version = 1 WHERE version = 0;"
     _SCHEMA_UPDATE_VERSION_SQL_V2 = "UPDATE schema_version SET version = 2 WHERE version = 1;"
     _SCHEMA_UPDATE_VERSION_SQL_V3 = "UPDATE schema_version SET version = 3 WHERE version = 2;"
+    _SCHEMA_UPDATE_VERSION_SQL_V4 = "UPDATE schema_version SET version = 4 WHERE version = 3;"
+    _SCHEMA_UPDATE_VERSION_SQL_V5 = "UPDATE schema_version SET version = 5 WHERE version = 4;"
 
     def _apply_schema_v1(self, conn: sqlite3.Connection):
         logging.info(f"Applying initial schema (Version 1) to DB: {self.db_path_str}...")
@@ -663,6 +678,55 @@ class PromptsDatabase:
             logging.error(f"[Schema V3] Application failed: {e}", exc_info=True)
             raise DatabaseError(f"DB schema V3 setup failed: {e}") from e  # noqa: TRY003
 
+    def _apply_schema_v4(self, conn: sqlite3.Connection):
+        logging.info(f"Applying schema migration (Version 4) to DB: {self.db_path_str}...")
+        try:
+            with self.transaction():
+                existing_columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(Prompts)").fetchall()
+                }
+                if "prompt_format" not in existing_columns:
+                    conn.execute(
+                        "ALTER TABLE Prompts ADD COLUMN prompt_format TEXT NOT NULL DEFAULT 'legacy'"
+                    )
+                if "prompt_schema_version" not in existing_columns:
+                    conn.execute("ALTER TABLE Prompts ADD COLUMN prompt_schema_version INTEGER")
+                if "prompt_definition_json" not in existing_columns:
+                    conn.execute("ALTER TABLE Prompts ADD COLUMN prompt_definition_json TEXT")
+                conn.execute(self._SCHEMA_UPDATE_VERSION_SQL_V4)
+                cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
+                version_in_tx = cursor_check.fetchone()
+                if not version_in_tx or version_in_tx["version"] != 4:
+                    raise SchemaError("Schema V4 version update did not take effect within transaction.")  # noqa: TRY003
+                prompts_columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(Prompts)").fetchall()
+                }
+                required = {"prompt_format", "prompt_schema_version", "prompt_definition_json"}
+                missing = required - prompts_columns
+                if missing:
+                    raise SchemaError(
+                        f"Schema V4 validation failed: missing prompt columns {sorted(missing)}."
+                    )  # noqa: TRY003
+            logging.info(f"[Schema V4] Structured prompt fields applied for DB: {self.db_path_str}.")
+        except sqlite3.Error as e:
+            logging.error(f"[Schema V4] Application failed: {e}", exc_info=True)
+            raise DatabaseError(f"DB schema V4 setup failed: {e}") from e  # noqa: TRY003
+
+    def _apply_schema_v5(self, conn: sqlite3.Connection):
+        logging.info(f"Applying schema migration (Version 5) to DB: {self.db_path_str}...")
+        try:
+            with self.transaction():
+                conn.execute(self._SCHEMA_UPDATE_VERSION_SQL_V5)
+                cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
+                version_in_tx = cursor_check.fetchone()
+                if not version_in_tx or version_in_tx["version"] != 5:
+                    raise SchemaError("Schema V5 version update did not take effect within transaction.")  # noqa: TRY003
+                self._rebuild_prompts_fts(conn)
+            logging.info(f"[Schema V5] Prompt FTS index rebuilt for DB: {self.db_path_str}.")
+        except sqlite3.Error as e:
+            logging.error(f"[Schema V5] Application failed: {e}", exc_info=True)
+            raise DatabaseError(f"DB schema V5 setup failed: {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         conn = self.get_connection()
         try:
@@ -685,6 +749,14 @@ class PromptsDatabase:
                     continue
                 if current_db_version == 2:
                     self._apply_schema_v3(conn)
+                    current_db_version = self._get_db_version(conn)
+                    continue
+                if current_db_version == 3:
+                    self._apply_schema_v4(conn)
+                    current_db_version = self._get_db_version(conn)
+                    continue
+                if current_db_version == 4:
+                    self._apply_schema_v5(conn)
                     current_db_version = self._get_db_version(conn)
                     continue
                 raise SchemaError(  # noqa: TRY003
@@ -713,6 +785,95 @@ class PromptsDatabase:
 
     def _generate_uuid(self) -> str:
         return str(uuid.uuid4())
+
+    @staticmethod
+    def _serialize_prompt_definition(prompt_definition: Any) -> Optional[str]:
+        if prompt_definition is None:
+            return None
+        if isinstance(prompt_definition, str):
+            return prompt_definition
+        return json.dumps(prompt_definition, sort_keys=True)
+
+    @staticmethod
+    def _deserialize_prompt_record(prompt_data: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        if not prompt_data:
+            return prompt_data
+
+        record = dict(prompt_data)
+        record["prompt_format"] = record.get("prompt_format") or "legacy"
+
+        prompt_definition_payload = record.pop("prompt_definition_json", None)
+        if prompt_definition_payload is None:
+            record["prompt_definition"] = None
+            return record
+
+        if isinstance(prompt_definition_payload, dict):
+            record["prompt_definition"] = prompt_definition_payload
+            return record
+
+        if isinstance(prompt_definition_payload, str) and prompt_definition_payload.strip():
+            try:
+                record["prompt_definition"] = json.loads(prompt_definition_payload)
+            except json.JSONDecodeError:
+                record["prompt_definition"] = None
+        else:
+            record["prompt_definition"] = None
+        return record
+
+    @staticmethod
+    def build_structured_prompt_searchable_text(prompt_definition: Any) -> str:
+        if prompt_definition is None:
+            return ""
+
+        definition_payload = prompt_definition
+        if isinstance(prompt_definition, str):
+            with suppress(TypeError, ValueError, json.JSONDecodeError):
+                definition_payload = json.loads(prompt_definition)
+
+        if not isinstance(definition_payload, dict):
+            return ""
+
+        parts: list[str] = []
+
+        variables = definition_payload.get("variables")
+        if isinstance(variables, list):
+            for variable in variables:
+                if not isinstance(variable, dict):
+                    continue
+                for key in ("name", "label", "description"):
+                    value = variable.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parts.append(value.strip())
+
+        blocks = definition_payload.get("blocks")
+        if isinstance(blocks, list):
+            for block in blocks:
+                if not isinstance(block, dict) or block.get("enabled") is False:
+                    continue
+                for key in ("name", "role", "content"):
+                    value = block.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parts.append(value.strip())
+
+        normalized_parts: list[str] = []
+        seen: set[str] = set()
+        for part in parts:
+            if part in seen:
+                continue
+            normalized_parts.append(part)
+            seen.add(part)
+        return "\n".join(normalized_parts)
+
+    def _build_fts_details_text(self, details: Optional[str], prompt_definition: Any) -> str:
+        detail_parts: list[str] = []
+        if isinstance(details, str) and details.strip():
+            detail_parts.append(details.strip())
+
+        structured_text = self.build_structured_prompt_searchable_text(prompt_definition)
+        if structured_text:
+            detail_parts.append(structured_text)
+
+        return "\n\n".join(detail_parts)
 
     def _normalize_keyword(self, keyword: str) -> str:
         """Normalize keyword while preserving case for round-trip display/export.
@@ -781,15 +942,43 @@ class PromptsDatabase:
 
     # --- FTS Helper Methods ---
     def _update_fts_prompt(self, conn: sqlite3.Connection, prompt_id: int, name: str, author: Optional[str],
-                           details: Optional[str], system_prompt: Optional[str], user_prompt: Optional[str]):
+                           details: Optional[str], system_prompt: Optional[str], user_prompt: Optional[str],
+                           prompt_definition: Any = None):
         try:
+            fts_details = self._build_fts_details_text(details, prompt_definition)
             conn.execute(
                 "INSERT OR REPLACE INTO prompts_fts (rowid, name, author, details, system_prompt, user_prompt) VALUES (?, ?, ?, ?, ?, ?)",
-                (prompt_id, name, author or "", details or "", system_prompt or "", user_prompt or ""))
+                (prompt_id, name, author or "", fts_details, system_prompt or "", user_prompt or ""))
             logging.debug(f"Updated FTS for Prompt ID {prompt_id}")
         except sqlite3.Error as e:
             logging.error(f"Failed FTS update Prompt ID {prompt_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed FTS update Prompt ID {prompt_id}: {e}") from e  # noqa: TRY003
+
+    def _rebuild_prompts_fts(self, conn: sqlite3.Connection) -> None:
+        try:
+            conn.executescript(self._FTS_TABLES_SQL)
+            conn.execute("DELETE FROM prompts_fts")
+            cursor = conn.execute(
+                """
+                SELECT id, name, author, details, system_prompt, user_prompt, prompt_definition_json
+                FROM Prompts
+                WHERE deleted = 0
+                """
+            )
+            for row in cursor.fetchall():
+                self._update_fts_prompt(
+                    conn,
+                    row["id"],
+                    row["name"],
+                    row["author"],
+                    row["details"],
+                    row["system_prompt"],
+                    row["user_prompt"],
+                    row["prompt_definition_json"],
+                )
+        except sqlite3.Error as e:
+            logging.error(f"Failed to rebuild prompt FTS index: {e}", exc_info=True)
+            raise DatabaseError(f"Failed to rebuild prompt FTS index: {e}") from e  # noqa: TRY003
 
     def _delete_fts_prompt(self, conn: sqlite3.Connection, prompt_id: int):
         try:
@@ -848,6 +1037,9 @@ class PromptsDatabase:
                         "details": payload.get("details"),
                         "system_prompt": payload.get("system_prompt"),
                         "user_prompt": payload.get("user_prompt"),
+                        "prompt_format": payload.get("prompt_format"),
+                        "prompt_schema_version": payload.get("prompt_schema_version"),
+                        "prompt_definition": payload.get("prompt_definition"),
                     })
                 versions_by_number[ver] = entry
             return [versions_by_number[v] for v in sorted(versions_by_number)]
@@ -918,7 +1110,16 @@ class PromptsDatabase:
             raise InputError(f"Version {version} not found for prompt {prompt_id}.")  # noqa: TRY003
 
         update_data: dict[str, Any] = {}
-        for field in ("name", "author", "details", "system_prompt", "user_prompt"):
+        for field in (
+            "name",
+            "author",
+            "details",
+            "system_prompt",
+            "user_prompt",
+            "prompt_format",
+            "prompt_schema_version",
+            "prompt_definition",
+        ):
             if field in payload:
                 update_data[field] = payload.get(field)
         if "keywords" in payload and isinstance(payload.get("keywords"), list):
@@ -1019,6 +1220,9 @@ class PromptsDatabase:
 
     def add_prompt(self, name: str, author: Optional[str], details: Optional[str],
                    system_prompt: Optional[str] = None, user_prompt: Optional[str] = None,
+                   prompt_format: str = "legacy",
+                   prompt_schema_version: Optional[int] = None,
+                   prompt_definition: Optional[Any] = None,
                    keywords: Optional[list[str]] = None, overwrite: bool = False) -> tuple[
         Optional[int], Optional[str], str]:
         if not isinstance(name, str) or name == "":
@@ -1026,6 +1230,7 @@ class PromptsDatabase:
 
         current_time = self._get_current_utc_timestamp_str()
         client_id = self.client_id
+        prompt_definition_json = self._serialize_prompt_definition(prompt_definition)
 
         try:
             with self.transaction() as conn:
@@ -1052,6 +1257,9 @@ class PromptsDatabase:
                     update_data = {
                         'name': name, 'author': author, 'details': details, 'system_prompt': system_prompt,
                         'user_prompt': user_prompt,
+                        'prompt_format': prompt_format,
+                        'prompt_schema_version': prompt_schema_version,
+                        'prompt_definition': prompt_definition,
                         'last_modified': current_time, 'version': new_version, 'client_id': client_id, 'deleted': 0,
                         'uuid': prompt_uuid
                     }
@@ -1060,13 +1268,17 @@ class PromptsDatabase:
                                           details=?,
                                           system_prompt=?,
                                           user_prompt=?,
+                                          prompt_format=?,
+                                          prompt_schema_version=?,
+                                          prompt_definition_json=?,
                                           last_modified=?,
                                           version=?,
                                           client_id=?,
                                           deleted=0
                                       WHERE id = ?
                                         AND version = ?""",
-                                   (author, details, system_prompt, user_prompt, current_time, new_version, client_id,
+                                   (author, details, system_prompt, user_prompt, prompt_format, prompt_schema_version,
+                                    prompt_definition_json, current_time, new_version, client_id,
                                     prompt_id, current_version))
                     if cursor.rowcount == 0:
                         # If it was deleted and overwrite is true, version check might fail if version wasn't for active.
@@ -1085,7 +1297,16 @@ class PromptsDatabase:
                         raise ConflictError(f"Failed to update prompt '{name}'.", "Prompts", prompt_id)  # noqa: TRY003, TRY301
 
                     self._log_sync_event(conn, 'Prompts', prompt_uuid, 'update', new_version, update_data)
-                    self._update_fts_prompt(conn, prompt_id, name, author, details, system_prompt, user_prompt)
+                    self._update_fts_prompt(
+                        conn,
+                        prompt_id,
+                        name,
+                        author,
+                        details,
+                        system_prompt,
+                        user_prompt,
+                        prompt_definition,
+                    )
                 else:  # New prompt
                     action_taken = "added"
                     prompt_uuid = self._generate_uuid()
@@ -1093,6 +1314,9 @@ class PromptsDatabase:
                     insert_data = {
                         'name': name, 'author': author, 'details': details, 'system_prompt': system_prompt,
                         'user_prompt': user_prompt,
+                        'prompt_format': prompt_format,
+                        'prompt_schema_version': prompt_schema_version,
+                        'prompt_definition': prompt_definition,
                         'usage_count': 0, 'last_used_at': None,
                         'uuid': prompt_uuid, 'last_modified': current_time, 'version': new_version,
                         'client_id': client_id, 'deleted': 0
@@ -1104,6 +1328,9 @@ class PromptsDatabase:
                             details,
                             system_prompt,
                             user_prompt,
+                            prompt_format,
+                            prompt_schema_version,
+                            prompt_definition_json,
                             usage_count,
                             last_used_at,
                             uuid,
@@ -1112,13 +1339,16 @@ class PromptsDatabase:
                             client_id,
                             deleted
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
                         (
                             name,
                             author,
                             details,
                             system_prompt,
                             user_prompt,
+                            prompt_format,
+                            prompt_schema_version,
+                            prompt_definition_json,
                             0,
                             None,
                             prompt_uuid,
@@ -1130,7 +1360,16 @@ class PromptsDatabase:
                     prompt_id = cursor.lastrowid
                     if not prompt_id: raise DatabaseError("Failed to get ID for new prompt.")  # noqa: E701, TRY003, TRY301
                     self._log_sync_event(conn, 'Prompts', prompt_uuid, 'create', new_version, insert_data)
-                    self._update_fts_prompt(conn, prompt_id, name, author, details, system_prompt, user_prompt)
+                    self._update_fts_prompt(
+                        conn,
+                        prompt_id,
+                        name,
+                        author,
+                        details,
+                        system_prompt,
+                        user_prompt,
+                        prompt_definition,
+                    )
 
                 if prompt_id:
                     # Apply provided keywords only; do not inject a default tag when none provided
@@ -1292,6 +1531,15 @@ class PromptsDatabase:
                 if 'user_prompt' in update_data:
                     set_clauses.append("user_prompt = ?")
                     params.append(update_data.get('user_prompt'))
+                if 'prompt_format' in update_data:
+                    set_clauses.append("prompt_format = ?")
+                    params.append(update_data.get('prompt_format') or 'legacy')
+                if 'prompt_schema_version' in update_data:
+                    set_clauses.append("prompt_schema_version = ?")
+                    params.append(update_data.get('prompt_schema_version'))
+                if 'prompt_definition' in update_data:
+                    set_clauses.append("prompt_definition_json = ?")
+                    params.append(self._serialize_prompt_definition(update_data.get('prompt_definition')))
                 if 'usage_count' in update_data:
                     usage_count = update_data.get('usage_count')
                     if usage_count is not None:
@@ -1330,14 +1578,15 @@ class PromptsDatabase:
                 # Log sync event
                 # Fetch the full updated row for payload
                 cursor.execute("SELECT * FROM Prompts WHERE id = ?", (prompt_id,))
-                updated_payload = dict(cursor.fetchone())
+                updated_payload = self._deserialize_prompt_record(dict(cursor.fetchone()))
                 self._log_sync_event(conn, 'Prompts', original_uuid, 'update', new_version, updated_payload)
 
                 # Update FTS
                 self._update_fts_prompt(conn, prompt_id,
                                         updated_payload['name'], updated_payload.get('author'),
                                         updated_payload.get('details'), updated_payload.get('system_prompt'),
-                                        updated_payload.get('user_prompt'))
+                                        updated_payload.get('user_prompt'),
+                                        updated_payload.get('prompt_definition'))
 
                 # Handle keywords if provided in update_data (assuming 'keywords' is a list of strings)
                 if 'keywords' in update_data and isinstance(update_data['keywords'], list):
@@ -1858,7 +2107,7 @@ class PromptsDatabase:
         try:
             cursor = self.execute_query(query, tuple(params))
             result = cursor.fetchone()
-            return dict(result) if result else None
+            return self._deserialize_prompt_record(dict(result)) if result else None
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching prompt by ID {prompt_id}: {e}")
             raise DatabaseError(f"Failed fetch prompt by ID: {e}") from e  # noqa: TRY003
@@ -1871,7 +2120,7 @@ class PromptsDatabase:
         try:
             cursor = self.execute_query(query, tuple(params))
             result = cursor.fetchone()
-            return dict(result) if result else None
+            return self._deserialize_prompt_record(dict(result)) if result else None
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching prompt by UUID {prompt_uuid}: {e}")
             raise DatabaseError(f"Failed fetch prompt by UUID: {e}") from e  # noqa: TRY003
@@ -1884,7 +2133,7 @@ class PromptsDatabase:
         try:
             cursor = self.execute_query(query, tuple(params))
             result = cursor.fetchone()
-            return dict(result) if result else None
+            return self._deserialize_prompt_record(dict(result)) if result else None
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching prompt by name '{name}': {e}")
             raise DatabaseError(f"Failed fetch prompt by name: {e}") from e  # noqa: TRY003
@@ -2256,6 +2505,14 @@ class PromptsDatabase:
                         rowd = dict(row)
                         kws = self.fetch_keywords_for_prompt(rowd['id'], include_deleted=False)
                         haystack_parts = []
+                        if fields_to_scan & text_fields:
+                            haystack_parts.append(
+                                self._normalize_text_for_search(
+                                    self.build_structured_prompt_searchable_text(
+                                        rowd.get("prompt_definition_json")
+                                    )
+                                )
+                            )
                         for f in fields_to_scan:
                             if f == "keywords":
                                 haystack_parts.extend([self._normalize_text_for_search(k) for k in kws])

@@ -378,15 +378,49 @@ export const sortItemsForReader = (
   })
 }
 
-export const stripHtmlToText = (value: string): string => {
+const decodeCommonEntities = (value: string): string => {
   return value
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
+    .split("&nbsp;").join(" ")
+    .split("&NBSP;").join(" ")
+    .split("&lt;").join("<")
+    .split("&LT;").join("<")
+    .split("&gt;").join(">")
+    .split("&GT;").join(">")
+    .split("&amp;").join("&")
+    .split("&AMP;").join("&")
+}
+
+const stripHtmlTagsWithoutRegex = (value: string): string => {
+  let output = ""
+  let insideTag = false
+  for (let idx = 0; idx < value.length; idx += 1) {
+    const ch = value[idx]
+    if (ch === "<") {
+      insideTag = true
+      continue
+    }
+    if (ch === ">") {
+      if (insideTag) output += " "
+      insideTag = false
+      continue
+    }
+    if (!insideTag) output += ch
+  }
+  return output
+}
+
+export const stripHtmlToText = (value: string): string => {
+  if (!value) return ""
+  if (typeof DOMParser !== "undefined") {
+    try {
+      const doc = new DOMParser().parseFromString(value, "text/html")
+      doc.querySelectorAll("script, style").forEach((node) => node.remove())
+      return (doc.body?.textContent || "").replace(/\s+/g, " ").trim()
+    } catch {
+      // Fall through to non-DOM fallback.
+    }
+  }
+  return decodeCommonEntities(stripHtmlTagsWithoutRegex(value))
     .replace(/\s+/g, " ")
     .trim()
 }

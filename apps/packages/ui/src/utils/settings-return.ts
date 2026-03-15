@@ -1,12 +1,66 @@
 const SETTINGS_RETURN_TO_KEY = "tldw:settingsReturnTo"
+export const SETTINGS_HISTORY_ID_PARAM = "settingsHistoryId"
+export const SETTINGS_SERVER_CHAT_ID_PARAM = "settingsServerChatId"
 
 const isSettingsPath = (path: string) => path.startsWith("/settings")
+const SETTINGS_RETURN_URL_BASE = "https://tldw.local"
 
-export const setSettingsReturnTo = (path: string) => {
+export type SettingsReturnChatContext = {
+  historyId?: string | null
+  serverChatId?: string | null
+}
+
+const toNormalizedId = (value?: string | null): string | null => {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const addChatContextToPath = (
+  path: string,
+  chatContext?: SettingsReturnChatContext
+): string => {
+  if (!chatContext) return path
+
+  try {
+    const url = new URL(path, SETTINGS_RETURN_URL_BASE)
+    if (url.pathname !== "/chat") {
+      return path
+    }
+
+    const normalizedHistoryId = toNormalizedId(chatContext.historyId)
+    const normalizedServerChatId = toNormalizedId(chatContext.serverChatId)
+
+    if (normalizedHistoryId) {
+      url.searchParams.set(SETTINGS_HISTORY_ID_PARAM, normalizedHistoryId)
+    } else {
+      url.searchParams.delete(SETTINGS_HISTORY_ID_PARAM)
+    }
+
+    if (normalizedServerChatId) {
+      url.searchParams.set(SETTINGS_SERVER_CHAT_ID_PARAM, normalizedServerChatId)
+    } else {
+      url.searchParams.delete(SETTINGS_SERVER_CHAT_ID_PARAM)
+    }
+
+    const query = url.searchParams.toString()
+    return `${url.pathname}${query ? `?${query}` : ""}${url.hash}`
+  } catch {
+    return path
+  }
+}
+
+export const setSettingsReturnTo = (
+  path: string,
+  chatContext?: SettingsReturnChatContext
+) => {
   try {
     if (typeof sessionStorage === "undefined") return
     if (!path || isSettingsPath(path)) return
-    sessionStorage.setItem(SETTINGS_RETURN_TO_KEY, path)
+    sessionStorage.setItem(
+      SETTINGS_RETURN_TO_KEY,
+      addChatContextToPath(path, chatContext)
+    )
   } catch {
     // ignore storage errors
   }

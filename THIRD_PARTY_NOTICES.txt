@@ -1,13 +1,17 @@
 THIRD-PARTY NOTICES
 ===================
 
-This file lists all third-party components bundled (committed) in the tldw_server2
-repository, along with their authors, license types, and pointers to the
+This file lists all third-party components bundled (committed) in the tldw_server
+repository (this workspace may also appear as `tldw_server2`), along with their
+authors, license types, and pointers to the
 original license text.  It does not cover transitive dependencies installed at
 build time via pip or npm; consult pyproject.toml and package.json for those.
 
-The tldw_server2 project itself is licensed under the GNU General Public License
-v2.0.  All bundled components below are license-compatible with GPLv2.
+Host project: tldw_server
+Host project license: GNU General Public License v3.0 (GPL-3.0-or-later)
+
+All bundled components below are listed with their own licenses and are used in
+a manner compatible with the project license.
 
 -------------------------------------------------------------------------------
 
@@ -73,6 +77,15 @@ v2.0.  All bundled components below are license-compatible with GPLv2.
                   (includes focus-visible polyfill and escape-html, both MIT)
    License text : https://opensource.org/licenses/MIT
    URL          : https://github.com/squidfunk/mkdocs-material
+
+9. repo2txt (ported/adapted modules)
+   Author/Year : Abin Thomas and repo2txt contributors
+   License      : MIT
+   Files        : apps/packages/ui/src/components/Option/Repo2Txt/
+                  (Repo2TxtPage.tsx, components/*, formatter/*, providers/*,
+                   store/*, workers/*)
+   License text : https://opensource.org/licenses/MIT
+   URL          : https://github.com/abinthomasonline/repo2txt
 
 -------------------------------------------------------------------------------
 END OF THIRD-PARTY NOTICES

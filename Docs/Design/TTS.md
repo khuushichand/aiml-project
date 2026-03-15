@@ -545,7 +545,7 @@ RESET = "\033[0m"
 voices = {"Puck", "Charon", "Kore", "Fenrir", "Aoede"}
 
 # --- Configuration ---
-MODEL = 'models/gemini-2.0-flash-exp'
+MODEL = 'models/gemini-2.0-flash'
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     raise EnvironmentError("GOOGLE_API_KEY environment variable is not set.")

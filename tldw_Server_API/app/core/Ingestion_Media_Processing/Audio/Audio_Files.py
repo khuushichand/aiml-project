@@ -287,8 +287,8 @@ def check_transcription_model_status(model_name: str) -> dict[str, Any]:
             "on_demand": False,
         }
 
-    # Whisper model readiness is local-cache based because the faster-whisper
-    # transcription route explicitly preflights and rejects unavailable models.
+    # Whisper model readiness is local-cache based, but uncached models remain
+    # usable because faster-whisper can download them lazily on first use.
     whisper_model_name = (parsed_model or requested_model or "").strip()
     try:
         whisper_model_name = validate_whisper_model_identifier(whisper_model_name)
@@ -314,7 +314,7 @@ def check_transcription_model_status(model_name: str) -> dict[str, Any]:
     else:
         return {
             'available': False,
-            'usable': False,
+            'usable': True,
             'message': (
                 f'Model {whisper_model_name} is not available locally and will be downloaded on first use. '
                 'This may take several minutes depending on model size and internet connection.'
@@ -374,17 +374,41 @@ def _validate_outbound_url(url: str) -> Optional[str]:
     return None
 
 
-def _unique_path(target_path: Path) -> Path:
+def _ensure_path_within_base(candidate_path: Path, base_dir: Path) -> Path:
+    base_resolved = Path(base_dir).resolve(strict=False)
+    resolved_candidate = Path(candidate_path).resolve(strict=False)
+    try:
+        resolved_candidate.relative_to(base_resolved)
+    except ValueError as exc:
+        raise AudioDownloadError("Resolved path escaped configured output directory.") from exc
+    return resolved_candidate
+
+
+def _unique_path(base_dir: Path, file_name: str) -> Path:
+    safe_name = Path(str(file_name or "")).name
+    if not safe_name or safe_name in {".", ".."}:
+        raise AudioDownloadError("Invalid target filename for audio download.")
+
+    base_resolved = Path(base_dir).resolve(strict=False)
+    target_path = _ensure_path_within_base(base_resolved / safe_name, base_resolved)
     if not target_path.exists():
         return target_path
+
     stem = target_path.stem
     suffix = target_path.suffix
     for counter in range(1, 1000):
-        candidate = target_path.with_name(f"{stem}_{counter}{suffix}")
+        candidate = _ensure_path_within_base(
+            base_resolved / f"{stem}_{counter}{suffix}",
+            base_resolved,
+        )
         if not candidate.exists():
             return candidate
+
     unique_suffix = uuid.uuid4().hex[:UUID_LENGTH]
-    return target_path.with_name(f"{stem}_{unique_suffix}{suffix}")
+    return _ensure_path_within_base(
+        base_resolved / f"{stem}_{unique_suffix}{suffix}",
+        base_resolved,
+    )
 
 
 def _default_title_from_audio_path(audio_path: str | Path) -> str:
@@ -921,7 +945,7 @@ def process_audio_files(
                             target_path = processing_temp_dir_path / source_path.name
                             if source_path.parent != processing_temp_dir_path:
                                 import shutil
-                                target_path = _unique_path(target_path)
+                                target_path = _unique_path(processing_temp_dir_path, source_path.name)
                                 shutil.move(str(source_path), str(target_path))
                                 current_audio_path = str(target_path)
                             else:
@@ -938,7 +962,7 @@ def process_audio_files(
                             target_path = processing_temp_dir_path / Path(downloaded_path).name
                             if Path(downloaded_path).parent != processing_temp_dir_path:
                                 import shutil
-                                target_path = _unique_path(target_path)
+                                target_path = _unique_path(processing_temp_dir_path, Path(downloaded_path).name)
                                 shutil.move(str(downloaded_path), str(target_path))
                                 current_audio_path = str(target_path)
                                 # Clean up original download dir if empty? Maybe too complex.
@@ -1603,7 +1627,7 @@ def download_youtube_audio(
             destination_dir.mkdir(parents=True, exist_ok=True)
 
             # Move the file from the temporary directory to the destination directory.
-            destination_path = _unique_path(destination_dir / f"{filename_stem}.mp3")
+            destination_path = _unique_path(destination_dir, f"{filename_stem}.mp3")
             import shutil
             shutil.move(str(temp_audio_path), str(destination_path))
 

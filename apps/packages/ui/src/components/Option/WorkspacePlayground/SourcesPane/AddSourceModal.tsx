@@ -423,7 +423,7 @@ const UploadTab: React.FC<{
     showUploadList: false,
     beforeUpload: (file) => {
       const validation = validateSourceUploadFile(file, uploadSizeLimitBytes)
-      if (!validation.valid) {
+      if (validation.valid === false) {
         const extension = file.name.split(".").pop()?.toLowerCase()
         const friendlyValidationError =
           validation.code === "file_too_large"
@@ -1546,6 +1546,7 @@ export const AddSourceModal: React.FC = () => {
   const setProcessing = useWorkspaceStore((s) => s.setAddSourceProcessing)
   const setError = useWorkspaceStore((s) => s.setAddSourceError)
   const addSource = useWorkspaceStore((s) => s.addSource)
+  const sources = useWorkspaceStore((s) => s.sources)
   const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
   const [tabUsage, setTabUsage] = React.useState<AddSourceTabUsage>(() =>
     readAddSourceTabUsage()
@@ -1561,11 +1562,41 @@ export const AddSourceModal: React.FC = () => {
   }, [tabUsage])
 
   const handleAddSources: AddSourceHandler = async (
-    sources,
+    sourceCandidates,
     options
   ) => {
-    // Add sources to workspace
-    for (const source of sources) {
+    // Check for duplicates before adding
+    const existingMediaIds = new Set((sources || []).map((s) => s.mediaId))
+    const duplicates = sourceCandidates.filter((s) =>
+      existingMediaIds.has(s.mediaId)
+    )
+    const newSources = sourceCandidates.filter(
+      (s) => !existingMediaIds.has(s.mediaId)
+    )
+
+    if (duplicates.length > 0 && newSources.length === 0) {
+      message.warning(
+        t(
+          "playground:sources.allDuplicates",
+          duplicates.length === 1
+            ? "This source is already in your workspace"
+            : "These sources are already in your workspace"
+        )
+      )
+      return
+    }
+
+    if (duplicates.length > 0) {
+      message.info(
+        t("playground:sources.someDuplicatesSkipped", {
+          defaultValue: "{{count}} duplicate source(s) skipped",
+          count: duplicates.length
+        })
+      )
+    }
+
+    // Add only new sources to workspace
+    for (const source of newSources) {
       addSource(source)
 
       // Tag media with workspace tag
@@ -1609,7 +1640,7 @@ export const AddSourceModal: React.FC = () => {
       label: (
         <span className="flex items-center gap-1.5">
           <Database className="h-4 w-4" />
-          {t("playground:sources.tabExisting", "Library")}
+          {t("playground:sources.tabExisting", "My Media")}
         </span>
       ),
       children: (
@@ -1657,7 +1688,7 @@ export const AddSourceModal: React.FC = () => {
       label: (
         <span className="flex items-center gap-1.5">
           <Search className="h-4 w-4" />
-          {t("playground:sources.tabSearch", "Search")}
+          {t("playground:sources.tabSearch", "Search Server")}
         </span>
       ),
       children: (

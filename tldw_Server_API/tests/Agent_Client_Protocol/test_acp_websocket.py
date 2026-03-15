@@ -23,6 +23,10 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     PendingPermission,
     SessionWebSocketRegistry,
 )
+from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPMessage
+from tldw_Server_API.app.services.acp_runtime_policy_service import (
+    ACPRuntimePolicySnapshot,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -213,7 +217,7 @@ async def test_acp_session_stream_start_failure_skips_unset_callback_cleanup(mon
         async def close(self, code: int = 1000) -> None:
             return None
 
-    async def _fake_authenticate_ws(websocket, token=None, api_key=None):
+    async def _fake_authenticate_ws(websocket, token=None, api_key=None, required_scope="read"):
         return 1
 
     async def _fake_get_runner_client():
@@ -308,6 +312,72 @@ class TestACPWebSocketConnection:
         ) as websocket:
             data = websocket.receive_json()
             assert data["type"] == "connected"
+
+    def test_websocket_stream_rejects_read_only_api_key_in_multi_user_mode(
+        self, client_user_only, mock_get_runner_client, monkeypatch
+    ):
+        """ACP control stream must require write scope for multi-user API keys."""
+        import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+        seen_required_scopes: list[str | None] = []
+
+        class _Settings:
+            AUTH_MODE = "multi_user"
+
+        class _APIKeyManager:
+            async def validate_api_key(self, api_key: str, required_scope: str | None = None, ip_address: str | None = None):
+                seen_required_scopes.append(required_scope)
+                if api_key == "write-key" and required_scope == "write":
+                    return {"user_id": 1}
+                raise RuntimeError("scope_denied")
+
+        monkeypatch.setattr(acp_endpoints, "get_auth_settings", lambda: _Settings())
+        monkeypatch.setattr(acp_endpoints, "resolve_client_ip", lambda websocket, settings=None: "127.0.0.1")
+
+        async def _get_api_key_manager():
+            return _APIKeyManager()
+
+        monkeypatch.setattr(acp_endpoints, "get_api_key_manager", _get_api_key_manager)
+
+        with pytest.raises(Exception):
+            with client_user_only.websocket_connect(
+                "/api/v1/acp/sessions/test-session/stream?api_key=read-key"
+            ):
+                pass
+
+        assert seen_required_scopes == ["write"]
+
+    def test_websocket_ssh_rejects_read_only_api_key_in_multi_user_mode(
+        self, client_user_only, monkeypatch
+    ):
+        """ACP SSH socket must require write scope for multi-user API keys."""
+        import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+        seen_required_scopes: list[str | None] = []
+
+        class _Settings:
+            AUTH_MODE = "multi_user"
+
+        class _APIKeyManager:
+            async def validate_api_key(self, api_key: str, required_scope: str | None = None, ip_address: str | None = None):
+                seen_required_scopes.append(required_scope)
+                raise RuntimeError("scope_denied")
+
+        monkeypatch.setattr(acp_endpoints, "get_auth_settings", lambda: _Settings())
+        monkeypatch.setattr(acp_endpoints, "resolve_client_ip", lambda websocket, settings=None: "127.0.0.1")
+
+        async def _get_api_key_manager():
+            return _APIKeyManager()
+
+        monkeypatch.setattr(acp_endpoints, "get_api_key_manager", _get_api_key_manager)
+
+        with pytest.raises(Exception):
+            with client_user_only.websocket_connect(
+                "/api/v1/acp/sessions/test-session/ssh?api_key=read-key"
+            ):
+                pass
+
+        assert seen_required_scopes == ["write"]
 
     def test_websocket_connect_with_api_key_uses_configured_fixed_id(
         self, client_user_only, mock_get_runner_client, monkeypatch
@@ -462,6 +532,95 @@ class TestACPWebSocketMessages:
             assert response["type"] == "prompt_complete"
             assert response["session_id"] == "test-session"
             assert response["stop_reason"] == "end"
+
+    def test_websocket_prompt_shadow_deny_is_not_blocked(
+        self, client_user_only, mock_jwt_manager, monkeypatch
+    ):
+        """Shadow rollout deny decisions should not be blocked by the WS endpoint."""
+        import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+        class _ShadowRunner(MockRunnerClient):
+            async def check_prompt_governance(
+                self,
+                session_id: str,
+                prompt: List[Dict],
+                *,
+                user_id: Optional[int] = None,
+                metadata: Optional[Dict[str, Any]] = None,
+            ) -> Dict[str, Any]:
+                return {
+                    "action": "deny",
+                    "status": "deny",
+                    "category": "acp",
+                    "rollout_mode": "shadow",
+                }
+
+        runner = _ShadowRunner()
+
+        async def _get_runner_client():
+            return runner
+
+        monkeypatch.setattr(acp_endpoints, "get_runner_client", _get_runner_client)
+
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            websocket.send_json({
+                "type": "prompt",
+                "session_id": "test-session",
+                "prompt": [{"role": "user", "content": "Hello"}],
+            })
+
+            response = websocket.receive_json()
+            assert response["type"] == "prompt_complete"
+            assert response["raw_result"]["detail"] == "ok"
+
+    def test_websocket_prompt_records_prompt_in_session_store(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager, monkeypatch
+    ):
+        """WS prompt path must persist prompt history through the ACP session store."""
+        import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+        class _Store:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, List[Dict], Dict[str, Any]]] = []
+
+            async def record_prompt(self, session_id: str, prompt: List[Dict], result: Dict[str, Any]):
+                self.calls.append((session_id, prompt, result))
+                return None
+
+        store = _Store()
+
+        async def _get_store():
+            return store
+
+        monkeypatch.setattr(acp_endpoints, "get_acp_session_store", _get_store)
+
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream?token=valid-token"
+        ) as websocket:
+            connected = websocket.receive_json()
+            assert connected["type"] == "connected"
+
+            websocket.send_json({
+                "type": "prompt",
+                "session_id": "test-session",
+                "prompt": [{"role": "user", "content": "Persist this"}],
+            })
+
+            response = websocket.receive_json()
+            assert response["type"] == "prompt_complete"
+
+        assert store.calls == [
+            (
+                "test-session",
+                [{"role": "user", "content": "Persist this"}],
+                {"stopReason": "end", "detail": "ok"},
+            )
+        ]
 
     def test_cancel_operation_via_websocket(
         self, client_user_only, mock_get_runner_client, mock_jwt_manager
@@ -697,3 +856,74 @@ class TestACPRunnerClientPermissions:
         assert client._determine_permission_tier("fs.write") == "batch"
         assert client._determine_permission_tier("git.commit") == "batch"
         assert client._determine_permission_tier("modify_file") == "batch"
+
+    @pytest.mark.asyncio
+    async def test_permission_request_message_includes_runtime_policy_metadata(self):
+        mock_config = MagicMock()
+        mock_config.command = "echo"
+        mock_config.args = []
+        mock_config.env = {}
+        mock_config.cwd = None
+        mock_config.startup_timeout_sec = 10
+
+        client = ACPRunnerClient(mock_config)
+        session_id = "session-policy-message"
+
+        async def _send(_payload: dict[str, Any]) -> None:
+            return None
+
+        registry = SessionWebSocketRegistry(session_id=session_id)
+        registry.websockets.add(_send)
+        client._ws_registry[session_id] = registry
+
+        async def _fake_snapshot(
+            sid: str,
+            *,
+            force_refresh: bool = False,
+        ) -> ACPRuntimePolicySnapshot | None:
+            del sid, force_refresh
+            return ACPRuntimePolicySnapshot(
+                session_id=session_id,
+                user_id=7,
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_fingerprint="snapshot-message",
+                policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+                policy_summary={"approval_mode": "require_approval"},
+                policy_provenance_summary={"source_kinds": ["profile"]},
+                resolved_policy_document={
+                    "allowed_tools": ["web.search"],
+                    "approval_mode": "require_approval",
+                },
+                approval_summary={"mode": "require_approval"},
+                context_summary={},
+                execution_config={},
+            )
+
+        client._get_runtime_policy_snapshot = _fake_snapshot  # type: ignore[attr-defined]
+
+        prompts: list[dict[str, Any]] = []
+
+        async def _fake_broadcast(sid: str, message: dict[str, Any]) -> None:
+            if message.get("type") == "permission_request":
+                prompts.append(message)
+                await client.respond_to_permission(sid, str(message["request_id"]), True)
+
+        client._broadcast_to_session = _fake_broadcast  # type: ignore[method-assign]
+
+        response = await client._handle_request(
+            ACPMessage(
+                jsonrpc="2.0",
+                id="perm-message-1",
+                method="session/request_permission",
+                params={
+                    "sessionId": session_id,
+                    "tool": {"name": "web.search", "input": {"query": "opa"}},
+                },
+            )
+        )
+
+        assert response.result == {"outcome": {"outcome": "approved"}}
+        assert len(prompts) == 1
+        assert prompts[0]["approval_requirement"] == "approval_required"
+        assert prompts[0]["provenance_summary"] == {"source_kinds": ["profile"]}
+        assert prompts[0]["policy_snapshot_fingerprint"] == "snapshot-message"

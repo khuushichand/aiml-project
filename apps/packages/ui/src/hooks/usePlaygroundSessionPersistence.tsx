@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { usePlaygroundSessionStore } from "@/store/playground-session"
 import { useStoreMessageOption } from "@/store/option"
 import { shallow } from "zustand/shallow"
+import { restoreQueuedRequests } from "@/utils/chat-request-queue"
 import {
   formatToChatHistory,
   formatToMessage,
@@ -9,6 +10,9 @@ import {
   getPromptById
 } from "@/db/dexie/helpers"
 import { useStoreChatModelSettings } from "@/store/model"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { buildChatSurfaceScopeKeyFromConfig } from "@/services/chat-surface-scope"
+import { useConnectionState } from "@/hooks/useConnectionState"
 
 const DEBOUNCE_MS = 1000
 
@@ -22,12 +26,15 @@ const DEBOUNCE_MS = 1000
 export function usePlaygroundSessionPersistence() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isRestoringRef = useRef(false)
+  const { serverUrl, lastConfigUpdatedAt } = useConnectionState()
 
   // Session store
   const sessionStore = usePlaygroundSessionStore()
   const saveSession = usePlaygroundSessionStore((s) => s.saveSession)
   const clearSession = usePlaygroundSessionStore((s) => s.clearSession)
   const isSessionValid = usePlaygroundSessionStore((s) => s.isSessionValid)
+  const [currentScopeKey, setCurrentScopeKey] = useState<string | null>(null)
+  const [sessionScopeReady, setSessionScopeReady] = useState(false)
 
   // Main message option store
   const {
@@ -42,6 +49,7 @@ export function usePlaygroundSessionPersistence() {
     ragTopK,
     ragEnableGeneration,
     ragEnableCitations,
+    queuedMessages,
     temporaryChat,
     setHistoryId,
     setServerChatId,
@@ -54,6 +62,7 @@ export function usePlaygroundSessionPersistence() {
     setRagTopK,
     setRagEnableGeneration,
     setRagEnableCitations,
+    setQueuedMessages,
     setHistory,
     setMessages,
     setSelectedSystemPrompt
@@ -70,6 +79,7 @@ export function usePlaygroundSessionPersistence() {
       ragTopK: state.ragTopK,
       ragEnableGeneration: state.ragEnableGeneration,
       ragEnableCitations: state.ragEnableCitations,
+      queuedMessages: state.queuedMessages,
       temporaryChat: state.temporaryChat,
       setHistoryId: state.setHistoryId,
       setServerChatId: state.setServerChatId,
@@ -82,6 +92,7 @@ export function usePlaygroundSessionPersistence() {
       setRagTopK: state.setRagTopK,
       setRagEnableGeneration: state.setRagEnableGeneration,
       setRagEnableCitations: state.setRagEnableCitations,
+      setQueuedMessages: state.setQueuedMessages,
       setHistory: state.setHistory,
       setMessages: state.setMessages,
       setSelectedSystemPrompt: state.setSelectedSystemPrompt
@@ -91,12 +102,36 @@ export function usePlaygroundSessionPersistence() {
 
   const { setSystemPrompt } = useStoreChatModelSettings()
 
-  const buildPersistableSessionSnapshot = useCallback(() => {
-    // Don't save if restoring or if temporary chat
-    if (isRestoringRef.current || temporaryChat) return null
+  const resolveCurrentScopeKey = useCallback(async (): Promise<string> => {
+    const config = await tldwClient.getConfig().catch(() => null)
+    return buildChatSurfaceScopeKeyFromConfig(config)
+  }, [])
 
-    // Don't save if no conversation started
-    if (!historyId && !serverChatId) return null
+  useEffect(() => {
+    let cancelled = false
+    setSessionScopeReady(false)
+
+    const syncScope = async () => {
+      const nextScopeKey = await resolveCurrentScopeKey()
+      if (cancelled) return
+      setCurrentScopeKey(nextScopeKey)
+      setSessionScopeReady(true)
+    }
+
+    void syncScope()
+
+    return () => {
+      cancelled = true
+    }
+  }, [lastConfigUpdatedAt, resolveCurrentScopeKey, serverUrl])
+
+  const buildPersistableSessionSnapshot = useCallback(() => {
+    // Don't save while a restore is replaying into the stores.
+    if (isRestoringRef.current) return null
+
+    // Allow queue-only restores even before a history/server chat id exists.
+    if (temporaryChat && queuedMessages.length === 0) return null
+    if (!historyId && !serverChatId && queuedMessages.length === 0) return null
 
     return {
       historyId,
@@ -109,7 +144,8 @@ export function usePlaygroundSessionPersistence() {
       ragSearchMode,
       ragTopK,
       ragEnableGeneration,
-      ragEnableCitations
+      ragEnableCitations,
+      queuedMessages
     }
   }, [
     historyId,
@@ -123,6 +159,7 @@ export function usePlaygroundSessionPersistence() {
     ragTopK,
     ragEnableGeneration,
     ragEnableCitations,
+    queuedMessages,
     temporaryChat
   ])
 
@@ -146,9 +183,14 @@ export function usePlaygroundSessionPersistence() {
 
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = null
-      saveSession(snapshot)
+      void resolveCurrentScopeKey().then((scopeKey) => {
+        saveSession({
+          ...snapshot,
+          scopeKey
+        })
+      })
     }, DEBOUNCE_MS)
-  }, [buildPersistableSessionSnapshot, saveSession])
+  }, [buildPersistableSessionSnapshot, resolveCurrentScopeKey, saveSession])
 
   const flushPendingSessionSave = useCallback(() => {
     if (saveTimerRef.current) {
@@ -157,8 +199,13 @@ export function usePlaygroundSessionPersistence() {
     }
     const snapshot = latestSessionSnapshotRef.current
     if (!snapshot) return
-    saveSession(snapshot)
-  }, [saveSession])
+    void resolveCurrentScopeKey().then((scopeKey) => {
+      saveSession({
+        ...snapshot,
+        scopeKey
+      })
+    })
+  }, [resolveCurrentScopeKey, saveSession])
 
   const flushPendingSessionSaveRef = useRef(flushPendingSessionSave)
 
@@ -186,40 +233,44 @@ export function usePlaygroundSessionPersistence() {
 
   // Restore session from persisted state
   const restoreSession = useCallback(async (): Promise<boolean> => {
-    if (!isSessionValid()) {
+    const scopeKey = await resolveCurrentScopeKey()
+    if (!isSessionValid(scopeKey)) {
       clearSession()
       return false
     }
 
     const savedHistoryId = sessionStore.historyId
-    if (!savedHistoryId) return false
+    const savedQueue = sessionStore.queuedMessages ?? []
+    if (!savedHistoryId && savedQueue.length === 0) return false
 
     isRestoringRef.current = true
 
     try {
-      // Restore messages from Dexie
-      const chatData = await getFullChatData(savedHistoryId)
-      if (!chatData) {
-        // History was deleted, clear session
-        clearSession()
-        return false
-      }
-
-      // Restore messages and history
-      setHistoryId(savedHistoryId)
-      setHistory(formatToChatHistory(chatData.messages))
-      setMessages(formatToMessage(chatData.messages))
-
-      // Restore system prompt if present
-      const lastUsedPrompt = (chatData.historyInfo as any)?.last_used_prompt
-      if (lastUsedPrompt?.prompt_id) {
-        const prompt = await getPromptById(lastUsedPrompt.prompt_id)
-        if (prompt) {
-          setSelectedSystemPrompt(lastUsedPrompt.prompt_id)
-          setSystemPrompt(prompt.content)
+      if (savedHistoryId) {
+        // Restore messages from Dexie
+        const chatData = await getFullChatData(savedHistoryId)
+        if (!chatData) {
+          // History was deleted, clear session
+          clearSession()
+          return false
         }
-      } else if (lastUsedPrompt?.prompt_content) {
-        setSystemPrompt(lastUsedPrompt.prompt_content)
+
+        // Restore messages and history
+        setHistoryId(savedHistoryId)
+        setHistory(formatToChatHistory(chatData.messages))
+        setMessages(formatToMessage(chatData.messages))
+
+        // Restore system prompt if present
+        const lastUsedPrompt = (chatData.historyInfo as any)?.last_used_prompt
+        if (lastUsedPrompt?.prompt_id) {
+          const prompt = await getPromptById(lastUsedPrompt.prompt_id)
+          if (prompt) {
+            setSelectedSystemPrompt(lastUsedPrompt.prompt_id)
+            setSystemPrompt(prompt.content)
+          }
+        } else if (lastUsedPrompt?.prompt_content) {
+          setSystemPrompt(lastUsedPrompt.prompt_content)
+        }
       }
 
       // Restore settings from session store
@@ -243,6 +294,7 @@ export function usePlaygroundSessionPersistence() {
       }
       setRagEnableGeneration(sessionStore.ragEnableGeneration)
       setRagEnableCitations(sessionStore.ragEnableCitations)
+      setQueuedMessages(restoreQueuedRequests(savedQueue))
 
       return true
     } catch (error) {
@@ -256,6 +308,7 @@ export function usePlaygroundSessionPersistence() {
     isSessionValid,
     sessionStore,
     clearSession,
+    resolveCurrentScopeKey,
     setHistoryId,
     setServerChatId,
     setHistory,
@@ -270,7 +323,8 @@ export function usePlaygroundSessionPersistence() {
     setRagSearchMode,
     setRagTopK,
     setRagEnableGeneration,
-    setRagEnableCitations
+    setRagEnableCitations,
+    setQueuedMessages
   ])
 
   // Clear persisted session (call when user starts new chat)
@@ -285,8 +339,16 @@ export function usePlaygroundSessionPersistence() {
   return {
     restoreSession,
     clearPersistedSession,
-    hasPersistedSession: isSessionValid(),
-    persistedHistoryId: sessionStore.historyId ?? null,
-    persistedServerChatId: sessionStore.serverChatId ?? null
+    sessionScopeReady,
+    hasPersistedSession:
+      sessionScopeReady && isSessionValid(currentScopeKey),
+    persistedHistoryId:
+      sessionScopeReady && isSessionValid(currentScopeKey)
+        ? sessionStore.historyId ?? null
+        : null,
+    persistedServerChatId:
+      sessionScopeReady && isSessionValid(currentScopeKey)
+        ? sessionStore.serverChatId ?? null
+        : null
   }
 }

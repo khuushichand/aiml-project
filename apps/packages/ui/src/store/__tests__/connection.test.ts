@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ConnectionPhase } from "@/types/connection"
 
 vi.mock("@/services/tldw-server", () => ({
@@ -20,7 +20,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 
 import { apiSend } from "@/services/api-send"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { useConnectionStore } from "../connection"
+import { CONNECTION_TIMEOUT_MS, useConnectionStore } from "../connection"
 
 const mockedApiSend = vi.mocked(apiSend)
 const mockedClient = vi.mocked(tldwClient, true)
@@ -43,6 +43,12 @@ const ageLastCheck = () => {
 }
 
 describe("connection store stability", () => {
+  const originalChrome = (
+    globalThis as typeof globalThis & {
+      chrome?: unknown
+    }
+  ).chrome
+
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.removeItem("__tldw_allow_offline")
@@ -71,6 +77,18 @@ describe("connection store stability", () => {
     } as any)
     mockedClient.initialize.mockResolvedValue(undefined)
     mockedClient.ragHealth.mockResolvedValue({ status: "healthy" } as any)
+  })
+
+  afterEach(() => {
+    if (typeof originalChrome === "undefined") {
+      Reflect.deleteProperty(globalThis, "chrome")
+      return
+    }
+
+    Object.defineProperty(globalThis, "chrome", {
+      value: originalChrome,
+      configurable: true
+    })
   })
 
   it("keeps connected state through transient unreachable checks before threshold", async () => {
@@ -103,6 +121,40 @@ describe("connection store stability", () => {
     expect(state.consecutiveFailures).toBe(3)
   })
 
+  it("falls back to localStorage when chrome storage lacks the first-run flag", async () => {
+    Object.defineProperty(globalThis, "chrome", {
+      value: {
+        storage: {
+          local: {
+            get: vi.fn((key: string, callback: (value: Record<string, unknown>) => void) => {
+              callback({})
+            })
+          }
+        }
+      },
+      configurable: true
+    })
+
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    mockedApiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { status: "alive" }
+    })
+
+    setConnectionState({
+      hasCompletedFirstRun: false,
+      phase: ConnectionPhase.SEARCHING,
+      isConnected: false,
+      lastCheckedAt: Date.now() - 60_000
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.hasCompletedFirstRun).toBe(true)
+  })
+
   it("uses lightweight health liveness endpoint and resets failure streak on success", async () => {
     setConnectionState({
       consecutiveFailures: 2,
@@ -125,7 +177,8 @@ describe("connection store stability", () => {
     expect(mockedApiSend).toHaveBeenCalledWith(
       expect.objectContaining({
         path: "/api/v1/health/live",
-        method: "GET"
+        method: "GET",
+        timeoutMs: CONNECTION_TIMEOUT_MS
       })
     )
   })
@@ -157,5 +210,239 @@ describe("connection store stability", () => {
     expect(state.errorKind).toBe("unreachable")
     expect(state.lastError).toContain("Likely CORS mismatch")
     expect(state.lastError).toContain("ALLOWED_ORIGINS")
+  })
+
+  it("surfaces a CORS/network hint for aborted cross-origin health checks", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.SEARCHING,
+      serverUrl: "http://192.168.5.186:8000",
+      isConnected: false,
+      isChecking: false,
+      lastCheckedAt: Date.now() - 60_000,
+      consecutiveFailures: 0
+    })
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://192.168.5.186:8000",
+      authMode: "single-user",
+      apiKey: "test-key"
+    } as any)
+    mockedApiSend.mockResolvedValue({
+      ok: false,
+      status: 0,
+      error: "The operation was aborted."
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.ERROR)
+    expect(state.errorKind).toBe("unreachable")
+    expect(state.lastError).toContain("Likely CORS mismatch")
+    expect(state.lastError).toContain("ALLOWED_ORIGINS")
+  })
+
+  it("recovers from stale LAN host by switching to current browser host when probe succeeds", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.SEARCHING,
+      serverUrl: "http://192.168.5.186:8000",
+      isConnected: false,
+      isChecking: false,
+      lastCheckedAt: Date.now() - 60_000,
+      consecutiveFailures: 0
+    })
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://192.168.5.186:8000",
+      authMode: "single-user",
+      apiKey: "test-key"
+    } as any)
+    mockedApiSend
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 0,
+        error: "NetworkError when attempting to fetch resource."
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { status: "alive" }
+      })
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue({
+        ok: true,
+        status: 200
+      } as Response)
+
+    const originalWindow = globalThis.window
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        location: {
+          origin: "http://192.168.5.184:3000",
+          hostname: "192.168.5.184"
+        }
+      },
+      configurable: true
+    })
+
+    try {
+      await useConnectionStore.getState().checkOnce()
+    } finally {
+      fetchMock.mockRestore()
+      Object.defineProperty(globalThis, "window", {
+        value: originalWindow,
+        configurable: true
+      })
+    }
+
+    const state = useConnectionStore.getState().state
+    expect(mockedClient.updateConfig).toHaveBeenCalledWith({
+      serverUrl: "http://192.168.5.184:8000"
+    })
+    expect(state.phase).toBe(ConnectionPhase.CONNECTED)
+    expect(state.isConnected).toBe(true)
+    expect(state.serverUrl).toBe("http://192.168.5.184:8000")
+    expect(mockedApiSend).toHaveBeenCalledTimes(2)
+  })
+
+  it("preserves persisted first-run completion when offline bypass is enabled", async () => {
+    setConnectionState({
+      hasCompletedFirstRun: false,
+      phase: ConnectionPhase.SEARCHING,
+      isConnected: false,
+      isChecking: false
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    localStorage.setItem("__tldw_allow_offline", "true")
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.CONNECTED)
+    expect(state.offlineBypass).toBe(true)
+    expect(state.hasCompletedFirstRun).toBe(true)
+  })
+
+  it("preserves persisted first-run completion through a successful health check", async () => {
+    setConnectionState({
+      hasCompletedFirstRun: false,
+      phase: ConnectionPhase.SEARCHING,
+      isConnected: false,
+      isChecking: false
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    mockedApiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { status: "alive" }
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.CONNECTED)
+    expect(state.isConnected).toBe(true)
+    expect(state.hasCompletedFirstRun).toBe(true)
+  })
+
+  it("treats a server URL without single-user credentials as unconfigured auth instead of connected", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.SEARCHING,
+      serverUrl: "http://127.0.0.1:8000",
+      isConnected: false,
+      isChecking: false,
+      lastCheckedAt: Date.now() - 60_000,
+      configStep: "health",
+      hasCompletedFirstRun: true
+    })
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    } as any)
+    mockedApiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { status: "alive" }
+    })
+
+    await useConnectionStore.getState().checkOnce()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.UNCONFIGURED)
+    expect(state.serverUrl).toBe("http://127.0.0.1:8000")
+    expect(state.configStep).toBe("auth")
+    expect(state.isConnected).toBe(false)
+    expect(state.errorKind).toBe("none")
+    expect(mockedApiSend).not.toHaveBeenCalled()
+  })
+
+  it("begins onboarding without clearing first-run completion when a saved server still needs auth", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.ERROR,
+      serverUrl: "http://127.0.0.1:8000",
+      isConnected: false,
+      isChecking: false,
+      errorKind: "auth",
+      configStep: "health",
+      hasCompletedFirstRun: true
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    } as any)
+
+    await useConnectionStore.getState().beginOnboarding()
+
+    const state = useConnectionStore.getState().state
+    expect(state.serverUrl).toBe("http://127.0.0.1:8000")
+    expect(state.configStep).toBe("auth")
+    expect(state.hasCompletedFirstRun).toBe(true)
+    expect(localStorage.getItem("__tldw_first_run_complete")).toBe("true")
+  })
+
+  it("restarts onboarding from the beginning only when explicitly requested", async () => {
+    setConnectionState({
+      phase: ConnectionPhase.ERROR,
+      serverUrl: "http://127.0.0.1:8000",
+      isConnected: false,
+      isChecking: false,
+      errorKind: "auth",
+      configStep: "auth",
+      hasCompletedFirstRun: true
+    })
+    localStorage.setItem("__tldw_first_run_complete", "true")
+
+    await (useConnectionStore.getState() as any).restartOnboarding()
+
+    const state = useConnectionStore.getState().state
+    expect(state.phase).toBe(ConnectionPhase.UNCONFIGURED)
+    expect(state.configStep).toBe("url")
+    expect(state.hasCompletedFirstRun).toBe(false)
+    expect(localStorage.getItem("__tldw_first_run_complete")).toBeNull()
+  })
+
+  it("exits demo mode when entering onboarding so setup does not look connected", async () => {
+    setConnectionState({
+      mode: "demo",
+      phase: ConnectionPhase.CONNECTED,
+      serverUrl: null,
+      isConnected: true,
+      isChecking: false,
+      configStep: "health",
+      errorKind: "none",
+      hasCompletedFirstRun: true
+    })
+    mockedClient.getConfig.mockResolvedValue(null as any)
+
+    await useConnectionStore.getState().beginOnboarding()
+
+    const state = useConnectionStore.getState().state
+    expect(state.mode).toBe("normal")
+    expect(state.phase).toBe(ConnectionPhase.UNCONFIGURED)
+    expect(state.isConnected).toBe(false)
+    expect(state.configStep).toBe("url")
   })
 })

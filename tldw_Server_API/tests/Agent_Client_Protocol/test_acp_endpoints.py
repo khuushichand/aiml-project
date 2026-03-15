@@ -1,10 +1,12 @@
 import importlib.machinery
 import sys
 import types
+from uuid import uuid4
 
 import pytest
 
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
+from tldw_Server_API.app.services.acp_runtime_policy_service import ACPRuntimePolicySnapshot
 
 pytestmark = pytest.mark.unit
 
@@ -106,7 +108,7 @@ class StubRunnerClient:
 
 
 @pytest.fixture()
-def stub_runner_client(monkeypatch):
+def stub_runner_client(monkeypatch, tmp_path):
     import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
 
     stub = StubRunnerClient()
@@ -115,10 +117,64 @@ def stub_runner_client(monkeypatch):
         return stub
 
     monkeypatch.setattr(acp_endpoints, "get_runner_client", _get_runner_client)
+
+    # Provide a fresh session store backed by a temp DB for test isolation
+    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+    from tldw_Server_API.app.services.admin_acp_sessions_service import ACPSessionStore
+
+    _test_db = ACPSessionsDB(db_path=str(tmp_path / "test_acp_sessions.db"))
+    _test_store = ACPSessionStore(db=_test_db)
+
+    async def _get_test_store():
+        return _test_store
+
+    monkeypatch.setattr(acp_endpoints, "get_acp_session_store", _get_test_store)
+
     return stub
 
 
-def test_acp_session_new_success(client_user_only, stub_runner_client, tmp_path):
+def test_acp_session_new_success(client_user_only, stub_runner_client, tmp_path, monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+    captured: dict[str, object] = {}
+
+    class _RuntimePolicyService:
+        async def build_snapshot(self, *, session_record, user_id: int, **kwargs):
+            del kwargs
+            captured["session_id"] = session_record.session_id
+            captured["user_id"] = user_id
+            return ACPRuntimePolicySnapshot(
+                session_id=session_record.session_id,
+                user_id=int(user_id),
+                policy_snapshot_version="resolved-v1",
+                policy_snapshot_fingerprint="snapshot-created-at-session-start",
+                policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+                policy_summary={"allowed_tool_count": 1, "approval_mode": "allow"},
+                policy_provenance_summary={"source_kinds": ["profile"]},
+                resolved_policy_document={"allowed_tools": ["web.search"]},
+                approval_summary={"mode": "allow"},
+                context_summary={"persona_id": getattr(session_record, "persona_id", None)},
+                execution_config={},
+            )
+
+        async def persist_snapshot(self, *, session_store, snapshot):
+            return await session_store.update_policy_snapshot_state(
+                snapshot.session_id,
+                policy_snapshot_version=snapshot.policy_snapshot_version,
+                policy_snapshot_fingerprint=snapshot.policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at=snapshot.policy_snapshot_refreshed_at,
+                policy_summary=snapshot.policy_summary,
+                policy_provenance_summary=snapshot.policy_provenance_summary,
+                policy_refresh_error=snapshot.refresh_error,
+            )
+
+    monkeypatch.setattr(
+        acp_endpoints,
+        "get_acp_runtime_policy_service",
+        lambda: _RuntimePolicyService(),
+        raising=False,
+    )
+
     resp = client_user_only.post(
         "/api/v1/acp/sessions/new",
         json={"cwd": str(tmp_path)},
@@ -127,6 +183,12 @@ def test_acp_session_new_success(client_user_only, stub_runner_client, tmp_path)
     payload = resp.json()
     assert payload["session_id"] == "session-123"
     assert payload["agent_capabilities"] == {"promptCapabilities": {"image": False}}
+    assert payload["policy_snapshot_version"] == "resolved-v1"
+    assert payload["policy_snapshot_fingerprint"] == "snapshot-created-at-session-start"
+    assert payload["policy_snapshot_refreshed_at"] == "2026-03-14T12:00:00+00:00"
+    assert payload["policy_summary"] == {"allowed_tool_count": 1, "approval_mode": "allow"}
+    assert payload["policy_provenance_summary"] == {"source_kinds": ["profile"]}
+    assert captured == {"session_id": "session-123", "user_id": 1}
     assert stub_runner_client.create_session_calls
     assert isinstance(stub_runner_client.create_session_calls[0]["user_id"], int)
 
@@ -240,3 +302,181 @@ def test_acp_session_updates_denied_for_unowned_session(client_user_only, stub_r
     resp = client_user_only.get("/api/v1/acp/sessions/session-999/updates")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "session_not_found"
+
+
+def test_acp_session_fork_creates_runtime_backed_session_and_bootstraps_first_prompt(client_user_only, monkeypatch, tmp_path):
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+    from tldw_Server_API.app.services.admin_acp_sessions_service import ACPSessionStore
+
+    class ForkRunner:
+        def __init__(self) -> None:
+            self.agent_capabilities = {"promptCapabilities": {"image": False}}
+            self.owners = {"source-session": 1}
+            self.create_session_calls = []
+            self.prompt_calls = []
+            self._counter = 0
+
+        async def create_session(
+            self,
+            cwd: str,
+            mcp_servers=None,
+            agent_type: str | None = None,
+            user_id: int | None = None,
+            persona_id: str | None = None,
+            workspace_id: str | None = None,
+            workspace_group_id: str | None = None,
+            scope_snapshot_id: str | None = None,
+        ) -> str:
+            self._counter += 1
+            session_id = f"fork-runtime-{self._counter}"
+            self.owners[session_id] = int(user_id or 0)
+            self.create_session_calls.append(
+                {
+                    "cwd": cwd,
+                    "mcp_servers": mcp_servers,
+                    "agent_type": agent_type,
+                    "user_id": user_id,
+                    "persona_id": persona_id,
+                    "workspace_id": workspace_id,
+                    "workspace_group_id": workspace_group_id,
+                    "scope_snapshot_id": scope_snapshot_id,
+                }
+            )
+            return session_id
+
+        async def verify_session_access(self, session_id: str, user_id: int) -> bool:
+            return self.owners.get(session_id) == user_id
+
+        async def prompt(self, session_id: str, prompt):
+            self.prompt_calls.append((session_id, prompt))
+            return {"content": "Bootstrapped reply"}
+
+        def pop_updates(self, session_id: str, limit: int = 100):
+            return []
+
+        def has_websocket_connections(self, session_id: str) -> bool:
+            return False
+
+    runner = ForkRunner()
+    _db = ACPSessionsDB(db_path=str(tmp_path / "fork_bootstrap_test.db"))
+    store = ACPSessionStore(db=_db)
+
+    async def _seed() -> None:
+        await store.register_session(
+            session_id="source-session",
+            user_id=1,
+            agent_type="codex",
+            name="Source Session",
+            cwd="/tmp/project",
+            mcp_servers=[{"name": "filesystem", "command": "fs-server"}],
+            persona_id="persona-1",
+            workspace_id="workspace-1",
+            workspace_group_id="group-1",
+            scope_snapshot_id="scope-1",
+        )
+        await store.record_prompt(
+            "source-session",
+            [{"role": "user", "content": "Seed question"}],
+            {"content": "Seed answer"},
+        )
+
+    import asyncio
+    asyncio.run(_seed())
+
+    async def _get_runner_client():
+        return runner
+
+    async def _get_store():
+        return store
+
+    monkeypatch.setattr(acp_endpoints, "get_runner_client", _get_runner_client)
+    monkeypatch.setattr(acp_endpoints, "get_acp_session_store", _get_store)
+
+    fork_resp = client_user_only.post(
+        "/api/v1/acp/sessions/source-session/fork",
+        json={"message_index": 1, "name": "Forked Session"},
+    )
+    assert fork_resp.status_code == 200
+    fork_payload = fork_resp.json()
+    fork_session_id = fork_payload["session_id"]
+    assert runner.create_session_calls[-1]["mcp_servers"] == [{"name": "filesystem", "command": "fs-server"}]
+    assert fork_payload["forked_from"] == "source-session"
+
+    prompt_resp = client_user_only.post(
+        "/api/v1/acp/sessions/prompt",
+        json={"session_id": fork_session_id, "prompt": [{"role": "user", "content": "Follow-up"}]},
+    )
+    assert prompt_resp.status_code == 200
+    assert runner.prompt_calls[-1][0] == fork_session_id
+    assert runner.prompt_calls[-1][1] == [
+        {"role": "user", "content": "Seed question"},
+        {"role": "assistant", "content": "Seed answer"},
+        {"role": "user", "content": "Follow-up"},
+    ]
+
+    import asyncio as _asyncio
+    fork_record = _asyncio.run(store.get_session(fork_session_id))
+    assert fork_record is not None
+    assert fork_record.needs_bootstrap is False
+
+
+def test_acp_session_fork_rejects_non_bootstrappable_source(client_user_only, monkeypatch, tmp_path):
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+    from tldw_Server_API.app.services.admin_acp_sessions_service import ACPSessionStore
+
+    class ForkRunner:
+        def __init__(self) -> None:
+            self.agent_capabilities = {"promptCapabilities": {"image": False}}
+            self.owners = {"source-session": 1}
+            self.create_session_calls = []
+
+        async def create_session(self, *args, **kwargs):
+            self.create_session_calls.append((args, kwargs))
+            return f"fork-{uuid4()}"
+
+        async def verify_session_access(self, session_id: str, user_id: int) -> bool:
+            return self.owners.get(session_id) == user_id
+
+        def has_websocket_connections(self, session_id: str) -> bool:
+            return False
+
+    runner = ForkRunner()
+    _db = ACPSessionsDB(db_path=str(tmp_path / "fork_test.db"))
+    store = ACPSessionStore(db=_db)
+
+    async def _seed() -> None:
+        await store.register_session(
+            session_id="source-session",
+            user_id=1,
+            agent_type="codex",
+            name="Opaque Source",
+            cwd="/tmp/project",
+            mcp_servers=[{"name": "filesystem"}],
+        )
+        await store.record_prompt(
+            "source-session",
+            [{"role": "user", "content": "Seed question"}],
+            {"detail": {"opaque": True}},
+        )
+
+    import asyncio
+    asyncio.run(_seed())
+
+    async def _get_runner_client():
+        return runner
+
+    async def _get_store():
+        return store
+
+    monkeypatch.setattr(acp_endpoints, "get_runner_client", _get_runner_client)
+    monkeypatch.setattr(acp_endpoints, "get_acp_session_store", _get_store)
+
+    fork_resp = client_user_only.post(
+        "/api/v1/acp/sessions/source-session/fork",
+        json={"message_index": 1, "name": "Forked Session"},
+    )
+    assert fork_resp.status_code == 409
+    assert fork_resp.json()["detail"] == "fork_not_resumable"
+    assert runner.create_session_calls == []

@@ -1,3 +1,8 @@
+import importlib
+
+import pytest
+
+from tldw_Server_API.app.core.DB_Management import sqlite_policy
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.RAG.rag_service.connection_pool import MultiDatabasePool
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import ClaimsRetriever
@@ -68,3 +73,34 @@ def test_multi_database_pool_memory_path_creates_no_artifacts(tmp_path, monkeypa
             assert not (tmp_path / name).exists(), f"Unexpected artifact file: {name}"
     finally:
         pool.close_all()
+
+
+def test_multi_database_pool_uses_shared_sqlite_policy_helper_for_wal_toggle(tmp_path):
+    pool_module = importlib.import_module(
+        "tldw_Server_API.app.core.RAG.rag_service.connection_pool"
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_configure(conn, **kwargs):
+        calls.append(kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sqlite_policy, "configure_sqlite_connection", fake_configure)
+        pool_module = importlib.reload(pool_module)
+
+        pool = pool_module.MultiDatabasePool(
+            default_config={"min_connections": 1, "max_connections": 1, "enable_wal": False}
+        )
+        try:
+            with pool.get_connection(str(tmp_path / "rag.db")) as conn:
+                conn.execute("SELECT 1")
+        finally:
+            pool.close_all()
+
+    importlib.reload(pool_module)
+
+    assert calls
+    assert all(
+        call == {"use_wal": False, "synchronous": None}
+        for call in calls
+    )

@@ -35,11 +35,14 @@ interface ConversationTabProps {
   uploadedFiles: UploadedFile[]
   onRemoveFile: (id: string) => void
   serverChatId: string | null
+  serverChatAssistantKind?: "character" | "persona" | null
+  serverChatPersonaMemoryMode?: "read_only" | "read_write" | null
   serverChatState: ConversationState | null
   onStateChange: (state: ConversationState) => void
   serverChatTopic: string | null
   onTopicChange: (topic: string | null) => void
   onVersionChange: (version: number | null) => void
+  onPersonaMemoryModeChange?: (mode: "read_only" | "read_write") => void
 }
 
 interface UpdateChatResponse {
@@ -344,11 +347,14 @@ export function ConversationTab({
   uploadedFiles,
   onRemoveFile,
   serverChatId,
+  serverChatAssistantKind,
+  serverChatPersonaMemoryMode,
   serverChatState,
   onStateChange,
   serverChatTopic,
   onTopicChange,
-  onVersionChange
+  onVersionChange,
+  onPersonaMemoryModeChange
 }: ConversationTabProps) {
   const { t } = useTranslation(["common", "playground"])
   const notification = useAntdNotification()
@@ -405,6 +411,7 @@ export function ConversationTab({
   const [autoSummaryWindowDraft, setAutoSummaryWindowDraft] = React.useState(
     persistedAutoSummaryWindow
   )
+  const personaMemoryModeValue = serverChatPersonaMemoryMode ?? "read_only"
   const generationOverrideSource =
     chatSettings?.chatGenerationOverride &&
     typeof chatSettings.chatGenerationOverride === "object"
@@ -852,6 +859,21 @@ export function ConversationTab({
     }
   }
 
+  const handlePersonaMemoryModeChange = async (value: string) => {
+    const nextMode = value === "read_write" ? "read_write" : "read_only"
+    onPersonaMemoryModeChange?.(nextMode)
+    if (!serverChatId) return
+    try {
+      const updated = await tldwClient.updateChat(serverChatId, {
+        persona_memory_mode: nextMode
+      })
+      onVersionChange(getUpdateChatVersion(updated))
+      queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
+    } catch (error: unknown) {
+      handleAsyncError(error)
+    }
+  }
+
   const previewSettingsFingerprint = React.useMemo(
     () =>
       JSON.stringify({
@@ -1040,6 +1062,43 @@ export function ConversationTab({
           onChange={handleStateChange}
         />
       </Form.Item>
+
+      {serverChatAssistantKind === "persona" ? (
+        <Form.Item
+          label={t(
+            "playground:composer.personaMemoryMode.label",
+            "Persona memory mode"
+          )}
+          help={t(
+            "playground:composer.personaMemoryMode.help",
+            "Read-only keeps persona memory available for context without writing new durable memories from this chat."
+          )}
+        >
+          <Select
+            data-testid="persona-memory-mode-select"
+            value={personaMemoryModeValue}
+            options={[
+              {
+                value: "read_only",
+                label: t(
+                  "playground:composer.personaMemoryMode.readOnly",
+                  "Read only"
+                )
+              },
+              {
+                value: "read_write",
+                label: t(
+                  "playground:composer.personaMemoryMode.readWrite",
+                  "Read + write"
+                )
+              }
+            ]}
+            onChange={(value) => {
+              void handlePersonaMemoryModeChange(String(value))
+            }}
+          />
+        </Form.Item>
+      ) : null}
 
       <Form.Item
         label={t("playground:composer.topicPlaceholder", "Conversation tag")}
@@ -1571,11 +1630,13 @@ export function ConversationTab({
       <PromptAssemblyPreview
         serverChatId={serverChatId}
         settingsFingerprint={previewSettingsFingerprint}
+        serverChatAssistantKind={serverChatAssistantKind}
       />
 
       <LorebookDebugPanel
         serverChatId={serverChatId}
         settingsFingerprint={previewSettingsFingerprint}
+        serverChatAssistantKind={serverChatAssistantKind}
       />
     </div>
   )

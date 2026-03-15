@@ -47,6 +47,12 @@ vi.mock("antd", () => {
     </select>
   )
 
+  const Button = ({ children, onClick, ...rest }: any) => (
+    <button type="button" onClick={() => onClick?.()} {...rest}>
+      {children}
+    </button>
+  )
+
   return {
     Alert: ({ title, description }: any) => (
       <div role="alert">
@@ -54,6 +60,7 @@ vi.mock("antd", () => {
         {description ? <div>{description}</div> : null}
       </div>
     ),
+    Button,
     Radio: {
       Group: RadioGroup,
       Button: RadioButton

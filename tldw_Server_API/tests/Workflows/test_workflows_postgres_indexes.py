@@ -75,6 +75,22 @@ def test_workflows_postgres_fresh_schema_has_jsonb_and_indexes(pg_database_confi
             assert succ_def and ("where" in succ_def.lower() and "succeeded" in succ_def.lower())
             fail_def = _index_def(backend, conn, "workflow_runs", "idx_runs_status_failed")
             assert fail_def and ("where" in fail_def.lower() and "failed" in fail_def.lower())
+            run_attempts_def = _index_def(backend, conn, "workflow_step_attempts", "idx_step_attempts_run_attempts")
+            assert run_attempts_def and "(run_id, attempt_number, started_at)" in run_attempts_def
+            run_step_attempts_def = _index_def(
+                backend,
+                conn,
+                "workflow_step_attempts",
+                "idx_step_attempts_run_step_attempts",
+            )
+            assert run_step_attempts_def and "(run_id, step_id, attempt_number, started_at)" in run_step_attempts_def
+            step_run_attempts_def = _index_def(
+                backend,
+                conn,
+                "workflow_step_attempts",
+                "idx_step_attempts_step_run_attempts",
+            )
+            assert step_run_attempts_def and "(step_run_id, attempt_number, started_at)" in step_run_attempts_def
 
             # Schema version table exists and equals current
             version = backend.execute(
@@ -203,6 +219,20 @@ def test_workflows_postgres_migration_preserves_indexes_from_legacy(pg_database_
             succ_def = _index_def(backend, conn, "workflow_runs", "idx_runs_status_succeeded")
             fail_def = _index_def(backend, conn, "workflow_runs", "idx_runs_status_failed")
             assert running_def and queued_def and succ_def and fail_def
+            run_attempts_def = _index_def(backend, conn, "workflow_step_attempts", "idx_step_attempts_run_attempts")
+            run_step_attempts_def = _index_def(
+                backend,
+                conn,
+                "workflow_step_attempts",
+                "idx_step_attempts_run_step_attempts",
+            )
+            step_run_attempts_def = _index_def(
+                backend,
+                conn,
+                "workflow_step_attempts",
+                "idx_step_attempts_step_run_attempts",
+            )
+            assert run_attempts_def and run_step_attempts_def and step_run_attempts_def
 
             version = backend.execute(
                 "SELECT version FROM workflow_schema_version LIMIT 1",

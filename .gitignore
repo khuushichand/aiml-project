@@ -188,7 +188,7 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
-# Generated static docs output
+# Generated static docs output (nested Docs/Docs/site path is intentional for published snapshots)
 /Docs/Docs/site/
 
 
@@ -283,10 +283,10 @@ errors.log
 !Docs/Product/WebUI/M1_4_Alias_Rollup_Week3_Natural_2026_02_13.json
 !Docs/Deployment/sidecar_workers_manifest.json
 !Docs/Monitoring/claims_grafana_dashboard.json
+!Docs/Development/schema/embeddings_v1.schema.json
+!Docs/Development/schema/embeddings_registry.json
 !Docs/Monitoring/http_client_grafana_dashboard.json
 !Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json
-!Docs/Development/schema/embeddings_registry.json
-!Docs/Development/schema/embeddings_v1.schema.json
 !Docs/Evals/samples/*.json
 !Docs/Examples/PromptStudio/mcts/*.json
 !Docs/Schemas/*.json
@@ -394,3 +394,5 @@ Dockerfiles/Monitoring/secrets/
 # I'm an idiot
 !apps/tldw-frontend/lib/
 !apps/tldw-frontend/lib/**
+/.hypothesis
+/admin-ui/.next

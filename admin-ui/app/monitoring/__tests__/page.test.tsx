@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import MonitoringPage, { normalizeHealthStatus } from '../page';
+import MonitoringPage from '../page';
+import { normalizeHealthStatus } from '../status-utils';
 import { api } from '@/lib/api-client';
 import { formatAxeViolations, getCriticalAndSeriousAxeViolations } from '@/test-utils/axe';
 
@@ -47,6 +48,8 @@ vi.mock('@/lib/api-client', () => ({
     getMetrics: vi.fn(),
     getWatchlists: vi.fn(),
     getAlerts: vi.fn(),
+    getAdminAlertHistory: vi.fn(),
+    getAdminAlertRules: vi.fn(),
     getUsers: vi.fn(),
     getHealth: vi.fn(),
     getHealthMetrics: vi.fn(),
@@ -62,6 +65,11 @@ vi.mock('@/lib/api-client', () => ({
     deleteWatchlist: vi.fn(),
     acknowledgeAlert: vi.fn(),
     dismissAlert: vi.fn(),
+    createAdminAlertRule: vi.fn(),
+    deleteAdminAlertRule: vi.fn(),
+    assignAdminAlert: vi.fn(),
+    snoozeAdminAlert: vi.fn(),
+    escalateAdminAlert: vi.fn(),
     getMonitoringMetrics: vi.fn(),
     updateNotificationSettings: vi.fn(),
     testNotification: vi.fn(),
@@ -74,6 +82,8 @@ const setDefaultApiMocks = () => {
   apiMock.getMetrics.mockResolvedValue({ cpu_usage: 45, memory_usage: 67 });
   apiMock.getWatchlists.mockResolvedValue([]);
   apiMock.getAlerts.mockResolvedValue([]);
+  apiMock.getAdminAlertHistory.mockResolvedValue({ items: [] });
+  apiMock.getAdminAlertRules.mockResolvedValue({ items: [] });
   apiMock.getUsers.mockResolvedValue([
     { id: '1', email: 'admin@example.com', username: 'admin' },
   ]);
@@ -112,6 +122,11 @@ const setDefaultApiMocks = () => {
   apiMock.createWatchlist.mockResolvedValue({});
   apiMock.acknowledgeAlert.mockResolvedValue({});
   apiMock.dismissAlert.mockResolvedValue({});
+  apiMock.createAdminAlertRule.mockResolvedValue({ item: null });
+  apiMock.deleteAdminAlertRule.mockResolvedValue({ status: 'deleted', id: 1 });
+  apiMock.assignAdminAlert.mockResolvedValue({ item: {} });
+  apiMock.snoozeAdminAlert.mockResolvedValue({ item: {} });
+  apiMock.escalateAdminAlert.mockResolvedValue({ item: {} });
   apiMock.updateNotificationSettings.mockResolvedValue({});
   apiMock.testNotification.mockResolvedValue({});
 };
@@ -518,9 +533,11 @@ describe('MonitoringPage', () => {
       expect(screen.getByTestId(`system-status-card-${key}`)).toBeTruthy();
     });
 
-    const apiResponse = screen.getByTestId('system-status-response-api').textContent || '';
-    expect(apiResponse).toContain('Response:');
-    expect(apiResponse).toContain('ms');
+    await waitFor(() => {
+      const apiResponse = screen.getByTestId('system-status-response-api').textContent || '';
+      expect(apiResponse).toContain('Response:');
+      expect(apiResponse).toContain('ms');
+    });
   });
 
   it('falls back to metrics for subsystem status when endpoint checks fail', async () => {

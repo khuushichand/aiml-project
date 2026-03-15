@@ -212,6 +212,34 @@ class TestChatCompletionRequest:
         )
         assert request.stream is False
 
+    @pytest.mark.unit
+    def test_llamacpp_extension_fields_are_first_class_schema_fields(self):
+        """Test llama.cpp extension fields round-trip through the request schema."""
+        request = ChatCompletionRequest(
+            model="llama.cpp/local-model",
+            messages=[{"role": "user", "content": "test"}],
+            grammar_mode="library",
+            grammar_id="grammar_1",
+            grammar_override='root ::= "ok"',
+            thinking_budget_tokens=64,
+        )
+        dumped = request.model_dump()
+        assert dumped["grammar_mode"] == "library"
+        assert dumped["grammar_id"] == "grammar_1"
+        assert dumped["thinking_budget_tokens"] == 64
+
+    @pytest.mark.unit
+    def test_llamacpp_inline_mode_requires_inline_grammar(self):
+        """Test llama.cpp inline grammar mode validation."""
+        with pytest.raises(ValidationError) as exc_info:
+            ChatCompletionRequest(
+                model="llama.cpp/local-model",
+                messages=[{"role": "user", "content": "test"}],
+                grammar_mode="inline",
+            )
+
+        assert "grammar_inline is required" in str(exc_info.value)
+
 # ========================================================================
 # Response Format Tests
 # ========================================================================
@@ -237,6 +265,52 @@ class TestResponseFormat:
         """Test text response format (default)."""
         format_spec = ResponseFormat(type="text")
         assert format_spec.type == "text"
+
+    @pytest.mark.unit
+    def test_json_schema_response_format(self):
+        """Test JSON schema response format specification."""
+        format_spec = ResponseFormat(
+            type="json_schema",
+            json_schema={
+                "name": "answer_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            },
+        )
+        assert format_spec.type == "json_schema"
+        assert format_spec.json_schema is not None
+        assert format_spec.json_schema.name == "answer_schema"
+
+        request = ChatCompletionRequest(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Return structured"}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                    },
+                },
+            },
+        )
+        assert request.response_format is not None
+        assert request.response_format.type == "json_schema"
+
+    @pytest.mark.unit
+    def test_json_schema_response_format_requires_schema(self):
+        """Test JSON schema response format requires json_schema.schema."""
+        with pytest.raises(ValidationError):
+            ChatCompletionRequest(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "Return structured"}],
+                response_format={"type": "json_schema", "json_schema": {"name": "bad"}},
+            )
 
 # ========================================================================
 # Tool/Function Calling Tests
@@ -314,7 +388,7 @@ class TestToolsAndFunctions:
         """Test request accepts Gemini-native tools."""
         request = ChatCompletionRequest(
             api_provider="google",
-            model="gemini-1.5-pro",
+            model="gemini-2.5-pro",
             messages=[{"role": "user", "content": "Hello"}],
             tools=[{"function_declarations": [{"name": "lookup"}]}],
         )
@@ -395,3 +469,38 @@ class TestEdgeCasesAndErrors:
             another_param=123  # Another extra field
         )
         # Should not raise an error due to ConfigDict(extra="allow")
+
+
+class TestContinuationSchema:
+    """Test continuation extension schema and validation."""
+
+    @pytest.mark.unit
+    def test_tldw_continuation_branch_is_accepted(self):
+        request = ChatCompletionRequest(
+            model="gpt-4o-mini",
+            conversation_id="conv-123",
+            messages=[{"role": "user", "content": "Continue from here"}],
+            tldw_continuation={
+                "from_message_id": "msg-456",
+                "mode": "branch",
+                "assistant_prefill": "Partial response ",
+            },
+        )
+
+        assert request.tldw_continuation is not None
+        assert request.tldw_continuation.mode == "branch"
+        assert request.tldw_continuation.from_message_id == "msg-456"
+
+    @pytest.mark.unit
+    def test_tldw_continuation_requires_conversation_id(self):
+        with pytest.raises(ValidationError) as exc_info:
+            ChatCompletionRequest(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Continue from here"}],
+                tldw_continuation={
+                    "from_message_id": "msg-456",
+                    "mode": "append",
+                },
+            )
+
+        assert "conversation_id is required" in str(exc_info.value)

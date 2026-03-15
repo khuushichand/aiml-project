@@ -20,7 +20,8 @@ import {
   DraftAsset,
   AudiobookProject,
   AudiobookChapterAsset,
-  TtsClip
+  TtsClip,
+  SttRecordingRow
 } from "./types"
 
 export class PageAssistDexieDB extends Dexie {
@@ -49,6 +50,9 @@ export class PageAssistDexieDB extends Dexie {
   audiobookProjects!: Table<AudiobookProject>
   audiobookChapterAssets!: Table<AudiobookChapterAsset>
   ttsClips!: Table<TtsClip>
+
+  // STT recordings
+  sttRecordings!: Table<SttRecordingRow>
 
   constructor() {
     super('PageAssistDatabase');
@@ -290,6 +294,71 @@ export class PageAssistDexieDB extends Dexie {
         }
         if (prompt.lastUsedAt === undefined) {
           prompt.lastUsedAt = null;
+        }
+      });
+    });
+
+    // Version 12: STT recording blob persistence
+    this.version(12).stores({
+      chatHistories: 'id, title, is_rag, message_source, is_pinned, createdAt, doc_id, last_used_prompt, model_id, root_id, parent_conversation_id, server_chat_id',
+      messages: 'id, history_id, name, role, content, createdAt, messageType, modelName, clusterId, modelId, parent_message_id',
+      prompts: 'id, title, content, is_system, createdBy, createdAt, deletedAt, serverId, studioProjectId, syncStatus, sourceSystem, usageCount, lastUsedAt',
+      webshares: 'id, title, url, api_url, share_id, createdAt',
+      sessionFiles: 'sessionId, retrievalEnabled, createdAt',
+      userSettings: 'id, user_id',
+      customModels: 'id, model_id, name, model_name, model_image, provider_id, lookup, model_type, db_type',
+      modelNickname: 'id, model_id, model_name, model_avatar',
+      processedMedia: 'id, url, createdAt',
+      folders: 'id, name, parent_id, deleted',
+      keywords: 'id, keyword, deleted',
+      folderKeywordLinks: '[folder_id+keyword_id], folder_id, keyword_id',
+      conversationKeywordLinks: '[conversation_id+keyword_id], conversation_id, keyword_id',
+      compareStates: 'history_id',
+      contentDrafts: 'id, batchId, status, mediaType, createdAt, updatedAt, expiresAt',
+      draftBatches: 'id, createdAt, updatedAt',
+      draftAssets: 'id, draftId, createdAt',
+      audiobookProjects: 'id, title, status, createdAt, updatedAt, lastOpenedAt',
+      audiobookChapterAssets: 'id, projectId, chapterId, createdAt',
+      ttsClips: 'id, createdAt, historyId, serverChatId, messageId, serverMessageId, provider',
+      sttRecordings: 'id, createdAt'
+    });
+
+    // Version 13: Structured prompt sync metadata defaults
+    this.version(13).stores({
+      chatHistories: 'id, title, is_rag, message_source, is_pinned, createdAt, doc_id, last_used_prompt, model_id, root_id, parent_conversation_id, server_chat_id',
+      messages: 'id, history_id, name, role, content, createdAt, messageType, modelName, clusterId, modelId, parent_message_id',
+      prompts: 'id, title, content, is_system, createdBy, createdAt, deletedAt, serverId, studioProjectId, syncStatus, sourceSystem, usageCount, lastUsedAt',
+      webshares: 'id, title, url, api_url, share_id, createdAt',
+      sessionFiles: 'sessionId, retrievalEnabled, createdAt',
+      userSettings: 'id, user_id',
+      customModels: 'id, model_id, name, model_name, model_image, provider_id, lookup, model_type, db_type',
+      modelNickname: 'id, model_id, model_name, model_avatar',
+      processedMedia: 'id, url, createdAt',
+      folders: 'id, name, parent_id, deleted',
+      keywords: 'id, keyword, deleted',
+      folderKeywordLinks: '[folder_id+keyword_id], folder_id, keyword_id',
+      conversationKeywordLinks: '[conversation_id+keyword_id], conversation_id, keyword_id',
+      compareStates: 'history_id',
+      contentDrafts: 'id, batchId, status, mediaType, createdAt, updatedAt, expiresAt',
+      draftBatches: 'id, createdAt, updatedAt',
+      draftAssets: 'id, draftId, createdAt',
+      audiobookProjects: 'id, title, status, createdAt, updatedAt, lastOpenedAt',
+      audiobookChapterAssets: 'id, projectId, chapterId, createdAt',
+      ttsClips: 'id, createdAt, historyId, serverChatId, messageId, serverMessageId, provider',
+      sttRecordings: 'id, createdAt'
+    }).upgrade(tx => {
+      return tx.table('prompts').toCollection().modify(prompt => {
+        if (prompt.promptFormat === undefined) {
+          prompt.promptFormat = 'legacy';
+        }
+        if (prompt.promptSchemaVersion === undefined) {
+          prompt.promptSchemaVersion = null;
+        }
+        if (prompt.structuredPromptDefinition === undefined) {
+          prompt.structuredPromptDefinition = null;
+        }
+        if (prompt.syncPayloadVersion === undefined) {
+          prompt.syncPayloadVersion = 1;
         }
       });
     });

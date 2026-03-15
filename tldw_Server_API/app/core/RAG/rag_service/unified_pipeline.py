@@ -59,6 +59,7 @@ _AdaptiveCache: Any = None
 _get_shared_cache: Any = None
 _MultiDatabaseRetriever: Any = None
 _RetrievalConfig: Any = None
+_SQLRetriever: Any = None
 _SecurityFilters: Any = None
 _SensitivityLevel: Any = None
 _TableProcessor: Any = None
@@ -169,6 +170,15 @@ import contextlib
 
 from .metrics_collector import MetricsCollector, QueryMetrics
 from .types import DataSource, Document
+
+try:
+    from tldw_Server_API.app.core.Text2SQL.source_registry import (
+        normalize_sources_internal as _normalize_sources_internal,
+    )
+except ImportError:
+    _normalize_sources_internal = None
+
+normalize_sources_internal = _normalize_sources_internal
 
 # Import all modules at module level to avoid 500ms overhead
 try:
@@ -365,12 +375,17 @@ try:
     from .database_retrievers import (
         RetrievalConfig as _RetrievalConfig,
     )
+    from .database_retrievers import (
+        SQLRetriever as _SQLRetriever,
+    )
 except ImportError:
     _MultiDatabaseRetriever = None
     _RetrievalConfig = None
+    _SQLRetriever = None
 
 MultiDatabaseRetriever = _MultiDatabaseRetriever
 RetrievalConfig = _RetrievalConfig
+SQLRetriever = _SQLRetriever
 
 try:
     from .security_filters import SecurityFilters as _SecurityFilters
@@ -877,6 +892,66 @@ class UnifiedSearchResult:
 UnifiedPipelineResult = Any
 
 
+_CANONICAL_SOURCE_TO_DATASOURCE: dict[str, DataSource] = {
+    "media_db": DataSource.MEDIA_DB,
+    "notes": DataSource.NOTES,
+    "characters": DataSource.CHARACTER_CARDS,
+    "chats": DataSource.CHARACTER_CARDS,
+    "kanban": DataSource.KANBAN,
+    "sql": DataSource.SQL,
+    "prompts": DataSource.PROMPTS,
+    "claims": DataSource.CLAIMS,
+}
+
+_DATASOURCE_TO_CANONICAL_SOURCE: dict[DataSource, str] = {
+    DataSource.MEDIA_DB: "media_db",
+    DataSource.NOTES: "notes",
+    DataSource.CHARACTER_CARDS: "characters",
+    DataSource.CHAT_HISTORY: "chats",
+    DataSource.KANBAN: "kanban",
+    DataSource.SQL: "sql",
+    DataSource.PROMPTS: "prompts",
+    DataSource.CLAIMS: "claims",
+}
+
+
+def _normalize_pipeline_sources(sources: Optional[list[Any]]) -> list[str]:
+    """Normalize source tokens using the canonical source registry."""
+    incoming: list[str] = []
+    if sources is None:
+        incoming = ["media_db"]
+    else:
+        for source in sources:
+            if isinstance(source, DataSource):
+                canonical = _DATASOURCE_TO_CANONICAL_SOURCE.get(source)
+                if canonical is None:
+                    raise ValueError(f"Invalid source '{source}'")
+                incoming.append(canonical)
+            else:
+                incoming.append(str(source))
+
+    if normalize_sources_internal is None:
+        normalized = [str(value).strip().lower() for value in incoming]
+    else:
+        normalized = normalize_sources_internal(incoming)
+
+    for normalized_source in normalized:
+        if normalized_source not in _CANONICAL_SOURCE_TO_DATASOURCE:
+            raise ValueError(f"Invalid source '{normalized_source}'")
+    return normalized
+
+
+def _sources_to_data_sources(sources: list[str]) -> list[DataSource]:
+    """Map canonical source ids into DataSource enum values."""
+    data_sources: list[DataSource] = []
+    for source in sources:
+        mapped = _CANONICAL_SOURCE_TO_DATASOURCE.get(source)
+        if mapped is None:
+            raise ValueError(f"Invalid source '{source}'")
+        data_sources.append(mapped)
+    return data_sources
+
+
 async def unified_rag_pipeline(
     # ========== REQUIRED PARAMETERS ==========
     query: str,
@@ -887,6 +962,8 @@ async def unified_rag_pipeline(
     notes_db_path: Optional[str] = None,
     character_db_path: Optional[str] = None,
     kanban_db_path: Optional[str] = None,
+    sql_target_id: str = "media_db",
+    sql_retriever: Any = None,
 
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = "hybrid",
@@ -1209,6 +1286,7 @@ async def unified_rag_pipeline(
     # ========== MEDIA SEARCH ==========
     enable_image_search: bool = False,
     enable_video_search: bool = False,
+    rag_profile: Optional[Literal["fast", "balanced", "accuracy"]] = None,
 
     # ========== ADDITIONAL PARAMETERS ==========
     **kwargs: Any
@@ -1358,6 +1436,41 @@ async def unified_rag_pipeline(
     except TypeError:
         pass
 
+    def _ensure_profile_resolution_metadata() -> dict[str, Any]:
+        profile_resolution = result.metadata.get("profile_resolution")
+        if not isinstance(profile_resolution, dict):
+            profile_resolution = {}
+        profile_resolution.setdefault("requested_profile", rag_profile)
+        profile_resolution.setdefault("applied_profile", rag_profile)
+        profile_resolution.setdefault("effective_overrides_count", 0)
+        if not isinstance(profile_resolution.get("degraded_features"), list):
+            profile_resolution["degraded_features"] = []
+        result.metadata["profile_resolution"] = profile_resolution
+        return profile_resolution
+
+    def _record_profile_degradation(
+        *,
+        component: str,
+        from_value: str,
+        to_value: str,
+        reason: str,
+    ) -> None:
+        profile_resolution = _ensure_profile_resolution_metadata()
+        degraded_features = profile_resolution.get("degraded_features")
+        if not isinstance(degraded_features, list):
+            degraded_features = []
+            profile_resolution["degraded_features"] = degraded_features
+        degraded_features.append(
+            {
+                "component": component,
+                "from": from_value,
+                "to": to_value,
+                "reason": reason,
+            }
+        )
+
+    _ensure_profile_resolution_metadata()
+
     cache_instance = None
     cache_max_size = 1000
     try:
@@ -1473,7 +1586,75 @@ async def unified_rag_pipeline(
     class _EarlyReturn(Exception):
         """Internal control-flow sentinel for intentional short-circuit paths."""
 
+    resolved_data_sources: list[DataSource] = []
+
     try:
+        try:
+            sources = _normalize_pipeline_sources(sources)
+            resolved_data_sources = _sources_to_data_sources(sources)
+            result.metadata["sources_requested"] = list(sources)
+        except ValueError as exc:
+            result.errors.append(f"invalid_source: {exc}")
+            result.metadata["source_validation_error"] = str(exc)
+            raise _EarlyReturn()
+
+        if (
+            sql_retriever is None
+            and SQLRetriever is not None
+            and any(src == DataSource.SQL for src in resolved_data_sources)
+        ):
+            sql_db_path = media_db_path
+            if sql_db_path is None:
+                try:
+                    db_path_val = getattr(media_db, "db_path", None)
+                    if db_path_val:
+                        sql_db_path = str(db_path_val)
+                except (AttributeError, RuntimeError, TypeError, ValueError):
+                    sql_db_path = None
+            if sql_db_path:
+                try:
+                    sql_retriever = SQLRetriever(
+                        db_path=str(sql_db_path),
+                        target_id=str(sql_target_id or "media_db"),
+                    )
+                except (
+                    AttributeError,
+                    ConnectionError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
+                    result.errors.append(f"SQL retriever init failed: {exc}")
+
+        def _build_multi_retriever(db_paths: dict[str, str]):
+            base_kwargs: dict[str, Any] = {"user_id": user_id or "0", "media_db": media_db}
+            if chacha_db is not None:
+                base_kwargs["chacha_db"] = chacha_db
+            if sql_retriever is not None:
+                base_kwargs["sql_retriever"] = sql_retriever
+
+            variants = [
+                dict(base_kwargs),
+                {k: v for k, v in base_kwargs.items() if k != "chacha_db"},
+                {k: v for k, v in base_kwargs.items() if k != "sql_retriever"},
+                {k: v for k, v in base_kwargs.items() if k not in {"chacha_db", "sql_retriever"}},
+            ]
+            seen: set[tuple[str, ...]] = set()
+            for variant in variants:
+                key = tuple(sorted(variant.keys()))
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    return MultiDatabaseRetriever(db_paths, **variant)
+                except TypeError:
+                    continue
+            try:
+                return MultiDatabaseRetriever(db_paths, user_id=user_id or "0")
+            except TypeError:
+                return MultiDatabaseRetriever(db_paths)
+
         # ========== LEARNED FUSION / CALIBRATION HELPERS ==========
         def _decorate_calibration_metadata() -> None:
             """
@@ -2405,20 +2586,8 @@ async def unified_rag_pipeline(
                     if kanban_db_path:
                         db_paths["kanban_db"] = kanban_db_path
 
-                    # Initialize retriever (minimal signature). Tests may patch this constructor.
-                    try:
-                        retriever = MultiDatabaseRetriever(
-                            db_paths,
-                            user_id=user_id or "0",
-                            media_db=media_db,
-                            chacha_db=chacha_db,
-                        )
-                    except TypeError:
-                        retriever = MultiDatabaseRetriever(
-                            db_paths,
-                            user_id=user_id or "0",
-                            media_db=media_db,
-                        )
+                    # Initialize retriever (tests may patch this constructor).
+                    retriever = _build_multi_retriever(db_paths)
 
                     # Configure retrieval
                     config = RetrievalConfig(
@@ -2450,21 +2619,7 @@ async def unified_rag_pipeline(
                             except (TypeError, ValueError):
                                 pass
 
-                    # Determine sources
-                    if sources is None:
-                        sources = ["media_db"]
-
-                    source_map = {
-                        "media_db": DataSource.MEDIA_DB,
-                        "media": DataSource.MEDIA_DB,
-                        "notes": DataSource.NOTES,
-                        "characters": DataSource.CHARACTER_CARDS,
-                        "chats": DataSource.CHARACTER_CARDS,
-                        "kanban": DataSource.KANBAN,
-                        "kanban_db": DataSource.KANBAN,
-                    }
-
-                    data_sources = [source_map.get(s, DataSource.MEDIA_DB) for s in sources]
+                    data_sources = list(resolved_data_sources)
 
                     # Retrieve documents
                     rh = getattr(retriever, 'retrieve_hybrid', None)
@@ -3579,12 +3734,7 @@ async def unified_rag_pipeline(
                         if kanban_db_path:
                             db_paths["kanban_db"] = kanban_db_path
 
-                        retriever = MultiDatabaseRetriever(
-                            db_paths,
-                            user_id=user_id or "0",
-                            media_db=media_db,
-                            chacha_db=chacha_db,
-                        )
+                        retriever = _build_multi_retriever(db_paths)
                         config = RetrievalConfig(
                             max_results=top_k,
                             min_score=min_score,
@@ -3593,18 +3743,7 @@ async def unified_rag_pipeline(
                             include_metadata=True,
                             fts_level=fts_level,
                         )
-                        # Reuse the original sources list for follow-up retrievals
-                        src_list = sources or ["media_db"]
-                        source_map = {
-                            "media_db": DataSource.MEDIA_DB,
-                            "media": DataSource.MEDIA_DB,
-                            "notes": DataSource.NOTES,
-                            "characters": DataSource.CHARACTER_CARDS,
-                            "chats": DataSource.CHARACTER_CARDS,
-                            "kanban": DataSource.KANBAN,
-                            "kanban_db": DataSource.KANBAN,
-                        }
-                        data_sources = [source_map.get(s, DataSource.MEDIA_DB) for s in src_list]
+                        data_sources = list(resolved_data_sources)
                         if not data_sources:
                             return []
                         new_docs = await retriever.retrieve(
@@ -3804,12 +3943,7 @@ async def unified_rag_pipeline(
                             if character_db_path:
                                 db_paths["character_cards_db"] = character_db_path
 
-                            retriever = MultiDatabaseRetriever(
-                                db_paths,
-                                user_id=user_id or "0",
-                                media_db=media_db,
-                                chacha_db=chacha_db,
-                            )
+                            retriever = _build_multi_retriever(db_paths)
                             retrieval_config = RetrievalConfig(
                                 max_results=top_k,
                                 min_score=min_score,
@@ -3818,26 +3952,7 @@ async def unified_rag_pipeline(
                                 include_metadata=True,
                                 fts_level=fts_level,
                             )
-
-                            src_list = ["media_db"] if sources is None else sources
-                            source_map = {
-                                "media_db": DataSource.MEDIA_DB,
-                                "media": DataSource.MEDIA_DB,
-                                "notes_db": DataSource.NOTES,
-                                "notes": DataSource.NOTES,
-                                "character_cards_db": DataSource.CHARACTER_CARDS,
-                                "characters": DataSource.CHARACTER_CARDS,
-                                "chats": DataSource.CHARACTER_CARDS,
-                                "kanban": DataSource.KANBAN,
-                                "kanban_db": DataSource.KANBAN,
-                                "prompts": DataSource.PROMPTS,
-                            }
-                            data_sources = []
-                            for src in src_list:
-                                if isinstance(src, DataSource):
-                                    data_sources.append(src)
-                                else:
-                                    data_sources.append(source_map.get(str(src), DataSource.MEDIA_DB))
+                            data_sources = list(resolved_data_sources)
 
                             new_docs = await retriever.retrieve(
                                 query=rewritten_query,
@@ -3930,6 +4045,17 @@ async def unified_rag_pipeline(
         # ========== RERANKING ==========
         if enable_reranking and result.documents and reranking_strategy != "none":
             rerank_start = time.time()
+            if (
+                reranking_strategy == "two_tier"
+                and not (create_reranker and RerankingStrategy and RerankingConfig)
+            ):
+                _record_profile_degradation(
+                    component="reranking_strategy",
+                    from_value="two_tier",
+                    to_value="hybrid",
+                    reason="unavailable_dependency",
+                )
+                reranking_strategy = "hybrid"
             try:
                 # --- OTEL: reranking span ---
                 _otel_cm_rk = None
@@ -4027,8 +4153,33 @@ async def unified_rag_pipeline(
                         min_relevance_prob=rerank_min_relevance_prob,
                         sentinel_margin=rerank_sentinel_margin,
                     )
-                    reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
-                    reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
+                    try:
+                        reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
+                        reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
+                    except Exception as rerank_exc:
+                        if reranking_strategy != "two_tier":
+                            raise
+                        logger.warning(
+                            "Two-tier reranker failed at runtime; degrading to hybrid strategy: {}",
+                            rerank_exc,
+                        )
+                        _record_profile_degradation(
+                            component="reranking_strategy",
+                            from_value="two_tier",
+                            to_value="hybrid",
+                            reason="runtime_failure",
+                        )
+                        reranking_strategy = "hybrid"
+                        selected_strategy = RerankingStrategy.HYBRID
+                        rerank_config = RerankingConfig(
+                            strategy=selected_strategy,
+                            top_k=rerank_top_k or top_k,
+                            model_name=None,
+                            min_relevance_prob=rerank_min_relevance_prob,
+                            sentinel_margin=rerank_sentinel_margin,
+                        )
+                        reranker = create_reranker(selected_strategy, rerank_config, llm_client=llm_client)
+                        reranked = await _resilient_call("reranking", reranker.rerank, query, result.documents)
                     if reranked and hasattr(reranked[0], 'document'):
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]
                     else:
@@ -5031,32 +5182,8 @@ async def unified_rag_pipeline(
                                 if kanban_db_path:
                                     db_paths["kanban_db"] = kanban_db_path
                                 # Initialize multi retriever scoped to user's databases
-                                try:
-                                    mdr = MultiDatabaseRetriever(
-                                        db_paths,
-                                        user_id=user_id or "0",
-                                        media_db=media_db,
-                                        chacha_db=chacha_db,
-                                    )
-                                except TypeError:
-                                    mdr = MultiDatabaseRetriever(
-                                        db_paths,
-                                        user_id=user_id or "0",
-                                        media_db=media_db,
-                                    )
-
-                                # Determine sources same as earlier
-                                claim_sources = sources or ["media_db"]
-                                source_map = {
-                                    "media_db": DataSource.MEDIA_DB,
-                                    "media": DataSource.MEDIA_DB,
-                                    "notes": DataSource.NOTES,
-                                    "characters": DataSource.CHARACTER_CARDS,
-                                    "chats": DataSource.CHARACTER_CARDS,
-                                    "kanban": DataSource.KANBAN,
-                                    "kanban_db": DataSource.KANBAN,
-                                }
-                                ds = [source_map.get(s, DataSource.MEDIA_DB) for s in claim_sources]
+                                mdr = _build_multi_retriever(db_paths)
+                                ds = list(resolved_data_sources)
 
                                 # For media_db, attempt hybrid; for others, simple retrieve
                                 docs: list[Any] = []
@@ -5293,7 +5420,7 @@ async def unified_rag_pipeline(
                                 # Best-effort: targeted retrieval on missing numbers (bounded)
                                 try:
                                     if MultiDatabaseRetriever and RetrievalConfig and media_db_path:
-                                        mdr = MultiDatabaseRetriever({"media_db": media_db_path}, user_id=user_id or "0")
+                                        mdr = _build_multi_retriever({"media_db": media_db_path})
                                         conf = RetrievalConfig(max_results=min(10, top_k), min_score=min_score, use_fts=True, use_vector=True, include_metadata=True, fts_level=fts_level)
                                         numeric_added: list[Document] = []
                                         for tok in list(nf.missing)[:3]:

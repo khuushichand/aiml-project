@@ -1043,17 +1043,7 @@ class AuthnzOrgsTeamsRepo:
                     (user_id,),
                 )
                 rows = await cur.fetchall()
-                return [
-                    {
-                        "team_id": r[0],
-                        "user_id": r[1],
-                        "role": r[2],
-                        "org_id": r[3],
-                        "team_name": r[4],
-                        "org_name": r[5],
-                    }
-                    for r in rows
-                ]
+                return [self._membership_row_to_dict(r) for r in rows]
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzOrgsTeamsRepo.list_memberships_for_user failed: {exc}"
@@ -1100,17 +1090,7 @@ class AuthnzOrgsTeamsRepo:
                     (user_id,),
                 )
                 rows = await cur.fetchall()
-                return [
-                    {
-                        "team_id": r[0],
-                        "user_id": r[1],
-                        "role": r[2],
-                        "org_id": r[3],
-                        "team_name": r[4],
-                        "org_name": r[5],
-                    }
-                    for r in rows
-                ]
+                return [self._membership_row_to_dict(r) for r in rows]
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzOrgsTeamsRepo.list_active_team_memberships_for_user failed: {exc}"
@@ -1831,3 +1811,19 @@ class AuthnzOrgsTeamsRepo:
                 f"AuthnzOrgsTeamsRepo.list_organizations_for_user failed: {exc}"
             )
             raise
+    @staticmethod
+    def _membership_row_to_dict(row: Any) -> dict[str, Any]:
+        """Normalize membership rows across legacy/new column projections."""
+        if isinstance(row, dict):
+            return dict(row)
+        result = {
+            "team_id": row[0],
+            "user_id": row[1],
+            "role": row[2],
+            "org_id": row[3],
+        }
+        if len(row) > 4:
+            result["team_name"] = row[4]
+        if len(row) > 5:
+            result["org_name"] = row[5]
+        return result

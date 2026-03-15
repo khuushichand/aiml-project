@@ -1,6 +1,10 @@
+import importlib
 import sqlite3
 from pathlib import Path
 
+import pytest
+
+from tldw_Server_API.app.core.DB_Management import sqlite_policy
 from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
 
 
@@ -37,3 +41,26 @@ def test_sqlite_schema_has_expected_columns_and_indexes(tmp_path):
         ensure_jobs_tables(Path(db_path))
     finally:
         conn.close()
+
+
+def test_jobs_migrations_uses_shared_sqlite_policy_helper(tmp_path):
+    jobs_migrations = importlib.import_module("tldw_Server_API.app.core.Jobs.migrations")
+    calls: list[dict[str, object]] = []
+
+    def fake_configure(conn, **kwargs):
+        calls.append(kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sqlite_policy, "configure_sqlite_connection", fake_configure)
+        jobs_migrations = importlib.reload(jobs_migrations)
+        jobs_migrations.ensure_jobs_tables(tmp_path / "jobs_helper.db")
+
+    importlib.reload(jobs_migrations)
+
+    assert calls == [{
+        "use_wal": True,
+        "synchronous": "NORMAL",
+        "busy_timeout_ms": 5000,
+        "foreign_keys": False,
+        "temp_store": None,
+    }]

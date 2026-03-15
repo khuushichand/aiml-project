@@ -35,6 +35,7 @@ This section is organized by product surface so you can quickly find the right d
 - [RAG Production Configuration](Server/RAG_Production_Configuration_Guide.md)
 - [RAG Evals Playbook](Server/RAG_Evals_Playbook.md)
 - [Evaluations User Guide](Server/Evaluations_User_Guide.md)
+- [Benchmark Creation and Runs (API + WebUI/Extension)](Server/Benchmark_Creation_API_WebUI_Extension_Guide.md)
 - [Evaluations Deployment Guide](Server/Evaluations_Deployment_Guide.md)
 - [Evaluations End User Guide](Server/Evaluations_End_User_Guide.md)
 - [Evaluations Production Deployment](Server/Evaluations_Production_Deployment_Guide.md)
@@ -76,6 +77,7 @@ This section is organized by product surface so you can quickly find the right d
 
 - [Chatbook User Guide](WebUI_Extension/Chatbook_User_Guide.md)
 - [Chatbook Tools Getting Started](WebUI_Extension/Chatbook_Tools_Getting_Started.md)
+- [Google Keep Notes Import and Export](WebUI_Extension/Google_Keep_Notes_Import_Export_Guide.md)
 - [Workflows Examples](WebUI_Extension/Workflows_Examples.md)
 
 ## Integrations and Experiments

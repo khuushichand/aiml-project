@@ -124,6 +124,10 @@ vi.mock("../StudioPane", () => ({
   StudioPane: () => <div data-testid="workspace-studio-pane">Studio</div>
 }))
 
+vi.mock("../WorkspaceStatusBar", () => ({
+  WorkspaceStatusBar: () => <div data-testid="workspace-status-bar" />
+}))
+
 if (!(globalThis as any).ResizeObserver) {
   ;(globalThis as any).ResizeObserver = class ResizeObserver {
     observe() {}
@@ -205,12 +209,12 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
     expect(
       await screen.findByTestId("workspace-storage-sync-banner")
     ).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Use latest" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Fork copy" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Keep mine" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Reload from other tab" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Save as new workspace" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Keep this version" })).toBeInTheDocument()
     expect(
       screen.getByText(
-        "Use latest reloads this tab. Keep mine keeps your current tab state. Fork copy duplicates your current state into a new workspace."
+        "Reload from other tab refreshes this tab. Keep this version ignores the update. Save as new workspace copies your current state."
       )
     ).toBeInTheDocument()
   })
@@ -225,7 +229,7 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
       await screen.findByTestId("workspace-storage-sync-banner")
     ).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("button", { name: "Keep mine" }))
+    fireEvent.click(screen.getByRole("button", { name: "Keep this version" }))
     expect(
       screen.queryByTestId("workspace-storage-sync-banner")
     ).not.toBeInTheDocument()
@@ -268,7 +272,7 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
       await screen.findByText("Changed fields: sources, chat history")
     ).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("button", { name: "Fork copy" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save as new workspace" }))
     expect(testState.duplicateWorkspace).toHaveBeenCalledWith("workspace-1")
     await waitFor(() => {
       expect(
@@ -365,12 +369,16 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
 
     const banner = await screen.findByTestId("workspace-banner")
     expect(banner).toBeInTheDocument()
+    // Banner without image defaults to collapsed ribbon — title visible, subtitle hidden
     expect(screen.getByTestId("workspace-banner-title")).toHaveTextContent(
       "Imageless Banner"
     )
+    expect(banner.getAttribute("style") || "").not.toContain("url(")
+
+    // Expand by clicking the collapsed ribbon
+    fireEvent.click(banner)
     expect(screen.getByTestId("workspace-banner-subtitle")).toHaveTextContent(
       "No image present"
     )
-    expect(banner.getAttribute("style") || "").not.toContain("url(")
   })
 })

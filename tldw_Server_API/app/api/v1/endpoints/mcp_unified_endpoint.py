@@ -40,7 +40,6 @@ from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, SYSTEM
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
-    is_single_user_mode as _authnz_is_single_user_mode,
     is_single_user_profile_mode,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
@@ -50,6 +49,7 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
+from tldw_Server_API.app.core.feature_flags import is_mcp_hub_policy_enforcement_enabled
 from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 from tldw_Server_API.app.services import admin_tool_catalog_service
 
@@ -65,15 +65,18 @@ _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS = (
     ipaddress.AddressValueError,
     ipaddress.NetmaskValueError,
 )
-
-# Test compatibility alias: some MCP auth tests monkeypatch this symbol.
-is_single_user_mode = _authnz_is_single_user_mode
+_ACCESS_TOKEN_TYPE = "access"  # nosec B105
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
 
 # Security
 security = HTTPBearer(auto_error=False)
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 # Request/Response models
@@ -179,9 +182,7 @@ def _should_use_single_user_api_key_compat() -> bool:
     if flag in {"0", "false", "off"}:
         return False
     try:
-        single_mode_fn = globals().get("is_single_user_mode")
-        single_mode = bool(single_mode_fn()) if callable(single_mode_fn) else False
-        return bool(is_single_user_profile_mode() or single_mode)
+        return bool(is_single_user_profile_mode())
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP unified: single-user profile detection failed; defaulting compat shim to False",
@@ -271,7 +272,7 @@ async def _resolve_token_data_compat(
                     username=getattr(user, "username", None),
                     roles=list(getattr(user, "roles", []) or []),
                     permissions=list(getattr(user, "permissions", []) or []),
-                    token_type="access",
+                    token_type=_ACCESS_TOKEN_TYPE,
                 )
     except HTTPException:
         logger.debug(
@@ -388,7 +389,7 @@ async def _resolve_token_data_compat(
                             username="single_user",
                             roles=roles,
                             permissions=perms,
-                            token_type="access",
+                            token_type=_ACCESS_TOKEN_TYPE,
                         )
             except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 # Fall through to multi-user API key validation
@@ -419,7 +420,7 @@ async def _resolve_token_data_compat(
                     username=None,
                     roles=["api_client"],
                     permissions=_extract_api_key_permissions(info),
-                    token_type="access",
+                    token_type=_ACCESS_TOKEN_TYPE,
                 )
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
@@ -565,6 +566,7 @@ async def _attach_api_key_metadata(
             )
 
     _attach_rg_ingress_metadata(metadata, http_request)
+    _attach_workspace_ingress_metadata(metadata, http_request)
     return metadata
 
 
@@ -580,6 +582,28 @@ def _attach_rg_ingress_metadata(metadata: dict[str, Any], http_request: Optional
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Failed to read rg_policy_id from request state",
+            error=str(exc),
+            exc_info=True,
+        )
+
+
+def _attach_workspace_ingress_metadata(
+    metadata: dict[str, Any],
+    http_request: Optional[Request],
+) -> None:
+    """Attach trusted direct-ingress workspace metadata for MCP path scoping."""
+    if not http_request:
+        return
+    try:
+        workspace_id = str(http_request.headers.get("x-tldw-workspace-id") or "").strip()
+        if workspace_id:
+            metadata["workspace_id"] = workspace_id
+        cwd = str(http_request.headers.get("x-tldw-cwd") or "").strip()
+        if cwd:
+            metadata["cwd"] = cwd
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(
+            "Failed to read direct MCP workspace headers",
             error=str(exc),
             exc_info=True,
         )
@@ -655,7 +679,10 @@ async def websocket_endpoint(
     websocket: WebSocket,
     client_id: Optional[str] = Query(None, description="Client identifier"),
     token: Optional[str] = Query(None, description="Authentication token"),
-    api_key: Optional[str] = Query(None, description="API key for authentication")
+    api_key: Optional[str] = Query(None, description="API key for authentication"),
+    mcp_session_id: Optional[str] = Query(None, description="Stable MCP session identifier"),
+    workspace_id: Optional[str] = Query(None, description="Trusted workspace identifier"),
+    cwd: Optional[str] = Query(None, description="Current working directory within the workspace"),
 ):
     """
     WebSocket endpoint for MCP protocol.
@@ -692,7 +719,15 @@ async def websocket_endpoint(
         await server.initialize()
 
     # Handle WebSocket connection
-    await server.handle_websocket(websocket, client_id=client_id, auth_token=token, api_key=api_key)
+    await server.handle_websocket(
+        websocket,
+        client_id=_normalize_optional_text(client_id),
+        auth_token=_normalize_optional_text(token),
+        api_key=_normalize_optional_text(api_key),
+        mcp_session_id=_normalize_optional_text(mcp_session_id),
+        workspace_id=_normalize_optional_text(workspace_id),
+        cwd=_normalize_optional_text(cwd),
+    )
 
 
 # HTTP endpoints
@@ -759,6 +794,7 @@ async def mcp_request(
         if auth.user.permissions:
             metadata.setdefault("permissions", auth.user.permissions)
 
+    metadata["mcp_policy_context_enabled"] = is_mcp_hub_policy_enforcement_enabled()
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
     if safe_config:
@@ -853,6 +889,7 @@ async def mcp_request_batch(
             metadata.setdefault("roles", auth.user.roles)
         if auth.user.permissions:
             metadata.setdefault("permissions", auth.user.permissions)
+    metadata["mcp_policy_context_enabled"] = is_mcp_hub_policy_enforcement_enabled()
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
     if safe_config:

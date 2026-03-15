@@ -30,7 +30,13 @@ import {
   type PromptTableDensity
 } from "./PromptListTable"
 import { PromptListToolbar } from "./PromptListToolbar"
-import type { PromptListQueryState, PromptRowVM } from "./prompt-workspace-types"
+import { PromptSidebar } from "./PromptSidebar"
+import { PromptFullPageEditor } from "./PromptFullPageEditor"
+import { PromptStarterCards } from "./PromptStarterCards"
+import { ContextualHint } from "./ContextualHint"
+import { useContextualHints } from "./useContextualHints"
+import { useFilterPresets, type FilterPreset } from "./useFilterPresets"
+import type { PromptListQueryState, PromptRowVM, PromptSavedView } from "./prompt-workspace-types"
 import {
   buildSyncBatchPlan,
   type SyncBatchTask
@@ -113,6 +119,7 @@ import {
   getPromptImportErrorNotice,
   parseImportPromptsPayload
 } from "./prompt-import-error-utils"
+import { renderStructuredPromptLegacySnapshot } from "./structured-prompt-utils"
 import { buildBulkCountSummary, collectFailedIds } from "./bulk-result-utils"
 import {
   filterTrashPromptsByName,
@@ -303,6 +310,7 @@ export const PromptBody = () => {
   const [newCollectionDescription, setNewCollectionDescription] = useState("")
   const [tagFilter, setTagFilter] = useState<string[]>([])
   const [tagMatchMode, setTagMatchMode] = useState<TagMatchMode>("any")
+  const [syncFilter, setSyncFilter] = useState<string>("all")
   const [currentPage, setCurrentPage] = useState(1)
   const [resultsPerPage, setResultsPerPage] = useState(20)
   const [tableDensity, setTableDensity] = useState<PromptTableDensity>(() =>
@@ -368,6 +376,13 @@ export const PromptBody = () => {
   const [copilotSearchText, setCopilotSearchText] = useState("")
   const [copilotKeyFilter, setCopilotKeyFilter] = useState<string>("all")
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [savedView, setSavedView] = useState<PromptSavedView>("all")
+  const [fullEditorOpen, setFullEditorOpen] = useState(false)
+  const [fullEditorMode, setFullEditorMode] = useState<"create" | "edit">("create")
+  const [fullEditorInitialValues, setFullEditorInitialValues] = useState<any>(null)
+  const { presets: filterPresets, savePreset: saveFilterPreset, deletePreset: deleteFilterPreset } = useFilterPresets()
+  const { shouldShow: shouldShowHint, dismiss: dismissHint, markShown: markHintShown } = useContextualHints()
   const copilotEditPromptValue = Form.useWatch("prompt", editCopilotForm)
 
   const { setSelectedQuickPrompt, setSelectedSystemPrompt } = useMessageOption()
@@ -541,6 +556,10 @@ export const PromptBody = () => {
         lastSyncedAt: promptRecord?.lastSyncedAt,
         fewShotExamples: promptRecord?.fewShotExamples,
         modulesConfig: promptRecord?.modulesConfig,
+        promptFormat: promptRecord?.promptFormat ?? "legacy",
+        promptSchemaVersion: promptRecord?.promptSchemaVersion ?? null,
+        structuredPromptDefinition:
+          promptRecord?.structuredPromptDefinition ?? null,
         changeDescription: promptRecord?.changeDescription,
         versionNumber: promptRecord?.versionNumber
       })
@@ -794,12 +813,24 @@ export const PromptBody = () => {
   const normalizePromptPayload = React.useCallback((values: any) => {
     const keywords = values?.keywords ?? values?.tags ?? []
     const promptName = values?.name || values?.title
-    const hasSystemPrompt = !!(values?.system_prompt?.trim())
+    const promptFormat = values?.promptFormat === "structured" ? "structured" : "legacy"
+    const structuredPromptDefinition =
+      promptFormat === "structured" ? values?.structuredPromptDefinition ?? null : null
+    const structuredSnapshot =
+      promptFormat === "structured"
+        ? renderStructuredPromptLegacySnapshot(structuredPromptDefinition)
+        : null
+    const normalizedSystemPrompt =
+      structuredSnapshot?.systemPrompt ?? values?.system_prompt
+    const normalizedUserPrompt =
+      structuredSnapshot?.userPrompt ?? values?.user_prompt
+    const hasSystemPrompt = !!(normalizedSystemPrompt?.trim())
     const resolvedContent =
       values?.content ??
-      (hasSystemPrompt ? values?.system_prompt : values?.user_prompt) ??
-      values?.system_prompt ??
-      values?.user_prompt
+      structuredSnapshot?.content ??
+      (hasSystemPrompt ? normalizedSystemPrompt : normalizedUserPrompt) ??
+      normalizedSystemPrompt ??
+      normalizedUserPrompt
 
     return {
       ...values,
@@ -808,8 +839,11 @@ export const PromptBody = () => {
       tags: keywords,
       keywords,
       content: resolvedContent,
-      system_prompt: values?.system_prompt,
-      user_prompt: values?.user_prompt,
+      promptFormat,
+      promptSchemaVersion: promptFormat === "structured" ? values?.promptSchemaVersion ?? 1 : null,
+      structuredPromptDefinition,
+      system_prompt: normalizedSystemPrompt,
+      user_prompt: normalizedUserPrompt,
       author: values?.author,
       details: values?.details,
       is_system: hasSystemPrompt
@@ -1935,6 +1969,9 @@ export const PromptBody = () => {
         return promptType === typeFilter
       })
     }
+    if (syncFilter !== "all") {
+      items = items.filter((p) => (p.syncStatus || "local") === syncFilter)
+    }
     if (usageFilter !== "all") {
       items = items.filter((p) =>
         usageFilter === "used"
@@ -1953,25 +1990,94 @@ export const PromptBody = () => {
         matchesTagFilter(getPromptKeywords(p), tagFilter, tagMatchMode)
       )
     }
+    // Apply savedView filter
+    if (savedView === "favorites") {
+      items = items.filter((p) => !!p.favorite)
+    } else if (savedView === "recent") {
+      items = [...items]
+        .filter((p) => typeof p.lastUsedAt === "number" && p.lastUsedAt > 0)
+        .sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0))
+        .slice(0, 20)
+    } else if (savedView === "most_used") {
+      items = [...items]
+        .filter((p) => getPromptUsageCount(p) > 0)
+        .sort((a, b) => getPromptUsageCount(b) - getPromptUsageCount(a))
+        .slice(0, 20)
+    } else if (savedView === "untagged") {
+      items = items.filter((p) => {
+        const kw = getPromptKeywords(p)
+        return !kw || kw.length === 0
+      })
+    }
     // favorites first, then newest
-    items = items.sort(
-      (a, b) =>
-        Number(!!b.favorite) - Number(!!a.favorite) ||
-        (b.createdAt || 0) - (a.createdAt || 0)
-    )
+    if (savedView === "all" || savedView === "favorites" || savedView === "untagged") {
+      items = items.sort(
+        (a, b) =>
+          Number(!!b.favorite) - Number(!!a.favorite) ||
+          (b.createdAt || 0) - (a.createdAt || 0)
+      )
+    }
     return items
   }, [
     data,
     projectFilter,
     typeFilter,
+    syncFilter,
     usageFilter,
     selectedCollection,
     tagFilter,
     tagMatchMode,
+    savedView,
     getPromptUsageCount,
     getPromptKeywords,
     getPromptType
   ])
+
+  // Compute sidebar counts from unfiltered data
+  const sidebarCounts = useMemo(() => {
+    const all = (data || []) as any[]
+    const typeCounts: Record<string, number> = { all: all.length }
+    const syncCounts: Record<string, number> = { all: all.length }
+    const tagCounts: Record<string, number> = {}
+    let favCount = 0
+    let recentCount = 0
+    let mostUsedCount = 0
+    let untaggedCount = 0
+
+    for (const p of all) {
+      // Type counts
+      const pt = getPromptType(p)
+      typeCounts[pt] = (typeCounts[pt] || 0) + 1
+      // Sync counts
+      const ss = p.syncStatus || "local"
+      syncCounts[ss] = (syncCounts[ss] || 0) + 1
+      // Tag counts
+      const kw = getPromptKeywords(p)
+      if (!kw || kw.length === 0) {
+        untaggedCount++
+      } else {
+        for (const tag of kw) {
+          tagCounts[tag] = (tagCounts[tag] || 0) + 1
+        }
+      }
+      if (p.favorite) favCount++
+      if (typeof p.lastUsedAt === "number" && p.lastUsedAt > 0) recentCount++
+      if (getPromptUsageCount(p) > 0) mostUsedCount++
+    }
+
+    return {
+      typeCounts,
+      syncCounts,
+      tagCounts,
+      smartCounts: {
+        all: all.length,
+        favorites: favCount,
+        recent: Math.min(recentCount, 20),
+        most_used: Math.min(mostUsedCount, 20),
+        untagged: untaggedCount,
+      } as Partial<Record<PromptSavedView, number>>,
+    }
+  }, [data, getPromptType, getPromptKeywords, getPromptUsageCount])
 
   const localSearchFilteredData = useMemo(() => {
     if (normalizedSearchText.length === 0) {
@@ -2084,7 +2190,7 @@ export const PromptBody = () => {
   const customPromptTableQuery: PromptListQueryState = {
     searchText,
     typeFilter: typeFilter,
-    syncFilter: "all",
+    syncFilter: syncFilter as PromptListQueryState["syncFilter"],
     usageFilter,
     tagFilter,
     tagMatchMode,
@@ -2094,7 +2200,7 @@ export const PromptBody = () => {
     },
     page: currentPage,
     pageSize: resultsPerPage,
-    savedView: "all"
+    savedView
   }
 
   const hiddenServerResultsOnPage = useMemo(() => {
@@ -2347,6 +2453,61 @@ export const PromptBody = () => {
     },
     [guardPrivateMode]
   )
+
+  const openFullEditor = React.useCallback(
+    (promptRecord?: any) => {
+      if (promptRecord?.id) {
+        const { systemText, userText } = getPromptTexts(promptRecord)
+        setFullEditorMode("edit")
+        setEditId(promptRecord.id)
+        setFullEditorInitialValues({
+          id: promptRecord.id,
+          name: promptRecord?.name || promptRecord?.title,
+          author: promptRecord?.author,
+          details: promptRecord?.details,
+          system_prompt: systemText,
+          user_prompt: userText,
+          promptFormat: promptRecord?.promptFormat ?? "legacy",
+          promptSchemaVersion: promptRecord?.promptSchemaVersion ?? null,
+          structuredPromptDefinition:
+            promptRecord?.structuredPromptDefinition ?? null,
+          keywords: promptRecord?.keywords ?? promptRecord?.tags ?? [],
+          changeDescription: promptRecord?.changeDescription,
+        })
+        setSearchParams({ edit: promptRecord.id }, { replace: true })
+      } else {
+        setFullEditorMode("create")
+        setFullEditorInitialValues(promptRecord || null)
+        setSearchParams({ new: "1" }, { replace: true })
+      }
+      setFullEditorOpen(true)
+    },
+    [getPromptTexts, setSearchParams]
+  )
+
+  const closeFullEditor = React.useCallback(() => {
+    setFullEditorOpen(false)
+    setFullEditorInitialValues(null)
+    const newParams = new URLSearchParams(searchParams)
+    newParams.delete("edit")
+    newParams.delete("new")
+    setSearchParams(newParams, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  // Handle ?edit=<id> and ?new=1 URL params for full editor
+  useEffect(() => {
+    if (status !== "success" || !Array.isArray(data)) return
+    const editId = searchParams.get("edit")
+    const isNew = searchParams.get("new")
+    if (editId && !fullEditorOpen) {
+      const prompt = data.find((p: any) => String(p.id) === editId)
+      if (prompt) {
+        openFullEditor(prompt)
+      }
+    } else if (isNew === "1" && !fullEditorOpen) {
+      openFullEditor()
+    }
+  }, [status, data, searchParams, fullEditorOpen, openFullEditor])
 
   const copyCopilotToCustom = React.useCallback(
     (record: { key?: string; prompt?: string }) => {
@@ -2739,7 +2900,7 @@ export const PromptBody = () => {
       }
       if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
-        openCreateDrawer()
+        openFullEditor()
         return
       }
       if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -2749,7 +2910,7 @@ export const PromptBody = () => {
     }
     document.addEventListener("keydown", handler)
     return () => document.removeEventListener("keydown", handler)
-  }, [drawerOpen, shortcutsHelpOpen, openCreateDrawer])
+  }, [drawerOpen, shortcutsHelpOpen, openFullEditor])
 
   const openEditDrawer = (record: any) => {
     if (guardPrivateMode()) return
@@ -2763,6 +2924,9 @@ export const PromptBody = () => {
       details: record?.details,
       system_prompt: systemText,
       user_prompt: userText,
+      promptFormat: record?.promptFormat ?? "legacy",
+      promptSchemaVersion: record?.promptSchemaVersion ?? null,
+      structuredPromptDefinition: record?.structuredPromptDefinition ?? null,
       keywords: getPromptKeywords(record),
       // Sync fields for progressive disclosure
       serverId: record?.serverId,
@@ -2865,12 +3029,42 @@ export const PromptBody = () => {
     }
   }
 
+  const handleFullEditorSubmit = (values: any) => {
+    const payload = normalizePromptPayload(values)
+    if (fullEditorMode === "create") {
+      savePromptMutation(payload)
+    } else {
+      updatePromptMutation(payload)
+    }
+  }
+
   // Clear project filter
   const clearProjectFilter = () => {
     const newParams = new URLSearchParams(searchParams)
     newParams.delete("project")
     setSearchParams(newParams, { replace: true })
   }
+
+  const handleLoadFilterPreset = React.useCallback((preset: FilterPreset) => {
+    setTypeFilter(preset.typeFilter as any)
+    setSyncFilter(preset.syncFilter as any)
+    setTagFilter(preset.tagFilter)
+    setTagMatchMode(preset.tagMatchMode)
+    setSavedView(preset.savedView)
+  }, [])
+
+  const handleSaveFilterPreset = React.useCallback(
+    (name: string) => {
+      saveFilterPreset(name, {
+        typeFilter,
+        syncFilter,
+        tagFilter,
+        tagMatchMode,
+        savedView,
+      })
+    },
+    [typeFilter, syncFilter, tagFilter, tagMatchMode, savedView, saveFilterPreset]
+  )
 
   const openConflictResolution = React.useCallback((localId: string) => {
     setConflictPromptId(localId)
@@ -3115,9 +3309,9 @@ export const PromptBody = () => {
     (promptId: string) => {
       const promptRecord = getPromptRecordById(promptId)
       if (!promptRecord) return
-      openEditDrawer(promptRecord)
+      openFullEditor(promptRecord)
     },
-    [getPromptRecordById]
+    [getPromptRecordById, openFullEditor]
   )
 
   const renderCustomPromptTitleMeta = React.useCallback(
@@ -3171,7 +3365,7 @@ export const PromptBody = () => {
           inlineUseInChat={false}
           onEdit={() => {
             if (!promptRecord) return
-            openEditDrawer(promptRecord)
+            openFullEditor(promptRecord)
           }}
           onDuplicate={() => {
             if (!promptRecord) return
@@ -3456,7 +3650,7 @@ export const PromptBody = () => {
             <div className="flex flex-wrap items-center gap-2">
               <Tooltip title={t("managePrompts.newPromptHint", { defaultValue: "New prompt (N)" })}>
               <button
-                onClick={openCreateDrawer}
+                onClick={() => openFullEditor()}
                 data-testid="prompts-add"
                 className="inline-flex items-center rounded-md border border-transparent bg-primary px-2 py-2 text-md font-medium leading-4 text-white shadow-sm hover:bg-primaryStrong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50">
                 {t("managePrompts.newPromptBtn", { defaultValue: "New prompt" })}
@@ -3790,28 +3984,48 @@ export const PromptBody = () => {
         )}
 
         {status === "success" && Array.isArray(data) && data.length === 0 && (
-          <FeatureEmptyState
-            title={t("settings:managePrompts.emptyTitle", {
-              defaultValue: "No custom prompts yet"
-            })}
-            description={t("settings:managePrompts.emptyDescription", {
-              defaultValue:
-                "Create reusable prompts for recurring tasks, workflows, and team conventions."
-            })}
-            examples={[
-              t("settings:managePrompts.emptyExample1", {
+          <>
+            <FeatureEmptyState
+              title={t("settings:managePrompts.emptyTitle", {
+                defaultValue: "No custom prompts yet"
+              })}
+              description={t("settings:managePrompts.emptyDescription", {
                 defaultValue:
-                  "Save your favorite system prompt for summaries, explanations, or translations."
-              }),
-              t("settings:managePrompts.emptyExample2", {
-                defaultValue:
-                  "Create quick prompts for common actions like drafting emails or refining notes."
-              })
-            ]}
-            primaryActionLabel={t("settings:managePrompts.emptyPrimaryCta", {
-              defaultValue: "Create prompt"
-            })}
-            onPrimaryAction={openCreateDrawer}
+                  "Create reusable prompts for recurring tasks, workflows, and team conventions."
+              })}
+              examples={[
+                t("settings:managePrompts.emptyExample1", {
+                  defaultValue:
+                    "Save your favorite system prompt for summaries, explanations, or translations."
+                }),
+                t("settings:managePrompts.emptyExample2", {
+                  defaultValue:
+                    "Create quick prompts for common actions like drafting emails or refining notes."
+                })
+              ]}
+              primaryActionLabel={t("settings:managePrompts.emptyPrimaryCta", {
+                defaultValue: "Create prompt"
+              })}
+              onPrimaryAction={() => openFullEditor()}
+            />
+            <div className="mt-6">
+              <h3 className="mb-3 text-sm font-medium text-text-muted">
+                Or start with a template
+              </h3>
+              <PromptStarterCards
+                onUse={(starter) => openFullEditor(starter)}
+              />
+            </div>
+          </>
+        )}
+
+        {status === "success" && Array.isArray(data) && data.length >= 5 && shouldShowHint("keyboard-shortcuts") && (
+          <ContextualHint
+            id="keyboard-shortcuts"
+            message="Press Enter to preview, E to edit, or ? for all keyboard shortcuts."
+            visible={true}
+            onDismiss={dismissHint}
+            onShown={markHintShown}
           />
         )}
 
@@ -4421,7 +4635,42 @@ export const PromptBody = () => {
           }
         />
       )}
-      <div className="flex flex-col items-start gap-1 mb-6">
+      <div className="flex gap-0">
+        {/* Sidebar - desktop only */}
+        {!isCompactViewport && (
+          <PromptSidebar
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={() => setSidebarCollapsed((p) => !p)}
+            selectedSegment={selectedSegment}
+            onSegmentChange={(s) => setSelectedSegment(s as SegmentType)}
+            trashCount={trashData?.length}
+            savedView={savedView}
+            onSavedViewChange={setSavedView}
+            smartCounts={sidebarCounts.smartCounts}
+            typeFilter={typeFilter}
+            onTypeFilterChange={(v) => setTypeFilter(v as any)}
+            typeCounts={sidebarCounts.typeCounts}
+            syncFilter={syncFilter}
+            onSyncFilterChange={setSyncFilter}
+            syncCounts={sidebarCounts.syncCounts}
+            tagFilter={tagFilter}
+            onTagFilterChange={setTagFilter}
+            tagMatchMode={tagMatchMode}
+            onTagMatchModeChange={setTagMatchMode}
+            tagCounts={sidebarCounts.tagCounts}
+            presets={filterPresets}
+            onLoadPreset={handleLoadFilterPreset}
+            onSavePreset={handleSaveFilterPreset}
+            onDeletePreset={deleteFilterPreset}
+          />
+        )}
+
+        {/* Main content area */}
+        <div className="flex-1 min-w-0">
+
+      {/* Mobile segment tabs */}
+      {isCompactViewport && (
+      <div className="flex flex-col items-start gap-1 mb-6 px-4">
         <Segmented
           size="large"
           options={[
@@ -4519,10 +4768,16 @@ export const PromptBody = () => {
               })}
         </p>
       </div>
+      )}
+      <div className={isCompactViewport ? "px-4" : "p-4"}>
       {selectedSegment === "custom" && customPrompts()}
       {selectedSegment === "copilot" && copilotPrompts()}
       {selectedSegment === "studio" && <StudioTabContainer />}
       {selectedSegment === "trash" && trashPrompts()}
+      </div>
+
+      </div>
+      </div>
 
       <PromptDrawer
         open={drawerOpen}
@@ -4537,6 +4792,16 @@ export const PromptBody = () => {
         allTags={allTags}
       />
 
+      <PromptFullPageEditor
+        open={fullEditorOpen}
+        onClose={closeFullEditor}
+        mode={fullEditorMode}
+        initialValues={fullEditorInitialValues}
+        onSubmit={handleFullEditorSubmit}
+        isLoading={fullEditorMode === "create" ? savePromptLoading : isUpdatingPrompt}
+        allTags={allTags}
+      />
+
       <PromptInspectorPanel
         open={inspectorOpen}
         prompt={inspectorPrompt}
@@ -4545,7 +4810,7 @@ export const PromptBody = () => {
           const promptRecord = getPromptRecordById(promptId)
           if (!promptRecord) return
           closeInspector()
-          openEditDrawer(promptRecord)
+          openFullEditor(promptRecord)
         }}
         onUseInChat={(promptId) => {
           const promptRecord = getPromptRecordById(promptId)

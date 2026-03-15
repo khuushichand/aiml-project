@@ -6,7 +6,7 @@ import {
   ChevronRight,
   ZoomIn,
   ZoomOut,
-  Maximize,
+  RotateCcw,
   LayoutGrid,
   FileText,
   List
@@ -29,6 +29,8 @@ interface ViewerToolbarProps {
   documentType?: DocumentType | null
   /** For EPUB: percentage complete (0-100) */
   percentage?: number
+  /** For EPUB: current chapter title */
+  chapterTitle?: string | null
   onPageChange: (page: number) => void
   onZoomChange: (zoom: number) => void
   onViewModeChange: (mode: ViewMode) => void
@@ -47,6 +49,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
   viewMode,
   documentType,
   percentage = 0,
+  chapterTitle,
   onPageChange,
   onZoomChange,
   onViewModeChange,
@@ -59,9 +62,10 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
   const handlePageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = parseInt(e.target.value, 10)
-    if (!isNaN(value) && value >= 1 && value <= totalPages) {
-      onPageChange(value)
-    }
+    if (isNaN(value)) return
+    // Clamp to valid range on every keystroke
+    const clamped = Math.max(1, Math.min(value, totalPages || 1))
+    onPageChange(clamped)
   }
 
   const handlePageInputBlur = (e: React.FocusEvent<HTMLInputElement>) => {
@@ -83,9 +87,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     onZoomChange(newZoom)
   }
 
-  const handleFitWidth = () => {
-    // Fit width will be calculated based on container width
-    // For now, reset to 100%
+  const handleResetZoom = () => {
     onZoomChange(DEFAULT_ZOOM_LEVEL)
   }
 
@@ -121,6 +123,15 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
   return (
     <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-surface px-2">
+      {/* EPUB: Show chapter title on the left */}
+      {isEpub && (
+        <div className="flex items-center min-w-0 max-w-[200px]">
+          <span className="truncate text-sm text-text-muted" title={chapterTitle || undefined}>
+            {chapterTitle || ""}
+          </span>
+        </div>
+      )}
+
       {/* View mode - only for PDF */}
       {!isEpub && (
         <div className="flex items-center">
@@ -171,13 +182,13 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
             </button>
           </Tooltip>
 
-          <Tooltip title={t("option:documentWorkspace.fitWidth", "Fit width")}>
+          <Tooltip title={t("option:documentWorkspace.resetZoom", "Reset zoom")}>
             <button
-              onClick={handleFitWidth}
+              onClick={handleResetZoom}
               className={TOOLBAR_ICON_BUTTON_CLASS}
-              aria-label={t("option:documentWorkspace.fitWidth", "Fit width")}
+              aria-label={t("option:documentWorkspace.resetZoom", "Reset zoom")}
             >
-              <Maximize className="h-4 w-4" />
+              <RotateCcw className="h-4 w-4" />
             </button>
           </Tooltip>
         </div>
@@ -227,6 +238,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
               onBlur={handlePageInputBlur}
               className="w-14 text-center"
               size="small"
+              data-testid="document-page-input"
             />
             <span className="text-muted">
               / {totalPages || "-"}

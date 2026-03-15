@@ -43,7 +43,14 @@ EXPECTED_SPLIT_ADMIN_OPERATIONS: set[tuple[str, str]] = {
     ("GET", "/api/v1/admin/backups"),
     ("POST", "/api/v1/admin/backups"),
     ("POST", "/api/v1/admin/backups/{backup_id}/restore"),
+    ("GET", "/api/v1/admin/backup-schedules"),
+    ("POST", "/api/v1/admin/backup-schedules"),
+    ("PATCH", "/api/v1/admin/backup-schedules/{schedule_id}"),
+    ("POST", "/api/v1/admin/backup-schedules/{schedule_id}/pause"),
+    ("POST", "/api/v1/admin/backup-schedules/{schedule_id}/resume"),
+    ("DELETE", "/api/v1/admin/backup-schedules/{schedule_id}"),
     ("GET", "/api/v1/admin/retention-policies"),
+    ("POST", "/api/v1/admin/retention-policies/{policy_key}/preview"),
     ("PUT", "/api/v1/admin/retention-policies/{policy_key}"),
     ("GET", "/api/v1/admin/maintenance"),
     ("PUT", "/api/v1/admin/maintenance"),
@@ -57,6 +64,13 @@ EXPECTED_SPLIT_ADMIN_OPERATIONS: set[tuple[str, str]] = {
     ("DELETE", "/api/v1/admin/incidents/{incident_id}"),
     ("POST", "/api/v1/admin/llm-usage/pricing/reload"),
     ("POST", "/api/v1/admin/chat/model-aliases/reload"),
+    ("GET", "/api/v1/admin/monitoring/alert-rules"),
+    ("POST", "/api/v1/admin/monitoring/alert-rules"),
+    ("DELETE", "/api/v1/admin/monitoring/alert-rules/{rule_id}"),
+    ("POST", "/api/v1/admin/monitoring/alerts/{alert_identity}/assign"),
+    ("POST", "/api/v1/admin/monitoring/alerts/{alert_identity}/snooze"),
+    ("POST", "/api/v1/admin/monitoring/alerts/{alert_identity}/escalate"),
+    ("GET", "/api/v1/admin/monitoring/alerts/history"),
 }
 
 
@@ -104,6 +118,14 @@ def test_admin_split_openapi_schema_contracts(monkeypatch, tmp_path) -> None:
     backups_schema = backups_get["responses"]["200"]["content"]["application/json"]["schema"]
     assert backups_schema["$ref"].endswith("/BackupListResponse")
 
+    backup_schedules_get = paths["/api/v1/admin/backup-schedules"]["get"]
+    backup_schedules_schema = backup_schedules_get["responses"]["200"]["content"]["application/json"]["schema"]
+    assert backup_schedules_schema["$ref"].endswith("/BackupScheduleListResponse")
+
+    backup_schedules_post = paths["/api/v1/admin/backup-schedules"]["post"]
+    backup_schedules_post_schema = backup_schedules_post["responses"]["200"]["content"]["application/json"]["schema"]
+    assert backup_schedules_post_schema["$ref"].endswith("/BackupScheduleMutationResponse")
+
     maintenance_put = paths["/api/v1/admin/maintenance"]["put"]
     maintenance_schema = maintenance_put["responses"]["200"]["content"]["application/json"]["schema"]
     assert maintenance_schema["$ref"].endswith("/MaintenanceState")
@@ -111,6 +133,18 @@ def test_admin_split_openapi_schema_contracts(monkeypatch, tmp_path) -> None:
     rate_limit_post = paths["/api/v1/admin/roles/{role_id}/rate-limits"]["post"]
     rate_limit_schema = rate_limit_post["responses"]["200"]["content"]["application/json"]["schema"]
     assert rate_limit_schema["$ref"].endswith("/RateLimitResponse")
+
+    monitoring_rules_get = paths["/api/v1/admin/monitoring/alert-rules"]["get"]
+    monitoring_rules_schema = monitoring_rules_get["responses"]["200"]["content"]["application/json"]["schema"]
+    assert monitoring_rules_schema["$ref"].endswith("/AdminAlertRuleListResponse")
+
+    monitoring_assign_post = paths["/api/v1/admin/monitoring/alerts/{alert_identity}/assign"]["post"]
+    monitoring_assign_schema = monitoring_assign_post["responses"]["200"]["content"]["application/json"]["schema"]
+    assert monitoring_assign_schema["$ref"].endswith("/AdminAlertStateMutationResponse")
+
+    monitoring_history_get = paths["/api/v1/admin/monitoring/alerts/history"]["get"]
+    monitoring_history_schema = monitoring_history_get["responses"]["200"]["content"]["application/json"]["schema"]
+    assert monitoring_history_schema["$ref"].endswith("/AdminAlertHistoryListResponse")
 
 
 def test_admin_root_module_has_no_route_handlers() -> None:

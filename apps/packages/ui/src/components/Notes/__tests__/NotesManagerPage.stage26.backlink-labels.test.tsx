@@ -285,7 +285,9 @@ describe("NotesManagerPage stage 26 conversation backlink labels", () => {
     renderPage()
 
     fireEvent.click(await screen.findByTestId("notes-open-button-note-backlink-1"))
-    fireEvent.click(await screen.findByRole("button", { name: /open conversation/i }))
+    // "Open linked conversation" is now inside the overflow menu
+    fireEvent.click(await screen.findByTestId("notes-overflow-menu-button"))
+    fireEvent.click(await screen.findByText(/open linked conversation/i))
 
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith("/")

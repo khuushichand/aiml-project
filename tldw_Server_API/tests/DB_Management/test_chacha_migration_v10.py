@@ -91,6 +91,19 @@ CREATE TABLE flashcards(
   version INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE sync_log(
+  change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  client_id TEXT NOT NULL DEFAULT 'legacy',
+  version INTEGER NOT NULL DEFAULT 1,
+  payload TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_sync_log_ts ON sync_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_sync_log_entity ON sync_log(entity, entity_id);
+
 INSERT INTO conversations(id, root_id, forked_from_message_id, parent_conversation_id, character_id, title, rating, created_at, last_modified, deleted, client_id, version)
 VALUES ('conv-1', 'conv-1', NULL, NULL, 1, 'Legacy Chat', 5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 'user-1', 1);
 

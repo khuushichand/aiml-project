@@ -121,10 +121,17 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
   }, [handleSetSelectedOrg, isOrgScoped, organizations, selectedOrg]);
 
   useEffect(() => {
-    if (!permLoading) {
-      loadOrganizations();
+    if (permLoading) {
+      return;
     }
-  }, [loadOrganizations, permLoading]);
+    if (!user) {
+      setOrganizations([]);
+      setSelectedOrg(null);
+      setLoading(false);
+      return;
+    }
+    void loadOrganizations();
+  }, [loadOrganizations, permLoading, user]);
 
   return (
     <OrgContext.Provider

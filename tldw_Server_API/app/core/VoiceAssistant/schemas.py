@@ -25,6 +25,14 @@ class VoiceCommand(BaseModel):
     """
     id: str = Field(..., description="Unique identifier for the command")
     user_id: int = Field(..., description="Owner user ID")
+    persona_id: Optional[str] = Field(
+        default=None,
+        description="Optional persona owner for persona-scoped command libraries"
+    )
+    connection_id: Optional[str] = Field(
+        default=None,
+        description="Optional reusable external connection reference"
+    )
     name: str = Field(..., description="Human-readable name for the command")
     phrases: list[str] = Field(..., description="Trigger phrases that activate this command")
     action_type: ActionType = Field(..., description="Type of action to execute")
@@ -83,6 +91,14 @@ class ParsedIntent(BaseModel):
     Result of intent parsing including match method and alternatives.
     """
     intent: VoiceIntent = Field(..., description="Primary matched intent")
+    matched_phrase: Optional[str] = Field(
+        default=None,
+        description="Best matching phrase template when a command match occurred"
+    )
+    match_reason: Optional[str] = Field(
+        default=None,
+        description="More specific reason for the match, e.g. phrase_exact or phrase_pattern"
+    )
     match_method: str = Field(
         default="unknown",
         description="How the intent was matched: keyword, pattern, llm, or default"

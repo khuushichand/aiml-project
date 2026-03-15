@@ -7,6 +7,10 @@ export type ServerCapabilities = {
   hasRag: boolean
   hasMedia: boolean
   hasNotes: boolean
+  hasSlides: boolean
+  hasPresentationStudio: boolean
+  hasPresentationRender: boolean
+  hasIngestionSources: boolean
   hasPrompts: boolean
   hasFlashcards: boolean
   hasQuizzes: boolean
@@ -43,6 +47,10 @@ const defaultCapabilities: ServerCapabilities = {
   hasRag: false,
   hasMedia: false,
   hasNotes: false,
+  hasSlides: false,
+  hasPresentationStudio: false,
+  hasPresentationRender: false,
+  hasIngestionSources: false,
   hasPrompts: false,
   hasFlashcards: false,
   hasQuizzes: false,
@@ -93,6 +101,14 @@ const fallbackSpec = {
       "/api/v1/media/process-ebooks",
       "/api/v1/media/process-audios",
       "/api/v1/notes/",
+      "/api/v1/slides/generate/from-media",
+      "/api/v1/slides/presentations",
+      "/api/v1/slides/presentations/{presentation_id}",
+      "/api/v1/slides/presentations/{presentation_id}/export",
+      "/api/v1/slides/presentations/{presentation_id}/render-jobs",
+      "/api/v1/slides/render-jobs/{job_id}",
+      "/api/v1/slides/presentations/{presentation_id}/render-artifacts",
+      "/api/v1/ingestion-sources",
       "/api/v1/prompts",
       "/api/v1/flashcards",
       "/api/v1/flashcards/decks",
@@ -314,14 +330,39 @@ const applyDocsInfoFeatureGates = (
   capabilities: ServerCapabilities,
   docsInfo: DocsInfoResponse | null | undefined
 ): ServerCapabilities => {
+  const slidesFeatureEnabled = extractFeatureFlag(docsInfo, "hasSlides")
+  const presentationStudioFeatureEnabled = extractFeatureFlag(
+    docsInfo,
+    "hasPresentationStudio"
+  )
+  const presentationRenderFeatureEnabled = extractFeatureFlag(
+    docsInfo,
+    "hasPresentationRender"
+  )
   const personaFeatureEnabled = extractFeatureFlag(docsInfo, "persona")
   const personalizationFeatureEnabled = extractFeatureFlag(
     docsInfo,
     "personalization"
   )
+  const mergeFeatureFlag = (computed: boolean, explicit: boolean | null): boolean =>
+    explicit === null ? computed : explicit
+  const hasSlides = mergeFeatureFlag(capabilities.hasSlides, slidesFeatureEnabled)
+  const hasPresentationStudio =
+    mergeFeatureFlag(
+      capabilities.hasPresentationStudio,
+      presentationStudioFeatureEnabled
+    ) && hasSlides
+  const hasPresentationRender =
+    mergeFeatureFlag(
+      capabilities.hasPresentationRender,
+      presentationRenderFeatureEnabled
+    ) && hasPresentationStudio
 
   return {
     ...capabilities,
+    hasSlides,
+    hasPresentationStudio,
+    hasPresentationRender,
     hasPersona:
       personaFeatureEnabled === null
         ? capabilities.hasPersona
@@ -338,6 +379,17 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
   const paths = normalizePaths(spec.paths || {})
   const has = (p: string) => Boolean(paths[p])
   const hasChatSaveToDb = detectChatSaveToDb(spec)
+  const hasSlidesRoutes =
+    has("/api/v1/slides/generate/from-media") ||
+    has("/api/v1/slides/presentations") ||
+    has("/api/v1/slides/presentations/{presentation_id}") ||
+    has("/api/v1/slides/presentations/{presentation_id}/export")
+  const hasPresentationRender =
+    has("/api/v1/slides/presentations/{presentation_id}/render-jobs") ||
+    has("/api/v1/slides/render-jobs/{job_id}") ||
+    has("/api/v1/slides/presentations/{presentation_id}/render-artifacts")
+  const hasSlides = hasSlidesRoutes || hasPresentationRender
+  const hasPresentationStudio = hasSlides
   const hasStt =
     has("/api/v1/audio/transcriptions") ||
     has("/api/v1/audio/transcriptions/health") ||
@@ -361,6 +413,13 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
       has("/api/v1/media/process-videos") ||
       has("/api/v1/media/process-documents"),
     hasNotes: has("/api/v1/notes/"),
+    hasSlides,
+    hasPresentationStudio,
+    hasPresentationRender,
+    hasIngestionSources:
+      has("/api/v1/ingestion-sources") ||
+      has("/api/v1/ingestion-sources/{source_id}") ||
+      has("/api/v1/ingestion-sources/{source_id}/items"),
     hasPrompts: has("/api/v1/prompts") || has("/api/v1/prompts/"),
     hasFlashcards:
       has("/api/v1/flashcards") ||

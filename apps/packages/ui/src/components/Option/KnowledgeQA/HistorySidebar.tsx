@@ -212,17 +212,6 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
         </button>
       </div>
 
-      {/* Preset indicator */}
-      <div className="px-4 py-2 border-b border-border">
-        <button
-          onClick={() => setSettingsPanelOpen(true)}
-          className="flex items-center justify-between w-full text-xs hover:bg-hover rounded-md px-2 py-1.5 transition-colors"
-        >
-          <span className="text-text-muted">Preset:</span>
-          <span className="font-medium capitalize">{preset}</span>
-        </button>
-      </div>
-
       <div className="px-4 py-2 border-b border-border">
         <label htmlFor="knowledge-history-filter" className="sr-only">
           Filter history
@@ -308,20 +297,13 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
       </div>
 
       {/* Footer actions */}
-      <div className="px-4 py-3 border-t border-border space-y-2">
+      <div className="px-4 py-3 border-t border-border">
         <button
           onClick={handleExportAll}
           className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md text-text-subtle hover:bg-hover hover:text-text transition-colors"
         >
           <Download className="w-4 h-4 text-text-muted" />
           <span>Export All</span>
-        </button>
-        <button
-          onClick={() => setSettingsPanelOpen(true)}
-          className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md text-text-subtle hover:bg-hover hover:text-text transition-colors"
-        >
-          <Settings className="w-4 h-4 text-text-muted" />
-          <span>Advanced Settings</span>
         </button>
       </div>
     </>

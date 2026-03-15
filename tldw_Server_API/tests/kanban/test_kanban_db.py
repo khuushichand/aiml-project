@@ -25,6 +25,7 @@ from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
     ConflictError,
     NotFoundError,
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management import Kanban_DB as kanban_db_module
 
 
@@ -65,6 +66,41 @@ class TestDbPathValidation:
 
         with pytest.raises(KanbanDBError, match="foreign_keys=ON"):
             kanban_db_module.KanbanDB._configure_connection(db, conn, enable_wal=False)
+
+    def test_get_vector_search_uses_active_db_root_for_user_db_base_dir(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ):
+        base_dir = tmp_path / "isolated_user_dbs"
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+        db_path = DatabasePaths.get_kanban_db_path("1")
+        db = KanbanDB(db_path=str(db_path), user_id="1")
+
+        captured: dict[str, Any] = {}
+        stale_base_dir = tmp_path / "stale_user_dbs"
+        original_settings_get = kanban_db_module.settings.get
+
+        def _fake_settings_get(key: str):
+            if key == "USER_DB_BASE_DIR":
+                return str(stale_base_dir)
+            return original_settings_get(key)
+
+        def _fake_create_vector_search(user_id: str, embedding_config: dict[str, Any]):
+            captured["user_id"] = user_id
+            captured["embedding_config"] = dict(embedding_config)
+            return None
+
+        monkeypatch.setattr(kanban_db_module.settings, "get", _fake_settings_get)
+        monkeypatch.setattr(kanban_db_module, "create_kanban_vector_search", _fake_create_vector_search)
+        try:
+            db.get_vector_search()
+        finally:
+            db.close()
+
+        expected_base_dir = str(db_path.resolve().parent.parent)
+        assert captured["user_id"] == "test_user_1"
+        assert captured["embedding_config"]["USER_DB_BASE_DIR"] == expected_base_dir
 
 
 # =============================================================================

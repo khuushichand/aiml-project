@@ -39,6 +39,9 @@ interface ControlRowProps {
   setChatMode: (mode: "normal" | "rag" | "vision") => void
   toolChoice: ToolChoice
   setToolChoice: (value: ToolChoice) => void
+  chatLoopStatus?: "idle" | "running" | "complete" | "error" | "cancelled"
+  pendingApprovalsCount?: number
+  runningToolCount?: number
   // Image upload
   onImageUpload: (file: File) => void
   // RAG toggle
@@ -47,7 +50,7 @@ interface ControlRowProps {
   isConnected: boolean
 }
 
-export const ControlRow: React.FC<ControlRowProps> = ({
+const ControlRowBase: React.FC<ControlRowProps> = ({
   selectedSystemPrompt,
   setSelectedSystemPrompt,
   setSelectedQuickPrompt,
@@ -59,6 +62,9 @@ export const ControlRow: React.FC<ControlRowProps> = ({
   setChatMode,
   toolChoice,
   setToolChoice,
+  chatLoopStatus = "idle",
+  pendingApprovalsCount = 0,
+  runningToolCount = 0,
   onImageUpload,
   onToggleRag,
   isConnected
@@ -187,6 +193,22 @@ export const ControlRow: React.FC<ControlRowProps> = ({
   const isSmallModel =
     modelCapabilities.includes("fast") ||
     (typeof modelContextLength === "number" && modelContextLength <= 8192)
+
+  const toolRunStatusLabel = React.useMemo(() => {
+    if (pendingApprovalsCount > 0) {
+      return t("sidepanel:controlRow.toolRunPending", "Pending approval")
+    }
+    if (runningToolCount > 0 || chatLoopStatus === "running") {
+      return t("sidepanel:controlRow.toolRunRunning", "Running")
+    }
+    if (chatLoopStatus === "error") {
+      return t("sidepanel:controlRow.toolRunFailed", "Failed")
+    }
+    if (chatLoopStatus === "complete") {
+      return t("sidepanel:controlRow.toolRunDone", "Done")
+    }
+    return t("sidepanel:controlRow.toolRunIdle", "Idle")
+  }, [chatLoopStatus, pendingApprovalsCount, runningToolCount, t])
 
   // Track if hints have been seen
   const knowledgeHintSeen = useFeatureHintSeen("knowledge-search")
@@ -318,6 +340,9 @@ export const ControlRow: React.FC<ControlRowProps> = ({
           </Radio.Button>
         </Radio.Group>
       </Tooltip>
+      <div className="text-[11px] text-text-muted">
+        {t("sidepanel:controlRow.toolRunStatus", "Tool run")}: {toolRunStatusLabel}
+      </div>
       <div className="text-caption text-text-muted font-medium">
         {t("sidepanel:controlRow.mcpToolsLabel", "MCP tools")}
       </div>
@@ -736,3 +761,6 @@ export const ControlRow: React.FC<ControlRowProps> = ({
       </div>
     )
 }
+
+export const ControlRow = React.memo(ControlRowBase)
+ControlRow.displayName = "ControlRow"

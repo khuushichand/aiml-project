@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import importlib
 import time
 from contextlib import contextmanager
@@ -38,6 +39,48 @@ def test_system_log_file_query_reads_shared_file(tmp_path, monkeypatch):
     assert total >= 1
     assert any(item.get("message") == "file-backed entry" for item in items)
     assert log_path.exists()
+
+
+def test_append_log_file_skips_recursive_append_during_settings_init(tmp_path, monkeypatch):
+    log_path = tmp_path / "system_logs.jsonl"
+    monkeypatch.setenv("SYSTEM_LOG_FILE_ENABLED", "true")
+    monkeypatch.setenv("SYSTEM_LOG_FILE_PATH", str(log_path))
+    monkeypatch.setenv("SYSTEM_LOG_FILE_MAX_ENTRIES", "100")
+    monkeypatch.delenv("SYSTEM_LOG_FILE_COMPACT_EVERY_WRITES", raising=False)
+
+    log_buffer = _reload_log_buffer()
+
+    import tldw_Server_API.app.core.config as config_mod
+
+    nested_calls: list[int] = []
+
+    def _fake_load_comprehensive_config():
+        nested_calls.append(1)
+        log_buffer._append_log_file(
+            {
+                "timestamp": datetime.now(timezone.utc),
+                "level": "INFO",
+                "message": "nested",
+            }
+        )
+        parser = configparser.ConfigParser()
+        parser.add_section("Logging")
+        parser.set("Logging", "system_log_file_compact_every_writes", "10")
+        return parser
+
+    monkeypatch.setattr(config_mod, "load_comprehensive_config", _fake_load_comprehensive_config, raising=True)
+
+    log_buffer._append_log_file(
+        {
+            "timestamp": datetime.now(timezone.utc),
+            "level": "INFO",
+            "message": "outer",
+        }
+    )
+
+    assert nested_calls
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert any('"message": "outer"' in line for line in lines)
 
 
 def test_append_log_file_compacts_periodically(tmp_path, monkeypatch):
@@ -113,21 +156,27 @@ def test_query_system_logs_handles_naive_start_with_aware_entries(monkeypatch):
     log_buffer = _reload_log_buffer()
 
     now_aware = datetime(2026, 2, 1, 12, 0, tzinfo=timezone.utc)
+    target_message = "aware-entry-isolated"
     with log_buffer._BUFFER_LOCK:
         log_buffer._BUFFER.clear()
         log_buffer._BUFFER.append(
             {
                 "timestamp": now_aware,
                 "level": "INFO",
-                "message": "aware-entry",
+                "message": target_message,
                 "logger": "test",
                 "module": "test_module",
             }
         )
 
-    items, total = log_buffer.query_system_logs(start=datetime(2026, 1, 1), limit=10, offset=0)
+    items, total = log_buffer.query_system_logs(
+        start=datetime(2026, 1, 1),
+        query=target_message,
+        limit=10,
+        offset=0,
+    )
     assert total == 1
-    assert items[0]["message"] == "aware-entry"
+    assert items[0]["message"] == target_message
     assert items[0]["timestamp"].tzinfo is not None
 
 
@@ -142,25 +191,25 @@ def test_query_system_logs_sorts_with_malformed_timestamps(monkeypatch):
                 {
                     "timestamp": "not-a-time",
                     "level": "INFO",
-                    "message": "bad-timestamp",
+                    "message": "sortcase-bad-timestamp",
                 },
                 {
                     "timestamp": datetime(2026, 2, 1, 11, 0, tzinfo=timezone.utc),
                     "level": "INFO",
-                    "message": "older",
+                    "message": "sortcase-older",
                 },
                 {
                     "timestamp": datetime(2026, 2, 1, 12, 0),
                     "level": "INFO",
-                    "message": "newer-naive",
+                    "message": "sortcase-newer-naive",
                 },
             ]
         )
 
-    items, total = log_buffer.query_system_logs(limit=10, offset=0)
+    items, total = log_buffer.query_system_logs(query="sortcase-", limit=10, offset=0)
     assert total == 3
-    assert items[0]["message"] == "newer-naive"
-    assert items[-1]["message"] == "bad-timestamp"
+    assert items[0]["message"] == "sortcase-newer-naive"
+    assert items[-1]["message"] == "sortcase-bad-timestamp"
 
 
 def test_log_file_lock_uses_runtime_timeout_from_env(monkeypatch, tmp_path):

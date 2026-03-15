@@ -379,7 +379,7 @@ const buildBibtexExport = (
   )
     .replace(/[^\d]/g, '')
     .slice(0, 4)
-  const fieldTuples: Array<[string, string]> = [
+  const rawFieldTuples: Array<[string, string]> = [
     ['title', exportPayload.title || `Media ${selectedMedia.id}`],
     ['author', toCitationFieldString(safeMetadata.authors ?? safeMetadata.author)],
     ['journal', toCitationFieldString(safeMetadata.journal)],
@@ -388,7 +388,8 @@ const buildBibtexExport = (
     ['url', toCitationFieldString(safeMetadata.url) || exportPayload.source],
     ['pmid', toCitationFieldString(safeMetadata.pmid)],
     ['eprint', toCitationFieldString(safeMetadata.arxiv_id ?? safeMetadata.arxiv)]
-  ].filter(([, value]) => value.trim().length > 0)
+  ]
+  const fieldTuples = rawFieldTuples.filter(([, value]) => value.trim().length > 0)
 
   const body = fieldTuples
     .map(([field, value], index) => {

@@ -146,17 +146,21 @@ class SessionManager:
                 logger.warning(f"Redis unavailable, using database only: {e}")
                 self.redis_client = None
 
-        # Schedule session cleanup (disable in tests or when explicitly requested)
-        disable_sched = False
+        # Schedule inline cleanup only for explicit fallback modes.
+        # The dedicated AuthNZ scheduler owns periodic cleanup in normal startup.
+        enable_inline_sched = False
         try:
+            if is_truthy(str(os.getenv("AUTHNZ_SESSION_MANAGER_INLINE_SCHEDULER", "")).strip().lower()):
+                enable_inline_sched = True
             if is_truthy(str(os.getenv("AUTHNZ_SCHEDULER_DISABLED", "")).strip().lower()):
-                disable_sched = True
+                # Global AuthNZ scheduler is disabled: keep session cleanup alive via local fallback.
+                enable_inline_sched = True
             # In general test mode, default to disabled unless explicitly overridden
             if is_test_mode() and not is_truthy(str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower()):
-                disable_sched = True
+                enable_inline_sched = False
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             pass
-        if (not disable_sched) and self.settings.SESSION_CLEANUP_INTERVAL_HOURS > 0:
+        if enable_inline_sched and self.settings.SESSION_CLEANUP_INTERVAL_HOURS > 0:
             self.scheduler.add_job(
                 self.cleanup_expired_sessions,
                 trigger=IntervalTrigger(hours=self.settings.SESSION_CLEANUP_INTERVAL_HOURS),

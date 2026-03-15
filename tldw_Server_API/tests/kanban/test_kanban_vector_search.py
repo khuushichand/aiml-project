@@ -318,3 +318,24 @@ class TestKanbanVectorSearchHelpers:
         """Test that close() can be called safely even when unavailable."""
         vector_search_instance.close()
         assert vector_search_instance.available is False
+
+    def test_factory_degrades_on_pyo3_style_panic(self, monkeypatch):
+
+        from tldw_Server_API.app.core.DB_Management import kanban_vector_search as kvs
+
+        class PanicException(BaseException):
+            pass
+
+        class _RaisingVectorSearch:
+            def __init__(self, *_args, **_kwargs):
+                raise PanicException("panic from rust backend")
+
+        monkeypatch.setattr(kvs, "_CHROMADB_AVAILABLE", True)
+        monkeypatch.setattr(kvs, "KanbanVectorSearch", _RaisingVectorSearch)
+
+        result = kvs.create_kanban_vector_search(
+            user_id="panic-user",
+            embedding_config={"embedding_model": "test-model"},
+        )
+
+        assert result is None

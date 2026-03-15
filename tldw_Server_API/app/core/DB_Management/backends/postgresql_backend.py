@@ -999,12 +999,13 @@ class PostgreSQLBackend(DatabaseBackend):
                 for col in columns
             ])
 
-            refresh_tsv_sql_template = """
-                UPDATE {self.escape_identifier(source_table)}
-                SET {self.escape_identifier(fts_column)} =
+            source_table_ident = self.escape_identifier(source_table)
+            fts_column_ident = self.escape_identifier(fts_column)
+            refresh_tsv_sql = f"""
+                UPDATE {source_table_ident}
+                SET {fts_column_ident} =
                     to_tsvector('english', {columns_concat_set})
-            """
-            refresh_tsv_sql = refresh_tsv_sql_template.format_map(locals())  # nosec B608
+            """  # nosec B608
             cursor.execute(refresh_tsv_sql)
 
             # Create GIN index for fast searching
@@ -1247,8 +1248,7 @@ class PostgreSQLBackend(DatabaseBackend):
         connection: Optional[Any] = None
     ) -> Generator[dict[str, Any], None, None]:
         """Export data from a table."""
-        export_query_template = "SELECT * FROM {self.escape_identifier(table_name)}"
-        query = export_query_template.format_map(locals())  # nosec B608
+        query = f"SELECT * FROM {self.escape_identifier(table_name)}"  # nosec B608
 
         if connection:
             conn = connection
@@ -1282,12 +1282,11 @@ class PostgreSQLBackend(DatabaseBackend):
         columns_str = ", ".join([self.escape_identifier(col) for col in columns])
         placeholders = ", ".join(["%s" for _ in columns])
 
-        import_query_template = """
+        query = f"""
             INSERT INTO {self.escape_identifier(table_name)} ({columns_str})
             VALUES ({placeholders})
             ON CONFLICT DO NOTHING
-        """
-        query = import_query_template.format_map(locals())  # nosec B608
+        """  # nosec B608
 
         # Convert dicts to tuples
         params_list = [tuple(row.get(col) for col in columns) for row in data]

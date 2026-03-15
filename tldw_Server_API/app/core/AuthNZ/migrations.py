@@ -15,6 +15,7 @@ from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.DB_Management.migrations import Migration, MigrationManager
+from tldw_Server_API.app.core.Infrastructure.distributed_lock import acquire_migration_lock
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.core.testing import is_truthy as _is_truthy
 
@@ -824,7 +825,11 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
                 total_cost_usd REAL,
                 currency TEXT DEFAULT 'USD',
                 estimated INTEGER DEFAULT 0,
-                request_id TEXT
+                request_id TEXT,
+                remote_ip TEXT,
+                user_agent TEXT,
+                token_name TEXT,
+                conversation_id TEXT
             )
             """
         )
@@ -851,6 +856,10 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
                 currency TEXT DEFAULT 'USD',
                 estimated INTEGER DEFAULT 0,
                 request_id TEXT,
+                remote_ip TEXT,
+                user_agent TEXT,
+                token_name TEXT,
+                conversation_id TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
                 FOREIGN KEY (key_id) REFERENCES api_keys(id) ON DELETE SET NULL
             )
@@ -862,6 +871,8 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_remote_ip_ts ON llm_usage_log(remote_ip, ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_token_name_ts ON llm_usage_log(token_name, ts)")
 
     # Daily aggregate table
     if _relax_fk:
@@ -1330,11 +1341,872 @@ def migration_053_create_byok_oauth_state(conn: sqlite3.Connection) -> None:
     logger.info("Migration 053: Created byok_oauth_state table")
 
 
+def migration_054_add_llm_usage_log_router_analytics_columns(conn: sqlite3.Connection) -> None:
+    """Add router-analytics enrichment columns/indexes to llm_usage_log (SQLite)."""
+    for column in ("remote_ip", "user_agent", "token_name", "conversation_id"):
+        with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
+            conn.execute(f"ALTER TABLE llm_usage_log ADD COLUMN {column} TEXT")
+
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_remote_ip_ts ON llm_usage_log(remote_ip, ts)")
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_token_name_ts ON llm_usage_log(token_name, ts)")
+
+    conn.commit()
+    logger.info("Migration 054: Added llm_usage_log router analytics columns/indexes")
+
+
+def migration_055_create_mcp_hub_tables(conn: sqlite3.Connection) -> None:
+    """Create MCP Hub management tables (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_acp_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            profile_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(name, owner_scope_type, owner_scope_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_acp_profiles_scope "
+        "ON mcp_acp_profiles(owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_servers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            transport TEXT NOT NULL,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_servers_scope "
+        "ON mcp_external_servers(owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_secrets (
+            server_id TEXT PRIMARY KEY,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT,
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (server_id) REFERENCES mcp_external_servers(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_secrets_updated_at "
+        "ON mcp_external_server_secrets(updated_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 055: Created MCP Hub tables")
+
+def migration_056_create_mcp_hub_policy_tables(conn: sqlite3.Connection) -> None:
+    """Create MCP Hub policy and approval tables (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_permission_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            mode TEXT NOT NULL DEFAULT 'custom',
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(name, owner_scope_type, owner_scope_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_scope "
+        "ON mcp_permission_profiles(owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_type TEXT NOT NULL,
+            target_id TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            profile_id INTEGER,
+            inline_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            approval_policy_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (profile_id) REFERENCES mcp_permission_profiles(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_scope "
+        "ON mcp_policy_assignments(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_target "
+        "ON mcp_policy_assignments(target_type, target_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            assignment_id INTEGER NOT NULL UNIQUE,
+            override_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            broadens_access INTEGER DEFAULT 0,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assignment_id) REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_policy_overrides_assignment "
+        "ON mcp_policy_overrides(assignment_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_policies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            mode TEXT NOT NULL,
+            rules_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_policies_scope "
+        "ON mcp_approval_policies(owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_policy_id INTEGER,
+            context_key TEXT NOT NULL,
+            conversation_id TEXT,
+            tool_name TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            consume_on_match INTEGER DEFAULT 0,
+            expires_at TIMESTAMP,
+            consumed_at TIMESTAMP,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (approval_policy_id) REFERENCES mcp_approval_policies(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_context "
+        "ON mcp_approval_decisions(context_key, conversation_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_credential_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            binding_target_type TEXT NOT NULL,
+            binding_target_id TEXT,
+            external_server_id TEXT NOT NULL,
+            credential_ref TEXT NOT NULL,
+            usage_rules_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (external_server_id) REFERENCES mcp_external_servers(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_credential_bindings_target "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_audit_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            previous_value_json TEXT NOT NULL DEFAULT '{}',
+            new_value_json TEXT NOT NULL DEFAULT '{}',
+            broadened_access INTEGER DEFAULT 0,
+            actor_id INTEGER,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_audit_history_resource "
+        "ON mcp_policy_audit_history(resource_type, resource_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 056: Created MCP Hub policy tables")
+
+
+def migration_057_add_consumable_mcp_approval_decision_columns(conn: sqlite3.Connection) -> None:
+    """Add explicit single-use approval columns to MCP Hub approval decisions."""
+
+    def add_col(name: str, decl: str) -> None:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_approval_decisions)").fetchall()}
+        if name not in cols:
+            conn.execute(f"ALTER TABLE mcp_approval_decisions ADD COLUMN {decl}")
+
+    add_col("consume_on_match", "consume_on_match INTEGER DEFAULT 0")
+    add_col("consumed_at", "consumed_at TIMESTAMP")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_active "
+        "ON mcp_approval_decisions(context_key, conversation_id, tool_name, scope_key, decision, consumed_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 057: Added MCP approval decision consumption columns")
+
+
+def migration_058_harden_mcp_policy_override_schema(conn: sqlite3.Connection) -> None:
+    """Add override activity tracking and enforce a 1:1 assignment override mapping."""
+
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_overrides)").fetchall()}
+    if "is_active" not in cols:
+        conn.execute("ALTER TABLE mcp_policy_overrides ADD COLUMN is_active INTEGER DEFAULT 1")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_policy_overrides_assignment "
+        "ON mcp_policy_overrides(assignment_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 058: Hardened MCP policy override schema")
+
+
+def migration_059_harden_mcp_external_binding_schema(conn: sqlite3.Connection) -> None:
+    """Add managed/legacy external server metadata and tighten credential bindings."""
+
+    external_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_external_servers)").fetchall()
+    }
+    if "server_source" not in external_columns:
+        conn.execute(
+            "ALTER TABLE mcp_external_servers ADD COLUMN server_source TEXT NOT NULL DEFAULT 'managed'"
+        )
+    if "legacy_source_ref" not in external_columns:
+        conn.execute("ALTER TABLE mcp_external_servers ADD COLUMN legacy_source_ref TEXT")
+    if "superseded_by_server_id" not in external_columns:
+        conn.execute("ALTER TABLE mcp_external_servers ADD COLUMN superseded_by_server_id TEXT")
+
+    binding_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_credential_bindings)").fetchall()
+    }
+    if "binding_mode" not in binding_columns:
+        conn.execute(
+            "ALTER TABLE mcp_credential_bindings ADD COLUMN binding_mode TEXT NOT NULL DEFAULT 'grant'"
+        )
+
+    conn.execute(
+        """
+        UPDATE mcp_credential_bindings
+        SET binding_mode = CASE
+            WHEN usage_rules_json LIKE '%"binding_mode":"disable"%'
+              OR usage_rules_json LIKE '%"binding_mode": "disable"%'
+            THEN 'disable'
+            ELSE COALESCE(NULLIF(TRIM(binding_mode), ''), 'grant')
+        END
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_credential_bindings_target_server "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id, external_server_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 059: Hardened MCP external binding schema")
+
+
+def _infer_default_external_slot(config_json: str | None) -> tuple[str, str] | None:
+    """Infer a safe default slot for obvious single-secret managed auth modes."""
+    try:
+        config = json.loads(config_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(config, dict):
+        return None
+    auth = config.get("auth")
+    if not isinstance(auth, dict):
+        return None
+    mode = str(auth.get("mode") or "").strip().lower()
+    if mode == "bearer_token":
+        return ("bearer_token", "bearer_token")
+    if mode == "api_key_header":
+        return ("api_key", "api_key")
+    return None
+
+
+def migration_060_add_mcp_external_credential_slots(conn: sqlite3.Connection) -> None:
+    """Add external credential slot tables and evolve bindings to be slot-aware."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_credential_slots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id TEXT NOT NULL,
+            slot_name TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            secret_kind TEXT NOT NULL,
+            privilege_class TEXT NOT NULL DEFAULT 'default',
+            is_required INTEGER DEFAULT 0,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (server_id) REFERENCES mcp_external_servers(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_external_server_slots_server_slot "
+        "ON mcp_external_server_credential_slots(server_id, slot_name)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slots_server "
+        "ON mcp_external_server_credential_slots(server_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_slot_secrets (
+            slot_id INTEGER PRIMARY KEY,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT,
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (slot_id) REFERENCES mcp_external_server_credential_slots(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slot_secrets_updated_at "
+        "ON mcp_external_server_slot_secrets(updated_at)"
+    )
+
+    binding_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_credential_bindings)").fetchall()
+    }
+    if "slot_name" not in binding_columns:
+        conn.execute(
+            "ALTER TABLE mcp_credential_bindings ADD COLUMN slot_name TEXT NOT NULL DEFAULT ''"
+        )
+
+    conn.execute("DROP INDEX IF EXISTS uq_mcp_credential_bindings_target_server")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_credential_bindings_target_server_slot "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id, external_server_id, slot_name)"
+    )
+
+    rows = conn.execute(
+        """
+        SELECT id, config_json, created_by, updated_by, created_at, updated_at
+        FROM mcp_external_servers
+        WHERE COALESCE(server_source, 'managed') = 'managed'
+          AND superseded_by_server_id IS NULL
+        """
+    ).fetchall()
+    for row in rows:
+        server_id = str(row[0] or "")
+        inferred = _infer_default_external_slot(row[1])
+        if not server_id or inferred is None:
+            continue
+        slot_name, secret_kind = inferred
+        display_name = slot_name.replace("_", " ").title()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO mcp_external_server_credential_slots (
+                server_id, slot_name, display_name, secret_kind, privilege_class, is_required,
+                created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                server_id,
+                slot_name,
+                display_name,
+                secret_kind,
+                "default",
+                1,
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE mcp_credential_bindings
+            SET slot_name = ?
+            WHERE external_server_id = ?
+              AND COALESCE(TRIM(slot_name), '') = ''
+            """,
+            (slot_name, server_id),
+        )
+        slot_row = conn.execute(
+            """
+            SELECT id
+            FROM mcp_external_server_credential_slots
+            WHERE server_id = ?
+              AND slot_name = ?
+            """,
+            (server_id, slot_name),
+        ).fetchone()
+        if slot_row is None:
+            continue
+        slot_id = int(slot_row[0])
+        secret_row = conn.execute(
+            """
+            SELECT encrypted_blob, key_hint, updated_by, updated_at
+            FROM mcp_external_server_secrets
+            WHERE server_id = ?
+            """,
+            (server_id,),
+        ).fetchone()
+        if secret_row is None:
+            continue
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO mcp_external_server_slot_secrets (
+                slot_id, encrypted_blob, key_hint, updated_by, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (slot_id, secret_row[0], secret_row[1], secret_row[2], secret_row[3]),
+        )
+
+    conn.commit()
+    logger.info("Migration 060: Added MCP external credential slot schema")
+
+
+def migration_061_add_mcp_path_scope_objects_and_assignment_workspaces(conn: sqlite3.Connection) -> None:
+    """Add reusable path-scope objects and assignment workspace membership tables."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_path_scope_objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            path_scope_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_path_scope_objects_scope "
+        "ON mcp_path_scope_objects(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_path_scope_objects_scope "
+        "ON mcp_path_scope_objects(name, owner_scope_type, owner_scope_id)"
+    )
+
+    profile_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_permission_profiles)").fetchall()
+    }
+    if "path_scope_object_id" not in profile_columns:
+        conn.execute("ALTER TABLE mcp_permission_profiles ADD COLUMN path_scope_object_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_path_scope_object "
+        "ON mcp_permission_profiles(path_scope_object_id)"
+    )
+
+    assignment_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_assignments)").fetchall()
+    }
+    if "path_scope_object_id" not in assignment_columns:
+        conn.execute("ALTER TABLE mcp_policy_assignments ADD COLUMN path_scope_object_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_path_scope_object "
+        "ON mcp_policy_assignments(path_scope_object_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignment_workspaces (
+            assignment_id INTEGER NOT NULL,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (assignment_id, workspace_id),
+            FOREIGN KEY (assignment_id) REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignment_workspaces_assignment "
+        "ON mcp_policy_assignment_workspaces(assignment_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 061: Added MCP path scope object schema")
+
+
+def migration_062_add_mcp_workspace_set_objects(conn: sqlite3.Connection) -> None:
+    """Add reusable workspace-set objects and assignment workspace source fields."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_objects_scope "
+        "ON mcp_workspace_set_objects(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_workspace_set_objects_scope "
+        "ON mcp_workspace_set_objects(name, owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_object_members (
+            workspace_set_object_id INTEGER NOT NULL,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (workspace_set_object_id, workspace_id),
+            FOREIGN KEY (workspace_set_object_id) REFERENCES mcp_workspace_set_objects(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_object_members_object "
+        "ON mcp_workspace_set_object_members(workspace_set_object_id)"
+    )
+
+    assignment_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_assignments)").fetchall()
+    }
+    if "workspace_source_mode" not in assignment_columns:
+        conn.execute("ALTER TABLE mcp_policy_assignments ADD COLUMN workspace_source_mode TEXT")
+    if "workspace_set_object_id" not in assignment_columns:
+        conn.execute("ALTER TABLE mcp_policy_assignments ADD COLUMN workspace_set_object_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_workspace_set_object "
+        "ON mcp_policy_assignments(workspace_set_object_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 062: Added MCP workspace set object schema")
+
+
+def migration_063_add_mcp_shared_workspaces(conn: sqlite3.Connection) -> None:
+    """Add shared workspace registry entries for shared-scope path governance."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_shared_workspaces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            absolute_root TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'team',
+            owner_scope_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_shared_workspaces_scope "
+        "ON mcp_shared_workspaces(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_shared_workspaces_scope_workspace "
+        "ON mcp_shared_workspaces(owner_scope_type, owner_scope_id, workspace_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 063: Added MCP shared workspace registry schema")
+
+
+def migration_069_add_mcp_governance_pack_schema(conn: sqlite3.Connection) -> None:
+    """Add governance-pack provenance tables and immutability flags for MCP Hub."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_packs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pack_id TEXT NOT NULL,
+            pack_version TEXT NOT NULL,
+            pack_schema_version INTEGER NOT NULL,
+            capability_taxonomy_version INTEGER NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            bundle_digest TEXT NOT NULL,
+            manifest_json TEXT NOT NULL DEFAULT '{}',
+            normalized_ir_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_packs_scope "
+        "ON mcp_governance_packs(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_scope_version "
+        "ON mcp_governance_packs(pack_id, pack_version, owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            governance_pack_id INTEGER NOT NULL,
+            object_type TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            source_object_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (governance_pack_id) REFERENCES mcp_governance_packs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_objects_pack "
+        "ON mcp_governance_pack_objects(governance_pack_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_pack_source "
+        "ON mcp_governance_pack_objects(governance_pack_id, object_type, source_object_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_object "
+        "ON mcp_governance_pack_objects(object_type, object_id)"
+    )
+
+    profile_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_permission_profiles)").fetchall()
+    }
+    if "is_immutable" not in profile_columns:
+        conn.execute(
+            "ALTER TABLE mcp_permission_profiles ADD COLUMN is_immutable INTEGER NOT NULL DEFAULT 0"
+        )
+
+    assignment_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_assignments)").fetchall()
+    }
+    if "is_immutable" not in assignment_columns:
+        conn.execute(
+            "ALTER TABLE mcp_policy_assignments ADD COLUMN is_immutable INTEGER NOT NULL DEFAULT 0"
+        )
+
+    approval_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_approval_policies)").fetchall()
+    }
+    if "is_immutable" not in approval_columns:
+        conn.execute(
+            "ALTER TABLE mcp_approval_policies ADD COLUMN is_immutable INTEGER NOT NULL DEFAULT 0"
+        )
+
+    conn.commit()
+    logger.info("Migration 069: Added MCP governance pack schema")
+
+
+def migration_070_add_mcp_capability_adapter_mappings(conn: sqlite3.Connection) -> None:
+    """Add scope-aware MCP capability adapter mapping storage."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_capability_adapter_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mapping_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER,
+            capability_name TEXT NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            resolved_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            supported_environment_requirements_json TEXT NOT NULL DEFAULT '[]',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_capability_adapter_mappings_scope "
+        "ON mcp_capability_adapter_mappings(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_mapping_id "
+        "ON mcp_capability_adapter_mappings(mapping_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_active_scope_capability "
+        "ON mcp_capability_adapter_mappings("
+        "owner_scope_type, IFNULL(owner_scope_id, -1), capability_name"
+        ") WHERE is_active = 1"
+    )
+
+    conn.commit()
+    logger.info("Migration 070: Added MCP capability adapter mapping schema")
+
+
+def migration_071_add_governance_pack_upgrade_lineage(conn: sqlite3.Connection) -> None:
+    """Add governance-pack install-state and upgrade-lineage tracking."""
+
+    governance_pack_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_governance_packs)").fetchall()
+    }
+    if "is_active_install" not in governance_pack_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_packs ADD COLUMN is_active_install INTEGER NOT NULL DEFAULT 1"
+        )
+    if "superseded_by_governance_pack_id" not in governance_pack_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_packs ADD COLUMN superseded_by_governance_pack_id INTEGER"
+        )
+    if "installed_from_upgrade_id" not in governance_pack_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_packs ADD COLUMN installed_from_upgrade_id INTEGER"
+        )
+
+    governance_pack_indexes = {
+        str(row[1]) for row in conn.execute("PRAGMA index_list(mcp_governance_packs)").fetchall()
+    }
+    if "uq_mcp_governance_packs_active_scope" not in governance_pack_indexes:
+        conn.execute("UPDATE mcp_governance_packs SET is_active_install = 0")
+        conn.execute(
+            """
+            UPDATE mcp_governance_packs
+            SET is_active_install = 1
+            WHERE id IN (
+                SELECT MAX(id)
+                FROM mcp_governance_packs
+                GROUP BY pack_id, owner_scope_type, IFNULL(owner_scope_id, -1)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_active_scope "
+            "ON mcp_governance_packs(pack_id, owner_scope_type, IFNULL(owner_scope_id, -1)) "
+            "WHERE is_active_install = 1"
+        )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_upgrades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pack_id TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            from_governance_pack_id INTEGER NOT NULL,
+            to_governance_pack_id INTEGER NOT NULL,
+            from_pack_version TEXT NOT NULL,
+            to_pack_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            planned_by INTEGER,
+            executed_by INTEGER,
+            planner_inputs_fingerprint TEXT,
+            adapter_state_fingerprint TEXT,
+            plan_summary_json TEXT NOT NULL DEFAULT '{}',
+            accepted_resolutions_json TEXT NOT NULL DEFAULT '{}',
+            failure_summary TEXT,
+            planned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            executed_at TIMESTAMP,
+            FOREIGN KEY (from_governance_pack_id) REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            FOREIGN KEY (to_governance_pack_id) REFERENCES mcp_governance_packs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_upgrades_scope "
+        "ON mcp_governance_pack_upgrades(pack_id, owner_scope_type, owner_scope_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 071: Added governance-pack upgrade lineage schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
     conn.commit()
     logger.info("Rollback 053: Dropped byok_oauth_state table")
+
 
 
 def rollback_051_drop_storage_quotas_table(conn: sqlite3.Connection) -> None:
@@ -2378,6 +3250,330 @@ def rollback_048_drop_org_team_config_overrides(conn: sqlite3.Connection) -> Non
     logger.info("Rollback 048: Dropped org/team config overrides tables")
 
 
+def migration_059_create_data_subject_requests_table(conn: sqlite3.Connection) -> None:
+    """Create data_subject_requests table for authoritative DSR intake."""
+    logger.info("Migration 059: START data_subject_requests table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_subject_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_request_id TEXT NOT NULL UNIQUE,
+            requester_identifier TEXT NOT NULL,
+            resolved_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            request_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            selected_categories TEXT NOT NULL DEFAULT '[]',
+            preview_summary TEXT NOT NULL DEFAULT '[]',
+            coverage_metadata TEXT DEFAULT '{}',
+            requested_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requester "
+        "ON data_subject_requests(requester_identifier)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_resolved_user "
+        "ON data_subject_requests(resolved_user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_type "
+        "ON data_subject_requests(request_type)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_status "
+        "ON data_subject_requests(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requested_at "
+        "ON data_subject_requests(requested_at)"
+    )
+    conn.commit()
+    logger.info("Migration 059: Created data_subject_requests table")
+
+
+def rollback_059_drop_data_subject_requests_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 059 by dropping data_subject_requests."""
+    conn.execute("DROP TABLE IF EXISTS data_subject_requests")
+    conn.commit()
+    logger.info("Rollback 059: Dropped data_subject_requests table")
+
+
+def migration_060_create_admin_monitoring_tables(conn: sqlite3.Connection) -> None:
+    """Create admin monitoring control-plane tables for SQLite backends."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric TEXT NOT NULL,
+            operator TEXT NOT NULL,
+            threshold REAL NOT NULL,
+            duration_minutes INTEGER NOT NULL,
+            severity TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_by_user_id INTEGER,
+            updated_by_user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_created_at ON admin_alert_rules(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_metric_enabled "
+        "ON admin_alert_rules(metric, enabled)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_state (
+            alert_identity TEXT PRIMARY KEY,
+            assigned_to_user_id INTEGER,
+            snoozed_until TIMESTAMP,
+            escalated_severity TEXT,
+            acknowledged_at TIMESTAMP,
+            dismissed_at TIMESTAMP,
+            updated_by_user_id INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assigned_to_user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_updated_at ON admin_alert_state(updated_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_assigned_user "
+        "ON admin_alert_state(assigned_to_user_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_identity TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor_user_id INTEGER,
+            details_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_identity_created "
+        "ON admin_alert_events(alert_identity, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_created_at ON admin_alert_events(created_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 060: Created admin monitoring tables")
+
+
+def rollback_060_drop_admin_monitoring_tables(conn: sqlite3.Connection) -> None:
+    """Rollback migration 060 by dropping admin monitoring tables."""
+    conn.execute("DROP TABLE IF EXISTS admin_alert_events")
+    conn.execute("DROP TABLE IF EXISTS admin_alert_state")
+    conn.execute("DROP TABLE IF EXISTS admin_alert_rules")
+    conn.commit()
+    logger.info("Rollback 060: Dropped admin monitoring tables")
+
+
+def migration_061_create_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+    """Create backup schedule persistence tables (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedules (
+            id TEXT PRIMARY KEY,
+            dataset TEXT NOT NULL,
+            target_user_id INTEGER,
+            target_scope_key TEXT NOT NULL,
+            frequency TEXT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            timezone TEXT NOT NULL,
+            anchor_day_of_week INTEGER,
+            anchor_day_of_month INTEGER,
+            retention_count INTEGER NOT NULL,
+            is_paused INTEGER NOT NULL DEFAULT 0,
+            created_by_user_id INTEGER,
+            updated_by_user_id INTEGER,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL,
+            next_run_at TIMESTAMP,
+            last_run_at TIMESTAMP,
+            last_status TEXT,
+            last_job_id TEXT,
+            last_error TEXT,
+            deleted_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backup_schedules_target_scope_active
+        ON backup_schedules(target_scope_key)
+        WHERE deleted_at IS NULL
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_next_run_at "
+        "ON backup_schedules(next_run_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedules_deleted_at "
+        "ON backup_schedules(deleted_at)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedule_runs (
+            id TEXT PRIMARY KEY,
+            schedule_id TEXT NOT NULL,
+            scheduled_for TIMESTAMP NOT NULL,
+            run_slot_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            job_id TEXT,
+            error TEXT,
+            enqueued_at TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            FOREIGN KEY (schedule_id) REFERENCES backup_schedules(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_schedule_id "
+        "ON backup_schedule_runs(schedule_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for "
+        "ON backup_schedule_runs(scheduled_for)"
+    )
+
+    conn.commit()
+    logger.info("Migration 061: Created backup schedule tables")
+
+
+def rollback_061_drop_backup_schedule_tables(conn: sqlite3.Connection) -> None:
+    """Drop backup schedule persistence tables (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS backup_schedule_runs")
+    conn.execute("DROP TABLE IF EXISTS backup_schedules")
+    conn.commit()
+    logger.info("Rollback 061: Dropped backup schedule tables")
+
+
+def migration_067_create_maintenance_rotation_runs_table(conn: sqlite3.Connection) -> None:
+    """Create maintenance rotation run persistence table (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS maintenance_rotation_runs (
+            id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            domain TEXT,
+            queue TEXT,
+            job_type TEXT,
+            fields_json TEXT NOT NULL,
+            "limit" INTEGER,
+            affected_count INTEGER,
+            requested_by_user_id INTEGER,
+            requested_by_label TEXT,
+            confirmation_recorded INTEGER NOT NULL DEFAULT 0,
+            job_id TEXT,
+            scope_summary TEXT NOT NULL,
+            key_source TEXT NOT NULL,
+            error_message TEXT,
+            created_at TIMESTAMP NOT NULL,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_active_execute
+        ON maintenance_rotation_runs(mode)
+        WHERE mode = 'execute' AND status IN ('queued', 'running')
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_created_at "
+        "ON maintenance_rotation_runs(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_status "
+        "ON maintenance_rotation_runs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 067: Created maintenance rotation runs table")
+
+
+def rollback_067_drop_maintenance_rotation_runs_table(conn: sqlite3.Connection) -> None:
+    """Drop maintenance rotation run persistence table (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS maintenance_rotation_runs")
+    conn.commit()
+    logger.info("Rollback 067: Dropped maintenance rotation runs table")
+
+
+def migration_068_create_byok_validation_runs_table(conn: sqlite3.Connection) -> None:
+    """Create BYOK validation run persistence table (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS byok_validation_runs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            org_id INTEGER,
+            provider TEXT,
+            keys_checked INTEGER,
+            valid_count INTEGER,
+            invalid_count INTEGER,
+            error_count INTEGER,
+            requested_by_user_id INTEGER,
+            requested_by_label TEXT,
+            job_id TEXT,
+            scope_summary TEXT NOT NULL,
+            error_message TEXT,
+            created_at TIMESTAMP NOT NULL,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_byok_validation_runs_active
+        ON byok_validation_runs((1))
+        WHERE status IN ('queued', 'running')
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_created_at "
+        "ON byok_validation_runs(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_status "
+        "ON byok_validation_runs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 068: Created BYOK validation runs table")
+
+
+def rollback_068_drop_byok_validation_runs_table(conn: sqlite3.Connection) -> None:
+    """Drop BYOK validation run persistence table (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS byok_validation_runs")
+    conn.commit()
+    logger.info("Rollback 068: Dropped BYOK validation runs table")
+
+
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     """Add llm_provider_overrides table for runtime provider overrides."""
     logger.info("Migration 041: START llm_provider_overrides table")
@@ -2753,6 +3949,101 @@ def get_authnz_migrations() -> list[Migration]:
             migration_053_create_byok_oauth_state,
             rollback_053_drop_byok_oauth_state,
         ),
+        Migration(
+            54,
+            "Add llm_usage_log router analytics columns and indexes",
+            migration_054_add_llm_usage_log_router_analytics_columns,
+        ),
+        Migration(
+            55,
+            "Create MCP Hub tables",
+            migration_055_create_mcp_hub_tables,
+        ),
+        Migration(
+            56,
+            "Create MCP Hub policy tables",
+            migration_056_create_mcp_hub_policy_tables,
+        ),
+        Migration(
+            57,
+            "Add consumable MCP approval decision columns",
+            migration_057_add_consumable_mcp_approval_decision_columns,
+        ),
+        Migration(
+            58,
+            "Harden MCP policy override schema",
+            migration_058_harden_mcp_policy_override_schema,
+        ),
+        Migration(
+            59,
+            "Create data subject requests table",
+            migration_059_create_data_subject_requests_table,
+            rollback_059_drop_data_subject_requests_table,
+        ),
+        Migration(
+            60,
+            "Create admin monitoring tables",
+            migration_060_create_admin_monitoring_tables,
+            rollback_060_drop_admin_monitoring_tables,
+        ),
+        Migration(
+            61,
+            "Create backup schedule tables",
+            migration_061_create_backup_schedule_tables,
+            rollback_061_drop_backup_schedule_tables,
+        ),
+        Migration(
+            62,
+            "Harden MCP external binding schema",
+            migration_059_harden_mcp_external_binding_schema,
+        ),
+        Migration(
+            63,
+            "Add MCP external credential slots",
+            migration_060_add_mcp_external_credential_slots,
+        ),
+        Migration(
+            64,
+            "Add MCP path scope objects and assignment workspaces",
+            migration_061_add_mcp_path_scope_objects_and_assignment_workspaces,
+        ),
+        Migration(
+            65,
+            "Add MCP workspace set objects",
+            migration_062_add_mcp_workspace_set_objects,
+        ),
+        Migration(
+            66,
+            "Add MCP shared workspace registry",
+            migration_063_add_mcp_shared_workspaces,
+        ),
+        Migration(
+            67,
+            "Create maintenance rotation runs table",
+            migration_067_create_maintenance_rotation_runs_table,
+            rollback_067_drop_maintenance_rotation_runs_table,
+        ),
+        Migration(
+            68,
+            "Create BYOK validation runs table",
+            migration_068_create_byok_validation_runs_table,
+            rollback_068_drop_byok_validation_runs_table,
+        ),
+        Migration(
+            69,
+            "Add MCP governance pack schema",
+            migration_069_add_mcp_governance_pack_schema,
+        ),
+        Migration(
+            70,
+            "Add MCP capability adapter mapping schema",
+            migration_070_add_mcp_capability_adapter_mappings,
+        ),
+        Migration(
+            71,
+            "Add governance pack upgrade lineage schema",
+            migration_071_add_governance_pack_upgrade_lineage,
+        ),
     ]
 
 
@@ -2764,6 +4055,22 @@ def apply_authnz_migrations(db_path: Path, target_version: int = None) -> None:
         db_path: Path to the database file
         target_version: Target migration version (None = latest)
     """
+    import os as _os
+
+    redis_url = _os.getenv("REDIS_URL")
+    lock_dir = str(Path(db_path).parent) if db_path else None
+
+    with acquire_migration_lock(
+        lock_dir=lock_dir,
+        lock_name="authnz_migration",
+        redis_url=redis_url,
+        timeout=60,
+    ):
+        _apply_authnz_migrations_locked(db_path, target_version)
+
+
+def _apply_authnz_migrations_locked(db_path: Path, target_version: int = None) -> None:
+    """Inner migration logic, called while holding the distributed lock."""
     manager = MigrationManager(db_path)
     try:
         from loguru import logger as _logger

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
 const cacheState = vi.hoisted(() => ({
@@ -41,6 +41,20 @@ vi.mock("@/utils/safe-storage", () => ({
 
 const importCapabilitiesModule = async () =>
   import("@/services/tldw/server-capabilities")
+
+const serverCapabilitiesPathCandidates = [
+  "src/services/tldw/server-capabilities.ts",
+  "../packages/ui/src/services/tldw/server-capabilities.ts",
+  "apps/packages/ui/src/services/tldw/server-capabilities.ts"
+]
+
+const serverCapabilitiesSourcePath = serverCapabilitiesPathCandidates.find((candidate) =>
+  existsSync(resolve(process.cwd(), candidate))
+)
+
+if (!serverCapabilitiesSourcePath) {
+  throw new Error("Unable to locate server-capabilities.ts for fallback spec contract test")
+}
 
 describe("server capabilities docs-info merge", () => {
   beforeEach(() => {
@@ -146,6 +160,32 @@ describe("server capabilities docs-info merge", () => {
     expect(capabilities.hasMedia).toBe(true)
   })
 
+  it("detects ingestion source capability from advertised source routes", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "ingestion-sources-version" },
+      paths: {
+        "/api/v1/ingestion-sources": {},
+        "/api/v1/ingestion-sources/{source_id}": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasIngestionSources).toBe(true)
+  })
+
+  it("keeps ingestion source capability available through the bundled fallback spec", async () => {
+    mocks.getOpenAPISpec.mockRejectedValue(new Error("openapi unavailable"))
+    mocks.bgRequest.mockRejectedValue(new Error("docs-info unavailable"))
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasIngestionSources).toBe(true)
+  })
+
   it("derives hasAudio from STT-only support while keeping TTS/voice flags explicit", async () => {
     mocks.getOpenAPISpec.mockResolvedValue({
       info: { version: "audio-split-stt" },
@@ -217,6 +257,50 @@ describe("server capabilities docs-info merge", () => {
     expect(capabilities.hasTts).toBe(true)
     expect(capabilities.hasVoiceChat).toBe(true)
     expect(capabilities.hasAudio).toBe(true)
+  })
+
+  it("detects presentation studio and render capability from docs-info", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "presentation-studio-docs-info" },
+      paths: {
+        "/api/v1/chat/completions": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({
+      capabilities: {
+        hasSlides: true,
+        hasPresentationStudio: true,
+        hasPresentationRender: true
+      }
+    })
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasSlides).toBe(true)
+    expect(capabilities.hasPresentationStudio).toBe(true)
+    expect(capabilities.hasPresentationRender).toBe(true)
+  })
+
+  it("detects presentation studio render capability from advertised slide routes", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "presentation-studio-routes" },
+      paths: {
+        "/api/v1/slides/presentations": {},
+        "/api/v1/slides/presentations/{presentation_id}": {},
+        "/api/v1/slides/presentations/{presentation_id}/render-jobs": {},
+        "/api/v1/slides/render-jobs/{job_id}": {},
+        "/api/v1/slides/presentations/{presentation_id}/render-artifacts": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasSlides).toBe(true)
+    expect(capabilities.hasPresentationStudio).toBe(true)
+    expect(capabilities.hasPresentationRender).toBe(true)
   })
 
   it("reuses a fresh cached capability payload for repeated calls", async () => {
@@ -334,10 +418,7 @@ describe("server capabilities docs-info merge", () => {
   })
 
   it("keeps fallback spec aligned with TTS voice-catalog route checks", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "src/services/tldw/server-capabilities.ts"),
-      "utf8"
-    )
+    const source = readFileSync(resolve(process.cwd(), serverCapabilitiesSourcePath), "utf8")
 
     const fallbackPathsBlock = source.match(
       /const fallbackSpec = \{[\s\S]*?paths:\s*Object\.fromEntries\(\s*\[([\s\S]*?)\]\.map/

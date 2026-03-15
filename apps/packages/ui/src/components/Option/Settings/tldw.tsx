@@ -34,6 +34,7 @@ import {
   type CoreStatus,
   type RagStatus
 } from "./tldw-connection-status"
+import { probeServerHealth } from "./server-health-probe"
 
 type TimeoutPresetKey = 'balanced' | 'extended'
 type LoginMethod = 'magic-link' | 'password'
@@ -603,24 +604,22 @@ export const TldwSettings = () => {
       // Test core connectivity via the health endpoint only, so we never
       // rely on the LLM provider for connection checks.
       const baseUrl = String(values.serverUrl || '').replace(/\/$/, '')
-      const healthPath: PathOrUrl = (baseUrl
-        ? `${baseUrl}/api/v1/health`
-        : "/api/v1/health") as PathOrUrl
       const singleUser = values.authMode === "single-user"
       const hasApiKey =
         singleUser && typeof values.apiKey === "string" && values.apiKey.trim().length > 0
 
-      const resp = await apiSend({
-        path: healthPath,
-        method: "GET",
-        // For single-user mode, send the API key explicitly and bypass
-        // background auth injection so we validate the current form values.
-        headers:
-          hasApiKey && baseUrl
-            ? { "X-API-KEY": String(values.apiKey).trim() }
-            : undefined,
-        noAuth: hasApiKey && baseUrl ? true : false
-      })
+      const resp = baseUrl
+        ? await probeServerHealth({
+            serverUrl: baseUrl,
+            authMode: values.authMode,
+            apiKey: hasApiKey ? String(values.apiKey).trim() : undefined
+          })
+        : await apiSend({
+            path: "/api/v1/health" as PathOrUrl,
+            method: "GET",
+            headers: hasApiKey ? { "X-API-KEY": String(values.apiKey).trim() } : undefined,
+            noAuth: hasApiKey
+          })
 
       success = !!resp?.ok
       setCoreStatus(success ? "connected" : "failed")

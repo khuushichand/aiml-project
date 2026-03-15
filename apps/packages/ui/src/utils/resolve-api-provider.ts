@@ -7,6 +7,12 @@ type ResolveApiProviderOptions = {
   providerHint?: string | null
 }
 
+type ResolveExplicitProviderForSelectedModelOptions = {
+  currentSelectedModel?: string | null
+  requestedSelectedModel?: string | null
+  explicitProvider?: string | null
+}
+
 const PROVIDER_ALIASES: Record<string, string> = {
   "custom_openai_api": "custom-openai-api",
   "custom-openai-api2": "custom-openai-api-2",
@@ -83,6 +89,29 @@ const normalizeKnownProvider = (value: unknown): string => {
   return normalized
 }
 
+export const resolveExplicitProviderForSelectedModel = ({
+  currentSelectedModel,
+  requestedSelectedModel,
+  explicitProvider
+}: ResolveExplicitProviderForSelectedModelOptions): string | undefined => {
+  const normalizedExplicitProvider = normalizeProvider(explicitProvider)
+  if (!normalizedExplicitProvider) return undefined
+
+  const normalizedRequestedModel = normalizeModelId(requestedSelectedModel)
+  if (!normalizedRequestedModel) {
+    return normalizedExplicitProvider
+  }
+
+  const normalizedCurrentModel = normalizeModelId(currentSelectedModel)
+  if (!normalizedCurrentModel) {
+    return undefined
+  }
+
+  return normalizedRequestedModel === normalizedCurrentModel
+    ? normalizedExplicitProvider
+    : undefined
+}
+
 const inferInlineProvider = (normalizedModelId: string): string => {
   const slashIndex = normalizedModelId.indexOf("/")
   if (slashIndex <= 0) return ""
@@ -128,15 +157,29 @@ export const resolveApiProviderForModel = async ({
   const explicit = normalizeProvider(explicitProvider)
   if (explicit) return explicit
 
-  const normalizedModelId = normalizeModelId(modelId)
+  const rawModelId = String(modelId || "").trim()
+  const normalizedModelId = normalizeModelId(rawModelId)
+  const isTldwScopedModel = /^tldw:/i.test(rawModelId)
+
+  // For models selected from the server catalog (`tldw:`), trust the
+  // catalog provider first. This avoids misrouting OpenRouter namespaced
+  // IDs like "anthropic/..." to Anthropic directly.
+  if (isTldwScopedModel) {
+    const catalogProvider = await inferProviderFromServerModelCatalog(
+      normalizedModelId
+    )
+    if (catalogProvider) return catalogProvider
+  }
 
   const inlineProvider = inferInlineProvider(normalizedModelId)
   if (inlineProvider) return inlineProvider
 
-  const catalogProvider = await inferProviderFromServerModelCatalog(
-    normalizedModelId
-  )
-  if (catalogProvider) return catalogProvider
+  if (!isTldwScopedModel) {
+    const catalogProvider = await inferProviderFromServerModelCatalog(
+      normalizedModelId
+    )
+    if (catalogProvider) return catalogProvider
+  }
 
   const hint = normalizeProvider(providerHint)
   if (hint) return hint

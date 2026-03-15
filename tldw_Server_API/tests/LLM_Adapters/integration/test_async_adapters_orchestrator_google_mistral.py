@@ -37,7 +37,7 @@ async def test_google_async_streaming(monkeypatch):
     stream = await chat_api_call_async(
         api_endpoint="google",
         messages_payload=[{"role": "user", "content": "hi"}],
-        model="gemini-1.5-pro",
+        model="gemini-2.5-pro",
         streaming=True,
     )
     lines = []

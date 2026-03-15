@@ -33,7 +33,7 @@ import {
   Zap
 } from "lucide-react"
 import type { HeaderShortcutId } from "@/services/settings/ui-settings"
-import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
+import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
 
 export type HeaderShortcutItem = {
   id: HeaderShortcutId
@@ -144,6 +144,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelDefault: "Document Workspace"
       },
       {
+        id: "repo2txt",
+        to: REPO2TXT_PATH,
+        icon: FileText,
+        labelKey: "option:repo2txt.nav",
+        labelDefault: "Repo2Txt"
+      },
+      {
         id: "evaluations",
         to: "/evaluations",
         icon: Microscope,
@@ -171,13 +178,6 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: LayoutGrid,
         labelKey: "option:header.libraryView",
         labelDefault: "Multi-Item Review"
-      },
-      {
-        id: "content-review",
-        to: "/content-review",
-        icon: FileText,
-        labelKey: "option:header.contentReview",
-        labelDefault: "Content Review"
       },
       {
         id: "collections",
@@ -241,6 +241,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: Headphones,
         labelKey: "option:header.audiobookStudio",
         labelDefault: "Audiobook Studio"
+      },
+      {
+        id: "presentation-studio",
+        to: "/presentation-studio",
+        icon: FileText,
+        labelKey: "option:header.presentationStudio",
+        labelDefault: "Presentation Studio"
       }
     ]
   },

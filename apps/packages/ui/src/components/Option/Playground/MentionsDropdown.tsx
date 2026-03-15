@@ -29,6 +29,11 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
   const [isRefreshing, setIsRefreshing] = React.useState(false)
   const dropdownRef = React.useRef<HTMLDivElement>(null)
   const [position, setPosition] = React.useState({ top: 0, left: 0 })
+  const toText = React.useCallback(
+    (value: unknown): string =>
+      typeof value === "string" ? value : String(value),
+    []
+  )
 
   const groupedTabs = React.useMemo(() => {
     if (tabs.length === 0) return []
@@ -231,17 +236,21 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
         <div className="p-4 text-center text-text-subtle text-sm">
           {mentionPosition?.query ? (
             <p>
-              {t(
-                "playground:mentions.noTabsMatching",
-                `No tabs found matching "{{query}}"`,
-                { query: mentionPosition.query } as any
+              {toText(
+                t(
+                  "playground:mentions.noTabsMatching",
+                  `No tabs found matching "{{query}}"`,
+                  { query: mentionPosition.query } as any
+                )
               )}
             </p>
           ) : (
             <p>
-              {t(
-                "playground:mentions.noTabsHint",
-                "Type to search open tabs, or refresh to load recent tabs."
+              {toText(
+                t(
+                  "playground:mentions.noTabsHint",
+                  "Type to search open tabs, or refresh to load recent tabs."
+                )
               )}
             </p>
           )}
@@ -250,13 +259,13 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
             disabled={isRefreshing}
             title={
               isRefreshing
-                ? (t("playground:mentions.refreshing", "Refreshing...") as string)
-                : (t("playground:mentions.refreshTabs", "Refresh tabs") as string)
+                ? toText(t("playground:mentions.refreshing", "Refreshing..."))
+                : toText(t("playground:mentions.refreshTabs", "Refresh tabs"))
             }
             className="mt-2 text-primary hover:text-primaryStrong disabled:opacity-50">
             {isRefreshing
-              ? t("playground:mentions.refreshing", "Refreshing...")
-              : t("playground:mentions.refreshTabs", "Refresh tabs")}
+              ? toText(t("playground:mentions.refreshing", "Refreshing..."))
+              : toText(t("playground:mentions.refreshTabs", "Refresh tabs"))}
           </button>
         </div>
       )}

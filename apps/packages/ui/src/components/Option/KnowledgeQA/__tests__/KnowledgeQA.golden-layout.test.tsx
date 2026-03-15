@@ -9,14 +9,22 @@ const state = {
   setSettingsPanelOpen: vi.fn(),
   results: [] as Array<{ id: string }>,
   answer: null as string | null,
+  citations: [] as Array<{ id: string }>,
   hasSearched: false,
   isSearching: false,
   error: null as string | null,
+  queryStage: "idle" as string,
+  preset: "balanced" as string,
+  setPreset: vi.fn(),
   settings: {
     sources: [] as string[],
     enable_web_fallback: true,
     top_k: 10,
+    include_media_ids: [] as string[],
+    include_note_ids: [] as string[],
   },
+  updateSetting: vi.fn(),
+  setQuery: vi.fn(),
   currentThreadId: null as string | null,
   selectThread: vi.fn(),
   selectSharedThread: vi.fn(),
@@ -30,6 +38,17 @@ const state = {
     conversationId?: string
   }>,
   restoreFromHistory: vi.fn(),
+  messages: [] as Array<{ role: string; content: string }>,
+  evidenceRailOpen: false,
+  setEvidenceRailOpen: vi.fn(),
+  evidenceRailTab: "sources" as string,
+  setEvidenceRailTab: vi.fn(),
+  lastSearchScope: null as null | {
+    preset: string
+    webFallback: boolean
+    sources: string[]
+  },
+  focusSource: vi.fn(),
 }
 const connectivity = {
   online: true,
@@ -41,6 +60,13 @@ const capabilitiesState = {
   loading: false,
   capabilities: { hasRag: true },
   refresh: vi.fn(),
+}
+
+const layoutModeState = {
+  mode: "simple" as "simple" | "research" | "expert",
+  isSimple: true,
+  isResearch: false,
+  showPromotionToast: false,
 }
 
 vi.mock("../KnowledgeQAProvider", () => ({
@@ -67,6 +93,27 @@ vi.mock("@/hooks/useConnectionState", () => ({
   useConnectionState: () => ({
     isChecking: connectivity.isChecking,
     lastCheckedAt: connectivity.lastCheckedAt,
+  }),
+  useConnectionUxState: () => ({
+    uxState: "connected_ok" as const,
+    hasCompletedFirstRun: true,
+  }),
+}))
+
+vi.mock("@/hooks/useMediaQuery", () => ({
+  useMobile: () => false,
+  useDesktop: () => true,
+}))
+
+vi.mock("../hooks/useLayoutMode", () => ({
+  useLayoutMode: () => ({
+    mode: layoutModeState.mode,
+    setLayoutMode: vi.fn(),
+    isSimple: layoutModeState.isSimple,
+    isResearch: layoutModeState.isResearch,
+    showPromotionToast: layoutModeState.showPromotionToast,
+    dismissPromotion: vi.fn(),
+    acceptPromotion: vi.fn(),
   }),
 }))
 
@@ -112,6 +159,18 @@ vi.mock("../ExportDialog", () => ({
   ExportDialog: () => <div data-testid="knowledge-export-dialog" />
 }))
 
+function setSimpleMode() {
+  layoutModeState.mode = "simple"
+  layoutModeState.isSimple = true
+  layoutModeState.isResearch = false
+}
+
+function setResearchMode() {
+  layoutModeState.mode = "research"
+  layoutModeState.isSimple = false
+  layoutModeState.isResearch = true
+}
+
 describe("KnowledgeQA golden layout guardrails", () => {
   const renderKnowledgeQa = (initialEntries: string[] = ["/knowledge"]) =>
     render(
@@ -126,29 +185,41 @@ describe("KnowledgeQA golden layout guardrails", () => {
     state.settingsPanelOpen = false
     state.results = []
     state.answer = null
+    state.citations = []
     state.hasSearched = false
     state.isSearching = false
     state.error = null
+    state.queryStage = "idle"
+    state.preset = "balanced"
     state.settings.sources = []
+    state.settings.enable_web_fallback = true
+    state.settings.top_k = 10
+    state.settings.include_media_ids = []
+    state.settings.include_note_ids = []
     state.currentThreadId = null
     state.searchHistory = []
     state.restoreFromHistory = vi.fn()
+    state.messages = []
+    state.evidenceRailOpen = false
+    state.evidenceRailTab = "sources"
+    state.lastSearchScope = null
     connectivity.online = true
     connectivity.isChecking = false
     connectivity.lastCheckedAt = Date.now()
     capabilitiesState.loading = false
     capabilitiesState.capabilities = { hasRag: true }
+    setSimpleMode()
+    layoutModeState.showPromotionToast = false
   })
 
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it("keeps hero + search-first layout when there are no results", () => {
+  it("keeps hero + search-first layout when there are no results (simple mode)", () => {
     renderKnowledgeQa()
 
-    expect(screen.getByTestId("knowledge-history-sidebar")).toBeInTheDocument()
-    expect(screen.getByText("Knowledge QA")).toBeInTheDocument()
+    expect(screen.getByText("Ask Your Library")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-bar")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-shell").className).toContain("pt-6")
     expect(screen.getByTestId("knowledge-search-shell").className).not.toContain(
@@ -157,6 +228,19 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(
       screen.queryByTestId("knowledge-answer-panel")
     ).not.toBeInTheDocument()
+    // Simple mode hides history sidebar
+    expect(
+      screen.queryByTestId("knowledge-history-sidebar")
+    ).not.toBeInTheDocument()
+  })
+
+  it("shows history sidebar in research mode empty state", () => {
+    setResearchMode()
+
+    renderKnowledgeQa()
+
+    expect(screen.getByTestId("knowledge-history-sidebar")).toBeInTheDocument()
+    expect(screen.getByText("Ask Your Library")).toBeInTheDocument()
   })
 
   it("shows onboarding guide and no-source recovery copy on first run", () => {
@@ -182,12 +266,12 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(screen.queryByText("How do I add my first source?")).not.toBeInTheDocument()
   })
 
-  it("opens source selector from ready-state source action", () => {
+  it("opens settings panel from ready-state source action in simple mode", () => {
     renderKnowledgeQa()
 
     fireEvent.click(screen.getByRole("button", { name: "No sources selected" }))
 
-    expect(screen.getByRole("menu", { name: "Source selector" })).toBeInTheDocument()
+    expect(state.setSettingsPanelOpen).toHaveBeenCalledWith(true)
   })
 
   it("restores the newest restorable knowledge session from ready-state", () => {
@@ -284,15 +368,13 @@ describe("KnowledgeQA golden layout guardrails", () => {
     )
   })
 
-  it("switches to results layout while preserving history and search shell", () => {
+  it("switches to results layout while preserving search shell", () => {
     state.results = [{ id: "r1" }]
 
     renderKnowledgeQa()
 
-    expect(screen.getByTestId("knowledge-history-sidebar")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-bar")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-answer-panel")).toBeInTheDocument()
-    expect(screen.getByTestId("knowledge-source-list")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-followup-input")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-shell").className).toContain("pt-6 pb-4")
     expect(screen.getByTestId("knowledge-search-shell").className).not.toContain("flex-1")
@@ -300,7 +382,17 @@ describe("KnowledgeQA golden layout guardrails", () => {
       "animate-in fade-in duration-200"
     )
     expect(screen.getByTestId("knowledge-results-shell").className).toContain("pb-24")
-    expect(screen.queryByText("Knowledge QA")).not.toBeInTheDocument()
+    expect(screen.queryByText("Ask Your Library")).not.toBeInTheDocument()
+  })
+
+  it("shows history sidebar alongside results in research mode", () => {
+    setResearchMode()
+    state.results = [{ id: "r1" }]
+
+    renderKnowledgeQa()
+
+    expect(screen.getByTestId("knowledge-history-sidebar")).toBeInTheDocument()
+    expect(screen.getByTestId("knowledge-answer-panel")).toBeInTheDocument()
   })
 
   it("shows explicit no-results guidance after an empty completed search", () => {
@@ -324,10 +416,12 @@ describe("KnowledgeQA golden layout guardrails", () => {
     renderKnowledgeQa()
 
     expect(screen.getByTestId("knowledge-followup-input")).toBeInTheDocument()
-    expect(screen.queryByText("Knowledge QA")).not.toBeInTheDocument()
+    expect(screen.queryByText("Ask Your Library")).not.toBeInTheDocument()
   })
 
   it("exposes skip navigation and landmark regions", () => {
+    setResearchMode()
+
     renderKnowledgeQa()
 
     const skipLink = screen.getByRole("link", { name: "Skip to search" })

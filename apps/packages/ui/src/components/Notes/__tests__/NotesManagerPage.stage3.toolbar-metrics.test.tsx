@@ -206,16 +206,17 @@ describe("NotesManagerPage stage 3 toolbar and metrics", () => {
     })
   })
 
-  it("renders save before delete and separates destructive action", () => {
+  it("renders save and overflow menu button in the toolbar", () => {
     renderPage()
 
     const saveButton = screen.getByTestId("notes-save-button")
-    const deleteButton = screen.getByTestId("notes-delete-button")
-    const divider = screen.getByTestId("notes-destructive-divider")
+    const overflowButton = screen.getByTestId("notes-overflow-menu-button")
 
-    expect(divider).toBeInTheDocument()
+    expect(saveButton).toBeInTheDocument()
+    expect(overflowButton).toBeInTheDocument()
 
-    const position = saveButton.compareDocumentPosition(deleteButton)
+    // Save should appear before the overflow menu button in DOM order
+    const position = saveButton.compareDocumentPosition(overflowButton)
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

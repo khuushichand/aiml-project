@@ -64,6 +64,8 @@ export const PAGES: PageEntry[] = [
   { path: "/settings/rag", name: "RAG Settings", category: "settings" },
   { path: "/settings/speech", name: "Speech Settings", category: "settings" },
   { path: "/settings/evaluations", name: "Evaluations Settings", category: "settings" },
+  { path: "/settings/family-guardrails", name: "Family Guardrails Wizard", category: "settings" },
+  { path: "/settings/guardian", name: "Guardian Settings", category: "settings" },
   { path: "/settings/chatbooks", name: "Chatbooks Settings", category: "settings" },
   { path: "/settings/characters", name: "Characters Settings", category: "settings" },
   { path: "/settings/world-books", name: "World Books Settings", category: "settings" },

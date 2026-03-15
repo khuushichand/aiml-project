@@ -37,7 +37,7 @@ vi.mock('@/services/background-proxy', () => ({
 
 vi.mock('antd', async (importOriginal) => {
   const actual = await importOriginal<typeof import('antd')>()
-  const renderItems = (items: any[] | undefined): React.ReactNode[] => {
+  const renderItems = (items: any[] | undefined): React.ReactElement[] => {
     if (!Array.isArray(items)) return []
     return items.flatMap((item) => {
       if (!item) return []

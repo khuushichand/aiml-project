@@ -142,6 +142,12 @@ export const ACPPlayground: React.FC = () => {
         tool_name: message.tool_name,
         tool_arguments: message.tool_arguments,
         tier: message.tier,
+        approval_requirement: message.approval_requirement,
+        governance_reason: message.governance_reason,
+        deny_reason: message.deny_reason,
+        provenance_summary: message.provenance_summary,
+        runtime_narrowing_reason: message.runtime_narrowing_reason,
+        policy_snapshot_fingerprint: message.policy_snapshot_fingerprint,
         timeout_seconds: message.timeout_seconds,
         requestedAt: new Date(),
       })

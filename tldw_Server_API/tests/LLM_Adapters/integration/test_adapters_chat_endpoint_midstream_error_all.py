@@ -45,7 +45,7 @@ def _payload(provider: str) -> dict:
         "anthropic": "claude-sonnet",
         "groq": "llama-3.1-8b-instant",
         "openrouter": "openrouter/auto",
-        "google": "gemini-1.5-pro",
+        "google": "gemini-2.5-pro",
         "mistral": "mistral-large-latest",
         "qwen": "qwen2.5:7b",
         "deepseek": "deepseek-chat",

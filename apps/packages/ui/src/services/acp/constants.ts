@@ -136,6 +136,12 @@ export const WS_CONFIG = {
   HEARTBEAT_TIMEOUT_MS: 45000,
 } as const
 
+export const ACP_NON_RETRYABLE_CLOSE_CODES = new Set([4401, 4404, 4429])
+
+export function shouldRetryACPWebSocketClose(code: number): boolean {
+  return !ACP_NON_RETRYABLE_CLOSE_CODES.has(code)
+}
+
 // -----------------------------------------------------------------------------
 // Session Configuration
 // -----------------------------------------------------------------------------

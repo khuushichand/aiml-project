@@ -46,6 +46,16 @@ _EMBEDDINGS_DOMAIN = "embeddings"
 _EMBEDDINGS_ROOT_JOB_TYPE = "embeddings_pipeline"
 
 
+def _is_noncritical_vector_error(exc: BaseException) -> bool:
+    """Return True for errors where vector-search should degrade gracefully."""
+    if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+        return False
+    if isinstance(exc, Exception):
+        return True
+    # pyo3_runtime.PanicException subclasses BaseException.
+    return exc.__class__.__name__ == "PanicException"
+
+
 def is_vector_search_available() -> bool:
     """Check if vector search is available."""
     return _CHROMADB_AVAILABLE
@@ -167,7 +177,9 @@ class KanbanVectorSearch:
             )
             self._available = True
             logger.info(f"KanbanVectorSearch initialized for user {self.user_id}")
-        except Exception as e:
+        except BaseException as e:
+            if not _is_noncritical_vector_error(e):
+                raise
             logger.warning(f"KanbanVectorSearch init failed for user {self.user_id}: {e}")
 
     @property
@@ -484,6 +496,8 @@ def create_kanban_vector_search(
     try:
         search = KanbanVectorSearch(user_id, embedding_config)
         return search if search.available else None
-    except Exception as e:
+    except BaseException as e:
+        if not _is_noncritical_vector_error(e):
+            raise
         logger.warning(f"Failed to create KanbanVectorSearch for user {user_id}: {e}")
         return None

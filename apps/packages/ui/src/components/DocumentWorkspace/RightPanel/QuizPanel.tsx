@@ -25,6 +25,7 @@ import {
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import {
   useDocumentQuiz,
+  useQuizHistory,
   QUESTION_TYPE_INFO,
   DIFFICULTY_INFO,
   type QuestionType,
@@ -38,21 +39,31 @@ import {
 const QuestionCard: React.FC<{
   question: QuizQuestion
   index: number
-}> = ({ question, index }) => {
+  selectedAnswer: string | null
+  showAnswer: boolean
+  onAnswerChange: (index: number, answer: string) => void
+  onCheckAnswer: (index: number) => void
+  onReset: (index: number) => void
+}> = ({
+  question,
+  index,
+  selectedAnswer,
+  showAnswer,
+  onAnswerChange,
+  onCheckAnswer,
+  onReset
+}) => {
   const { t } = useTranslation(["option", "common"])
-  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null)
-  const [showAnswer, setShowAnswer] = useState(false)
 
   const isCorrect = selectedAnswer === question.correctAnswer
   const hasAnswered = selectedAnswer !== null
 
   const handleCheckAnswer = () => {
-    setShowAnswer(true)
+    onCheckAnswer(index)
   }
 
   const handleReset = () => {
-    setSelectedAnswer(null)
-    setShowAnswer(false)
+    onReset(index)
   }
 
   return (
@@ -70,7 +81,7 @@ const QuestionCard: React.FC<{
         <div className="mb-3 space-y-2 pl-8">
           <Radio.Group
             value={selectedAnswer}
-            onChange={(e) => setSelectedAnswer(e.target.value)}
+            onChange={(e) => onAnswerChange(index, e.target.value)}
             disabled={showAnswer}
             className="w-full"
           >
@@ -180,13 +191,95 @@ export const QuizPanel: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
 
-  // Quiz config state
-  const [numQuestions, setNumQuestions] = useState(5)
-  const [questionType, setQuestionType] = useState<QuestionType>("multiple_choice")
-  const [difficulty, setDifficulty] = useState<DifficultyLevel>("medium")
+  // Quiz config state - persisted in localStorage
+  const QUIZ_PREFS_KEY = "document-workspace-quiz-prefs"
+
+  const loadPrefs = (): Record<string, unknown> | null => {
+    try {
+      const raw = localStorage.getItem(QUIZ_PREFS_KEY)
+      if (raw) return JSON.parse(raw)
+    } catch { /* noop */ }
+    return null
+  }
+
+  const [savedPrefs] = useState(loadPrefs)
+  const validQuestionTypes: QuestionType[] = ["multiple_choice", "true_false", "short_answer", "mixed"]
+  const validDifficulties: DifficultyLevel[] = ["easy", "medium", "hard"]
+  const [numQuestions, setNumQuestions] = useState<number>(
+    typeof savedPrefs?.numQuestions === "number" ? savedPrefs.numQuestions : 5
+  )
+  const [questionType, setQuestionType] = useState<QuestionType>(
+    validQuestionTypes.includes(savedPrefs?.questionType as QuestionType)
+      ? (savedPrefs!.questionType as QuestionType)
+      : "multiple_choice"
+  )
+  const [difficulty, setDifficulty] = useState<DifficultyLevel>(
+    validDifficulties.includes(savedPrefs?.difficulty as DifficultyLevel)
+      ? (savedPrefs!.difficulty as DifficultyLevel)
+      : "medium"
+  )
   const [showConfig, setShowConfig] = useState(true)
 
-  const { quiz, isGenerating, error, generateQuiz, clearQuiz } = useDocumentQuiz(activeDocumentId)
+  // Persist preferences when they change
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(QUIZ_PREFS_KEY, JSON.stringify({ numQuestions, questionType, difficulty }))
+    } catch { /* noop */ }
+  }, [numQuestions, questionType, difficulty])
+
+  const { quiz, isGenerating, error, generateQuiz, clearQuiz, loadQuiz, persistAnswer } = useDocumentQuiz(activeDocumentId)
+  const { history: quizHistory, refresh: refreshHistory } = useQuizHistory(activeDocumentId)
+  const [answers, setAnswers] = useState<Record<number, string>>({})
+  const [revealedAnswers, setRevealedAnswers] = useState<Record<number, boolean>>({})
+
+  const persistProgress = useCallback((nextAnswers: Record<number, string>) => {
+    if (!quiz) {
+      persistAnswer(nextAnswers)
+      return
+    }
+
+    const totalQuestions = quiz.questions.length
+    const correctAnswers = Object.entries(nextAnswers).reduce((count, [idx, answer]) => (
+      quiz.questions[Number(idx)]?.correctAnswer === answer ? count + 1 : count
+    ), 0)
+    const score = totalQuestions > 0
+      ? Math.round((correctAnswers / totalQuestions) * 100)
+      : undefined
+    const completedAt = Object.keys(nextAnswers).length >= totalQuestions
+      ? Date.now()
+      : undefined
+
+    persistAnswer(nextAnswers, score, completedAt)
+  }, [quiz, persistAnswer])
+
+  const handleAnswerChange = useCallback((questionIndex: number, answer: string) => {
+    setAnswers((prev) => {
+      const next = { ...prev, [questionIndex]: answer }
+      persistProgress(next)
+      return next
+    })
+  }, [persistProgress])
+
+  const handleCheckAnswer = useCallback((questionIndex: number) => {
+    setRevealedAnswers((prev) => ({
+      ...prev,
+      [questionIndex]: true
+    }))
+  }, [])
+
+  const handleResetAnswer = useCallback((questionIndex: number) => {
+    setAnswers((prev) => {
+      const next = { ...prev }
+      delete next[questionIndex]
+      persistProgress(next)
+      return next
+    })
+    setRevealedAnswers((prev) => {
+      const next = { ...prev }
+      delete next[questionIndex]
+      return next
+    })
+  }, [persistProgress])
 
   const handleGenerate = useCallback(() => {
     generateQuiz({
@@ -195,11 +288,15 @@ export const QuizPanel: React.FC = () => {
       difficulty
     })
     setShowConfig(false)
+    setAnswers({})
+    setRevealedAnswers({})
   }, [generateQuiz, numQuestions, questionType, difficulty])
 
   const handleNewQuiz = () => {
     clearQuiz()
     setShowConfig(true)
+    setAnswers({})
+    setRevealedAnswers({})
   }
 
   const handleExport = () => {
@@ -329,6 +426,58 @@ export const QuizPanel: React.FC = () => {
               </p>
             </div>
 
+            {/* Quiz History */}
+            {quizHistory.length > 0 && (
+              <div className="border-t border-border pt-4">
+                <h4 className="text-xs font-medium text-text-secondary mb-2">
+                  {t("option:documentWorkspace.quizHistory", "Previous Quizzes")}
+                </h4>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {quizHistory.slice(0, 5).map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      className="w-full text-left rounded-lg border border-border p-2 hover:border-primary/50 transition-colors"
+                      onClick={() => {
+                        loadQuiz(entry.quiz, entry.id)
+                        setAnswers(entry.answers || {})
+                        setRevealedAnswers(
+                          Object.fromEntries(
+                            Object.keys(entry.answers || {}).map((key) => [Number(key), true])
+                          )
+                        )
+                        setShowConfig(false)
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-text-secondary">
+                          {entry.quiz.questions.length} {t("option:documentWorkspace.questions", "questions")}
+                        </span>
+                        {entry.score !== undefined && (
+                          <Tag color={entry.score >= 70 ? "success" : entry.score >= 40 ? "warning" : "error"} className="m-0">
+                            {entry.score}%
+                          </Tag>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-text-muted mt-1">
+                        {new Date(entry.createdAt).toLocaleDateString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit"
+                        })}
+                        {!entry.completedAt && (
+                          <span className="ml-2 text-primary">
+                            {t("option:documentWorkspace.resumeQuiz", "Resume")}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Generate button */}
             <Button
               type="primary"
@@ -375,7 +524,16 @@ export const QuizPanel: React.FC = () => {
           <div className="flex-1 overflow-y-auto p-3">
             <div className="space-y-4">
               {quiz.questions.map((q, i) => (
-                <QuestionCard key={i} question={q} index={i} />
+                <QuestionCard
+                  key={i}
+                  question={q}
+                  index={i}
+                  selectedAnswer={answers[i] ?? null}
+                  showAnswer={Boolean(revealedAnswers[i])}
+                  onAnswerChange={handleAnswerChange}
+                  onCheckAnswer={handleCheckAnswer}
+                  onReset={handleResetAnswer}
+                />
               ))}
             </div>
           </div>

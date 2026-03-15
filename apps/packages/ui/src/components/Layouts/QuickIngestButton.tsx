@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { UploadCloud } from "lucide-react"
 import { useQuickIngestStore } from "@/store/quick-ingest"
-import QuickIngestModal from "../Common/QuickIngestModal"
+import { QuickIngestWizardModal as QuickIngestModal } from "../Common/QuickIngestWizardModal"
 import { createEventHost } from "@/utils/create-event-host"
 
 const classNames = (...classes: (string | false | null | undefined)[]) =>

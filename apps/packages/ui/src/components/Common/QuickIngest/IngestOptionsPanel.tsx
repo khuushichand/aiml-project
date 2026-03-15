@@ -36,7 +36,7 @@ type ProgressMeta = {
   done: number
   pct: number
   elapsedLabel?: string | null
-  state?: "running" | "failed" | "complete" | "ready"
+  state?: "running" | "failed" | "complete" | "cancelled" | "ready"
   error?: string | null
 }
 

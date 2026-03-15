@@ -74,6 +74,740 @@ _CREATE_TOOL_CATALOGS = [
 ]
 
 
+_CREATE_MCP_HUB_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_acp_profiles (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            profile_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_acp_profiles_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_acp_profiles_scope "
+        "ON mcp_acp_profiles(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_servers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            enabled BOOLEAN DEFAULT TRUE,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            transport TEXT NOT NULL,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_servers_scope "
+        "ON mcp_external_servers(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_external_servers "
+        "ADD COLUMN IF NOT EXISTS server_source TEXT NOT NULL DEFAULT 'managed'",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_external_servers "
+        "ADD COLUMN IF NOT EXISTS legacy_source_ref TEXT",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_external_servers "
+        "ADD COLUMN IF NOT EXISTS superseded_by_server_id TEXT",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_secrets (
+            server_id TEXT PRIMARY KEY REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT NULL,
+            updated_by INTEGER NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_secrets_updated_at "
+        "ON mcp_external_server_secrets(updated_at)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_credential_slots (
+            id SERIAL PRIMARY KEY,
+            server_id TEXT NOT NULL REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
+            slot_name TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            secret_kind TEXT NOT NULL,
+            privilege_class TEXT NOT NULL DEFAULT 'default',
+            is_required BOOLEAN DEFAULT FALSE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_external_server_slots_server_slot "
+        "ON mcp_external_server_credential_slots(server_id, slot_name)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slots_server "
+        "ON mcp_external_server_credential_slots(server_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_slot_secrets (
+            slot_id INTEGER PRIMARY KEY REFERENCES mcp_external_server_credential_slots(id) ON DELETE CASCADE,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT NULL,
+            updated_by INTEGER NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slot_secrets_updated_at "
+        "ON mcp_external_server_slot_secrets(updated_at)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_permission_profiles (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            mode TEXT NOT NULL DEFAULT 'custom',
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_permission_profiles_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_scope "
+        "ON mcp_permission_profiles(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_permission_profiles "
+        "ADD COLUMN IF NOT EXISTS path_scope_object_id INTEGER",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_permission_profiles "
+        "ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT FALSE",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_path_scope_object "
+        "ON mcp_permission_profiles(path_scope_object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_path_scope_objects (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            path_scope_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_path_scope_objects_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_path_scope_objects_scope "
+        "ON mcp_path_scope_objects(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignments (
+            id SERIAL PRIMARY KEY,
+            target_type TEXT NOT NULL,
+            target_id TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            profile_id INTEGER NULL REFERENCES mcp_permission_profiles(id) ON DELETE SET NULL,
+            inline_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            approval_policy_id INTEGER NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_scope "
+        "ON mcp_policy_assignments(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_target "
+        "ON mcp_policy_assignments(target_type, target_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS path_scope_object_id INTEGER",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_path_scope_object "
+        "ON mcp_policy_assignments(path_scope_object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignment_workspaces (
+            assignment_id INTEGER NOT NULL REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_policy_assignment_workspaces UNIQUE (assignment_id, workspace_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignment_workspaces_assignment "
+        "ON mcp_policy_assignment_workspaces(assignment_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_objects (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_workspace_set_objects_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_objects_scope "
+        "ON mcp_workspace_set_objects(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_shared_workspaces (
+            id SERIAL PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            absolute_root TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'team',
+            owner_scope_id INTEGER NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_shared_workspaces_scope_workspace UNIQUE (owner_scope_type, owner_scope_id, workspace_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_shared_workspaces_scope "
+        "ON mcp_shared_workspaces(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_object_members (
+            workspace_set_object_id INTEGER NOT NULL REFERENCES mcp_workspace_set_objects(id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_workspace_set_object_members UNIQUE (workspace_set_object_id, workspace_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_object_members_object "
+        "ON mcp_workspace_set_object_members(workspace_set_object_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS workspace_source_mode TEXT",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS workspace_set_object_id INTEGER",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT FALSE",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_workspace_set_object "
+        "ON mcp_policy_assignments(workspace_set_object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_overrides (
+            id SERIAL PRIMARY KEY,
+            assignment_id INTEGER NOT NULL UNIQUE REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE,
+            override_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            broadens_access BOOLEAN DEFAULT FALSE,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_overrides "
+        "ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_policy_overrides_assignment "
+        "ON mcp_policy_overrides(assignment_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_policies (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            mode TEXT NOT NULL,
+            rules_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_policies_scope "
+        "ON mcp_approval_policies(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_approval_policies "
+        "ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT FALSE",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_capability_adapter_mappings (
+            id SERIAL PRIMARY KEY,
+            mapping_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER NULL,
+            capability_name TEXT NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            resolved_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            supported_environment_requirements_json TEXT NOT NULL DEFAULT '[]',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_capability_adapter_mappings_scope "
+        "ON mcp_capability_adapter_mappings(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_mapping_id "
+        "ON mcp_capability_adapter_mappings(mapping_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_active_scope_capability "
+        "ON mcp_capability_adapter_mappings("
+        "owner_scope_type, COALESCE(owner_scope_id, -1), capability_name"
+        ") WHERE is_active",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_packs (
+            id SERIAL PRIMARY KEY,
+            pack_id TEXT NOT NULL,
+            pack_version TEXT NOT NULL,
+            pack_schema_version INTEGER NOT NULL,
+            capability_taxonomy_version INTEGER NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            bundle_digest TEXT NOT NULL,
+            manifest_json TEXT NOT NULL DEFAULT '{}',
+            normalized_ir_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_packs_scope "
+        "ON mcp_governance_packs(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_scope_version "
+        "ON mcp_governance_packs(pack_id, pack_version, owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS is_active_install BOOLEAN NOT NULL DEFAULT TRUE",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS superseded_by_governance_pack_id INTEGER NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS installed_from_upgrade_id INTEGER NULL",
+        (),
+    ),
+    (
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE indexname = 'uq_mcp_governance_packs_active_scope'
+                  AND schemaname = ANY (current_schemas(false))
+            ) THEN
+                UPDATE mcp_governance_packs
+                SET is_active_install = FALSE;
+
+                WITH latest AS (
+                    SELECT MAX(id) AS id
+                    FROM mcp_governance_packs
+                    GROUP BY pack_id, owner_scope_type, COALESCE(owner_scope_id, -1)
+                )
+                UPDATE mcp_governance_packs
+                SET is_active_install = TRUE
+                WHERE id IN (SELECT id FROM latest);
+            END IF;
+        END $$;
+        """,
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_active_scope "
+        "ON mcp_governance_packs(pack_id, owner_scope_type, COALESCE(owner_scope_id, -1)) "
+        "WHERE is_active_install",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_objects (
+            id SERIAL PRIMARY KEY,
+            governance_pack_id INTEGER NOT NULL REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            object_type TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            source_object_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_objects_pack "
+        "ON mcp_governance_pack_objects(governance_pack_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_pack_source "
+        "ON mcp_governance_pack_objects(governance_pack_id, object_type, source_object_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_object "
+        "ON mcp_governance_pack_objects(object_type, object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_upgrades (
+            id SERIAL PRIMARY KEY,
+            pack_id TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            from_governance_pack_id INTEGER NOT NULL REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            to_governance_pack_id INTEGER NOT NULL REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            from_pack_version TEXT NOT NULL,
+            to_pack_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            planned_by INTEGER NULL,
+            executed_by INTEGER NULL,
+            planner_inputs_fingerprint TEXT NULL,
+            adapter_state_fingerprint TEXT NULL,
+            plan_summary_json TEXT NOT NULL DEFAULT '{}',
+            accepted_resolutions_json TEXT NOT NULL DEFAULT '{}',
+            failure_summary TEXT NULL,
+            planned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            executed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_upgrades_scope "
+        "ON mcp_governance_pack_upgrades(pack_id, owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_approval_decisions (
+            id SERIAL PRIMARY KEY,
+            approval_policy_id INTEGER NULL REFERENCES mcp_approval_policies(id) ON DELETE SET NULL,
+            context_key TEXT NOT NULL,
+            conversation_id TEXT NULL,
+            tool_name TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            consume_on_match BOOLEAN DEFAULT FALSE,
+            expires_at TIMESTAMPTZ NULL,
+            consumed_at TIMESTAMPTZ NULL,
+            created_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE mcp_approval_decisions ADD COLUMN IF NOT EXISTS consume_on_match BOOLEAN DEFAULT FALSE", ()),
+    ("ALTER TABLE mcp_approval_decisions ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMPTZ", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_context "
+        "ON mcp_approval_decisions(context_key, conversation_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_approval_decisions_active "
+        "ON mcp_approval_decisions(context_key, conversation_id, tool_name, scope_key, decision, consumed_at)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_credential_bindings (
+            id SERIAL PRIMARY KEY,
+            binding_target_type TEXT NOT NULL,
+            binding_target_id TEXT NULL,
+            external_server_id TEXT NOT NULL REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
+            credential_ref TEXT NOT NULL,
+            binding_mode TEXT NOT NULL DEFAULT 'grant',
+            usage_rules_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_credential_bindings_target "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_credential_bindings "
+        "ADD COLUMN IF NOT EXISTS binding_mode TEXT NOT NULL DEFAULT 'grant'",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_credential_bindings "
+        "ADD COLUMN IF NOT EXISTS slot_name TEXT NOT NULL DEFAULT ''",
+        (),
+    ),
+    (
+        """
+        UPDATE mcp_credential_bindings
+        SET binding_mode = CASE
+            WHEN usage_rules_json LIKE '%"binding_mode":"disable"%'
+              OR usage_rules_json LIKE '%"binding_mode": "disable"%'
+            THEN 'disable'
+            ELSE COALESCE(NULLIF(TRIM(binding_mode), ''), 'grant')
+        END
+        """,
+        (),
+    ),
+    ("DROP INDEX IF EXISTS uq_mcp_credential_bindings_target_server", ()),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_credential_bindings_target_server_slot "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id, external_server_id, slot_name)",
+        (),
+    ),
+    (
+        """
+        INSERT INTO mcp_external_server_credential_slots (
+            server_id, slot_name, display_name, secret_kind, privilege_class, is_required,
+            created_by, updated_by, created_at, updated_at
+        )
+        SELECT
+            s.id,
+            CASE
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'bearer_token' THEN 'bearer_token'
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'api_key_header' THEN 'api_key'
+                ELSE NULL
+            END,
+            CASE
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'bearer_token' THEN 'Bearer Token'
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'api_key_header' THEN 'Api Key'
+                ELSE NULL
+            END,
+            CASE
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'bearer_token' THEN 'bearer_token'
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'api_key_header' THEN 'api_key'
+                ELSE NULL
+            END,
+            'default',
+            TRUE,
+            s.created_by,
+            s.updated_by,
+            s.created_at,
+            s.updated_at
+        FROM mcp_external_servers s
+        WHERE COALESCE(s.server_source, 'managed') = 'managed'
+          AND s.superseded_by_server_id IS NULL
+          AND LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) IN ('bearer_token', 'api_key_header')
+        ON CONFLICT (server_id, slot_name) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        UPDATE mcp_credential_bindings b
+        SET slot_name = CASE
+            WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'bearer_token' THEN 'bearer_token'
+            WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'api_key_header' THEN 'api_key'
+            ELSE b.slot_name
+        END
+        FROM mcp_external_servers s
+        WHERE b.external_server_id = s.id
+          AND COALESCE(BTRIM(b.slot_name), '') = ''
+          AND LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) IN ('bearer_token', 'api_key_header')
+        """,
+        (),
+    ),
+    (
+        """
+        INSERT INTO mcp_external_server_slot_secrets (slot_id, encrypted_blob, key_hint, updated_by, updated_at)
+        SELECT slot.id, sec.encrypted_blob, sec.key_hint, sec.updated_by, sec.updated_at
+        FROM mcp_external_server_credential_slots slot
+        JOIN mcp_external_server_secrets sec ON sec.server_id = slot.server_id
+        WHERE slot.slot_name IN ('bearer_token', 'api_key')
+        ON CONFLICT (slot_id) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_audit_history (
+            id SERIAL PRIMARY KEY,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            previous_value_json TEXT NOT NULL DEFAULT '{}',
+            new_value_json TEXT NOT NULL DEFAULT '{}',
+            broadened_access BOOLEAN DEFAULT FALSE,
+            actor_id INTEGER NULL,
+            grant_authority_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_audit_history_resource "
+        "ON mcp_policy_audit_history(resource_type, resource_id)",
+        (),
+    ),
+]
+
+
 _CREATE_PRIVILEGE_SNAPSHOTS = [
     (
         """
@@ -882,17 +1616,27 @@ _CREATE_USAGE_TABLES = [
             total_cost_usd DOUBLE PRECISION,
             currency TEXT DEFAULT 'USD',
             estimated BOOLEAN DEFAULT FALSE,
-            request_id TEXT
+            request_id TEXT,
+            remote_ip TEXT,
+            user_agent TEXT,
+            token_name TEXT,
+            conversation_id TEXT
         )
         """,
         (),
     ),
+    ("ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS remote_ip TEXT", ()),
+    ("ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS user_agent TEXT", ()),
+    ("ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS token_name TEXT", ()),
+    ("ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS conversation_id TEXT", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_ts ON llm_usage_log(ts)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_key_ts ON llm_usage_log(key_id, ts)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_operation ON llm_usage_log(operation)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_remote_ip_ts ON llm_usage_log(remote_ip, ts)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_token_name_ts ON llm_usage_log(token_name, ts)", ()),
     (
         """
         CREATE TABLE IF NOT EXISTS llm_usage_daily (
@@ -1110,6 +1854,284 @@ _CREATE_GENERATED_FILES_TABLES = [
     ),
 ]
 
+_CREATE_DATA_SUBJECT_REQUESTS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS data_subject_requests (
+            id SERIAL PRIMARY KEY,
+            client_request_id TEXT NOT NULL UNIQUE,
+            requester_identifier TEXT NOT NULL,
+            resolved_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            request_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            selected_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+            preview_summary JSONB NOT NULL DEFAULT '[]'::jsonb,
+            coverage_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            requested_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT NULL
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requester "
+        "ON data_subject_requests(requester_identifier)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_resolved_user "
+        "ON data_subject_requests(resolved_user_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_type "
+        "ON data_subject_requests(request_type)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_status "
+        "ON data_subject_requests(status)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_data_subject_requests_requested_at "
+        "ON data_subject_requests(requested_at)",
+        (),
+    ),
+]
+
+
+_CREATE_ADMIN_MONITORING_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_rules (
+            id SERIAL PRIMARY KEY,
+            metric TEXT NOT NULL,
+            operator TEXT NOT NULL,
+            threshold DOUBLE PRECISION NOT NULL,
+            duration_minutes INTEGER NOT NULL,
+            severity TEXT NOT NULL,
+            enabled BOOLEAN DEFAULT TRUE,
+            created_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            updated_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_created_at "
+        "ON admin_alert_rules(created_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_rules_metric_enabled "
+        "ON admin_alert_rules(metric, enabled)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_state (
+            alert_identity TEXT PRIMARY KEY,
+            assigned_to_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            snoozed_until TIMESTAMPTZ NULL,
+            escalated_severity TEXT NULL,
+            acknowledged_at TIMESTAMPTZ NULL,
+            dismissed_at TIMESTAMPTZ NULL,
+            updated_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_updated_at "
+        "ON admin_alert_state(updated_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_state_assigned_user "
+        "ON admin_alert_state(assigned_to_user_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS admin_alert_events (
+            id SERIAL PRIMARY KEY,
+            alert_identity TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+            details_json TEXT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_identity_created "
+        "ON admin_alert_events(alert_identity, created_at DESC)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_admin_alert_events_created_at "
+        "ON admin_alert_events(created_at DESC)",
+        (),
+    ),
+]
+
+_CREATE_BACKUP_SCHEDULES_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedules (
+            id TEXT PRIMARY KEY,
+            dataset TEXT NOT NULL,
+            target_user_id INTEGER NULL,
+            target_scope_key TEXT NOT NULL,
+            frequency TEXT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            timezone TEXT NOT NULL,
+            anchor_day_of_week INTEGER NULL,
+            anchor_day_of_month INTEGER NULL,
+            retention_count INTEGER NOT NULL,
+            is_paused BOOLEAN NOT NULL DEFAULT FALSE,
+            created_by_user_id INTEGER NULL,
+            updated_by_user_id INTEGER NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL,
+            next_run_at TIMESTAMPTZ NULL,
+            last_run_at TIMESTAMPTZ NULL,
+            last_status TEXT NULL,
+            last_job_id TEXT NULL,
+            last_error TEXT NULL,
+            deleted_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backup_schedules_target_scope_active
+        ON backup_schedules(target_scope_key)
+        WHERE deleted_at IS NULL
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedules_next_run_at ON backup_schedules(next_run_at)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedules_deleted_at ON backup_schedules(deleted_at)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS backup_schedule_runs (
+            id TEXT PRIMARY KEY,
+            schedule_id TEXT NOT NULL REFERENCES backup_schedules(id) ON DELETE CASCADE,
+            scheduled_for TIMESTAMPTZ NOT NULL,
+            run_slot_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            job_id TEXT NULL,
+            error TEXT NULL,
+            enqueued_at TIMESTAMPTZ NULL,
+            started_at TIMESTAMPTZ NULL,
+            completed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_schedule_id ON backup_schedule_runs(schedule_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for ON backup_schedule_runs(scheduled_for)", ()),
+]
+
+_CREATE_MAINTENANCE_ROTATION_RUNS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS maintenance_rotation_runs (
+            id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            domain TEXT NULL,
+            queue TEXT NULL,
+            job_type TEXT NULL,
+            fields_json TEXT NOT NULL,
+            "limit" INTEGER NULL,
+            affected_count INTEGER NULL,
+            requested_by_user_id INTEGER NULL,
+            requested_by_label TEXT NULL,
+            confirmation_recorded BOOLEAN NOT NULL DEFAULT FALSE,
+            job_id TEXT NULL,
+            scope_summary TEXT NOT NULL,
+            key_source TEXT NOT NULL,
+            error_message TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            started_at TIMESTAMPTZ NULL,
+            completed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_active_execute
+        ON maintenance_rotation_runs(mode)
+        WHERE mode = 'execute' AND status IN ('queued', 'running')
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_created_at "
+        "ON maintenance_rotation_runs(created_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_status "
+        "ON maintenance_rotation_runs(status)",
+        (),
+    ),
+]
+
+_CREATE_BYOK_VALIDATION_RUNS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS byok_validation_runs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            org_id INTEGER NULL,
+            provider TEXT NULL,
+            keys_checked INTEGER NULL,
+            valid_count INTEGER NULL,
+            invalid_count INTEGER NULL,
+            error_count INTEGER NULL,
+            requested_by_user_id INTEGER NULL,
+            requested_by_label TEXT NULL,
+            job_id TEXT NULL,
+            scope_summary TEXT NOT NULL,
+            error_message TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            started_at TIMESTAMPTZ NULL,
+            completed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_byok_validation_runs_active
+        ON byok_validation_runs((1))
+        WHERE status IN ('queued', 'running')
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_created_at "
+        "ON byok_validation_runs(created_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_status "
+        "ON byok_validation_runs(status)",
+        (),
+    ),
+]
+
 
 async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
@@ -1134,6 +2156,98 @@ async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bo
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL tool catalogs tables: {exc}")
+        return False
+
+
+async def ensure_backup_schedules_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure backup schedule tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before backup schedules failed: {exc}")
+        for sql, params in _CREATE_BACKUP_SCHEDULES_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure backup schedules DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL backup schedule tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL backup schedule tables: {exc}")
+        return False
+
+
+async def ensure_maintenance_rotation_runs_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure maintenance rotation run tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(
+                f"PG ensure authnz core tables before maintenance rotation runs failed: {exc}"
+            )
+        for sql, params in _CREATE_MAINTENANCE_ROTATION_RUNS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure maintenance rotation run DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL maintenance rotation runs table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL maintenance rotation runs table: {exc}")
+        return False
+
+
+async def ensure_byok_validation_runs_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure BYOK validation run tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(
+                f"PG ensure authnz core tables before BYOK validation runs failed: {exc}"
+            )
+        for sql, params in _CREATE_BYOK_VALIDATION_RUNS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure BYOK validation run DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL BYOK validation runs table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL BYOK validation runs table: {exc}")
+        return False
+
+
+async def ensure_mcp_hub_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure MCP Hub management tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False  # not postgres
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before mcp hub tables failed: {exc}")
+        for sql, params in _CREATE_MCP_HUB_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure mcp hub tables DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL MCP Hub tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL MCP Hub tables: {exc}")
         return False
 
 
@@ -1802,6 +2916,49 @@ async def ensure_generated_files_table_pg(pool: DatabasePool | None = None) -> b
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL generated_files table: {exc}")
+        return False
+
+async def ensure_data_subject_requests_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure data_subject_requests table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before data_subject_requests failed: {exc}")
+        for sql, params in _CREATE_DATA_SUBJECT_REQUESTS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure data_subject_requests DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL data_subject_requests table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL data_subject_requests table: {exc}")
+        return False
+
+
+async def ensure_admin_monitoring_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure admin monitoring control-plane tables exist for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"PG ensure authnz core tables before admin monitoring failed: {exc}")
+        for sql, params in _CREATE_ADMIN_MONITORING_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure admin monitoring DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL admin monitoring tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL admin monitoring tables: {exc}")
         return False
 
 

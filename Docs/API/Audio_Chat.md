@@ -63,11 +63,15 @@ Purpose: low-latency voice commands with partial STT, streaming LLM deltas, and 
   - `tts`: `voice|model|provider|format|speed|extra_params` (`pcm` default; `mp3|opus|aac|flac|wav` supported).
   - Optional: `session_id`, `metadata`.
 - Stream audio as `{"type":"audio","data":"<base64 float32/PCM>"}`; send `{"type":"commit"}` to finalize (Silero VAD auto-commit also supported). `reset` clears buffers; `stop` closes the socket.
+- Optional interruption: send `{"type":"interrupt","reason":"barge_in|user_stop|..."}` to cancel the in-flight turn synthesis/generation window without closing the socket.
 
 ## Server Frames
 - STT partial/final frames mirror `/audio/stream/transcribe` plus `full_transcript` with `voice_to_voice_start` + `auto_commit`.
 - LLM streaming: `llm_delta` for each text chunk; `llm_message` + `assistant_summary` at end.
-- TTS streaming: binary audio frames; bracketed by `tts_start` / `tts_done`. Errors use canonical `{type:"error", code:"...", message, data?}`; compatibility alias `error_type` is included when `AUDIO_WS_COMPAT_ERROR_TYPE=1`.
+- TTS streaming: binary audio frames; bracketed by `tts_start` / `tts_done`.
+- Interrupt ack: `{"type":"interrupted","turn_id":"turn-N|null","phase":"both","reason":"..."}`.
+- Overlap behavior: in overlapped mode, `tts_start` and early audio bytes can arrive before final `llm_message`.
+- Errors use canonical `{type:"error", code:"...", message, data?}`; compatibility alias `error_type` is included when `AUDIO_WS_COMPAT_ERROR_TYPE=1`.
 
 ## Limits & Metrics
 - Auth/quotas: API key/JWT/single-user key; per-user concurrency guard; minute accounting per chunk with bounded fail-open; quota/rate errors close with 4003 (1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`).

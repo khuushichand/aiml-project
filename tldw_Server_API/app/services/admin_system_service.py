@@ -532,6 +532,8 @@ async def get_audit_log(
             return str(resource_id)
 
         if is_pg:
+            limit_pos = param_count + 1
+            offset_pos = param_count + 2
             count_query_template = """
                 SELECT COUNT(*)
                 FROM audit_logs a
@@ -548,8 +550,8 @@ async def get_audit_log(
                 {join_clause}
                 {where_clause}
                 ORDER BY a.created_at DESC
-                LIMIT ${param_count + 1}
-                OFFSET ${param_count + 2}
+                LIMIT ${limit_pos}
+                OFFSET ${offset_pos}
             """
             query = query_template.format_map(locals())  # nosec B608
             query_params = list(params)

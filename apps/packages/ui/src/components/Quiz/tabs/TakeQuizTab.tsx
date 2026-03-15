@@ -69,6 +69,7 @@ import {
   isMatchingAnswerCorrect,
   normalizeMatchingAnswerMap
 } from "../utils/matchingAnswer"
+import { summarizeQuizSources } from "../utils/sourceBundle"
 import { QuizMarkdown } from "../components/QuizMarkdown"
 import { SourceCitations } from "../components/SourceCitations"
 
@@ -1558,6 +1559,11 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
 
   const renderAssignmentAlert = () => {
     if (!hasAssignmentContext || assignmentAlertDismissed) return null
+    const assignmentPastDueMessage = assignmentIsOverdue
+      ? t("option:quiz.assignmentPastDue", {
+        defaultValue: "This shared assignment is past due."
+      })
+      : null
     return (
       <Alert
         data-testid="quiz-assignment-alert"
@@ -1565,15 +1571,16 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
         showIcon
         closable
         onClose={() => setAssignmentAlertDismissed(true)}
-        title={assignmentIsOverdue
-          ? t("option:quiz.assignmentPastDue", {
-            defaultValue: "This shared assignment is past due."
-          })
-          : t("option:quiz.assignmentActive", {
-            defaultValue: "This quiz was opened from a shared assignment link."
-          })}
+        title={t("option:quiz.assignmentActive", {
+          defaultValue: "This quiz was opened from a shared assignment link."
+        })}
         description={(
           <div className="space-y-1 text-sm">
+            {assignmentPastDueMessage && (
+              <Typography.Text className="block">
+                {assignmentPastDueMessage}
+              </Typography.Text>
+            )}
             {assignmentDueAtLabel && (
               <Typography.Text className="block">
                 {t("option:quiz.assignmentDueAt", {
@@ -2446,6 +2453,7 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
         }}
         renderItem={(quiz) => {
           const isHighlighted = quiz.id === highlightedQuizId
+          const sourceSummary = summarizeQuizSources(quiz)
           return (
             <List.Item>
               <Card
@@ -2503,6 +2511,30 @@ export const TakeQuizTab: React.FC<TakeQuizTabProps> = ({
                         {(quiz as Quiz & { difficulty?: string | null }).difficulty && (
                           <Tag color="purple">
                             {getQuizDifficultyLabel(quiz)}
+                          </Tag>
+                        )}
+                        {sourceSummary.media > 0 && (
+                          <Tag color="green" data-testid={`take-quiz-source-media-${quiz.id}`}>
+                            {t("option:quiz.sourceBadgeMedia", {
+                              defaultValue: "Media {{count}}",
+                              count: sourceSummary.media
+                            })}
+                          </Tag>
+                        )}
+                        {sourceSummary.notes > 0 && (
+                          <Tag color="cyan" data-testid={`take-quiz-source-notes-${quiz.id}`}>
+                            {t("option:quiz.sourceBadgeNotes", {
+                              defaultValue: "Notes {{count}}",
+                              count: sourceSummary.notes
+                            })}
+                          </Tag>
+                        )}
+                        {sourceSummary.flashcards > 0 && (
+                          <Tag color="magenta" data-testid={`take-quiz-source-flashcards-${quiz.id}`}>
+                            {t("option:quiz.sourceBadgeFlashcards", {
+                              defaultValue: "Flashcards {{count}}",
+                              count: sourceSummary.flashcards
+                            })}
                           </Tag>
                         )}
                         {quiz.media_id != null && (

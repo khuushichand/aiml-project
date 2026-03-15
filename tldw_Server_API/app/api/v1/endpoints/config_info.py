@@ -106,13 +106,17 @@ def load_safe_config() -> dict:
 
     # Feature flags / capabilities (safe to expose)
     try:
-        _settings = config_mod.settings
         caps = {
-            "personalization": bool(_settings.get("PERSONALIZATION_ENABLED", True))
+            "personalization": bool(config_mod.legacy_get("PERSONALIZATION_ENABLED", True))
             and bool(config_mod.route_enabled("personalization", default_stable=False)),
-            "persona": bool(_settings.get("PERSONA_ENABLED", True))
+            "persona": bool(config_mod.legacy_get("PERSONA_ENABLED", True))
             and bool(config_mod.route_enabled("persona", default_stable=True)),
         }
+        caps["hasSlides"] = bool(config_mod.route_enabled("slides", default_stable=True))
+        caps["hasPresentationStudio"] = bool(caps["hasSlides"])
+        caps["hasPresentationRender"] = bool(caps["hasPresentationStudio"]) and bool(
+            is_truthy(os.getenv("PRESENTATION_RENDER_ENABLED", "true"))
+        )
         # expose both for backward-compat and forward-looking UI
         safe_config["supported_features"] = caps
         safe_config["capabilities"] = caps

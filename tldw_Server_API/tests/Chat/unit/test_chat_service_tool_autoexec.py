@@ -72,7 +72,18 @@ async def _run_execute_non_stream_call(
     *,
     llm_call_func,
     save_message_fn,
+    cleaned_args_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    cleaned_args = {
+        "api_endpoint": "openai",
+        "api_key": "test-key",
+        "messages_payload": [{"role": "user", "content": "hi"}],
+        "model": "gpt-4o-mini",
+        "streaming": False,
+    }
+    if cleaned_args_overrides:
+        cleaned_args.update(cleaned_args_overrides)
+
     request = SimpleNamespace(
         method="POST",
         url=SimpleNamespace(path="/api/v1/chat/completions"),
@@ -81,13 +92,7 @@ async def _run_execute_non_stream_call(
     )
     return await execute_non_stream_call(
         current_loop=asyncio.get_running_loop(),
-        cleaned_args={
-            "api_endpoint": "openai",
-            "api_key": "test-key",
-            "messages_payload": [{"role": "user", "content": "hi"}],
-            "model": "gpt-4o-mini",
-            "streaming": False,
-        },
+        cleaned_args=cleaned_args,
         selected_provider="openai",
         provider="openai",
         model="gpt-4o-mini",
@@ -139,6 +144,42 @@ async def test_non_stream_autoexec_disabled_keeps_existing_behavior(monkeypatch:
     response = await _run_execute_non_stream_call(
         llm_call_func=_build_llm_response_with_tool_calls,
         save_message_fn=save_message_fn,
+    )
+
+    assert called["autoexec"] == 0
+    assert len(saved_payloads) == 1
+    assert saved_payloads[0]["role"] == "assistant"
+    assert "tldw_tool_results" not in response
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_non_stream_loop_mode_disables_legacy_autoexec(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_log_llm_usage(**_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "log_llm_usage", fake_log_llm_usage)
+    monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+    monkeypatch.setattr(chat_service, "should_auto_execute_tools", lambda: True)
+
+    called = {"autoexec": 0}
+
+    async def fake_autoexec(**_kwargs):
+        called["autoexec"] += 1
+        return ToolExecutionBatchResult(0, 0, 0, 0, False, [])
+
+    monkeypatch.setattr(chat_service, "execute_assistant_tool_calls", fake_autoexec)
+
+    saved_payloads: list[dict[str, Any]] = []
+
+    async def save_message_fn(_db, _conv_id, payload, use_transaction=True):
+        saved_payloads.append(payload)
+        return f"m-{len(saved_payloads)}"
+
+    response = await _run_execute_non_stream_call(
+        llm_call_func=_build_llm_response_with_tool_calls,
+        save_message_fn=save_message_fn,
+        cleaned_args_overrides={"chat_loop_mode": "enabled"},
     )
 
     assert called["autoexec"] == 0

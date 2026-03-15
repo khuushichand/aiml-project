@@ -85,6 +85,8 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
     searchQuery: "",
     searchResults: [],
     activeSearchIndex: 0,
+    searchMatchCase: false,
+    searchWordBoundary: false,
     annotations: [],
     pendingAnnotations: [],
     annotationSyncStatus: "synced",
@@ -417,6 +419,14 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
       })
     },
 
+    setSearchMatchCase: (matchCase: boolean) => {
+      set({ searchMatchCase: matchCase })
+    },
+
+    setSearchWordBoundary: (wordBoundary: boolean) => {
+      set({ searchWordBoundary: wordBoundary })
+    },
+
     // Annotations
     addAnnotation: (annotation) => {
       const now = new Date()
@@ -494,6 +504,8 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
         searchQuery: "",
         searchResults: [],
         activeSearchIndex: 0,
+        searchMatchCase: false,
+        searchWordBoundary: false,
         annotations: [],
         pendingAnnotations: [],
         annotationSyncStatus: "synced",

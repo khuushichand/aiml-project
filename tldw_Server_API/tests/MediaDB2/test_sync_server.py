@@ -13,7 +13,7 @@ import pytest
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.endpoints.sync import ServerSyncProcessor
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, MediaDatabase
 
 #
 #######################################################################################################################
@@ -125,6 +125,99 @@ class TestServerSyncProcessorApply:
         assert state['version'] == 2
         assert state['client_id'] == "client_sender_1"
         assert state['last_modified'] > "2023-11-01T10:00:00Z"
+
+    def test_apply_client_media_update_refreshes_fts_index(self, server_processor, server_user_db):
+        """Media updates received via sync should refresh the FTS index."""
+        media_id, media_uuid, _ = server_user_db.add_media_with_keywords(
+            title="sync media old title",
+            media_type="article",
+            content="legacy_sync_marker",
+            keywords=[],
+        )
+
+        initial_results, initial_total = MediaDatabase.search_media_db(
+            server_user_db,
+            search_query="legacy_sync_marker",
+            search_fields=["content"],
+        )
+        assert initial_total == 1
+        assert initial_results[0]["id"] == media_id
+
+        client_change = create_mock_log_entry(
+            change_id=24,
+            entity="Media",
+            uuid=media_uuid,
+            op="update",
+            client="client_sender_1",
+            version=2,
+            payload_dict={
+                "title": "sync media new title",
+                "content": "fresh_sync_token_123",
+            },
+            ts="2023-11-01T10:15:00Z",
+        )
+
+        success, errors = server_processor.apply_client_changes_batch([client_change])
+
+        assert success is True
+        assert not errors
+
+        updated_results, updated_total = MediaDatabase.search_media_db(
+            server_user_db,
+            search_query="fresh_sync_token_123",
+            search_fields=["content"],
+        )
+        assert updated_total == 1
+        assert updated_results[0]["id"] == media_id
+
+    def test_apply_client_media_update_rolls_back_when_fts_refresh_fails(
+        self,
+        server_processor,
+        server_user_db,
+        monkeypatch,
+    ):
+        """FTS refresh failures should rollback the sync write atomically."""
+        media_id, media_uuid, _ = server_user_db.add_media_with_keywords(
+            title="rollback old title",
+            media_type="article",
+            content="rollback_old_content",
+            keywords=[],
+        )
+
+        def _raise_fts_failure(*_args, **_kwargs):
+            raise DatabaseError("synthetic fts refresh failure")
+
+        monkeypatch.setattr(
+            server_processor.db,
+            "sync_refresh_fts_for_entity",
+            _raise_fts_failure,
+            raising=False,
+        )
+
+        client_change = create_mock_log_entry(
+            change_id=25,
+            entity="Media",
+            uuid=media_uuid,
+            op="update",
+            client="client_sender_1",
+            version=2,
+            payload_dict={
+                "title": "rollback new title",
+                "content": "rollback_new_content",
+            },
+            ts="2023-11-01T10:20:00Z",
+        )
+
+        success, errors = server_processor.apply_client_changes_batch([client_change])
+
+        assert success is False
+        assert errors
+        state = get_entity_state(server_user_db, "Media", media_uuid)
+        assert state is not None
+        assert state["id"] == media_id
+        assert state["title"] == "rollback old title"
+        assert state["content"] == "rollback_old_content"
+        assert state["version"] == 1
 
     def test_apply_client_mediakeywords_link_success(self, server_processor, server_user_db):
         """MediaKeywords link should be handled without generic uuid/version lookup."""

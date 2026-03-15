@@ -7,6 +7,7 @@ import hmac
 import json
 import mimetypes
 import os
+import tempfile
 import threading
 import time
 
@@ -24,13 +25,14 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.schemas.sandbox_schemas import (
+    SandboxAdminMacOSDiagnosticsResponse,
     ArtifactListResponse,
     CancelResponse,
     SandboxAdminIdempotencyItem,
@@ -296,6 +298,97 @@ def _require_session_owner(session_id: str, current_user: User) -> str:
     if not _is_admin_user(current_user) and str(owner) != str(current_user.id):
         raise HTTPException(status_code=404, detail="session_not_found")
     return str(owner)
+
+
+def _model_field_names(model: object | None) -> set[str]:
+    if model is None:
+        return set()
+    fields = getattr(model, "model_fields_set", None)
+    if fields is None:
+        fields = getattr(model, "__fields_set__", set())
+    return {str(field) for field in (fields or set())}
+
+
+def _workspace_usage_bytes_sync(root: str) -> int:
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in filenames:
+            full_path = os.path.join(dirpath, filename)
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                if os.path.isfile(full_path):
+                    total += int(os.path.getsize(full_path))
+    return total
+
+
+def _existing_file_size_sync(target: str) -> int:
+    try:
+        if os.path.isfile(target):
+            return int(os.path.getsize(target))
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        return 0
+    return 0
+
+
+def _prepare_temp_target_sync(target: str) -> tuple[int, str, int]:
+    parent = os.path.dirname(target)
+    os.makedirs(parent, exist_ok=True)
+    existing_size = _existing_file_size_sync(target)
+    fd, temp_path = tempfile.mkstemp(
+        dir=parent,
+        prefix=f".{os.path.basename(target)}.",
+        suffix=".upload",
+    )
+    return fd, temp_path, existing_size
+
+
+def _write_fd_chunk_sync(fd: int, chunk: bytes) -> None:
+    os.write(fd, chunk)
+
+
+def _finalize_temp_target_sync(fd: int, temp_path: str, target: str) -> None:
+    try:
+        os.close(fd)
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        pass
+    os.replace(temp_path, target)
+
+
+def _cleanup_temp_target_sync(fd: int, temp_path: str) -> None:
+    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+        os.close(fd)
+    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+        os.unlink(temp_path)
+
+
+def _make_directory_sync(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def _stream_reader_to_target_sync(
+    target: str,
+    read_chunk,
+    *,
+    chunk_size: int,
+    workspace_used: int,
+    cap_bytes: int,
+) -> tuple[int, int]:
+    fd, temp_path, existing_size = _prepare_temp_target_sync(target)
+    file_bytes = 0
+    try:
+        while True:
+            chunk = read_chunk(chunk_size)
+            if not chunk:
+                break
+            next_total = workspace_used - existing_size + file_bytes + len(chunk)
+            if next_total > cap_bytes:
+                raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
+            _write_fd_chunk_sync(fd, chunk)
+            file_bytes += len(chunk)
+        _finalize_temp_target_sync(fd, temp_path, target)
+        return file_bytes, workspace_used - existing_size + file_bytes
+    except Exception:
+        _cleanup_temp_target_sync(fd, temp_path)
+        raise
 
 
 def _looks_like_jwt(token: str | None) -> bool:
@@ -613,7 +706,7 @@ async def create_session(
                 content={
                     "error": {
                         "code": "policy_unsupported",
-                        "message": str(e),
+                        "message": "Sandbox policy is unsupported for the requested runtime.",
                         "details": {
                             "runtime": rt,
                             "requirement": requirement,
@@ -720,6 +813,13 @@ async def create_session(
         id=session.id,
         runtime=session.runtime.value,
         base_image=session.base_image,
+        cpu_limit=session.cpu_limit,
+        memory_mb=session.memory_mb,
+        timeout_sec=session.timeout_sec,
+        network_policy=session.network_policy,
+        env=dict(session.env or {}),
+        labels=dict(session.labels or {}),
+        trust_level=(session.trust_level.value if session.trust_level else None),
         expires_at=session.expires_at,
         policy_hash=ph,
         persona_id=session.persona_id,
@@ -777,6 +877,16 @@ async def create_snapshot(
             created_at=result["created_at"],
             size_bytes=result["size_bytes"],
         )
+    except SessionActiveRunsConflict as e:
+        err = str(e) or "session_has_active_runs"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": err,
+                "active_runs": int(getattr(e, "active_runs", 0) or 0),
+                "session_id": str(session_id),
+            },
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except OSError as e:
@@ -804,6 +914,16 @@ async def restore_snapshot(
             restored=restored,
             snapshot_id=payload.snapshot_id,
         )
+    except SessionActiveRunsConflict as e:
+        err = str(e) or "session_has_active_runs"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": err,
+                "active_runs": int(getattr(e, "active_runs", 0) or 0),
+                "session_id": str(session_id),
+            },
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except OSError as e:
@@ -834,6 +954,16 @@ async def clone_session(
             session_id=new_session.id,
             cloned_from=session_id,
         )
+    except SessionActiveRunsConflict as e:
+        err = str(e) or "session_has_active_runs"
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": err,
+                "active_runs": int(getattr(e, "active_runs", 0) or 0),
+                "session_id": str(session_id),
+            },
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
@@ -889,96 +1019,134 @@ async def upload_files(
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxFileUploadResponse:
     _require_session_owner(session_id, current_user)
-    ws_root = _service.get_session_workspace_path(session_id)
-    if not ws_root:
-        raise HTTPException(status_code=404, detail="session_not_found")
-
-    try:
-        cap_mb = int(os.getenv("SANDBOX_WORKSPACE_CAP_MB") or 256)
-    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-        cap_mb = 256
-    cap_bytes = cap_mb * 1024 * 1024
     written = 0
     count = 0
 
-    import io
-    import tarfile
-    import zipfile
-    for up in files:
-        try:
-            content = await up.read()
-        except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-            logger.warning(f"Failed reading upload file {up.filename}: {e}")
-            continue
-        if written + len(content) > cap_bytes:
-            raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
-        lower = (up.filename or "").lower()
-        if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
+    try:
+        async with _service.async_workspace_operation_lock(session_id) as ws_root:
             try:
-                mode = "r:*"
-                tf = tarfile.open(fileobj=io.BytesIO(content), mode=mode)
-                for m in tf.getmembers():
-                    # Skip device files, symlinks, and hard links
-                    if m.isdev() or m.issym() or m.islnk():
-                        continue
-                    # Use secure path join to prevent traversal
-                    target = safe_join(ws_root, m.name)
+                cap_mb = int(os.getenv("SANDBOX_WORKSPACE_CAP_MB") or 256)
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+                cap_mb = 256
+            cap_bytes = cap_mb * 1024 * 1024
+            chunk_size = 64 * 1024
+            import tarfile
+            import zipfile
+
+            async def _stream_upload_to_target(
+                upload: UploadFile,
+                target: str,
+                *,
+                workspace_used: int,
+            ) -> tuple[int, int]:
+                fd, temp_path, existing_size = await asyncio.to_thread(_prepare_temp_target_sync, target)
+                file_bytes = 0
+                try:
+                    while True:
+                        chunk = await upload.read(chunk_size)
+                        if not chunk:
+                            break
+                        next_total = workspace_used - existing_size + file_bytes + len(chunk)
+                        if next_total > cap_bytes:
+                            raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
+                        await asyncio.to_thread(_write_fd_chunk_sync, fd, chunk)
+                        file_bytes += len(chunk)
+                    await asyncio.to_thread(_finalize_temp_target_sync, fd, temp_path, target)
+                    return file_bytes, workspace_used - existing_size + file_bytes
+                except Exception:
+                    await asyncio.to_thread(_cleanup_temp_target_sync, fd, temp_path)
+                    raise
+
+            workspace_used = await asyncio.to_thread(_workspace_usage_bytes_sync, ws_root)
+
+            for up in files:
+                lower = (up.filename or "").lower()
+                if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
+                    try:
+                        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                            await up.seek(0)
+                        with tarfile.open(fileobj=up.file, mode="r:*") as tf:
+                            for member in tf.getmembers():
+                                if member.isdev() or member.issym() or member.islnk():
+                                    continue
+                                target = safe_join(ws_root, member.name)
+                                if target is None:
+                                    continue
+                                if member.isdir():
+                                    await asyncio.to_thread(_make_directory_sync, target)
+                                    continue
+                                fileobj = tf.extractfile(member)
+                                if fileobj is None:
+                                    continue
+                                try:
+                                    file_bytes, workspace_used = await asyncio.to_thread(
+                                        _stream_reader_to_target_sync,
+                                        target,
+                                        fileobj.read,
+                                        chunk_size=chunk_size,
+                                        workspace_used=workspace_used,
+                                        cap_bytes=cap_bytes,
+                                    )
+                                finally:
+                                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                                        fileobj.close()
+                                written += file_bytes
+                                count += 1
+                    except HTTPException:
+                        raise
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Failed to extract tar: {e}")
+                elif lower.endswith(".zip"):
+                    try:
+                        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                            await up.seek(0)
+                        with zipfile.ZipFile(up.file) as zf:
+                            for member in zf.infolist():
+                                if member.is_dir():
+                                    continue
+                                if (member.external_attr >> 16) & 0xF000 == 0xA000:
+                                    continue
+                                target = safe_join(ws_root, member.filename)
+                                if target is None:
+                                    continue
+                                with zf.open(member) as fileobj:
+                                    file_bytes, workspace_used = await asyncio.to_thread(
+                                        _stream_reader_to_target_sync,
+                                        target,
+                                        fileobj.read,
+                                        chunk_size=chunk_size,
+                                        workspace_used=workspace_used,
+                                        cap_bytes=cap_bytes,
+                                    )
+                                written += file_bytes
+                                count += 1
+                    except HTTPException:
+                        raise
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Failed to extract zip: {e}")
+                else:
+                    target = safe_join(ws_root, up.filename or f"file_{count}")
                     if target is None:
-                        # Path traversal attempt detected, skip this entry
                         continue
-                    if m.isdir():
-                        os.makedirs(target, exist_ok=True)
+                    try:
+                        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                            await up.seek(0)
+                        file_bytes, workspace_used = await _stream_upload_to_target(
+                            up,
+                            target,
+                            workspace_used=workspace_used,
+                        )
+                    except HTTPException:
+                        raise
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Failed reading upload file {up.filename}: {e}")
                         continue
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    f = tf.extractfile(m)
-                    if f is None:
-                        continue
-                    data = f.read()
-                    if written + len(data) > cap_bytes:
-                        raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
-                    with open(target, "wb") as out:
-                        out.write(data)
-                    written += len(data)
+                    written += file_bytes
                     count += 1
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Failed to extract tar: {e}")
-        elif lower.endswith(".zip"):
-            try:
-                zf = zipfile.ZipFile(io.BytesIO(content))
-                for m in zf.infolist():
-                    if m.is_dir():
-                        continue
-                    # Check for symlinks in zip files (external_attr >> 28 == 0xA indicates symlink)
-                    # Unix symlink mode is 0o120000 (0xA000), stored in high 16 bits of external_attr
-                    if (m.external_attr >> 16) & 0xF000 == 0xA000:
-                        continue
-                    name = m.filename
-                    # Use secure path join to prevent traversal
-                    target = safe_join(ws_root, name)
-                    if target is None:
-                        # Path traversal attempt detected, skip this entry
-                        continue
-                    data = zf.read(m)
-                    if written + len(data) > cap_bytes:
-                        raise HTTPException(status_code=413, detail="workspace_cap_exceeded")
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    with open(target, "wb") as out:
-                        out.write(data)
-                    written += len(data)
-                    count += 1
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Failed to extract zip: {e}")
-        else:
-            # Use secure path join for regular file uploads
-            target = safe_join(ws_root, up.filename or f"file_{count}")
-            if target is None:
-                # Path traversal attempt detected, skip this file
-                continue
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with open(target, "wb") as out:
-                out.write(content)
-            written += len(content)
-            count += 1
+    except ValueError as e:
+        if str(e) == "session_not_found":
+            raise HTTPException(status_code=404, detail="session_not_found") from e
+        raise
 
     # Metrics
     try:
@@ -1046,7 +1214,18 @@ async def start_run(
     """
     if payload.session_id:
         _require_session_owner(payload.session_id, current_user)
-    files_inline = _service.parse_inline_files([f.dict() for f in (payload.files or [])])
+    try:
+        files_inline = _service.parse_inline_files([(f.model_dump() if hasattr(f, "model_dump") else f.dict()) for f in (payload.files or [])])
+    except ValueError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": {
+                    "code": "invalid_inline_file",
+                    "message": str(e),
+                }
+            },
+        ) from e
     try:
         default_exec_to = int(getattr(app_settings, "SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC", 300))
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -1057,17 +1236,35 @@ async def start_run(
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         default_startup_to = 20
 
+    payload_fields = _model_field_names(payload)
+    resource_fields = _model_field_names(payload.resources)
+    explicit_fields = set(payload_fields)
+    explicit_fields.update({f"resources.{field}" for field in resource_fields})
+
+    runtime = CoreRuntimeType(payload.runtime) if payload.runtime else None
+    base_image = payload.base_image or None
+    env = dict(payload.env or {})
+    timeout_sec = int(payload.timeout_sec) if payload.timeout_sec is not None else default_exec_to
+    cpu = payload.resources.cpu if payload.resources else None
+    memory_mb = payload.resources.memory_mb if payload.resources else None
+    network_policy = payload.network_policy
+    trust_level = CoreTrustLevel(payload.trust_level) if payload.trust_level else None
+    persona_id = payload.persona_id
+    workspace_id = payload.workspace_id
+    workspace_group_id = payload.workspace_group_id
+    scope_snapshot_id = payload.scope_snapshot_id
+
     spec = RunSpec(
         session_id=payload.session_id,
-        runtime=(CoreRuntimeType(payload.runtime) if payload.runtime else None),
-        base_image=payload.base_image,
+        runtime=runtime,
+        base_image=base_image,
         command=list(payload.command),
-        env=payload.env or {},
+        env=env,
         startup_timeout_sec=payload.startup_timeout_sec or default_startup_to,
-        timeout_sec=payload.timeout_sec or default_exec_to,
-        cpu=(payload.resources.cpu if payload.resources else None) if hasattr(payload, "resources") and payload.resources else None,
-        memory_mb=(payload.resources.memory_mb if payload.resources else None) if hasattr(payload, "resources") and payload.resources else None,
-        network_policy=payload.network_policy,
+        timeout_sec=timeout_sec,
+        cpu=cpu,
+        memory_mb=memory_mb,
+        network_policy=network_policy,
         files_inline=files_inline,
         capture_patterns=payload.capture_patterns or [],
         interactive=(bool(payload.interactive) if hasattr(payload, "interactive") and payload.interactive is not None else None),
@@ -1075,27 +1272,21 @@ async def start_run(
         stdin_max_frame_bytes=(int(payload.stdin_max_frame_bytes) if hasattr(payload, "stdin_max_frame_bytes") and payload.stdin_max_frame_bytes is not None else None),
         stdin_bps=(int(payload.stdin_bps) if hasattr(payload, "stdin_bps") and payload.stdin_bps is not None else None),
         stdin_idle_timeout_sec=(int(payload.stdin_idle_timeout_sec) if hasattr(payload, "stdin_idle_timeout_sec") and payload.stdin_idle_timeout_sec is not None else None),
-        trust_level=(CoreTrustLevel(payload.trust_level) if hasattr(payload, "trust_level") and payload.trust_level else None),
-        persona_id=payload.persona_id,
-        workspace_id=payload.workspace_id,
-        workspace_group_id=payload.workspace_group_id,
-        scope_snapshot_id=payload.scope_snapshot_id,
+        trust_level=trust_level,
+        persona_id=persona_id,
+        workspace_id=workspace_id,
+        workspace_group_id=workspace_group_id,
+        scope_snapshot_id=scope_snapshot_id,
     )
     # Scaffold: return immediate completed status without real execution
     try:
-        # Metrics: started
-        try:
-            rt = (spec.runtime.value if spec.runtime else (payload.runtime or "unknown"))
-            increment_counter("sandbox_runs_started_total", labels={"runtime": str(rt)})
-        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-            logger.debug("metrics: sandbox_runs_started_total failed")
-
         status = _service.start_run_scaffold(
             user_id=current_user.id,
             spec=spec,
             spec_version=payload.spec_version,
             idem_key=idempotency_key,
             raw_body=payload.model_dump(exclude_none=True),
+            explicit_fields=explicit_fields,
         )
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         if isinstance(e, SandboxPolicy.RuntimeUnavailable):
@@ -1104,12 +1295,12 @@ async def start_run(
             suggestions = _runtime_unavailable_suggestions(rt)
             reasons = list(getattr(e, "reasons", []) or [])
             return JSONResponse(status_code=503, content={
-                "error": {
-                    "code": "runtime_unavailable",
-                    "message": str(e),
-                    "details": {"runtime": rt, "available": False, "suggested": suggestions, "reasons": reasons}
-                }
-            })
+                    "error": {
+                        "code": "runtime_unavailable",
+                        "message": "The requested runtime is currently unavailable.",
+                        "details": {"runtime": rt, "available": False, "suggested": suggestions, "reasons": reasons}
+                    }
+                })
         if isinstance(e, SandboxPolicy.PolicyUnsupported):
             rt = _runtime_name_from_policy_exception(e)
             requirement = str(getattr(e, "requirement", "unknown"))
@@ -1119,7 +1310,7 @@ async def start_run(
                 content={
                     "error": {
                         "code": "policy_unsupported",
-                        "message": str(e),
+                        "message": "Sandbox policy is unsupported for the requested runtime.",
                         "details": {
                             "runtime": rt,
                             "requirement": requirement,
@@ -1186,7 +1377,24 @@ async def start_run(
                     "details": e.details,
                 }
             })
+        if isinstance(e, ValueError) and str(e) == "session_not_found":
+            raise HTTPException(status_code=404, detail="session_not_found") from e
+        if isinstance(e, ValueError) and str(e) == "session_base_image_required":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": {
+                        "code": "session_base_image_required",
+                        "message": "Session-backed runs require a base_image",
+                    }
+                },
+            ) from e
         raise
+    try:
+        rt = (status.runtime.value if status.runtime else (payload.runtime or "unknown"))
+        increment_counter("sandbox_runs_started_total", labels={"runtime": str(rt)})
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+        logger.debug("metrics: sandbox_runs_started_total failed")
     # Metrics and audit post-run (if completed)
     try:
         if status.started_at and status.finished_at:
@@ -1534,10 +1742,19 @@ async def download_artifact(
         or ".." in raw
     ):
         raise HTTPException(status_code=400, detail="invalid_path")
-    data = _service._orch.get_artifact(run_id, path)  # type: ignore[attr-defined]
-    if data is None:
-        raise HTTPException(status_code=404, detail="artifact_not_found")
-    size = len(data)
+
+    artifact_path = _service._orch.get_artifact_path(run_id, path)  # type: ignore[attr-defined]
+    data = None
+    if artifact_path is not None:
+        try:
+            size = int(artifact_path.stat().st_size)
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+            raise HTTPException(status_code=404, detail="artifact_not_found") from None
+    else:
+        data = _service._orch.get_artifact(run_id, path)  # type: ignore[attr-defined]
+        if data is None:
+            raise HTTPException(status_code=404, detail="artifact_not_found")
+        size = len(data)
     ctype, _ = mimetypes.guess_type(path)
     ctype = ctype or "application/octet-stream"
 
@@ -1568,6 +1785,19 @@ async def download_artifact(
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             return None
 
+    def _iter_artifact_file(file_path: str, start: int, end: int):
+        if end < start:
+            return
+        remaining = end - start + 1
+        with open(file_path, "rb") as handle:
+            handle.seek(start)
+            while remaining > 0:
+                chunk = handle.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
     headers = {"Accept-Ranges": "bytes"}
     if range_header:
         rng = _parse_range(range_header)
@@ -1575,14 +1805,27 @@ async def download_artifact(
             # Invalid or unsupported range
             return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
         start, end = rng
-        chunk = data[start:end + 1]
+        chunk_len = end - start + 1
         headers.update({
             "Content-Range": f"bytes {start}-{end}/{size}",
-            "Content-Length": str(len(chunk)),
+            "Content-Length": str(chunk_len),
         })
-        return Response(content=chunk, media_type=ctype, headers=headers, status_code=206)
-    # Default: return full content
+        if artifact_path is not None:
+            return StreamingResponse(
+                _iter_artifact_file(str(artifact_path), start, end),
+                media_type=ctype,
+                headers=headers,
+                status_code=206,
+            )
+        return Response(content=data[start:end + 1], media_type=ctype, headers=headers, status_code=206)
+
     headers["Content-Length"] = str(size)
+    if artifact_path is not None:
+        return StreamingResponse(
+            _iter_artifact_file(str(artifact_path), 0, size - 1),
+            media_type=ctype,
+            headers=headers,
+        )
     return Response(content=data, media_type=ctype, headers=headers)
 
 
@@ -1812,12 +2055,17 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     async def _heartbeats() -> None:
         try:
             while True:
+                if hub.has_ended(run_id):
+                    return
                 await asyncio.sleep(10)
+                if hub.has_ended(run_id):
+                    return
                 # Publish via hub to attach seq and flow through the same queue.
                 # If this fails, skip the heartbeat to avoid injecting out-of-band frames
                 # with potentially inconsistent sequencing.
                 try:
-                    hub.publish_heartbeat(run_id)
+                    if not hub.publish_heartbeat(run_id):
+                        return
                     with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         increment_counter("sandbox_ws_heartbeats_sent_total", labels={"component": "sandbox"})
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -1828,7 +2076,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     spawn_hb = True
     try:
         # If run already ended, avoid spawning heartbeats that could interleave
-        if bool(run_id in getattr(hub, "_ended", set())):
+        if hub.has_ended(run_id):
             spawn_hb = False
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         spawn_hb = True
@@ -1972,6 +2220,19 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
 # -----------------------
 # Admin API (list/details)
 # -----------------------
+
+@router.get(
+    "/admin/macos-diagnostics",
+    response_model=SandboxAdminMacOSDiagnosticsResponse,
+    summary="Admin: macOS sandbox diagnostics",
+)
+async def admin_macos_diagnostics(
+    _principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
+    _current_user: User = Depends(get_request_user),
+) -> SandboxAdminMacOSDiagnosticsResponse:
+    """Return detailed macOS sandbox diagnostics for admin troubleshooting."""
+
+    return SandboxAdminMacOSDiagnosticsResponse.model_validate(_service.macos_diagnostics())
 
 @router.get(
     "/admin/runs",

@@ -3,7 +3,6 @@
 
 ## Introduction
 
-https://hub.vroid.com/en
 RSS
     https://feedparser.readthedocs.io/en/latest/
     https://github.com/kurtmckee/feedparser
@@ -19,7 +18,6 @@ https://github.com/Olshansk/rss-feeds
 https://themeisle.com/blog/rss-feeds-list/
 https://github.com/muchdogesec/history4feed?tab=readme-ov-file
 https://www.dogesec.com/blog/full_text_full_history_rss_atom_blog_feeds/
-https://github.com/muchdogesec/history4feed?tab=readme-ov-file
 https://github.com/TimmyOVO/freshrss-filter
 https://github.com/piqoni/matcha
 

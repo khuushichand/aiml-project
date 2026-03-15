@@ -81,6 +81,20 @@ export interface TeamMember {
   user?: User;
 }
 
+export interface OrgMembership {
+  org_id: number;
+  role: string;
+  org_name?: string;
+}
+
+export interface TeamMembership {
+  team_id: number;
+  org_id: number;
+  role: string;
+  team_name?: string;
+  org_name?: string;
+}
+
 export interface ApiKey {
   id: string;
   user_id: number;
@@ -91,6 +105,12 @@ export interface ApiKey {
   expires_at?: string;
   revoked_at?: string;
   last_used_at?: string;
+}
+
+export interface ApiKeyMutationResponse {
+  key?: string;
+  id?: string;
+  key_prefix?: string;
 }
 
 export interface Role {
@@ -134,6 +154,114 @@ export interface BackupsResponse {
   offset: number;
 }
 
+export interface BackupScheduleItem {
+  id: string;
+  dataset: string;
+  target_user_id?: number | null;
+  frequency: 'daily' | 'weekly' | 'monthly';
+  time_of_day: string;
+  timezone: string;
+  anchor_day_of_week?: number | null;
+  anchor_day_of_month?: number | null;
+  retention_count: number;
+  is_paused: boolean;
+  schedule_description: string;
+  next_run_at?: string | null;
+  last_run_at?: string | null;
+  last_status?: string | null;
+  last_job_id?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface BackupScheduleListResponse {
+  items: BackupScheduleItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface BackupScheduleMutationResponse {
+  status: string;
+  item: BackupScheduleItem;
+}
+
+export interface MaintenanceRotationRunItem {
+  id: string;
+  mode: 'dry_run' | 'execute';
+  status: 'queued' | 'running' | 'complete' | 'failed';
+  domain?: string | null;
+  queue?: string | null;
+  job_type?: string | null;
+  fields_json: string;
+  limit?: number | null;
+  affected_count?: number | null;
+  requested_by_user_id?: number | null;
+  requested_by_label?: string | null;
+  confirmation_recorded: boolean;
+  job_id?: string | null;
+  scope_summary: string;
+  key_source: string;
+  error_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface MaintenanceRotationRunListResponse {
+  items: MaintenanceRotationRunItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface MaintenanceRotationRunCreateRequest {
+  mode: 'dry_run' | 'execute';
+  domain?: string;
+  queue?: string;
+  job_type?: string;
+  fields: string[];
+  limit: number;
+  confirmed: boolean;
+}
+
+export interface MaintenanceRotationRunCreateResponse {
+  item: MaintenanceRotationRunItem;
+}
+
+export interface ByokValidationRunItem {
+  id: string;
+  status: 'queued' | 'running' | 'complete' | 'failed';
+  org_id?: number | null;
+  provider?: string | null;
+  keys_checked?: number | null;
+  valid_count?: number | null;
+  invalid_count?: number | null;
+  error_count?: number | null;
+  requested_by_user_id?: number | null;
+  requested_by_label?: string | null;
+  job_id?: string | null;
+  scope_summary: string;
+  error_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface ByokValidationRunListResponse {
+  items: ByokValidationRunItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ByokValidationRunCreateRequest {
+  org_id?: number;
+  provider?: string;
+}
+
 export interface RetentionPolicy {
   key: string;
   days?: number | null;
@@ -142,6 +270,21 @@ export interface RetentionPolicy {
 
 export interface RetentionPoliciesResponse {
   policies: RetentionPolicy[];
+}
+
+export interface RetentionPolicyPreviewCounts {
+  audit_log_entries: number;
+  job_records: number;
+  backup_files: number;
+}
+
+export interface RetentionPolicyPreviewResponse {
+  key: string;
+  current_days: number;
+  new_days: number;
+  counts: RetentionPolicyPreviewCounts;
+  preview_signature: string;
+  notes: string[];
 }
 
 export interface ProviderSecret {
@@ -190,6 +333,25 @@ export type SecurityHealthData = {
   last_security_scan?: string;
 };
 
+export interface SecurityAlertStatus {
+  total_alerts?: number;
+  critical_alerts?: number;
+  warning_alerts?: number;
+  unacknowledged?: number;
+  recent_alerts?: {
+    id: string;
+    severity: string;
+    message: string;
+    timestamp: string;
+    source?: string;
+  }[];
+}
+
+export interface EffectivePermissionsResponse {
+  user_id: number;
+  permissions: string[];
+}
+
 export interface AuthContextType {
   user: User | null;
   login: (username: string, password: string) => Promise<boolean>;
@@ -222,6 +384,18 @@ export interface VoiceSession {
   created_at: string;
   last_activity: string;
   turn_count: number;
+}
+
+export interface VoiceCommandListResponse {
+  commands?: VoiceCommand[];
+  items?: VoiceCommand[];
+  total?: number;
+}
+
+export interface VoiceSessionListResponse {
+  sessions?: VoiceSession[];
+  items?: VoiceSession[];
+  total?: number;
 }
 
 export interface VoiceCommandUsage {
@@ -259,3 +433,71 @@ export interface VoiceAnalyticsSummary {
 }
 
 export type { IncidentEvent, IncidentItem, IncidentsResponse } from './incidents';
+
+// ============================================
+// Billing & Subscription Types
+// ============================================
+
+export type PlanTier = 'free' | 'pro' | 'enterprise';
+export type SubscriptionStatus = 'active' | 'past_due' | 'canceled' | 'trialing' | 'incomplete';
+
+export interface Plan {
+  id: string;
+  name: string;
+  tier: PlanTier;
+  stripe_product_id: string;
+  stripe_price_id: string;
+  monthly_price_cents: number;
+  included_token_credits: number;
+  overage_rate_per_1k_tokens_cents: number;
+  features: string[];
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Subscription {
+  id: string;
+  org_id: number;
+  plan_id: string;
+  plan?: Plan;
+  stripe_subscription_id: string;
+  status: SubscriptionStatus;
+  current_period_start: string;
+  current_period_end: string;
+  trial_end?: string;
+  cancel_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrgUsageSummary {
+  org_id: number;
+  period_start: string;
+  period_end: string;
+  tokens_used: number;
+  tokens_included: number;
+  tokens_overage: number;
+  overage_cost_cents: number;
+  breakdown_by_provider: Record<string, number>;
+}
+
+export interface Invoice {
+  id: string;
+  stripe_invoice_id: string;
+  amount_cents: number;
+  currency: string;
+  status: 'paid' | 'open' | 'void' | 'draft' | 'uncollectible';
+  invoice_pdf?: string;
+  period_start: string;
+  period_end: string;
+  created_at: string;
+}
+
+export interface FeatureRegistryEntry {
+  feature_key: string;
+  display_name: string;
+  description: string;
+  plans: string[];
+  category: string;
+}

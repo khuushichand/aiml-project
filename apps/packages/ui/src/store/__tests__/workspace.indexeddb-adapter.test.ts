@@ -88,12 +88,14 @@ const buildWorkspaceState = (workspaceId: string) => {
         id: workspaceId,
         name: "Workspace A",
         tag: "workspace:a",
+        collectionId: null,
         createdAt: "2026-02-22T00:00:00.000Z",
         lastAccessedAt: "2026-02-22T00:00:00.000Z",
         sourceCount: 0
       }
     ],
     archivedWorkspaces: [],
+    workspaceCollections: [],
     workspaceSnapshots: {
       [workspaceId]: {
         workspaceId,

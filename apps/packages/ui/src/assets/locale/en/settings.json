@@ -22,9 +22,25 @@
   "researchStudioNav": "Research Studio",
   "modelPlaygroundNav": "Model Playground",
   "acpPlaygroundNav": "ACP Playground",
+  "mcpHubNav": "MCP Hub",
   "skillsNav": "Skills",
   "splashSettingsNav": "Splash screens",
+  "familyGuardrailsWizardNav": "Family Guardrails Wizard",
   "guardianNav": "Guardian & Monitoring",
+  "familyWizard": {
+    "title": "Family Guardrails Wizard",
+    "subtitle": "Template-first setup for guardians, dependents, and moderation acceptance tracking.",
+    "steps": {
+      "householdBasics": "Household Basics",
+      "addGuardians": "Add Guardians",
+      "addDependents": "Add Dependents (Accounts)",
+      "relationshipMapping": "Relationship Mapping",
+      "templates": "Templates + Customization",
+      "alertPreferences": "Alert Preferences",
+      "acceptanceTracker": "Invite + Acceptance Tracker",
+      "reviewActivate": "Review + Activate"
+    }
+  },
   "guardian": {
     "title": "Guardian & Self-Monitoring",
     "subtitle": "Configure personal content monitoring rules, guardian supervision relationships, and access crisis resources.",

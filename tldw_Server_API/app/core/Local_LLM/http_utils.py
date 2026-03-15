@@ -29,16 +29,6 @@ DEFAULT_RETRIES: int = 2
 DEFAULT_BACKOFF: float = 0.75
 
 
-class LocalHTTPStatusError(Exception):
-    """Lightweight status error for non-httpx clients used in tests."""
-
-    def __init__(self, status_code: int, response_text: str = "", response: Any = None) -> None:
-        self.status_code = status_code
-        self.response_text = response_text
-        self.response = response
-        super().__init__(f"HTTP {status_code}: {response_text}")
-
-
 def _is_httpx_async_client(client: Any) -> bool:
     module = getattr(client.__class__, "__module__", "")
     return module.startswith("httpx") and client.__class__.__name__ == "AsyncClient"
@@ -166,44 +156,8 @@ async def request_json(
 
     Uses centralized egress enforcement, retries, and backoff.
     """
-    # Backward-compat shim: if client is not an httpx.AsyncClient (e.g., tests provide a FakeClient),
-    # fall back to the legacy minimal retry loop without extra kwargs.
-    # DEPRECATED: This shim is for testing only and will be removed in a future version.
     if not _is_httpx_async_client(client):
-        import warnings
-        warnings.warn(
-            "Using non-httpx.AsyncClient in request_json is deprecated. "
-            "Use httpx.AsyncClient or patch the http_client factory/helpers in tests.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        attempt = 0
-        while True:
-            try:
-                resp = await client.request(method.upper(), url, json=json, headers=headers)
-                status = getattr(resp, "status_code", None)
-                if status is None:
-                    raise LocalHTTPStatusError(0, "Missing status_code on response", response=resp)
-                if 500 <= status < 600 and attempt < retries:
-                    attempt += 1
-                    await asyncio.sleep(backoff * (attempt or 1))
-                    continue
-                if status >= 400:
-                    response_text = getattr(resp, "text", "")
-                    raise LocalHTTPStatusError(status, str(response_text), response=resp)
-                return resp.json()
-            except LocalHTTPStatusError as e:
-                if e.status_code >= 500 and attempt < retries:
-                    attempt += 1
-                    await asyncio.sleep(backoff * (attempt or 1))
-                    continue
-                raise
-            except Exception:
-                if attempt < retries:
-                    attempt += 1
-                    await asyncio.sleep(backoff * (attempt or 1))
-                    continue
-                raise
+        raise TypeError("request_json requires an httpx.AsyncClient instance")
 
     # Map legacy semantics (attempts = 1 + retries) for real httpx clients
     retry_count = max(0, int(retries))

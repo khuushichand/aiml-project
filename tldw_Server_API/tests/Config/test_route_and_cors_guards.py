@@ -1,5 +1,7 @@
 import importlib
 import os
+from pathlib import Path
+import re
 
 from fastapi import FastAPI
 import pytest
@@ -18,6 +20,21 @@ app_main = importlib.reload(app_main)
 
 def test_main_app_route_guard_passes_for_current_routes() -> None:
     app_main._fail_on_duplicate_route_method_pairs(app_main.app, context="unit-test")
+
+
+def test_config_loads_dotenv_before_module_level_allowed_origins_read() -> None:
+    source = Path(config_mod.__file__).read_text(encoding="utf-8")
+    module_level_load_idx = source.find("\n_load_env_files_early()\n")
+    allowed_origins_read_idx = source.find('_ENV_ALLOWED = os.getenv("ALLOWED_ORIGINS")')
+
+    if module_level_load_idx == -1:
+        pytest.fail("Expected module-level _load_env_files_early() call in config.py")
+    if allowed_origins_read_idx == -1:
+        pytest.fail("Expected ALLOWED_ORIGINS env read in config.py")
+    if module_level_load_idx >= allowed_origins_read_idx:
+        pytest.fail(
+            "Expected .env bootstrap before module-level ALLOWED_ORIGINS read in config.py"
+        )
 
 
 def test_duplicate_route_guard_raises_for_duplicate_path_method_pairs() -> None:
@@ -71,6 +88,44 @@ def test_validate_cors_configuration_rejects_wildcard_with_credentials() -> None
 
 def test_validate_cors_configuration_allows_wildcard_without_credentials() -> None:
     app_main._validate_cors_configuration_or_raise(["*"], allow_credentials=False)
+
+
+def test_compute_dev_cors_origin_regex_allows_private_lan_origins_in_non_production() -> None:
+    pattern = app_main._compute_dev_cors_origin_regex(
+        ["http://localhost:3000"],
+        enforce_explicit_origins=False,
+    )
+
+    if not pattern:
+        pytest.fail("Expected development private-LAN regex when explicit origins are not enforced")
+
+    should_match = (
+        "http://192.168.5.184:3000",
+        "https://10.0.0.42:5173",
+        "http://172.16.0.8:8080",
+        "http://127.0.0.1:3000",
+        "https://localhost:3000",
+    )
+    for candidate in should_match:
+        if re.match(pattern, candidate) is None:
+            pytest.fail(f"Expected origin to match development private-LAN regex: {candidate}")
+
+    if re.match(pattern, "https://example.com") is not None:
+        pytest.fail("Did not expect public internet origin to match development private-LAN regex")
+
+
+def test_compute_dev_cors_origin_regex_disabled_for_wildcard_or_production() -> None:
+    if app_main._compute_dev_cors_origin_regex(
+        ["*"],
+        enforce_explicit_origins=False,
+    ) is not None:
+        pytest.fail("Expected no dev private-LAN regex when wildcard origins are configured")
+
+    if app_main._compute_dev_cors_origin_regex(
+        ["http://localhost:3000"],
+        enforce_explicit_origins=True,
+    ) is not None:
+        pytest.fail("Expected no dev private-LAN regex when explicit origins are enforced")
 
 
 def test_should_allow_cors_credentials_defaults_false() -> None:

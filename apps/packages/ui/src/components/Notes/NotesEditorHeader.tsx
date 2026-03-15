@@ -1,10 +1,12 @@
-import React from 'react'
-import { Button, Dropdown, Tag, Tooltip, Typography } from 'antd'
+import React, { useMemo } from 'react'
+import { Button, Dropdown, Tooltip, Typography } from 'antd'
+import type { MenuProps } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { useMobile } from '@/hooks/useMediaQuery'
+import type { SaveIndicatorState } from './notes-manager-types'
+import NotesSaveStatus from './NotesSaveStatus'
 import {
   Link2 as LinkIcon,
-  Plus as PlusIcon,
   Sparkles as SparklesIcon,
   Copy as CopyIcon,
   FileDown as FileDownIcon,
@@ -14,7 +16,9 @@ import {
   Trash2 as TrashIcon,
   Eye as EyeIcon,
   Edit3 as EditIcon,
-  Columns2 as SplitIcon
+  Columns2 as SplitIcon,
+  MoreHorizontal,
+  Printer as PrinterIcon
 } from 'lucide-react'
 
 interface NotesEditorHeaderProps {
@@ -38,9 +42,10 @@ interface NotesEditorHeaderProps {
   isSaving: boolean
   canDelete: boolean
   isDirty?: boolean
+  saveIndicator?: SaveIndicatorState
+  lastSavedAt?: string | null
   onOpenLinkedConversation: () => void
   onOpenSourceLink: (sourceId: string, sourceLabel: string) => void
-  onNewNote: () => void
   onApplyTemplate?: (templateId: string) => void
   onDuplicate?: () => void
   onTogglePin?: () => void
@@ -73,9 +78,10 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
   isSaving,
   canDelete,
   isDirty,
+  saveIndicator = 'idle',
+  lastSavedAt,
   onOpenLinkedConversation,
   onOpenSourceLink,
-  onNewNote,
   onApplyTemplate,
   onDuplicate,
   onTogglePin,
@@ -107,6 +113,218 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
         })}: ${backlinkConversationId}`
       : null
 
+  const overflowMenuItems: MenuProps['items'] = useMemo(() => {
+    const items: MenuProps['items'] = []
+
+    // --- Create group ---
+    if (!editorDisabled) {
+      const createChildren: MenuProps['items'] = []
+
+      if (onDuplicate) {
+        createChildren.push({
+          key: 'duplicate',
+          label: t('option:notesSearch.duplicateNoteAction', { defaultValue: 'Duplicate' }),
+          icon: (<CopyIcon className="w-4 h-4" />),
+          disabled: !canDuplicate
+        })
+      }
+
+      if (onApplyTemplate && templateOptions.length > 0) {
+        createChildren.push({
+          key: 'template-submenu',
+          label: t('option:notesSearch.templateAction', { defaultValue: 'From Template' }),
+          icon: (<FileTemplateIcon className="w-4 h-4" />),
+          children: templateOptions.map((tpl) => ({
+            key: `template-${tpl.id}`,
+            label: tpl.label
+          }))
+        })
+      }
+
+      if (createChildren.length > 0) {
+        items.push({
+          type: 'group' as const,
+          label: t('option:notesSearch.overflowGroupCreate', { defaultValue: 'Create' }),
+          children: createChildren
+        })
+      }
+
+      // --- Organize group ---
+      const organizeChildren: MenuProps['items'] = []
+
+      if (onTogglePin) {
+        organizeChildren.push({
+          key: 'pin',
+          label: isPinned
+            ? t('option:notesSearch.unpinNoteAction', { defaultValue: 'Unpin' })
+            : t('option:notesSearch.pinNoteAction', { defaultValue: 'Pin' }),
+          icon: (
+            <StarIcon
+              className={`w-4 h-4 ${isPinned ? 'fill-current text-amber-500' : ''}`}
+            />
+          ),
+          disabled: !canPin
+        })
+      }
+
+      if (backlinkConversationId) {
+        organizeChildren.push({
+          key: 'open-conversation',
+          label: t('option:notesSearch.openConversation', {
+            defaultValue: 'Open linked conversation'
+          }),
+          icon: (<LinkIcon className="w-4 h-4" />)
+        })
+      }
+
+      if (organizeChildren.length > 0) {
+        items.push({
+          type: 'group' as const,
+          label: t('option:notesSearch.overflowGroupOrganize', { defaultValue: 'Organize' }),
+          children: organizeChildren
+        })
+      }
+
+      // --- AI group ---
+      items.push({
+        type: 'group' as const,
+        label: t('option:notesSearch.overflowGroupAI', { defaultValue: 'AI' }),
+        children: [
+          {
+            key: 'flashcards',
+            label: t('option:notesSearch.generateFlashcardsAction', {
+              defaultValue: 'Generate flashcards'
+            }),
+            icon: (<SparklesIcon className="w-4 h-4" />),
+            disabled: !canGenerateFlashcards
+          }
+        ]
+      })
+    }
+
+    // --- Export group ---
+    items.push({
+      type: 'group' as const,
+      label: t('option:notesSearch.overflowGroupExport', { defaultValue: 'Export' }),
+      children: [
+        {
+          key: 'copy-submenu',
+          label: t('option:notesSearch.toolbarCopyTooltip', { defaultValue: 'Copy' }),
+          icon: (<CopyIcon className="w-4 h-4" />),
+          disabled: !hasContent,
+          children: [
+            {
+              key: 'copy-content',
+              label: t('option:notesSearch.copyModeContentOnly', {
+                defaultValue: 'Content only'
+              })
+            },
+            {
+              key: 'copy-markdown',
+              label: t('option:notesSearch.copyModeMarkdown', {
+                defaultValue: 'Markdown with title'
+              })
+            }
+          ]
+        },
+        {
+          key: 'export-submenu',
+          label: t('option:notesSearch.exportSingleAction', { defaultValue: 'Export' }),
+          icon: (<FileDownIcon className="w-4 h-4" />),
+          disabled: !canExport,
+          children: [
+            {
+              key: 'export-md',
+              label: t('option:notesSearch.exportSingleMd', {
+                defaultValue: 'Markdown (.md)'
+              })
+            },
+            {
+              key: 'export-json',
+              label: t('option:notesSearch.exportSingleJson', {
+                defaultValue: 'JSON (.json)'
+              })
+            },
+            {
+              key: 'export-print',
+              label: t('option:notesSearch.exportSinglePrint', {
+                defaultValue: 'Print / Save as PDF'
+              }),
+              icon: (<PrinterIcon className="w-4 h-4" />)
+            }
+          ]
+        }
+      ]
+    })
+
+    // --- Danger divider + delete ---
+    items.push({ type: 'divider' as const })
+    items.push({
+      key: 'delete',
+      label: t('common:delete', { defaultValue: 'Delete' }),
+      icon: (<TrashIcon className="w-4 h-4" />),
+      danger: true,
+      disabled: !canDelete
+    })
+
+    return items
+  }, [
+    editorDisabled,
+    canDuplicate,
+    canPin,
+    isPinned,
+    canGenerateFlashcards,
+    canExport,
+    canDelete,
+    hasContent,
+    backlinkConversationId,
+    templateOptions,
+    onDuplicate,
+    onApplyTemplate,
+    onTogglePin,
+    t
+  ])
+
+  const handleOverflowMenuClick: MenuProps['onClick'] = ({ key }) => {
+    switch (key) {
+      case 'duplicate':
+        onDuplicate?.()
+        break
+      case 'pin':
+        onTogglePin?.()
+        break
+      case 'open-conversation':
+        onOpenLinkedConversation()
+        break
+      case 'flashcards':
+        onGenerateFlashcards()
+        break
+      case 'copy-content':
+        onCopy('content')
+        break
+      case 'copy-markdown':
+        onCopy('markdown')
+        break
+      case 'export-md':
+        onExport('md')
+        break
+      case 'export-json':
+        onExport('json')
+        break
+      case 'export-print':
+        onExport('print')
+        break
+      case 'delete':
+        onDelete()
+        break
+      default:
+        if (key?.startsWith('template-')) {
+          onApplyTemplate?.(key.replace('template-', ''))
+        }
+        break
+    }
+  }
+
   return (
     <div className="flex flex-col gap-3 border-b border-border bg-surface px-4 py-3 md:flex-row md:items-center md:justify-between">
       <div className="flex flex-col gap-0.5 min-w-0">
@@ -114,11 +332,11 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
           <Typography.Title level={5} className="!mb-0 truncate !text-text">
             {displayTitle}
           </Typography.Title>
-          {isDirty && (
-            <Tag color="orange" className="!text-[10px] !px-1.5 !py-0 !leading-4 !m-0">
-              {t('option:notesSearch.unsaved', { defaultValue: 'Unsaved' })}
-            </Tag>
-          )}
+          <NotesSaveStatus
+            state={isDirty ? 'dirty' : saveIndicator}
+            lastSavedAt={lastSavedAt}
+            onRetry={onSave}
+          />
         </div>
         {backlinkConversationId && (
           <div className="text-xs text-primary">
@@ -185,7 +403,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             onClick={onSave}
             loading={isSaving}
             disabled={!canSave}
-            icon={(<SaveIcon className="w-4 h-4" />) as any}
+            icon={(<SaveIcon className="w-4 h-4" />)}
             className={touchTargetClass}
             aria-label={t('option:notesSearch.toolbarSaveTooltip', {
               defaultValue: 'Save note'
@@ -195,152 +413,9 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
             {t('common:save', { defaultValue: 'Save' })}
           </Button>
         </Tooltip>
-        <div
-          className={
-            isMobileViewport ? 'flex w-full flex-wrap items-center gap-2' : 'flex items-center gap-2'
-          }
-        >
-          {!editorDisabled && (
-            <>
-              {backlinkConversationId && (
-                <Tooltip
-                  title={t('option:notesSearch.openConversationTooltip', {
-                    defaultValue: 'Open linked conversation'
-                  })}
-                >
-                  <Button
-                    size={toolbarButtonSize}
-                    loading={openingLinkedChat}
-                    onClick={onOpenLinkedConversation}
-                    icon={(<LinkIcon className="w-4 h-4" />) as any}
-                    className={touchTargetClass}
-                  >
-                    {t('option:notesSearch.openConversation', {
-                      defaultValue: 'Open conversation'
-                    })}
-                  </Button>
-                </Tooltip>
-              )}
-              <Tooltip
-                title={t('option:notesSearch.newTooltip', {
-                  defaultValue: 'Create a new note'
-                })}
-              >
-                <Button
-                  data-testid="notes-new-button"
-                  size={toolbarButtonSize}
-                  onClick={onNewNote}
-                  icon={(<PlusIcon className="w-4 h-4" />) as any}
-                  className={touchTargetClass}
-                >
-                  {t('option:notesSearch.new', {
-                    defaultValue: 'New note'
-                  })}
-                  </Button>
-                </Tooltip>
-              {onApplyTemplate && templateOptions.length > 0 && (
-                <Dropdown
-                  trigger={['click']}
-                  menu={{
-                    onClick: ({ key }) => {
-                      onApplyTemplate(String(key))
-                    },
-                    items: templateOptions.map((template) => ({
-                      key: template.id,
-                      label: template.label
-                    }))
-                  }}
-                >
-                  <Tooltip
-                    title={t('option:notesSearch.templateTooltip', {
-                      defaultValue: 'Create from template'
-                    })}
-                  >
-                    <Button
-                      size={toolbarButtonSize}
-                      icon={(<FileTemplateIcon className="w-4 h-4" />) as any}
-                      className={touchTargetClass}
-                      data-testid="notes-template-button"
-                    >
-                      {t('option:notesSearch.templateAction', {
-                        defaultValue: 'Template'
-                      })}
-                    </Button>
-                  </Tooltip>
-                </Dropdown>
-              )}
-              {onDuplicate && (
-                <Tooltip
-                  title={t('option:notesSearch.duplicateNoteTooltip', {
-                    defaultValue: 'Duplicate this note'
-                  })}
-                >
-                  <Button
-                    size={toolbarButtonSize}
-                    onClick={onDuplicate}
-                    disabled={!canDuplicate}
-                    icon={(<CopyIcon className="w-4 h-4" />) as any}
-                    className={touchTargetClass}
-                    data-testid="notes-duplicate-button"
-                  >
-                    {t('option:notesSearch.duplicateNoteAction', {
-                      defaultValue: 'Duplicate'
-                    })}
-                  </Button>
-                </Tooltip>
-              )}
-              {onTogglePin && (
-                <Tooltip
-                  title={
-                    isPinned
-                      ? t('option:notesSearch.unpinNoteTooltip', {
-                          defaultValue: 'Unpin this note'
-                        })
-                      : t('option:notesSearch.pinNoteTooltip', {
-                          defaultValue: 'Pin this note'
-                        })
-                  }
-                >
-                  <Button
-                    size={toolbarButtonSize}
-                    onClick={onTogglePin}
-                    disabled={!canPin}
-                    icon={
-                      (<StarIcon className={`w-4 h-4 ${isPinned ? 'fill-current text-amber-500' : ''}`} />) as any
-                    }
-                    className={touchTargetClass}
-                    data-testid="notes-pin-button"
-                  >
-                    {isPinned
-                      ? t('option:notesSearch.unpinNoteAction', {
-                          defaultValue: 'Unpin'
-                        })
-                      : t('option:notesSearch.pinNoteAction', {
-                          defaultValue: 'Pin'
-                        })}
-                  </Button>
-                </Tooltip>
-              )}
-              <Tooltip
-                title={t('option:notesSearch.generateFlashcardsTooltip', {
-                  defaultValue: 'Generate flashcards from this note'
-                })}
-              >
-                <Button
-                  size={toolbarButtonSize}
-                  onClick={onGenerateFlashcards}
-                  disabled={!canGenerateFlashcards}
-                  icon={(<SparklesIcon className="w-4 h-4" />) as any}
-                  className={touchTargetClass}
-                  data-testid="notes-generate-flashcards-button"
-                >
-                  {t('option:notesSearch.generateFlashcardsAction', {
-                    defaultValue: 'Generate cards'
-                  })}
-                </Button>
-              </Tooltip>
-            </>
-          )}
+
+        {/* Editor mode toggle - visible on desktop, hidden on mobile */}
+        {!isMobileViewport && (
           <div
             className="inline-flex items-center gap-1 rounded-md border border-border p-0.5"
             role="group"
@@ -357,7 +432,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
                 size={toolbarButtonSize}
                 type={editorMode === 'edit' ? 'primary' : 'text'}
                 onClick={() => onChangeEditorMode('edit')}
-                icon={(<EditIcon className="w-4 h-4" />) as any}
+                icon={(<EditIcon className="w-4 h-4" />)}
                 className={touchTargetClass}
                 aria-pressed={editorMode === 'edit'}
                 aria-label={t('option:notesSearch.editModeLabel', {
@@ -378,7 +453,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
                 size={toolbarButtonSize}
                 type={editorMode === 'split' ? 'primary' : 'text'}
                 onClick={() => onChangeEditorMode('split')}
-                icon={(<SplitIcon className="w-4 h-4" />) as any}
+                icon={(<SplitIcon className="w-4 h-4" />)}
                 className={touchTargetClass}
                 aria-pressed={editorMode === 'split'}
                 aria-label={t('option:notesSearch.splitModeLabel', {
@@ -399,7 +474,7 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
                 size={toolbarButtonSize}
                 type={editorMode === 'preview' ? 'primary' : 'text'}
                 onClick={() => onChangeEditorMode('preview')}
-                icon={(<EyeIcon className="w-4 h-4" />) as any}
+                icon={(<EyeIcon className="w-4 h-4" />)}
                 className={touchTargetClass}
                 aria-pressed={editorMode === 'preview'}
                 aria-label={t('option:notesSearch.previewModeLabel', {
@@ -412,134 +487,32 @@ const NotesEditorHeader: React.FC<NotesEditorHeaderProps> = ({
               </Button>
             </Tooltip>
           </div>
-          <Dropdown
-            trigger={['click']}
-            disabled={!hasContent}
-            menu={{
-              onClick: ({ key }) => {
-                if (key === 'copy-markdown') {
-                  onCopy('markdown')
-                  return
-                }
-                onCopy('content')
-              },
-              items: [
-                {
-                  key: 'copy-content',
-                  label: t('option:notesSearch.copyModeContentOnly', {
-                    defaultValue: 'Copy content only'
-                  })
-                },
-                {
-                  key: 'copy-markdown',
-                  label: t('option:notesSearch.copyModeMarkdown', {
-                    defaultValue: 'Copy markdown with title'
-                  })
-                }
-              ]
-            }}
-          >
-            <Tooltip
-              title={t('option:notesSearch.toolbarCopyTooltip', {
-                defaultValue: 'Copy note'
-              })}
-            >
-              <Button
-                size={toolbarButtonSize}
-                icon={(<CopyIcon className="w-4 h-4" />) as any}
-                disabled={!hasContent}
-                className={touchTargetIconOnlyClass}
-                aria-label={t('option:notesSearch.toolbarCopyTooltip', {
-                  defaultValue: 'Copy note'
-                })}
-                data-testid="notes-copy-button"
-              />
-            </Tooltip>
-          </Dropdown>
-          <Dropdown
-            trigger={['click']}
-            disabled={!canExport}
-            menu={{
-              onClick: ({ key }) => {
-                if (key === 'export-json') {
-                  onExport('json')
-                  return
-                }
-                if (key === 'export-print') {
-                  onExport('print')
-                  return
-                }
-                onExport('md')
-              },
-              items: [
-                {
-                  key: 'export-md',
-                  label: t('option:notesSearch.exportSingleMd', {
-                    defaultValue: 'Export as Markdown (.md)'
-                  })
-                },
-                {
-                  key: 'export-json',
-                  label: t('option:notesSearch.exportSingleJson', {
-                    defaultValue: 'Export as JSON (.json)'
-                  })
-                },
-                {
-                  key: 'export-print',
-                  label: t('option:notesSearch.exportSinglePrint', {
-                    defaultValue: 'Print / Save as PDF'
-                  })
-                }
-              ]
-            }}
-          >
-            <Tooltip
-              title={t('option:notesSearch.toolbarExportMdTooltip', {
-                defaultValue: 'Export note'
-              })}
-            >
-              <Button
-                size={toolbarButtonSize}
-                icon={(<FileDownIcon className="w-4 h-4" />) as any}
-                disabled={!canExport}
-                className={touchTargetClass}
-                aria-label={t('option:notesSearch.toolbarExportMdTooltip', {
-                  defaultValue: 'Export note'
-                })}
-                data-testid="notes-export-button"
-              >
-                {t('option:notesSearch.exportSingleAction', {
-                  defaultValue: 'Export'
-                })}
-              </Button>
-            </Tooltip>
-          </Dropdown>
-        </div>
-        <span
-          className="h-5 w-px bg-border"
-          data-testid="notes-destructive-divider"
-          aria-hidden="true"
-        />
-        <Tooltip
-          title={t('option:notesSearch.toolbarDeleteTooltip', {
-            defaultValue: 'Delete note'
-          })}
+        )}
+
+        {/* Overflow "More actions" menu */}
+        <Dropdown
+          trigger={['click']}
+          menu={{
+            items: overflowMenuItems,
+            onClick: handleOverflowMenuClick
+          }}
         >
-          <Button
-            danger
-            size={toolbarButtonSize}
-            onClick={onDelete}
-            icon={(<TrashIcon className="w-4 h-4" />) as any}
-            disabled={!canDelete}
-            className={touchTargetClass}
-            aria-label={t('option:notesSearch.toolbarDeleteTooltip', {
-              defaultValue: 'Delete note'
+          <Tooltip
+            title={t('option:notesSearch.moreActionsTooltip', {
+              defaultValue: 'More actions'
             })}
-            data-testid="notes-delete-button"
           >
-            {t('common:delete', { defaultValue: 'Delete' })}
-          </Button>
-        </Tooltip>
+            <Button
+              size={toolbarButtonSize}
+              icon={(<MoreHorizontal className="w-4 h-4" />)}
+              className={touchTargetIconOnlyClass}
+              aria-label={t('option:notesSearch.moreActionsTooltip', {
+                defaultValue: 'More actions'
+              })}
+              data-testid="notes-overflow-menu-button"
+            />
+          </Tooltip>
+        </Dropdown>
       </div>
     </div>
   )

@@ -259,7 +259,9 @@ def _load_parsed_references_cache(
     WHERE media_id = ? AND user_id = ? AND parser_version = ? AND content_hash = ?
     LIMIT 1
     """
-    query = query_template.format_map(locals())  # nosec B608
+    query = query_template.format(
+        PARSED_REFERENCES_CACHE_TABLE=PARSED_REFERENCES_CACHE_TABLE
+    )  # nosec B608
     try:
         cursor = db.execute_query(
             query,
@@ -297,13 +299,17 @@ def _save_parsed_references_cache(
     DELETE FROM {PARSED_REFERENCES_CACHE_TABLE}
     WHERE media_id = ? AND user_id = ? AND parser_version = ?
     """
-    delete_sql = delete_sql_template.format_map(locals())  # nosec B608
+    delete_sql = delete_sql_template.format(
+        PARSED_REFERENCES_CACHE_TABLE=PARSED_REFERENCES_CACHE_TABLE
+    )  # nosec B608
     insert_sql_template = """
     INSERT INTO {PARSED_REFERENCES_CACHE_TABLE}
     (media_id, user_id, parser_version, content_hash, references_json, total_detected, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     """
-    insert_sql = insert_sql_template.format_map(locals())  # nosec B608
+    insert_sql = insert_sql_template.format(
+        PARSED_REFERENCES_CACHE_TABLE=PARSED_REFERENCES_CACHE_TABLE
+    )  # nosec B608
     references_json = json.dumps(references, ensure_ascii=False)
     updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:

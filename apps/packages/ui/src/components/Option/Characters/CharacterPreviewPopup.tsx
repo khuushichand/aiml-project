@@ -1,6 +1,6 @@
 import React from "react"
 import { Modal, Button, Tooltip, Dropdown } from "antd"
-import { MessageCircle, Pen, Copy, History, Trash2, Download, ExternalLink, Clock3 } from "lucide-react"
+import { MessageCircle, Pen, Copy, History, Trash2, Download, ExternalLink, Clock3, Info, MoreHorizontal, UserCircle2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { CharacterPreview } from "./CharacterPreview"
 
@@ -27,7 +27,10 @@ interface CharacterPreviewPopupProps {
   onExport: (format?: 'json' | 'png') => void
   onDelete: () => void
   onViewConversations: () => void
+  onCreatePersonaFromCharacter: () => void
+  onOpenPersonaGarden: () => void
   onViewVersionHistory: () => void
+  creatingPersonaFromCharacter?: boolean
   attachedWorldBooks?: Array<{ id: number; name: string }>
   attachedWorldBooksLoading?: boolean
   launchedFromWorldBooks?: boolean
@@ -48,7 +51,10 @@ export function CharacterPreviewPopup({
   onExport,
   onDelete,
   onViewConversations,
+  onCreatePersonaFromCharacter,
+  onOpenPersonaGarden,
   onViewVersionHistory,
+  creatingPersonaFromCharacter = false,
   attachedWorldBooks = [],
   attachedWorldBooksLoading = false,
   launchedFromWorldBooks = false,
@@ -79,7 +85,7 @@ export function CharacterPreviewPopup({
     defaultValue: "Chat"
   })
   const quickChatLabel = t("settings:manageCharacters.actions.quickChat", {
-    defaultValue: "Quick chat"
+    defaultValue: "Test in popup"
   })
   const chatInNewTabLabel = t("settings:manageCharacters.actions.chatInNewTab", {
     defaultValue: "Chat in new tab"
@@ -106,6 +112,22 @@ export function CharacterPreviewPopup({
     "settings:manageCharacters.actions.versionHistory",
     {
       defaultValue: "Version history"
+    }
+  )
+  const createPersonaLabel = t(
+    creatingPersonaFromCharacter
+      ? "settings:manageCharacters.actions.creatingPersonaFromCharacter"
+      : "settings:manageCharacters.actions.createPersonaFromCharacter",
+    {
+      defaultValue: creatingPersonaFromCharacter
+        ? "Creating Persona..."
+        : "Create Persona from Character"
+    }
+  )
+  const openPersonaGardenLabel = t(
+    "settings:manageCharacters.actions.openInPersonaGarden",
+    {
+      defaultValue: "Open in Persona Garden"
     }
   )
   const characterIdParam = encodeURIComponent(String(character.id || ""))
@@ -166,10 +188,15 @@ export function CharacterPreviewPopup({
 
         <div className="rounded-md border border-border bg-surface p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-sm font-medium">
+            <div className="flex items-center gap-1 text-sm font-medium">
               {t("settings:manageCharacters.worldBooks.title", {
                 defaultValue: "World Books"
               })}
+              <Tooltip title={t("settings:manageCharacters.worldBooks.hint", {
+                defaultValue: "Shared lore documents that provide context during conversations with this character."
+              })}>
+                <Info className="h-3.5 w-3.5 text-text-muted cursor-help" />
+              </Tooltip>
             </div>
             <a
               href={worldBooksWorkspaceHref}
@@ -235,8 +262,9 @@ export function CharacterPreviewPopup({
           </div>
         </div>
 
-          {/* Action Buttons */}
+          {/* Action Buttons — primary / secondary / overflow */}
           <div className="flex flex-wrap items-center justify-center gap-2 border-t border-border pt-4">
+            {/* Primary action */}
             <Button
               type="primary"
               icon={<MessageCircle className="w-4 h-4" />}
@@ -245,33 +273,7 @@ export function CharacterPreviewPopup({
               {chatLabel}
             </Button>
 
-          <Tooltip title={chatInNewTabLabel}>
-            <Button
-              icon={<ExternalLink className="w-4 h-4" />}
-              onClick={onChatInNewTab}
-              aria-label={t("settings:manageCharacters.aria.chatWithInNewTab", {
-                defaultValue: "Chat with {{name}} in a new tab",
-                name: displayName
-              })}
-            >
-              {chatInNewTabLabel}
-            </Button>
-          </Tooltip>
-
-          <Tooltip title={quickChatLabel}>
-            <Button
-              icon={<MessageCircle className="w-4 h-4" />}
-              onClick={onQuickChat}
-              aria-label={t("settings:manageCharacters.aria.quickChatWith", {
-                defaultValue: "Quick chat with {{name}}",
-                name: displayName
-              })}
-            >
-              {quickChatLabel}
-            </Button>
-          </Tooltip>
-
-          <Tooltip title={editLabel}>
+            {/* Secondary actions */}
             <Button
               icon={<Pen className="w-4 h-4" />}
               onClick={onEdit}
@@ -282,9 +284,7 @@ export function CharacterPreviewPopup({
             >
               {editLabel}
             </Button>
-          </Tooltip>
 
-          <Tooltip title={duplicateLabel}>
             <Button
               icon={<Copy className="w-4 h-4" />}
               onClick={onDuplicate}
@@ -295,66 +295,76 @@ export function CharacterPreviewPopup({
             >
               {duplicateLabel}
             </Button>
-          </Tooltip>
 
-          <Dropdown
-            menu={{ items: exportMenuItems }}
-            trigger={['click']}
-            disabled={exporting}>
-            <Tooltip title={exportLabel}>
+            {/* Overflow menu */}
+            <Dropdown
+              menu={{
+                items: [
+                  {
+                    key: "chat-new-tab",
+                    icon: <ExternalLink className="w-4 h-4" />,
+                    label: chatInNewTabLabel,
+                    onClick: onChatInNewTab
+                  },
+                  {
+                    key: "test-in-popup",
+                    icon: <MessageCircle className="w-4 h-4" />,
+                    label: quickChatLabel,
+                    onClick: onQuickChat
+                  },
+                  {
+                    key: "export",
+                    icon: <Download className="w-4 h-4" />,
+                    label: exportLabel,
+                    disabled: exporting,
+                    children: exportMenuItems
+                  },
+                  {
+                    key: "conversations",
+                    icon: <History className="w-4 h-4" />,
+                    label: viewConversationsLabel,
+                    onClick: onViewConversations
+                  },
+                  {
+                    key: "create-persona",
+                    icon: <UserCircle2 className="w-4 h-4" />,
+                    label: createPersonaLabel,
+                    disabled: creatingPersonaFromCharacter,
+                    onClick: onCreatePersonaFromCharacter
+                  },
+                  {
+                    key: "open-persona-garden",
+                    icon: <ExternalLink className="w-4 h-4" />,
+                    label: openPersonaGardenLabel,
+                    onClick: onOpenPersonaGarden
+                  },
+                  {
+                    key: "version-history",
+                    icon: <Clock3 className="w-4 h-4" />,
+                    label: versionHistoryLabel,
+                    onClick: onViewVersionHistory
+                  },
+                  { type: "divider" as const },
+                  {
+                    key: "delete",
+                    icon: <Trash2 className="w-4 h-4" />,
+                    label: deleteLabel,
+                    danger: true,
+                    disabled: deleting,
+                    onClick: onDelete
+                  }
+                ]
+              }}
+              trigger={["click"]}
+            >
               <Button
-                icon={<Download className="w-4 h-4" />}
-                loading={exporting}
-                aria-label={t("settings:manageCharacters.aria.export", {
-                  defaultValue: "Export character {{name}}",
+                icon={<MoreHorizontal className="w-4 h-4" />}
+                aria-label={t("settings:manageCharacters.aria.moreActions", {
+                  defaultValue: "More actions for {{name}}",
                   name: displayName
                 })}
-              >
-                {exportLabel}
-              </Button>
-            </Tooltip>
-          </Dropdown>
-
-          <Tooltip title={viewConversationsLabel}>
-            <Button
-              icon={<History className="w-4 h-4" />}
-              onClick={onViewConversations}
-              aria-label={t("settings:manageCharacters.aria.viewConversations", {
-                defaultValue: "View conversations for {{name}}",
-                name: displayName
-              })}
-            >
-              {viewConversationsLabel}
-            </Button>
-          </Tooltip>
-
-          <Tooltip title={versionHistoryLabel}>
-            <Button
-              icon={<Clock3 className="w-4 h-4" />}
-              onClick={onViewVersionHistory}
-              aria-label={t("settings:manageCharacters.aria.viewVersionHistory", {
-                defaultValue: "View version history for {{name}}",
-                name: displayName
-              })}
-            >
-              {versionHistoryLabel}
-            </Button>
-          </Tooltip>
-
-          <Tooltip title={deleteLabel}>
-            <Button
-              danger
-              icon={<Trash2 className="w-4 h-4" />}
-              onClick={onDelete}
-              loading={deleting}
-              aria-label={t("settings:manageCharacters.aria.delete", {
-                defaultValue: "Delete character {{name}}",
-                name: displayName
-              })}
-            >
-              {deleteLabel}
-            </Button>
-          </Tooltip>
+              />
+            </Dropdown>
           </div>
         </div>
       </Modal>

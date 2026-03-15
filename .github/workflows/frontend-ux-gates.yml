@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: frontend-ux-gates-${{ github.event.pull_request.head.sha || github.sha }}
+  group: frontend-ux-gates-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,9 +22,9 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-      TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
       MINIMAL_TEST_APP: '1'
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
       AUTH_MODE: single_user
       SINGLE_USER_API_KEY: smoke-ci-key-12345
@@ -34,15 +34,17 @@ jobs:
       TLDW_API_KEY: smoke-ci-key-12345
       TLDW_WEB_URL: http://localhost:8080
       TLDW_WEB_AUTOSTART: 'true'
-      TLDW_WEB_CMD: bun run dev -- -p 8080
+      TLDW_WEB_CMD: 'env NEXT_DISABLE_MEM_OVERRIDE=1 NODE_OPTIONS=--max-old-space-size=5120 bun run dev -- --webpack -p 8080'
       TLDW_ONBOARDING_EVIDENCE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -126,9 +128,9 @@ jobs:
     env:
       PYTHONPATH: .
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-      TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
       MINIMAL_TEST_APP: '1'
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
       AUTH_MODE: single_user
       SINGLE_USER_API_KEY: smoke-ci-key-12345
@@ -138,15 +140,17 @@ jobs:
       TLDW_API_KEY: smoke-ci-key-12345
       TLDW_WEB_URL: http://localhost:8080
       TLDW_WEB_AUTOSTART: 'true'
-      TLDW_WEB_CMD: bun run dev -- -p 8080
+      TLDW_WEB_CMD: 'env NODE_OPTIONS=--max-old-space-size=4096 bun run start -- -p 8080'
       TLDW_SMOKE_HARD_GATE: '1'
 
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -158,6 +162,10 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps
         run: bun install
+
+      - name: Build frontend production bundle for smoke gate
+        working-directory: apps/tldw-frontend
+        run: bun run build
 
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium

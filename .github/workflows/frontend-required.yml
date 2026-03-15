@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: frontend-required-${{ github.event.pull_request.head.sha || github.sha }}
+  group: frontend-required-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -28,9 +28,10 @@ jobs:
       coverage_required: ${{ steps.detect.outputs.coverage_required }}
     steps:
       - name: Checkout
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - id: detect
         name: Classify changed files
         uses: ./.github/actions/detect-required-gate-changes
@@ -40,6 +41,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     timeout-minutes: 25
+    env:
+      PYTHONPATH: .
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      DISABLE_HEAVY_STARTUP: '1'
+      MINIMAL_TEST_APP: '1'
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+      PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
     steps:
       - name: No-op pass (frontend unchanged)
         if: needs.changes.outputs.frontend_changed != 'true'
@@ -47,7 +55,9 @@ jobs:
 
       - name: Checkout
         if: needs.changes.outputs.frontend_changed == 'true'
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Node.js
         if: needs.changes.outputs.frontend_changed == 'true'
@@ -101,15 +111,43 @@ jobs:
         working-directory: admin-ui
         run: bun install
 
+      - name: Install admin-ui Playwright Chromium
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        working-directory: admin-ui
+        run: bunx playwright install --with-deps chromium
+
+      - name: Setup Python and server dependencies
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: '3.12'
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev
+
       - name: Run admin-ui lint
         if: needs.changes.outputs.admin_ui_changed == 'true'
         working-directory: admin-ui
         run: bun run lint
 
+      - name: Run admin-ui typecheck
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        working-directory: admin-ui
+        run: bun run typecheck
+
       - name: Run admin-ui unit tests
         if: needs.changes.outputs.admin_ui_changed == 'true'
         working-directory: admin-ui
         run: bun run test
+
+      - name: Run admin-ui real-backend e2e
+        if: needs.changes.outputs.admin_ui_changed == 'true'
+        working-directory: admin-ui
+        env:
+          TLDW_ADMIN_E2E_PYTHON: python
+        run: bun run test:real-backend -- --project=chromium-real-jwt --project=chromium-real-single-user --reporter=line
 
       - name: Run admin-ui build
         if: needs.changes.outputs.admin_ui_changed == 'true'

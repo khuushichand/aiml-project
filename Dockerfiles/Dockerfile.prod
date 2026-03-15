@@ -43,18 +43,20 @@ WORKDIR /app
 # Bring in installed Python deps from the builder image.
 COPY --from=builder /install /usr/local
 
+# Create runtime user up front so content copies can avoid recursive chown.
+RUN useradd -m -u 10001 appuser
+
 # Runtime source/docs/scripts expected by server routes and helpers.
-COPY tldw_Server_API /app/tldw_Server_API
-COPY apps/tldw-frontend /app/apps/tldw-frontend
-COPY Docs /app/Docs
-COPY Helper_Scripts /app/Helper_Scripts
-COPY Databases /app/Databases
+COPY --chown=appuser:appuser tldw_Server_API /app/tldw_Server_API
+COPY --chown=appuser:appuser apps/tldw-frontend /app/apps/tldw-frontend
+COPY --chown=appuser:appuser Docs /app/Docs
+COPY --chown=appuser:appuser Helper_Scripts /app/Helper_Scripts
 COPY Dockerfiles/entrypoints/tldw-app-first-run.sh /usr/local/bin/tldw-app-first-run
 
-# Create a non-root user
-RUN chmod +x /usr/local/bin/tldw-app-first-run && \
-    useradd -m -u 10001 appuser && \
-    chown -R appuser:appuser /app
+# Create writable runtime DB directory without copying host runtime data.
+RUN mkdir -p /app/Databases && \
+    chown appuser:appuser /app/Databases && \
+    chmod +x /usr/local/bin/tldw-app-first-run
 USER appuser
 
 ENV PYTHONPATH=/app/tldw_Server_API \

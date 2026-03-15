@@ -11,6 +11,7 @@ import {
   Space,
   Typography
 } from "antd"
+import type { TextAreaRef } from "antd/es/input/TextArea"
 import { Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
@@ -22,17 +23,28 @@ import {
 } from "../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../constants"
 import { MarkdownWithBoundary } from "./MarkdownWithBoundary"
+import { FlashcardImageInsertButton } from "./FlashcardImageInsertButton"
+import { DeckSchedulerSettingsEditor } from "./DeckSchedulerSettingsEditor"
 import { normalizeFlashcardTemplateFields } from "../utils/template-helpers"
+import {
+  getSelectionFromElement,
+  insertTextAtSelection,
+  restoreSelection,
+  type TextSelection
+} from "../utils/text-selection"
 import {
   FLASHCARD_FIELD_MAX_BYTES,
   getFlashcardFieldLimitState,
   getUtf8ByteLength
 } from "../utils/field-byte-limit"
 import type { FlashcardCreate, Deck } from "@/services/flashcards"
+import { useDeckSchedulerDraft } from "../hooks/useDeckSchedulerDraft"
+import { formatSchedulerSummary } from "../utils/scheduler-settings"
 
 const { Text } = Typography
 const CLOZE_PATTERN = /\{\{c\d+::[\s\S]+?\}\}/
 type FlashcardModelType = NonNullable<FlashcardCreate["model_type"]>
+type EditableTextField = "front" | "back" | "extra" | "notes"
 
 interface PreviewProps {
   content?: string
@@ -75,6 +87,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const selectedModelType = Form.useWatch("model_type", form) as
     | FlashcardModelType
     | undefined
+  const selectedDeckId = Form.useWatch("deck_id", form) as number | undefined
   const [showPreview, setShowPreview] = React.useState(false)
   const frontPreview = useDebouncedFormField(form, "front")
   const backPreview = useDebouncedFormField(form, "back")
@@ -83,6 +96,18 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   const tagsValue = useDebouncedFormField(form, "tags")
   const frontValue = Form.useWatch("front", form) as string | undefined
   const backValue = Form.useWatch("back", form) as string | undefined
+  const textAreaRefs = React.useRef<Record<EditableTextField, TextAreaRef | null>>({
+    front: null,
+    back: null,
+    extra: null,
+    notes: null
+  })
+  const selectionRef = React.useRef<Record<EditableTextField, TextSelection>>({
+    front: { start: 0, end: 0 },
+    back: { start: 0, end: 0 },
+    extra: { start: 0, end: 0 },
+    notes: { start: 0, end: 0 }
+  })
 
   // Count how many advanced fields have values for the badge indicator
   const advancedFieldCount = React.useMemo(() => {
@@ -96,11 +121,16 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
   // Inline deck creation state
   const [showInlineCreate, setShowInlineCreate] = React.useState(false)
   const [inlineDeckName, setInlineDeckName] = React.useState("")
+  const inlineSchedulerDraft = useDeckSchedulerDraft()
 
   // Queries and mutations - use props if provided, otherwise fetch
   const decksQuery = useDecksQuery({ enabled: !propDecks })
   const decks = propDecks ?? decksQuery.data ?? []
   const decksLoading = propDecksLoading ?? decksQuery.isLoading
+  const selectedDeck = React.useMemo(
+    () => decks.find((deck) => deck.id === selectedDeckId) ?? null,
+    [decks, selectedDeckId]
+  )
 
   const createMutation = useCreateFlashcardMutation()
   const createDeckMutation = useCreateDeckMutation()
@@ -166,8 +196,9 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
       setShowPreview(false)
       setShowInlineCreate(false)
       setInlineDeckName("")
+      inlineSchedulerDraft.resetToDefaults()
     }
-  }, [open, form])
+  }, [form, inlineSchedulerDraft.resetToDefaults, open])
 
   // Create new deck (inline)
   const handleInlineCreateDeck = async () => {
@@ -180,12 +211,17 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
         )
         return
       }
+      const schedulerSettings = inlineSchedulerDraft.getValidatedSettings()
+      if (!schedulerSettings) return
       const deck = await createDeckMutation.mutateAsync({
-        name: inlineDeckName.trim()
+        name: inlineDeckName.trim(),
+        scheduler_type: schedulerSettings.scheduler_type,
+        scheduler_settings: schedulerSettings.scheduler_settings
       })
       message.success(t("common:created", { defaultValue: "Created" }))
       setShowInlineCreate(false)
       setInlineDeckName("")
+      inlineSchedulerDraft.resetToDefaults()
       form.setFieldsValue({ deck_id: deck.id })
     } catch (e: unknown) {
       const errorMessage =
@@ -228,6 +264,52 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
       message.error(errorMessage)
     }
   }
+
+  const updateSelection = React.useCallback(
+    (
+      field: EditableTextField,
+      element: HTMLTextAreaElement | null | undefined
+    ) => {
+      const currentValue = String(form.getFieldValue(field) ?? "")
+      selectionRef.current[field] = getSelectionFromElement(element, currentValue)
+    },
+    [form]
+  )
+
+  const handleInsertImage = React.useCallback(
+    async (field: EditableTextField, markdownSnippet: string) => {
+      const currentValue = String(form.getFieldValue(field) ?? "")
+      const textArea =
+        textAreaRefs.current[field]?.resizableTextArea?.textArea ?? null
+      const selection =
+        selectionRef.current[field] ?? getSelectionFromElement(textArea, currentValue)
+      const { nextValue, cursor } = insertTextAtSelection(
+        currentValue,
+        selection,
+        markdownSnippet
+      )
+      form.setFieldsValue({ [field]: nextValue })
+      restoreSelection(textArea, cursor)
+    },
+    [form]
+  )
+
+  const renderFieldLabel = React.useCallback(
+    (field: EditableTextField, label: string) => (
+      <div className="flex items-center justify-between gap-3">
+        <span>{label}</span>
+        <FlashcardImageInsertButton
+          ariaLabel={`Upload image for ${label}`}
+          buttonLabel={t("option:flashcards.insertImage", {
+            defaultValue: "Insert image"
+          })}
+          onInsert={(markdownSnippet) => handleInsertImage(field, markdownSnippet)}
+          onError={(error) => message.error(error.message)}
+        />
+      </div>
+    ),
+    [handleInsertImage, message, t]
+  )
 
   return (
     <Drawer
@@ -314,41 +396,63 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
               />
             </Form.Item>
           ) : (
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder={t("option:flashcards.newDeckNamePlaceholder", {
-                  defaultValue: "New deck name"
-                })}
-                value={inlineDeckName}
-                onChange={(e) => setInlineDeckName(e.target.value)}
-                className="flex-1"
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleInlineCreateDeck()
-                  if (e.key === "Escape") {
+            <>
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder={t("option:flashcards.newDeckNamePlaceholder", {
+                    defaultValue: "New deck name"
+                  })}
+                  value={inlineDeckName}
+                  onChange={(e) => setInlineDeckName(e.target.value)}
+                  className="flex-1"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleInlineCreateDeck()
+                    if (e.key === "Escape") {
+                      setShowInlineCreate(false)
+                      setInlineDeckName("")
+                      inlineSchedulerDraft.resetToDefaults()
+                    }
+                  }}
+                />
+              </div>
+              <DeckSchedulerSettingsEditor
+                schedulerDraft={inlineSchedulerDraft}
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  type="primary"
+                  size="small"
+                  onClick={handleInlineCreateDeck}
+                  loading={createDeckMutation.isPending}
+                  data-testid="flashcards-inline-create-deck-submit"
+                >
+                  {t("common:create", { defaultValue: "Create" })}
+                </Button>
+                <Button
+                  size="small"
+                  data-testid="flashcards-inline-create-deck-cancel"
+                  onClick={() => {
                     setShowInlineCreate(false)
                     setInlineDeckName("")
-                  }
-                }}
-              />
-              <Button
-                type="primary"
-                size="small"
-                onClick={handleInlineCreateDeck}
-                loading={createDeckMutation.isPending}
-              >
-                {t("common:create", { defaultValue: "Create" })}
-              </Button>
-              <Button
-                size="small"
-                onClick={() => {
-                  setShowInlineCreate(false)
-                  setInlineDeckName("")
-                }}
-              >
-                {t("common:cancel", { defaultValue: "Cancel" })}
-              </Button>
-            </div>
+                    inlineSchedulerDraft.resetToDefaults()
+                  }}
+                >
+                  {t("common:cancel", { defaultValue: "Cancel" })}
+                </Button>
+              </div>
+              <Text type="secondary" className="block text-xs">
+                {t("option:flashcards.schedulerTabRedirectHint", {
+                  defaultValue: "Use the Scheduler tab later if you want to refine this deck further."
+                })}
+              </Text>
+            </>
+          )}
+
+          {!showInlineCreate && selectedDeck && (
+            <Text type="secondary" className="block text-xs -mt-2 mb-3">
+              {formatSchedulerSummary(selectedDeck.scheduler_type, selectedDeck.scheduler_settings)}
+            </Text>
           )}
 
           {/* Card template */}
@@ -412,7 +516,10 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
           {/* Front - required */}
           <Form.Item
             name="front"
-            label={t("option:flashcards.front", { defaultValue: "Front" })}
+            label={renderFieldLabel(
+              "front",
+              t("option:flashcards.front", { defaultValue: "Front" })
+            )}
             rules={[
               {
                 required: true,
@@ -460,10 +567,16 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
             ]}
           >
             <Input.TextArea
+              ref={(instance) => {
+                textAreaRefs.current.front = instance
+              }}
               rows={3}
               placeholder={t("option:flashcards.frontPlaceholder", {
                 defaultValue: "Question or prompt..."
               })}
+              onSelect={(event) => updateSelection("front", event.currentTarget)}
+              onClick={(event) => updateSelection("front", event.currentTarget)}
+              onKeyUp={(event) => updateSelection("front", event.currentTarget)}
             />
           </Form.Item>
           <Text
@@ -477,7 +590,10 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
           {/* Back - required */}
           <Form.Item
             name="back"
-            label={t("option:flashcards.back", { defaultValue: "Back" })}
+            label={renderFieldLabel(
+              "back",
+              t("option:flashcards.back", { defaultValue: "Back" })
+            )}
             rules={[
               {
                 required: true,
@@ -505,10 +621,16 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
             ]}
           >
             <Input.TextArea
+              ref={(instance) => {
+                textAreaRefs.current.back = instance
+              }}
               rows={5}
               placeholder={t("option:flashcards.backPlaceholder", {
                 defaultValue: "Answer..."
               })}
+              onSelect={(event) => updateSelection("back", event.currentTarget)}
+              onClick={(event) => updateSelection("back", event.currentTarget)}
+              onKeyUp={(event) => updateSelection("back", event.currentTarget)}
             />
           </Form.Item>
           <Text
@@ -583,28 +705,46 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
 
                   <Form.Item
                     name="extra"
-                    label={t("option:flashcards.extra", { defaultValue: "Extra" })}
+                    label={renderFieldLabel(
+                      "extra",
+                      t("option:flashcards.extra", { defaultValue: "Extra" })
+                    )}
                     className="!mb-0"
                   >
                     <Input.TextArea
+                      ref={(instance) => {
+                        textAreaRefs.current.extra = instance
+                      }}
                       rows={2}
                       placeholder={t("option:flashcards.extraPlaceholder", {
                         defaultValue: "Optional hints or explanations..."
                       })}
+                      onSelect={(event) => updateSelection("extra", event.currentTarget)}
+                      onClick={(event) => updateSelection("extra", event.currentTarget)}
+                      onKeyUp={(event) => updateSelection("extra", event.currentTarget)}
                     />
                   </Form.Item>
                   <Preview content={extraPreview} showPreview={showPreview} />
 
                   <Form.Item
                     name="notes"
-                    label={t("option:flashcards.notes", { defaultValue: "Notes" })}
+                    label={renderFieldLabel(
+                      "notes",
+                      t("option:flashcards.notes", { defaultValue: "Notes" })
+                    )}
                     className="!mb-0"
                   >
                     <Input.TextArea
+                      ref={(instance) => {
+                        textAreaRefs.current.notes = instance
+                      }}
                       rows={2}
                       placeholder={t("option:flashcards.notesPlaceholder", {
                         defaultValue: "Internal notes (not shown during review)..."
                       })}
+                      onSelect={(event) => updateSelection("notes", event.currentTarget)}
+                      onClick={(event) => updateSelection("notes", event.currentTarget)}
+                      onKeyUp={(event) => updateSelection("notes", event.currentTarget)}
                     />
                   </Form.Item>
                   <Preview content={notesPreview} showPreview={showPreview} />

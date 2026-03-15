@@ -51,7 +51,7 @@ def test_google_stream_emits_done_once(monkeypatch):
         api_provider="google",
         messages=[{"role": "user", "content": "hi"}],
         api_key="test-key",
-        model="gemini-1.5-flash-latest",
+        model="gemini-2.5-flash",
         streaming=True,
     )
     chunks = list(gen)

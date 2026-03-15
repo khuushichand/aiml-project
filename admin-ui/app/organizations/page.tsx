@@ -21,8 +21,14 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormField } from '@/components/ui/form';
 import { Plus, Eye, Search, BookmarkPlus, BookmarkX, Pencil, Trash2 } from 'lucide-react';
-import { Organization } from '@/types';
+import type { Organization, PlanTier, Subscription } from '@/types';
 import { api } from '@/lib/api-client';
+import {
+  EMPTY_BILLING_CELL_PLACEHOLDER,
+  isBillingEnabled,
+  type OrganizationPlanMap,
+} from '@/lib/billing';
+import { PlanBadge } from '@/components/PlanBadge';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import Link from 'next/link';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
@@ -60,6 +66,7 @@ function OrganizationsPageContent() {
   const [updatingOrganization, setUpdatingOrganization] = useState(false);
   const [deletingOrganizationId, setDeletingOrganizationId] = useState<number | null>(null);
   const [totalItems, setTotalItems] = useState(0);
+  const [orgPlans, setOrgPlans] = useState<OrganizationPlanMap>({});
   const [slugTouched, setSlugTouched] = useState(false);
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
   const [savedViews, setSavedViews] = useState<SavedOrgView[]>([]);
@@ -128,15 +135,27 @@ function OrganizationsPageContent() {
         const total = (data as { total?: number }).total;
         setOrganizations(items);
         setTotalItems(typeof total === 'number' ? total : items.length);
-        return;
-      }
-      if (Array.isArray(data)) {
+      } else if (Array.isArray(data)) {
         setOrganizations(data);
         setTotalItems(data.length);
-        return;
+      } else {
+        setOrganizations([]);
+        setTotalItems(0);
       }
-      setOrganizations([]);
-      setTotalItems(0);
+      if (isBillingEnabled()) {
+        try {
+          const subs = await api.getSubscriptions();
+          const planMap: Record<number, { tier: PlanTier; status: string }> = {};
+          if (Array.isArray(subs)) {
+            subs.forEach((sub: Subscription) => {
+              planMap[sub.org_id] = { tier: (sub.plan?.tier ?? 'free') as PlanTier, status: sub.status };
+            });
+          }
+          setOrgPlans(planMap);
+        } catch (err) {
+          console.warn('Failed to load subscription data for organizations:', err);
+        }
+      }
     } catch (error: unknown) {
       setOrganizations([]);
       setTotalItems(0);
@@ -516,7 +535,7 @@ function OrganizationsPageContent() {
               <CardContent>
                 {loading ? (
                   <div className="py-4">
-                    <TableSkeleton rows={3} columns={5} />
+                    <TableSkeleton rows={3} columns={isBillingEnabled() ? 7 : 5} />
                   </div>
                 ) : organizations.length === 0 ? (
                   <EmptyState
@@ -551,6 +570,8 @@ function OrganizationsPageContent() {
                           <TableHead>Name</TableHead>
                           <TableHead>Slug</TableHead>
                           <TableHead>Created</TableHead>
+                          {isBillingEnabled() && <TableHead>Plan</TableHead>}
+                          {isBillingEnabled() && <TableHead>Status</TableHead>}
                           <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -563,6 +584,16 @@ function OrganizationsPageContent() {
                               <Badge variant="secondary">{org.slug}</Badge>
                             </TableCell>
                             <TableCell>{new Date(org.created_at).toLocaleDateString()}</TableCell>
+                            {isBillingEnabled() && (
+                              <TableCell>
+                                <PlanBadge tier={orgPlans[org.id]?.tier ?? 'free'} />
+                              </TableCell>
+                            )}
+                            {isBillingEnabled() && (
+                              <TableCell className="capitalize text-sm">
+                                {orgPlans[org.id]?.status ?? EMPTY_BILLING_CELL_PLACEHOLDER}
+                              </TableCell>
+                            )}
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2">
                                 <Link href={`/organizations/${org.id}`}>

@@ -478,15 +478,20 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "/media/*",
       "/media-multi",
       "/prompt-studio",
+      "/settings/prompt-studio",
+      "/settings/family-guardrails",
       "/settings/about",
       "/settings/speech",
       "/chatbooks",
       "/watchlists",
       "/prompts",
       "/reading",
+      "/collections",
       "/admin",
       "/admin/server",
       "/notes",
+      "/moderation-playground",
+      "/chunking-playground",
       "/workspace-playground",
       "/stt",
       "/speech",
@@ -643,6 +648,17 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
     owner: "Platform",
     expiresOn: "2026-03-31",
     routes: ["/content-review", "/claims-review", "/workspace-playground"]
+  },
+  {
+    id: "m5-model-metadata-abort-noise",
+    scope: "console",
+    pattern:
+      /Failed to fetch models from tldw:\s+AbortError:\s+signal is aborted without reason/i,
+    rationale:
+      "Workspace Playground can abort in-flight model metadata fetches during route hydration without user-impacting breakage.",
+    owner: "WebUI",
+    expiresOn: "2026-03-31",
+    routes: ["/workspace-playground"]
   },
   {
     id: "m5-chatbooks-evaluations-cors-noise",

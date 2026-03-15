@@ -37,11 +37,16 @@ const createOnboardingSessionId = (): string => {
     if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
       return globalThis.crypto.randomUUID()
     }
+    if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.getRandomValues === "function") {
+      const bytes = new Uint8Array(8)
+      globalThis.crypto.getRandomValues(bytes)
+      const randomSuffix = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+      return `watchlists-${Date.now().toString(36)}-${randomSuffix}`
+    }
   } catch {
     // Fallback below.
   }
-  const randomSuffix = Math.random().toString(16).slice(2, 10)
-  return `watchlists-${Date.now().toString(36)}-${randomSuffix}`
+  return `watchlists-${Date.now().toString(36)}`
 }
 
 export type WatchlistsQuickSetupStep = "feed" | "monitor" | "review"

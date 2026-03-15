@@ -185,6 +185,36 @@ st_api_json_dict_or_str = st.one_of(
 st_base64_image_str = st.one_of(st.none(), st.just(create_dummy_image_base64()))
 
 
+def _normalize_expected_tags_for_api(value: Any) -> list[str]:
+    """Mirror API/DB tag normalization used by character create/update paths."""
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return []
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = [value]
+        values = parsed if isinstance(parsed, list) else [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = [value]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        tag = str(item).strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        normalized.append(tag)
+    return normalized
+
+
 def st_character_create_payload_pbt():
     return st.builds(
         dict,
@@ -1582,6 +1612,8 @@ def test_pbt_create_character_api(client: TestClient, test_db: CharactersRAGDB, 
             if expected_val is None and key in data and (data[key] == [] or data[key] == {}):
                 pass  # This is acceptable if API behavior is to default None to empty collection
             else:
+                if key == "tags":
+                    expected_val = _normalize_expected_tags_for_api(expected_val)
                 assert data.get(key) == expected_val, f"Mismatch for {key}"
         elif value is not None:  # For other simple fields that were provided
             assert data.get(key) == value, f"Mismatch for {key}"
@@ -1750,6 +1782,8 @@ def test_pbt_update_character_api(
                 expected_value = []  # API converts None to empty list for these fields
             elif resp_key == "extensions" and expected_value is None:
                 expected_value = {}  # API converts None to empty dict for extensions
+            if resp_key == "tags":
+                expected_value = _normalize_expected_tags_for_api(expected_value)
             # The `payload_sent_to_lib` should have Python objects if JSON strings were parsed by Pydantic
             assert (
                 resp_value == expected_value

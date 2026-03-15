@@ -8,6 +8,16 @@ from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.Logging.log_context import ensure_traceparent
 
 
+def _route_exists(path: str, method: str) -> bool:
+    wanted_method = method.upper()
+    for route in app.routes:
+        route_path = getattr(route, "path", None)
+        route_methods = getattr(route, "methods", set()) or set()
+        if route_path == path and wanted_method in route_methods:
+            return True
+    return False
+
+
 def test_ensure_traceparent_sets_state_and_returns_value():
 
 
@@ -35,6 +45,9 @@ def test_ensure_traceparent_sets_state_and_returns_value():
 def test_audio_jobs_submit_propagates_request_id(monkeypatch):
 
 
+    if not _route_exists("/api/v1/audio/jobs/submit", "POST"):
+        pytest.skip("audio-jobs submit route is disabled in this test app configuration")
+
     # Capture kwargs sent to JobManager.create_job
     captured: Dict[str, Any] = {}
 
@@ -42,7 +55,7 @@ def test_audio_jobs_submit_propagates_request_id(monkeypatch):
 
     def fake_create_job(self, *, domain, queue, job_type, payload, owner_user_id, project_id=None,
                         priority=5, max_retries=3, available_at=None, idempotency_key=None,
-                        request_id=None, trace_id=None):  # signature-compatible
+                        request_id=None, trace_id=None, **kwargs):  # signature-compatible
         captured.update({
             "domain": domain,
             "queue": queue,
@@ -78,7 +91,7 @@ def test_media_ingest_jobs_submit_propagates_request_id(monkeypatch, tmp_path):
 
     def fake_create_job(self, *, domain, queue, job_type, payload, owner_user_id, project_id=None,
                         priority=5, max_retries=3, available_at=None, idempotency_key=None,
-                        request_id=None, trace_id=None):
+                        request_id=None, trace_id=None, batch_group=None, **kwargs):
         captured.update({
             "domain": domain,
             "queue": queue,
@@ -113,10 +126,14 @@ def test_reembed_schedule_propagates_request_id(monkeypatch):
     captured: Dict[str, Any] = {}
 
     from tldw_Server_API.app.core.Jobs import manager as jobs_manager
+    from tldw_Server_API.app.core.Embeddings import redis_pipeline
+
+    if not _route_exists("/api/v1/embeddings/reembed/schedule", "POST"):
+        pytest.skip("re-embed schedule route is disabled in this test app configuration")
 
     def fake_create_job(self, *, domain, queue, job_type, payload, owner_user_id, project_id=None,
                         priority=5, max_retries=3, available_at=None, idempotency_key=None,
-                        request_id=None, trace_id=None):
+                        request_id=None, trace_id=None, **kwargs):
         captured.update({
             "domain": domain,
             "queue": queue,
@@ -127,7 +144,15 @@ def test_reembed_schedule_propagates_request_id(monkeypatch):
         })
         return {"id": 99, "uuid": "u2", "domain": domain, "queue": queue, "job_type": job_type, "status": "queued"}
 
+    def fake_enqueue_chunking_job(*, payload, root_job_uuid, force_regenerate=False, require_redis=True):
+        captured.update({
+            "redis_root_job_uuid": root_job_uuid,
+            "redis_request_id": payload.get("request_id"),
+        })
+        return "1-0"
+
     monkeypatch.setattr(jobs_manager.JobManager, "create_job", fake_create_job, raising=True)
+    monkeypatch.setattr(redis_pipeline, "enqueue_chunking_job", fake_enqueue_chunking_job, raising=True)
 
     client = TestClient(app)
     resp = client.post(

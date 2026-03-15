@@ -47,6 +47,12 @@ export class WorkspacePlaygroundPage {
     })
   }
 
+  private async clickWhenActionable(locator: Locator): Promise<void> {
+    await expect(locator).toBeVisible({ timeout: 10_000 })
+    await locator.click({ trial: true })
+    await locator.click()
+  }
+
   async goto(): Promise<void> {
     await this.page.goto("/workspace-playground", {
       waitUntil: "domcontentloaded"
@@ -85,46 +91,42 @@ export class WorkspacePlaygroundPage {
 
   async hideSourcesPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
-      .getByRole("button", { name: /hide sources/i })
-      .first()
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.sourcesPanel.getByRole("button", { name: /hide sources/i })
+    )
     await expect(this.sourcesPanel).toBeHidden({ timeout: 10_000 })
   }
 
   async showSourcesPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
-      .getByRole("button", { name: /show sources/i })
-      .first()
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.page.getByRole("button", { name: /show sources/i }).first()
+    )
     await expect(this.sourcesPanel).toBeVisible({ timeout: 10_000 })
   }
 
   async hideStudioPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
-      .getByRole("button", { name: /hide studio/i })
-      .first()
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.studioPanel.getByRole("button", { name: /hide studio/i })
+    )
     await expect(this.studioPanel).toBeHidden({ timeout: 10_000 })
   }
 
   async showStudioPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
-      .getByRole("button", { name: /show studio/i })
-      .first()
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.page.getByRole("button", { name: /show studio/i }).first()
+    )
     await expect(this.studioPanel).toBeVisible({ timeout: 10_000 })
   }
 
   async openAddSourcesModal(): Promise<void> {
     await expect(this.sourcesPanel).toBeVisible({ timeout: 10_000 })
     await this.disableNextJsPortalPointerInterception()
-    await this.sourcesPanel
-      .getByRole("button", { name: /^add$/i })
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.sourcesPanel.getByRole("button", { name: /^add$/i })
+    )
     await expect(this.addSourceModal).toBeVisible({ timeout: 10_000 })
   }
 

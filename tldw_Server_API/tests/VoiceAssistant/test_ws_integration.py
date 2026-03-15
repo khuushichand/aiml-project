@@ -139,7 +139,12 @@ class DummyCommandRouter:
         self.processed_commands: List[str] = []
 
     async def process_command(
-        self, text: str, user_id: int, session_id: str, db: Any = None
+        self,
+        text: str,
+        user_id: int,
+        session_id: str,
+        db: Any = None,
+        persona_id: Optional[str] = None,
     ) -> tuple[Any, str]:
         """Process a command and return a dummy result."""
         from tldw_Server_API.app.core.VoiceAssistant.schemas import ActionResult, ActionType

@@ -2634,7 +2634,12 @@ async def create_embedding_endpoint(
                     continue
             if not embeddings:
                 logger.error(f"Embedding creation failed across providers {chain}: {last_error}")
-                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding providers unavailable")
+                if isinstance(last_error, HTTPException):
+                    raise last_error
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Embedding providers unavailable",
+                ) from last_error
 
         try:
             final_credentials = byok_cache.get(provider.lower())
@@ -2740,6 +2745,7 @@ async def create_embedding_endpoint(
             await log_llm_usage(
                 user_id=user_id,
                 key_id=api_key_id,
+                request=request,
                 endpoint=f"{request.method}:{request.url.path}",
                 operation="embeddings",
                 provider=provider,

@@ -51,11 +51,21 @@ import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { tldwModels, type ModelInfo } from "@/services/tldw"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import { generateQuiz } from "@/services/quizzes"
-import { createFlashcard, createDeck, listDecks } from "@/services/flashcards"
+import {
+  createFlashcard,
+  createDeck,
+  generateFlashcards as generateFlashcardDrafts,
+  listDecks
+} from "@/services/flashcards"
 import { fetchTldwVoiceCatalog, type TldwVoice } from "@/services/tldw/audio-voices"
 import { inferTldwProviderFromModel } from "@/services/tts-provider"
 import { OUTPUT_TYPES } from "@/types/workspace"
-import type { ArtifactType, GeneratedArtifact, AudioTtsProvider } from "@/types/workspace"
+import type {
+  ArtifactType,
+  GeneratedArtifact,
+  AudioTtsProvider,
+  WorkspaceSource
+} from "@/types/workspace"
 import { useStoreMessageOption } from "@/store/option"
 import { useStoreChatModelSettings } from "@/store/model"
 import Mermaid from "@/components/Common/Mermaid"
@@ -90,7 +100,7 @@ const OUTPUT_BUTTONS: {
 }[] = [
   {
     type: "audio_overview",
-    label: "Audio Overview",
+    label: "Audio Summary",
     description:
       OUTPUT_TYPES.find((config) => config.type === "audio_overview")
         ?.description || "Generate a spoken summary of your sources",
@@ -269,6 +279,13 @@ type QuizQuestionDraft = {
   explanation?: string
 }
 
+type ParsedQuizQuestion = {
+  question: string
+  options: string[]
+  answer: string
+  explanation: string
+}
+
 type MarkdownTableData = {
   headers: string[]
   rows: string[][]
@@ -281,6 +298,8 @@ type ArtifactDiscussDetail = {
   content: string
 }
 
+const RECENT_OUTPUT_TYPES_STORAGE_KEY = "tldw:workspace-playground:recent-output-types:v1"
+const RECENT_OUTPUT_TYPES_COUNT = 3
 const WORKSPACE_DISCUSS_EVENT = "workspace-playground:discuss-artifact"
 const VOICE_PREVIEW_TEXT =
   "This is a quick voice preview from your current audio settings."
@@ -292,6 +311,33 @@ const STUDIO_DEFAULT_RAG_TOP_K = 8
 const STUDIO_DEFAULT_RAG_MIN_SCORE = 0.2
 const STUDIO_DEFAULT_ENABLE_RERANKING = true
 const STUDIO_DEFAULT_MAX_TOKENS = 800
+
+const loadRecentOutputTypes = (): ArtifactType[] => {
+  try {
+    const raw = localStorage.getItem(RECENT_OUTPUT_TYPES_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    const validTypes = new Set(OUTPUT_BUTTONS.map((b) => b.type))
+    return parsed.filter(
+      (item): item is ArtifactType =>
+        typeof item === "string" && validTypes.has(item as ArtifactType)
+    )
+  } catch {
+    return []
+  }
+}
+
+const recordRecentOutputType = (type: ArtifactType): ArtifactType[] => {
+  const current = loadRecentOutputTypes()
+  const updated = [type, ...current.filter((t) => t !== type)].slice(0, 10)
+  try {
+    localStorage.setItem(RECENT_OUTPUT_TYPES_STORAGE_KEY, JSON.stringify(updated))
+  } catch {
+    // Quota exceeded — silent
+  }
+  return updated
+}
 
 const isAbortLikeError = (error: unknown): boolean => {
   const candidate = (error as {
@@ -314,6 +360,23 @@ const isAbortLikeError = (error: unknown): boolean => {
   const message = candidate.message ?? String(error ?? "")
   return /\babort(ed|error)?\b/i.test(message)
 }
+
+const TEXT_FAILURE_SENTINELS: Partial<Record<ArtifactType, string[]>> = {
+  summary: ["Summary generation failed"],
+  report: ["Report generation failed"],
+  compare_sources: ["Compare sources generation failed"],
+  timeline: ["Timeline generation failed"],
+  mindmap: ["Mind map generation failed"],
+  slides: ["Slides generation failed"],
+  data_table: ["Data table generation failed"]
+}
+
+const KNOWN_ERROR_RESPONSE_TEXTS = new Set([
+  "sorry, i encountered an error. please try again.",
+  "i'm sorry, i encountered an error processing your request.",
+  "i encountered an error generating a response.",
+  "the workflow encountered an error."
+])
 
 export const estimateGenerationSeconds = (
   type: ArtifactType,
@@ -411,6 +474,30 @@ type GenerationResult = {
   data?: Record<string, unknown>
 }
 
+type StudioSourceContext = {
+  title: string
+  text: string
+}
+
+type SourceContentGenerationOptions = {
+  mediaIds: number[]
+  selectedSources: WorkspaceSource[]
+  model?: string
+  apiProvider?: string
+  temperature: number
+  topP: number
+  maxTokens: number
+  abortSignal?: AbortSignal
+}
+
+type FlashcardsGenerationOptions = SourceContentGenerationOptions & {
+  preferredDeckId?: number
+}
+
+const STUDIO_SOURCE_CHAR_LIMIT = 6000
+const STUDIO_TOTAL_SOURCE_CHAR_LIMIT = 18000
+const FLASHCARD_GENERATION_TEXT_LIMIT = 8000
+
 const extractUsageMetrics = (payload: unknown): UsageMetrics => {
   if (!payload || typeof payload !== "object") {
     return {}
@@ -457,6 +544,270 @@ const extractUsageMetrics = (payload: unknown): UsageMetrics => {
   }
 }
 
+const buildMissingContentError = (label: string): Error =>
+  new Error(`No usable ${label} content was returned.`)
+
+const extractNestedText = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map(extractNestedText).filter(Boolean).join("")
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    return (
+      extractNestedText(record.text) ||
+      extractNestedText(record.content) ||
+      extractNestedText(record.parts)
+    )
+  }
+  return ""
+}
+
+const extractChatCompletionText = (payload: unknown): string => {
+  if (!payload || typeof payload !== "object") {
+    return ""
+  }
+  const record = payload as Record<string, unknown>
+  const choices = Array.isArray(record.choices) ? record.choices : []
+  if (choices.length > 0) {
+    const choice = choices[0] as Record<string, unknown>
+    const choiceText = extractNestedText(choice.message ?? choice.delta ?? choice.text)
+    if (choiceText.trim()) {
+      return choiceText.trim()
+    }
+  }
+  return extractNestedText(
+    record.message ?? record.content ?? record.text ?? record.output_text
+  ).trim()
+}
+
+const extractMediaDetailText = (payload: unknown): string => {
+  if (!isRecord(payload)) {
+    return ""
+  }
+  if (typeof payload.content === "string" && payload.content.trim()) {
+    return payload.content.trim()
+  }
+  const content = isRecord(payload.content) ? payload.content : null
+  if (typeof content?.text === "string" && content.text.trim()) {
+    return content.text.trim()
+  }
+  const processing = isRecord(payload.processing) ? payload.processing : null
+  if (typeof processing?.analysis === "string" && processing.analysis.trim()) {
+    return processing.analysis.trim()
+  }
+  return ""
+}
+
+const readChatCompletionResponseText = async (response: Response): Promise<string> => {
+  const bodyText = (await response.text()).trim()
+  if (!bodyText) {
+    return ""
+  }
+  try {
+    return extractChatCompletionText(JSON.parse(bodyText))
+  } catch {
+    return bodyText
+  }
+}
+
+const loadStudioSourceContexts = async (
+  options: SourceContentGenerationOptions
+): Promise<StudioSourceContext[]> => {
+  const sourceByMediaId = new Map(
+    options.selectedSources.map((source) => [source.mediaId, source])
+  )
+  const mediaDetails = await Promise.all(
+    options.mediaIds.map(async (mediaId) => {
+      const detail = await tldwClient.getMediaDetails(mediaId, {
+        include_content: true,
+        include_versions: false,
+        include_version_content: false,
+        signal: options.abortSignal
+      })
+      const source = sourceByMediaId.get(mediaId)
+      const sourceMeta = isRecord(detail) && isRecord(detail.source) ? detail.source : null
+      return {
+        title:
+          source?.title ||
+          (typeof sourceMeta?.title === "string" ? sourceMeta.title : "") ||
+          `Source ${mediaId}`,
+        text: extractMediaDetailText(detail)
+      }
+    })
+  )
+
+  let remainingChars = STUDIO_TOTAL_SOURCE_CHAR_LIMIT
+  const sourceContexts: StudioSourceContext[] = []
+  for (const detail of mediaDetails) {
+    if (!detail.text || remainingChars <= 0) {
+      continue
+    }
+    const clippedText = detail.text
+      .slice(0, Math.min(STUDIO_SOURCE_CHAR_LIMIT, remainingChars))
+      .trim()
+    if (!clippedText) {
+      continue
+    }
+    sourceContexts.push({
+      title: detail.title,
+      text: clippedText
+    })
+    remainingChars -= clippedText.length
+  }
+
+  return sourceContexts
+}
+
+const formatStudioSourceContexts = (
+  sourceContexts: StudioSourceContext[],
+  maxChars?: number
+): string => {
+  const combined = sourceContexts
+    .map(
+      (source, index) =>
+        `Source ${index + 1}: ${source.title}\n${source.text}`
+    )
+    .join("\n\n")
+    .trim()
+
+  if (!combined) {
+    return ""
+  }
+  if (typeof maxChars !== "number" || maxChars <= 0) {
+    return combined
+  }
+  return combined.slice(0, maxChars).trim()
+}
+
+const extractRequiredRagText = (response: unknown, label: string): string => {
+  const candidate = isRecord(response) ? response : {}
+  const generation =
+    typeof candidate.generation === "string" ? candidate.generation.trim() : ""
+  const generatedAnswer =
+    typeof candidate.generated_answer === "string"
+      ? candidate.generated_answer.trim()
+      : ""
+  const answer = typeof candidate.answer === "string" ? candidate.answer.trim() : ""
+  const responseText =
+    typeof candidate.response === "string" ? candidate.response.trim() : ""
+  const text = generation || generatedAnswer || answer || responseText
+
+  if (!text) {
+    throw buildMissingContentError(label)
+  }
+
+  return text
+}
+
+type StudioRagGenerationRequest = {
+  query: string
+  generationPrompt: string
+  mediaIds: number[]
+  topK: number
+  abortSignal?: AbortSignal
+  enableCitations?: boolean
+}
+
+const requestStudioRagGeneration = async ({
+  query,
+  generationPrompt,
+  mediaIds,
+  topK,
+  abortSignal,
+  enableCitations = false
+}: StudioRagGenerationRequest): Promise<any> =>
+  tldwClient.ragSearch(query, {
+    include_media_ids: mediaIds,
+    top_k: topK,
+    enable_generation: true,
+    enable_citations: enableCitations,
+    generation_prompt: generationPrompt,
+    timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
+    signal: abortSignal
+  })
+
+const requireUsableTextResult = (
+  type: ArtifactType,
+  result: GenerationResult,
+  label: string
+): GenerationResult => {
+  const content = typeof result.content === "string" ? result.content.trim() : ""
+  const sentinels = TEXT_FAILURE_SENTINELS[type] ?? []
+  const normalizedContent = content.toLowerCase()
+
+  if (
+    !content ||
+    sentinels.includes(content) ||
+    KNOWN_ERROR_RESPONSE_TEXTS.has(normalizedContent)
+  ) {
+    throw buildMissingContentError(label)
+  }
+
+  return {
+    ...result,
+    content
+  }
+}
+
+const finalizeGenerationResult = (
+  type: ArtifactType,
+  result: GenerationResult,
+  options?: {
+    audioProvider?: AudioTtsProvider
+  }
+): GenerationResult => {
+  switch (type) {
+    case "summary":
+      return requireUsableTextResult(type, result, "summary")
+    case "report":
+      return requireUsableTextResult(type, result, "report")
+    case "compare_sources":
+      return requireUsableTextResult(type, result, "comparison")
+    case "timeline":
+      return requireUsableTextResult(type, result, "timeline")
+    case "mindmap": {
+      const normalized = requireUsableTextResult(type, result, "mind map")
+      const mermaid =
+        isRecord(normalized.data) && typeof normalized.data.mermaid === "string"
+          ? normalized.data.mermaid.trim()
+          : ""
+      if (!mermaid || !isLikelyMermaidDiagram(mermaid)) {
+        throw buildMissingContentError("mind map")
+      }
+      return normalized
+    }
+    case "data_table": {
+      const normalized = requireUsableTextResult(type, result, "data table")
+      const table =
+        isRecord(normalized.data) && normalized.data.table ? normalized.data.table : null
+      if (!table) {
+        throw buildMissingContentError("data table")
+      }
+      return normalized
+    }
+    case "slides":
+      if (result.presentationId) {
+        return result
+      }
+      return requireUsableTextResult(type, result, "slide")
+    case "audio_overview": {
+      const normalized = requireUsableTextResult(type, result, "audio")
+      if (options?.audioProvider === "browser") {
+        return normalized
+      }
+      if (!result.audioUrl) {
+        throw new Error("No usable audio output was returned.")
+      }
+      return normalized
+    }
+    default:
+      return result
+  }
+}
+
 /**
  * StudioPane - Right pane for generating outputs
  */
@@ -467,7 +818,16 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
 
   // Store state
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
+  const selectedSourceFolderIds = useWorkspaceStore(
+    (s) => s.selectedSourceFolderIds
+  ) || []
   const getSelectedMediaIds = useWorkspaceStore((s) => s.getSelectedMediaIds)
+  const getEffectiveSelectedMediaIds = useWorkspaceStore(
+    (s) => s.getEffectiveSelectedMediaIds
+  )
+  const getEffectiveSelectedSources = useWorkspaceStore(
+    (s) => s.getEffectiveSelectedSources
+  )
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const isGeneratingOutput = useWorkspaceStore((s) => s.isGeneratingOutput)
   const generatingOutputType = useWorkspaceStore((s) => s.generatingOutputType)
@@ -518,6 +878,12 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [selectedFlashcardDeck, setSelectedFlashcardDeck] = useState<"auto" | number>("auto")
   const [activeOutputType, setActiveOutputType] = useState<ArtifactType | null>(
     null
+  )
+  const [recentOutputTypes, setRecentOutputTypes] = useState<ArtifactType[]>(
+    () => loadRecentOutputTypes()
+  )
+  const [moreOutputsExpanded, setMoreOutputsExpanded] = useState(
+    () => loadRecentOutputTypes().length === 0
   )
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
 
@@ -613,11 +979,34 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const hasSelectedSources = selectedSourceIds.length > 0
-  const selectedMediaCount = Math.max(
-    getSelectedMediaIds().length,
-    selectedSourceIds.length
+  const selectedMediaIds = React.useMemo(
+    () =>
+      typeof getEffectiveSelectedMediaIds === "function"
+        ? getEffectiveSelectedMediaIds()
+        : getSelectedMediaIds(),
+    [
+      getEffectiveSelectedMediaIds,
+      getSelectedMediaIds,
+      selectedSourceFolderIds,
+      selectedSourceIds
+    ]
   )
+  const selectedSources = React.useMemo(
+    () =>
+      typeof getEffectiveSelectedSources === "function"
+        ? getEffectiveSelectedSources().filter((source) =>
+            selectedMediaIds.includes(source.mediaId)
+          )
+        : [],
+    [
+      getEffectiveSelectedSources,
+      selectedMediaIds,
+      selectedSourceFolderIds,
+      selectedSourceIds
+    ]
+  )
+  const hasSelectedSources = selectedMediaIds.length > 0
+  const selectedMediaCount = selectedMediaIds.length
   const contextualAudioSettingsVisible =
     activeOutputType === "audio_overview" ||
     generatingOutputType === "audio_overview"
@@ -712,6 +1101,75 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     }
     return options
   }, [filteredChatModels, selectedModel, t])
+  const resolveStudioChatRuntime = React.useCallback(async () => {
+    const normalizeProviderValue = (value: unknown) =>
+      typeof value === "string" && value.trim().length > 0
+        ? value.trim().toLowerCase()
+        : undefined
+
+    const pickRuntime = (models: ModelInfo[]) => {
+      const selectedModelId =
+        typeof selectedModel === "string" && selectedModel.trim().length > 0
+          ? selectedModel.trim()
+          : undefined
+      const providerFiltered =
+        normalizedApiProvider === "__auto__"
+          ? models
+          : models.filter(
+              (model) =>
+                String(model.provider || "").trim().toLowerCase() ===
+                normalizedApiProvider
+            )
+      if (selectedModelId) {
+        const matchedModel = models.find(
+          (model) =>
+            typeof model.id === "string" && model.id.trim() === selectedModelId
+        )
+        return {
+          model: selectedModelId,
+          provider:
+            normalizedApiProvider !== "__auto__"
+              ? normalizedApiProvider
+              : normalizeProviderValue(matchedModel?.provider)
+        }
+      }
+
+      const fallbackModel = providerFiltered.find(
+        (model) => typeof model.id === "string" && model.id.trim().length > 0
+      ) ||
+        models.find(
+          (model) => typeof model.id === "string" && model.id.trim().length > 0
+        )
+
+      return {
+        model: fallbackModel?.id?.trim() || undefined,
+        provider:
+          normalizeProviderValue(fallbackModel?.provider) ||
+          (normalizedApiProvider !== "__auto__" ? normalizedApiProvider : undefined)
+      }
+    }
+
+    const cachedRuntime = pickRuntime(chatModels)
+    if (
+      cachedRuntime.model &&
+      (normalizedApiProvider !== "__auto__" || cachedRuntime.provider)
+    ) {
+      return cachedRuntime
+    }
+
+    try {
+      const models = await tldwModels.getChatModels()
+      const normalizedModels = Array.isArray(models) ? models : []
+      setChatModels(normalizedModels)
+      return pickRuntime(normalizedModels)
+    } catch {
+      return cachedRuntime
+    }
+  }, [chatModels, normalizedApiProvider, selectedModel])
+  const resolveStudioChatModel = React.useCallback(async () => {
+    const runtime = await resolveStudioChatRuntime()
+    return runtime.model
+  }, [resolveStudioChatRuntime])
   const patchRagAdvancedOptions = React.useCallback(
     (patch: Record<string, unknown>) => {
       setRagAdvancedOptions({
@@ -1092,9 +1550,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     type: ArtifactType,
     options: ArtifactGenerationOptions = {}
   ) => {
+    setRecentOutputTypes(recordRecentOutputType(type))
     if (!hasSelectedSources) return
 
-    const mediaIds = getSelectedMediaIds()
+    const mediaIds = selectedMediaIds
     if (mediaIds.length === 0) return
     if (type === "compare_sources" && mediaIds.length < 2) {
       messageApi.warning(
@@ -1209,15 +1668,32 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           )
           break
         case "flashcards":
-          result = await generateFlashcards(
+          const flashcardRuntime = await resolveStudioChatRuntime()
+          result = await generateFlashcards({
             mediaIds,
-            selectedFlashcardDeck === "auto" ? undefined : selectedFlashcardDeck,
-            workspaceTag,
-            activeAbort.signal
-          )
+            selectedSources,
+            model: flashcardRuntime.model,
+            apiProvider: flashcardRuntime.provider,
+            temperature: resolvedTemperature,
+            topP: resolvedTopP,
+            maxTokens: resolvedNumPredict,
+            preferredDeckId:
+              selectedFlashcardDeck === "auto" ? undefined : selectedFlashcardDeck,
+            abortSignal: activeAbort.signal
+          })
           break
         case "mindmap":
-          result = await generateMindMap(mediaIds, activeAbort.signal)
+          result = await generateMindMap({
+            mediaIds,
+            selectedSources,
+            model: await resolveStudioChatModel(),
+            apiProvider:
+              normalizedApiProvider !== "__auto__" ? normalizedApiProvider : undefined,
+            temperature: resolvedTemperature,
+            topP: resolvedTopP,
+            maxTokens: resolvedNumPredict,
+            abortSignal: activeAbort.signal
+          })
           break
         case "audio_overview":
           result = await generateAudioOverview(
@@ -1230,11 +1706,17 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           result = await generateSlidesFromApi(mediaIds[0], activeAbort.signal)
           break
         case "data_table":
-          result = await generateDataTable(
+          result = await generateDataTable({
             mediaIds,
-            workspaceTag,
-            activeAbort.signal
-          )
+            selectedSources,
+            model: await resolveStudioChatModel(),
+            apiProvider:
+              normalizedApiProvider !== "__auto__" ? normalizedApiProvider : undefined,
+            temperature: resolvedTemperature,
+            topP: resolvedTopP,
+            maxTokens: resolvedNumPredict,
+            abortSignal: activeAbort.signal
+          })
           break
         default:
           throw new Error(`Unsupported output type: ${type}`)
@@ -1247,6 +1729,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       if (!artifact) {
         throw new Error("Artifact placeholder was not created")
       }
+
+      result = finalizeGenerationResult(type, result, {
+        audioProvider: audioSettings.provider
+      })
 
       updateArtifactStatus(artifact.id, "completed", {
         serverId: result.serverId,
@@ -1501,6 +1987,37 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       return
     }
 
+    if (artifact.type === "quiz") {
+      const questions =
+        isRecord(artifact.data) && Array.isArray(artifact.data.questions)
+          ? artifact.data.questions
+          : null
+
+      if (questions) {
+        const quizBlob = new Blob(
+          [
+            JSON.stringify(
+              {
+                title: artifact.title,
+                questions
+              },
+              null,
+              2
+            )
+          ],
+          { type: "application/json" }
+        )
+        downloadBlobFile(quizBlob, `${artifact.title}.json`)
+        return
+      }
+
+      if (artifact.content) {
+        const quizTextBlob = new Blob([artifact.content], { type: "text/plain" })
+        downloadBlobFile(quizTextBlob, `${artifact.title}.txt`)
+      }
+      return
+    }
+
     if (artifact.serverId && artifact.type !== "mindmap") {
       try {
         const blob = await tldwClient.downloadOutput(String(artifact.serverId))
@@ -1587,7 +2104,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             <button
               type="button"
               onClick={onHide}
-              className="hidden rounded p-1.5 text-text-muted transition hover:bg-surface2 hover:text-text lg:block"
+              className="hidden h-9 w-9 items-center justify-center rounded text-text-muted transition hover:bg-surface2 hover:text-text lg:flex"
               aria-label={t("playground:workspace.hideStudio", "Hide studio")}
             >
               <PanelRightClose className="h-4 w-4" />
@@ -1917,73 +2434,136 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             </div>
           </div>
         )}
-        <div className="space-y-4">
-          {OUTPUT_GROUPS.map((group) => (
-            <section key={group.id} aria-label={group.label}>
-              <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                {group.label}
-              </h4>
-              <div className="grid grid-cols-2 gap-3">
-                {group.types.map((type) => {
-                  const button = OUTPUT_BUTTONS.find((entry) => entry.type === type)
-                  if (!button) return null
-                  const { label, icon: Icon, description } = button
-                  const isGenerating =
-                    isGeneratingOutput && generatingOutputType === type
-                  const requiresMultipleSources =
-                    type === "compare_sources" && selectedMediaCount < 2
-                  const isDisabled =
-                    !hasSelectedSources || isGeneratingOutput || requiresMultipleSources
+        {(() => {
+          const recentTypes = recentOutputTypes.slice(0, RECENT_OUTPUT_TYPES_COUNT)
+          const allTypes = OUTPUT_BUTTONS.map((b) => b.type)
+          const remainingTypes = allTypes.filter((t) => !recentTypes.includes(t))
+          const hasRecent = recentTypes.length > 0
 
+          const artifactStatusForType = (type: ArtifactType): "completed" | "failed" | null => {
+            const match = generatedArtifacts.find((a) => a.type === type)
+            if (!match) return null
+            if (match.status === "completed") return "completed"
+            if (match.status === "failed") return "failed"
+            return null
+          }
+
+          const renderOutputButton = (type: ArtifactType) => {
+            const button = OUTPUT_BUTTONS.find((entry) => entry.type === type)
+            if (!button) return null
+            const { label, icon: Icon, description } = button
+            const isGenerating =
+              isGeneratingOutput && generatingOutputType === type
+            const requiresMultipleSources =
+              type === "compare_sources" && selectedMediaCount < 2
+            const isDisabled =
+              !hasSelectedSources || isGeneratingOutput || requiresMultipleSources
+            const artifactStatus = artifactStatusForType(type)
+
+            return (
+              <Tooltip
+                key={type}
+                title={
+                  requiresMultipleSources
+                    ? t(
+                        "playground:studio.compareRequiresMultipleSourcesHint",
+                        "Compare Sources requires at least two selected sources."
+                      )
+                    : !hasSelectedSources
+                    ? t(
+                        "playground:studio.selectSourcesFirst",
+                        "Select sources first"
+                      )
+                    : description
+                }
+              >
+                <button
+                  type="button"
+                  disabled={isDisabled}
+                  onFocus={() => setActiveOutputType(type)}
+                  onMouseEnter={() => setActiveOutputType(type)}
+                  onClick={() => {
+                    setActiveOutputType(type)
+                    if (type === "audio_overview") {
+                      setShowTtsSettings(true)
+                    }
+                    void handleGenerateOutput(type)
+                  }}
+                  className={`relative flex flex-col items-center justify-center rounded-lg border p-3 transition-colors ${
+                    isDisabled
+                      ? "cursor-not-allowed border-border bg-surface2/50 text-text-muted"
+                      : "border-border bg-surface hover:border-primary/50 hover:bg-primary/5"
+                  }`}
+                >
+                  {isGenerating ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                  ) : (
+                    <Icon className="h-5 w-5" />
+                  )}
+                  <span className="mt-1.5 text-xs font-medium">{label}</span>
+                  {artifactStatus === "completed" && (
+                    <CheckCircle className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-success" />
+                  )}
+                  {artifactStatus === "failed" && (
+                    <XCircle className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-error" />
+                  )}
+                </button>
+              </Tooltip>
+            )
+          }
+
+          return (
+            <div className="space-y-4">
+              {hasRecent && (
+                <section aria-label={t("playground:studio.recentOutputs", "Recent")}>
+                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                    {t("playground:studio.recentOutputs", "Recent")}
+                  </h4>
+                  <div className="grid grid-cols-3 gap-3">
+                    {recentTypes.map(renderOutputButton)}
+                  </div>
+                </section>
+              )}
+              {hasRecent && !moreOutputsExpanded && (
+                <button
+                  type="button"
+                  onClick={() => setMoreOutputsExpanded(true)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-2 text-xs font-medium text-text-muted transition hover:border-primary/40 hover:text-text"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  {t("playground:studio.moreOutputs", "More outputs...")}
+                </button>
+              )}
+              {(moreOutputsExpanded || !hasRecent) &&
+                OUTPUT_GROUPS.map((group) => {
+                  const groupTypes = hasRecent
+                    ? group.types.filter((t) => remainingTypes.includes(t))
+                    : group.types
+                  if (groupTypes.length === 0) return null
                   return (
-                    <Tooltip
-                      key={type}
-                      title={
-                        requiresMultipleSources
-                          ? t(
-                              "playground:studio.compareRequiresMultipleSourcesHint",
-                              "Compare Sources requires at least two selected sources."
-                            )
-                          : !hasSelectedSources
-                          ? t(
-                              "playground:studio.selectSourcesFirst",
-                              "Select sources first"
-                            )
-                          : description
-                      }
-                    >
-                      <button
-                        type="button"
-                        disabled={isDisabled}
-                        onFocus={() => setActiveOutputType(type)}
-                        onMouseEnter={() => setActiveOutputType(type)}
-                        onClick={() => {
-                          setActiveOutputType(type)
-                          if (type === "audio_overview") {
-                            setShowTtsSettings(true)
-                          }
-                          void handleGenerateOutput(type)
-                        }}
-                        className={`flex flex-col items-center justify-center rounded-lg border p-3 transition-colors ${
-                          isDisabled
-                            ? "cursor-not-allowed border-border bg-surface2/50 text-text-muted"
-                            : "border-border bg-surface hover:border-primary/50 hover:bg-primary/5"
-                        }`}
-                      >
-                        {isGenerating ? (
-                          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                        ) : (
-                          <Icon className="h-5 w-5" />
-                        )}
-                        <span className="mt-1.5 text-xs font-medium">{label}</span>
-                      </button>
-                    </Tooltip>
+                    <section key={group.id} aria-label={group.label}>
+                      <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                        {group.label}
+                      </h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        {groupTypes.map(renderOutputButton)}
+                      </div>
+                    </section>
                   )
                 })}
-              </div>
-            </section>
-          ))}
-        </div>
+              {hasRecent && moreOutputsExpanded && (
+                <button
+                  type="button"
+                  onClick={() => setMoreOutputsExpanded(false)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-2 text-xs font-medium text-text-muted transition hover:border-primary/40 hover:text-text"
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                  {t("playground:studio.lessOutputs", "Show less")}
+                </button>
+              )}
+            </div>
+          )
+        })()}
         {!hasSelectedSources && (
           <p className="mt-2 text-center text-xs text-text-muted">
             {t(
@@ -1999,7 +2579,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             <p className="mb-2 rounded border border-border bg-surface2/30 px-3 py-2 text-xs text-text-muted">
               {t(
                 "playground:studio.audioSettingsHint",
-                "Select Audio Overview to configure TTS voice and speed."
+                "Select Audio Summary to configure TTS voice and speed."
               )}
             </p>
           )}
@@ -3066,22 +3646,19 @@ async function generateSummary(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  // Use RAG to get content and generate summary via chat
-  const ragResponse = await tldwClient.ragSearch(
-    "Provide a comprehensive summary of the key points and main ideas.",
-    {
-      media_ids: mediaIds,
-      top_k: 20,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+  const ragResponse = await requestStudioRagGeneration({
+    query: "key points main ideas summary",
+    generationPrompt:
+      "Provide a comprehensive summary of the key points and main ideas.",
+    mediaIds,
+    topK: 20,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Summary generation failed",
+    content: extractRequiredRagText(ragResponse, "summary"),
     ...usage
   }
 }
@@ -3091,28 +3668,26 @@ async function generateReport(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Generate a detailed report with the following sections:
+  const generationPrompt = `Generate a detailed report with the following sections:
 1. Executive Summary
 2. Key Findings
 3. Detailed Analysis
 4. Conclusions
 5. Recommendations
 
-Use the provided sources to create a comprehensive report.`,
-    {
-      media_ids: mediaIds,
-      top_k: 30,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Use the provided sources to create a comprehensive report.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "key findings detailed analysis conclusions recommendations",
+    generationPrompt,
+    mediaIds,
+    topK: 30,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Report generation failed",
+    content: extractRequiredRagText(ragResponse, "report"),
     ...usage
   }
 }
@@ -3122,25 +3697,23 @@ async function generateTimeline(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Extract and organize all events, dates, and chronological information into a timeline format.
+  const generationPrompt = `Extract and organize all events, dates, and chronological information into a timeline format.
 Present the timeline as:
 - [Date/Period] - Event description
 
-List events in chronological order.`,
-    {
-      media_ids: mediaIds,
-      top_k: 30,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+List events in chronological order.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "events dates chronology timeline",
+    generationPrompt,
+    mediaIds,
+    topK: 30,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Timeline generation failed",
+    content: extractRequiredRagText(ragResponse, "timeline"),
     ...usage
   }
 }
@@ -3150,28 +3723,23 @@ async function generateCompareSources(
   workspaceTag?: string,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Compare the selected sources and produce:
+  const generationPrompt = `Compare the selected sources and produce:
 1. A short synthesis of where they agree.
 2. A list of key disagreements or conflicting claims.
 3. Evidence strength notes for each disagreement.
 4. Open questions that need additional verification.
 
-Use markdown headings and bullet lists. Cite source-specific evidence when possible.`,
-    {
-      media_ids: mediaIds,
-      top_k: 30,
-      enable_generation: true,
-      enable_citations: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Use markdown headings and bullet lists. Cite source-specific evidence when possible.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "agreements disagreements claims evidence",
+    generationPrompt,
+    mediaIds,
+    topK: 30,
+    abortSignal,
+    enableCitations: true
+  })
   const usage = extractUsageMetrics(ragResponse)
-  const content =
-    ragResponse?.generation ||
-    ragResponse?.answer ||
-    "Compare sources generation failed"
+  const content = extractRequiredRagText(ragResponse, "comparison")
 
   return {
     content,
@@ -3264,47 +3832,60 @@ async function generateQuizFromMedia(
 }
 
 async function generateFlashcards(
-  mediaIds: number[],
-  preferredDeckId: number | undefined,
-  workspaceTag?: string,
-  abortSignal?: AbortSignal
+  options: FlashcardsGenerationOptions
 ): Promise<GenerationResult> {
-  // First, get content via RAG
-  const ragResponse = await tldwClient.ragSearch(
-    `Extract key concepts, definitions, and important facts that would make good flashcards.
-Format each as:
-Front: [Question or term]
-Back: [Answer or definition]
-
-Generate 10-15 flashcards.`,
-    {
-      media_ids: mediaIds,
-      top_k: 20,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
+  const sourceContexts = await loadStudioSourceContexts(options)
+  const sourceText = formatStudioSourceContexts(
+    sourceContexts,
+    FLASHCARD_GENERATION_TEXT_LIMIT
   )
-  const usage = extractUsageMetrics(ragResponse)
+  if (!sourceText) {
+    throw buildMissingContentError("flashcard")
+  }
 
-  const content = ragResponse?.generation || ragResponse?.answer || ""
+  const generated = await generateFlashcardDrafts({
+    text: sourceText,
+    num_cards: 12,
+    difficulty: "mixed",
+    provider: options.apiProvider,
+    model:
+      typeof options.model === "string" && options.model.trim().length > 0
+        ? options.model.trim()
+        : undefined
+  })
 
-  // Parse and create flashcards
-  const flashcards = parseFlashcards(content)
+  const flashcards = (Array.isArray(generated.flashcards) ? generated.flashcards : [])
+    .map((card) => ({
+      front: typeof card.front === "string" ? card.front.trim() : "",
+      back: typeof card.back === "string" ? card.back.trim() : "",
+      tags: Array.isArray(card.tags)
+        ? card.tags.filter((tag) => typeof tag === "string" && tag.trim().length > 0)
+        : [],
+      notes: typeof card.notes === "string" ? card.notes.trim() : "",
+      extra: typeof card.extra === "string" ? card.extra.trim() : "",
+      modelType:
+        card.model_type === "basic_reverse" || card.model_type === "cloze"
+          ? card.model_type
+          : "basic"
+    }))
+    .filter((card) => card.front && card.back)
   if (!flashcards.length) {
-    throw new Error("Failed to parse generated flashcards from model output")
+    throw new Error("Flashcard generation returned no usable cards")
   }
 
   // Ensure we have a deck
-  const decks = await listDecks({ signal: abortSignal })
+  const decks = await listDecks({ signal: options.abortSignal })
   let deckId: number | undefined
 
-  if (preferredDeckId && decks.some((deck) => deck.id === preferredDeckId)) {
-    deckId = preferredDeckId
+  if (
+    options.preferredDeckId &&
+    decks.some((deck) => deck.id === options.preferredDeckId)
+  ) {
+    deckId = options.preferredDeckId
   } else if (decks.length === 0) {
     const newDeck = await createDeck(
       { name: "Workspace Flashcards" },
-      { signal: abortSignal }
+      { signal: options.abortSignal }
     )
     deckId = newDeck.id
   } else {
@@ -3320,9 +3901,15 @@ Generate 10-15 flashcards.`,
         deck_id: deckId,
         front: card.front,
         back: card.back,
+        tags: card.tags.length > 0 ? card.tags : undefined,
+        notes: card.notes || undefined,
+        extra: card.extra || undefined,
+        model_type: card.modelType,
+        reverse: card.modelType === "basic_reverse",
+        is_cloze: card.modelType === "cloze",
         source_ref_type: "media",
-        source_ref_id: mediaIds.join(",")
-      }, { signal: abortSignal })
+        source_ref_id: options.mediaIds.join(",")
+      }, { signal: options.abortSignal })
       createdCount += 1
     } catch (error) {
       if (firstCreateError == null) {
@@ -3343,52 +3930,73 @@ Generate 10-15 flashcards.`,
     failedCount > 0
       ? `Created ${createdCount} of ${flashcards.length} flashcards (${failedCount} failed)`
       : `Created ${createdCount} flashcards`
+  const content = formatFlashcardsContent(
+    flashcards.map((card) => ({
+      front: card.front,
+      back: card.back
+    }))
+  )
 
   return {
     content: `${summaryLine}\n\n${content}`,
-    ...usage,
     data: {
-      flashcards,
+      flashcards: flashcards.map((card) => ({
+        front: card.front,
+        back: card.back
+      })),
       deckId,
-      sourceMediaIds: mediaIds
+      sourceMediaIds: options.mediaIds
     }
   }
 }
 
 async function generateMindMap(
-  mediaIds: number[],
-  abortSignal?: AbortSignal
+  options: SourceContentGenerationOptions
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Analyze the content and create a mind map in Mermaid format.
-Use the following structure:
-\`\`\`mermaid
-mindmap
-  root((Main Topic))
-    Branch 1
-      Sub-topic 1.1
-      Sub-topic 1.2
-    Branch 2
-      Sub-topic 2.1
-      Sub-topic 2.2
-\`\`\`
+  const model = typeof options.model === "string" ? options.model.trim() : ""
+  if (!model) {
+    throw new Error("Select a chat model before generating a mind map.")
+  }
 
-Identify the central theme and 3-5 main branches with their sub-topics.`,
-    {
-      media_ids: mediaIds,
-      top_k: 20,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
+  const sourceContexts = await loadStudioSourceContexts(options)
+  if (sourceContexts.length === 0) {
+    throw buildMissingContentError("mind map")
+  }
+
+  const response = await tldwClient.createChatCompletion({
+    model,
+    api_provider: options.apiProvider,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a mind map generator. Return ONLY Mermaid mindmap syntax. You may wrap the result in a ```mermaid code fence, but do not include commentary, explanations, or prose outside the diagram."
+      },
+      {
+        role: "user",
+        content: `Analyze the provided sources and create a Mermaid mindmap that captures the central theme, 3-5 major branches, and the most important subtopics.
+
+Sources:
+${sourceContexts
+  .map(
+    (source, index) =>
+      `Source ${index + 1}: ${source.title}\n${source.text}`
   )
-  const usage = extractUsageMetrics(ragResponse)
+  .join("\n\n")}`
+      }
+    ],
+    temperature: options.temperature,
+    top_p: options.topP,
+    max_tokens: options.maxTokens
+  })
 
-  const content =
-    ragResponse?.generation || ragResponse?.answer || "Mind map generation failed"
+  const content = (await readChatCompletionResponseText(response)).trim()
+  if (!content) {
+    throw buildMissingContentError("mind map")
+  }
+
   return {
     content,
-    ...usage,
     data: {
       mermaid: extractMermaidCode(content)
     }
@@ -3400,25 +4008,21 @@ async function generateAudioOverview(
   audioSettings: import("@/types/workspace").AudioGenerationSettings,
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  // First generate a spoken overview script
-  const ragResponse = await tldwClient.ragSearch(
-    `Create a spoken overview script (2-3 minutes when read aloud) that:
+  const generationPrompt = `Create a spoken overview script (2-3 minutes when read aloud) that:
 1. Introduces the topic
 2. Covers the main points
 3. Concludes with key takeaways
 
-Write in a conversational, easy-to-listen style. Do not include any stage directions, speaker labels, or formatting - just the spoken text.`,
-    {
-      media_ids: mediaIds,
-      top_k: 15,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+Write in a conversational, easy-to-listen style. Do not include any stage directions, speaker labels, or formatting - just the spoken text.`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "topic main points key takeaways overview",
+    generationPrompt,
+    mediaIds,
+    topK: 15,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
-
-  const script = ragResponse?.generation || ragResponse?.answer || ""
+  const script = extractRequiredRagText(ragResponse, "audio")
 
   if (!script.trim()) {
     throw new Error("Failed to generate audio script")
@@ -3468,12 +4072,8 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
     if (isAbortLikeError(ttsError)) {
       throw ttsError
     }
-    // If TTS fails, fall back to returning just the script
     console.error("TTS generation failed:", ttsError)
-    return {
-      content: `[Audio Script]\n\n${script}\n\n[Note: Audio generation failed - TTS service unavailable]`,
-      ...usage
-    }
+    throw new Error("Audio generation failed because speech synthesis did not return audio.")
   }
 }
 
@@ -3526,8 +4126,7 @@ async function generateSlidesFallback(
   mediaIds: number[],
   abortSignal?: AbortSignal
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Create a presentation outline with 8-12 slides:
+  const generationPrompt = `Create a presentation outline with 8-12 slides:
 
 For each slide provide:
 # Slide [Number]: [Title]
@@ -3540,56 +4139,74 @@ Include:
 2. Introduction/Overview
 3-10. Main content slides
 11. Summary/Key Takeaways
-12. Conclusion/Q&A`,
-    {
-      media_ids: mediaIds,
-      top_k: 25,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
-  )
+12. Conclusion/Q&A`
+  const ragResponse = await requestStudioRagGeneration({
+    query: "presentation outline overview key takeaways",
+    generationPrompt,
+    mediaIds,
+    topK: 25,
+    abortSignal
+  })
   const usage = extractUsageMetrics(ragResponse)
 
   return {
-    content: ragResponse?.generation || ragResponse?.answer || "Slides generation failed",
+    content: extractRequiredRagText(ragResponse, "slide"),
     ...usage
   }
 }
 
 async function generateDataTable(
-  mediaIds: number[],
-  workspaceTag?: string,
-  abortSignal?: AbortSignal
+  options: SourceContentGenerationOptions
 ): Promise<GenerationResult> {
-  const ragResponse = await tldwClient.ragSearch(
-    `Extract structured data from the content and format it as a markdown table.
-Identify:
-- Key entities (people, organizations, places, products)
-- Attributes and values
-- Relationships and comparisons
+  const model = typeof options.model === "string" ? options.model.trim() : ""
+  if (!model) {
+    throw new Error("Select a chat model before generating a data table.")
+  }
+  const sourceContexts = await loadStudioSourceContexts(options)
+  if (sourceContexts.length === 0) {
+    throw buildMissingContentError("data table")
+  }
 
-Format as:
-| Column 1 | Column 2 | Column 3 |
-|----------|----------|----------|
-| Data 1   | Data 2   | Data 3   |`,
-    {
-      media_ids: mediaIds,
-      top_k: 25,
-      enable_generation: true,
-      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
-      signal: abortSignal
-    }
+  const response = await tldwClient.createChatCompletion({
+    model,
+    api_provider: options.apiProvider,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a data table generator. Return ONLY a markdown table with pipe delimiters, a header row, and a separator row. Do not include commentary or code fences."
+      },
+      {
+        role: "user",
+        content: `Extract structured data from the provided sources and format it as a markdown table.
+
+Include:
+- Key entities, people, organizations, places, or products when present
+- Important attributes and values
+- Relationships or comparisons when they are supported by the source text
+
+Sources:
+${sourceContexts
+  .map(
+    (source, index) =>
+      `Source ${index + 1}: ${source.title}\n${source.text}`
   )
-  const usage = extractUsageMetrics(ragResponse)
+  .join("\n\n")}`
+      }
+    ],
+    temperature: options.temperature,
+    top_p: options.topP,
+    max_tokens: options.maxTokens
+  })
 
-  const content =
-    ragResponse?.generation || ragResponse?.answer || "Data table generation failed"
+  const content = (await readChatCompletionResponseText(response)).trim()
+  if (!content) {
+    throw buildMissingContentError("data table")
+  }
   const parsedTable = parseMarkdownTable(content)
 
   return {
     content,
-    ...usage,
     data: parsedTable ? { table: parsedTable } : undefined
   }
 }
@@ -3800,7 +4417,7 @@ function getArtifactQuizQuestions(artifact: GeneratedArtifact): QuizQuestionDraf
   const questionsFromData = isRecord(artifact.data) &&
     Array.isArray(artifact.data.questions)
       ? artifact.data.questions
-          .map((entry) => {
+          .map((entry): ParsedQuizQuestion | null => {
             if (!isRecord(entry)) return null
             const question = String(
               entry.question || entry.question_text || ""
@@ -3817,7 +4434,7 @@ function getArtifactQuizQuestions(artifact: GeneratedArtifact): QuizQuestionDraf
             if (!question) return null
             return { question, options, answer, explanation }
           })
-          .filter((entry): entry is QuizQuestionDraft => entry !== null)
+          .filter((entry): entry is ParsedQuizQuestion => entry !== null)
       : []
 
   if (questionsFromData.length > 0) {

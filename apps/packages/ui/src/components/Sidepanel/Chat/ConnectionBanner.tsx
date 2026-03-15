@@ -1,14 +1,14 @@
-import React, { useState } from "react"
+import React, { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Alert, Button, Input, message } from "antd"
-import { Settings, RefreshCw, WifiOff, KeyRound, Loader2, Check, Eye, EyeOff } from "lucide-react"
+import { Settings, RefreshCw, WifiOff, KeyRound, Loader2, Check } from "lucide-react"
 import {
   useConnectionState,
   useConnectionUxState,
   useConnectionActions
 } from "@/hooks/useConnectionState"
 import { ConnectionPhase } from "@/types/connection"
-import { useStorage } from "@plasmohq/storage/hook"
+import { tldwClient, type TldwConfig } from "@/services/tldw/TldwApiClient"
 
 type ConnectionBannerProps = {
   className?: string
@@ -30,20 +30,39 @@ export const ConnectionBanner: React.FC<ConnectionBannerProps> = ({
   const { t } = useTranslation(["sidepanel", "settings", "common"])
   const { phase, isConnected, serverUrl } = useConnectionState()
   const { uxState, isChecking, hasCompletedFirstRun } = useConnectionUxState()
-  const { checkOnce } = useConnectionActions()
+  const { checkOnce, setConfigPartial } = useConnectionActions()
 
   // Inline API key form state
   const [showApiKeyForm, setShowApiKeyForm] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState("")
   const [showApiKey, setShowApiKey] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [, setStoredApiKey] = useStorage("tldwApiKey", "")
+  const [authMode, setAuthMode] = useState<TldwConfig["authMode"]>("single-user")
+
+  useEffect(() => {
+    let cancelled = false
+
+    void tldwClient
+      .getConfig()
+      .then((config) => {
+        if (!cancelled && config?.authMode) {
+          setAuthMode(config.authMode)
+        }
+      })
+      .catch(() => undefined)
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Don't show banner if connected
   const isConnectionReady = isConnected && phase === ConnectionPhase.CONNECTED
   if (isConnectionReady) {
     return null
   }
+
+  const canInlineRepairApiKey = uxState === "error_auth" && authMode === "single-user"
 
   const openSettings = () => {
     try {
@@ -67,14 +86,13 @@ export const ConnectionBanner: React.FC<ConnectionBannerProps> = ({
 
     setIsSaving(true)
     try {
-      await setStoredApiKey(apiKeyInput.trim())
+      await setConfigPartial({
+        apiKey: apiKeyInput.trim()
+      })
       message.success(t("sidepanel:connectionBanner.apiKeySaved", "API key saved"))
       setShowApiKeyForm(false)
       setApiKeyInput("")
-      // Trigger a connection check
-      setTimeout(() => {
-        void checkOnce()
-      }, 500)
+      void checkOnce()
     } catch (err) {
       message.error(t("sidepanel:connectionBanner.apiKeySaveError", "Failed to save API key"))
     } finally {
@@ -183,7 +201,7 @@ export const ConnectionBanner: React.FC<ConnectionBannerProps> = ({
               </p>
 
               {/* Inline API key form for auth errors */}
-              {uxState === "error_auth" && showApiKeyForm ? (
+              {canInlineRepairApiKey && showApiKeyForm ? (
                 <div className="mt-3 space-y-2">
                   <div className="flex items-center gap-2">
                     <Input.Password
@@ -225,7 +243,7 @@ export const ConnectionBanner: React.FC<ConnectionBannerProps> = ({
               ) : (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   {/* Quick fix button for auth errors */}
-                  {uxState === "error_auth" && (
+                  {canInlineRepairApiKey && (
                     <Button
                       size="small"
                       type="primary"
@@ -250,7 +268,7 @@ export const ConnectionBanner: React.FC<ConnectionBannerProps> = ({
                   {config.showSettings && (
                     <Button
                       size="small"
-                      type={uxState === "error_auth" ? "default" : "primary"}
+                      type={canInlineRepairApiKey ? "default" : "primary"}
                       icon={<Settings className="size-3" />}
                       onClick={openSettings}
                       title={t("sidepanel:connectionBanner.openSettings", "Open Settings")}

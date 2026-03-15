@@ -156,12 +156,14 @@ describe('useWatchlistActions', () => {
       );
     });
 
-    expect(setError).toHaveBeenCalledWith('');
-    expect(setSuccess).toHaveBeenCalledWith('Watchlist created successfully');
-    expect(onReloadRequested).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('dialog-open').textContent).toBe('false');
-    expect(screen.getByTestId('draft-name').textContent).toBe('');
-    expect(screen.getByTestId('draft-target').textContent).toBe('');
+    await waitFor(() => {
+      expect(setError).toHaveBeenCalledWith('');
+      expect(setSuccess).toHaveBeenCalledWith('Watchlist created successfully');
+      expect(onReloadRequested).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('dialog-open').textContent).toBe('false');
+      expect(screen.getByTestId('draft-name').textContent).toBe('');
+      expect(screen.getByTestId('draft-target').textContent).toBe('');
+    });
   });
 
   it('aborts deletion when confirmation is declined', async () => {

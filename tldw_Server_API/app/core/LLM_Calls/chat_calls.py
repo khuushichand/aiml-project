@@ -23,6 +23,7 @@ from typing import Any, Optional
 #
 # Import Local libraries
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.deprecations import log_runtime_deprecation
 
 #
 # Import 3rd-Party Libraries
@@ -74,6 +75,13 @@ class _SessionShim:
 
     def post(self, url, *, headers=None, json=None, stream: bool = False, timeout=None, **kwargs):
         if stream:
+            log_runtime_deprecation(
+                "llm_chat_legacy_session",
+                message=(
+                    "LLM chat streaming path used legacy requests Session compatibility "
+                    "facade for iter_lines behavior."
+                ),
+            )
             # For streaming, use legacy requests session to preserve iter_lines semantics
             self._delegate_session = _legacy_create_session_with_retries(
                 total=self._retry.attempts,
@@ -118,6 +126,12 @@ def create_session_with_retries(
     """
     import os as _os
     if _os.getenv("PYTEST_CURRENT_TEST"):
+        log_runtime_deprecation(
+            "llm_chat_legacy_session",
+            message=(
+                "LLM chat used legacy session compatibility path under pytest runtime."
+            ),
+        )
         return _legacy_create_session_with_retries(
             total=total,
             backoff_factor=backoff_factor,

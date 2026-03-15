@@ -22,6 +22,19 @@ describe("notes export utils", () => {
     expect(markdown).toContain("Body text")
   })
 
+  it("escapes backslashes and control characters in YAML frontmatter values", () => {
+    const markdown = buildSingleNoteMarkdown({
+      id: 8,
+      title: 'Path "C:\\notes\\today"\nline',
+      content: "Body",
+      keywords: ['team\\alpha', 'line\nbreak']
+    })
+
+    expect(markdown).toContain('title: "Path \\"C:\\\\notes\\\\today\\"\\nline"')
+    expect(markdown).toContain('  - "team\\\\alpha"')
+    expect(markdown).toContain('  - "line\\nbreak"')
+  })
+
   it("builds normalized single-note JSON payload", () => {
     const payload = buildSingleNoteJson({
       id: "n-1",

@@ -10,6 +10,7 @@ import {
 import { generateBranchMessage } from "@/db/dexie/branch"
 import { getPromptById, getSessionFiles, UploadedFile } from "@/db"
 import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
+import { normalizeConversationState } from "@/utils/conversation-state"
 import type { NotificationInstance } from "antd/es/notification/interface"
 
 export const createRegenerateLastMessage = ({
@@ -367,17 +368,26 @@ export const createBranchMessage = ({
 
         let resolvedTitle = (chatTitle || "").trim()
         let resolvedCharacterId = characterId ?? null
-        if (resolvedCharacterId == null) {
-          try {
-            const chat = await tldwClient.getChat(serverChatId)
-            if (!resolvedTitle) {
-              resolvedTitle = (chat?.title || "").trim()
-            }
-            resolvedCharacterId =
-              (chat as any)?.character_id ?? (chat as any)?.characterId ?? null
-          } catch (e) {
-            console.log("[branch] server metadata fetch failed", e)
+        let resolvedState = normalizeConversationState(
+          serverChatState || "in-progress"
+        )
+        try {
+          const chat = await tldwClient.getChat(serverChatId)
+          if (!resolvedTitle) {
+            resolvedTitle = (chat?.title || "").trim()
           }
+          const chatCharacterId =
+            (chat as any)?.character_id ?? (chat as any)?.characterId ?? null
+          if (chatCharacterId != null) {
+            resolvedCharacterId = chatCharacterId
+          }
+          resolvedState = normalizeConversationState(
+            (chat as any)?.state ??
+              (chat as any)?.conversation_state ??
+              resolvedState
+          )
+        } catch (e) {
+          console.log("[branch] server metadata fetch failed", e)
         }
 
         const originalTitle =
@@ -389,10 +399,14 @@ export const createBranchMessage = ({
             : originalTitle
         const branchTitle = `${base} [${shortId}] · msg #${index + 1}`
 
+        if (resolvedCharacterId == null) {
+          throw new Error("Cannot branch server chat without character_id")
+        }
+
         const payload: Record<string, any> = {
           title: branchTitle,
           parent_conversation_id: serverChatId,
-          state: serverChatState || "in-progress",
+          state: resolvedState,
           topic_label: serverChatTopic || undefined,
           cluster_id: serverChatClusterId || undefined,
           source: serverChatSource || undefined,

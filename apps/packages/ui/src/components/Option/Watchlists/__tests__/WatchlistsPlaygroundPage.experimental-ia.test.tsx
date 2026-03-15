@@ -28,9 +28,18 @@ const mocks = vi.hoisted(() => {
     recordWatchlistsIaExperimentTelemetryMock: vi.fn(),
     trackWatchlistsOnboardingTelemetryMock: vi.fn(),
     notificationDestroyMock: vi.fn(),
+    openSourceFormMock: vi.fn(),
     state
   }
 })
+
+const connectionMocks = vi.hoisted(() => ({
+  useConnectionUxState: vi.fn()
+}))
+
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -42,7 +51,8 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
-vi.mock("antd", () => {
+vi.mock("antd", async () => {
+  const actual = await vi.importActual<typeof import("antd")>("antd")
   const Alert = ({ title, description, closable, onClose }: any) => (
     <div>
       <div>{title}</div>
@@ -74,14 +84,31 @@ vi.mock("antd", () => {
         <div>{footer}</div>
       </div>
     ) : null
+  const Drawer = ({ open, title, children }: any) =>
+    open ? (
+      <div>
+        <h3>{title}</h3>
+        {children}
+      </div>
+    ) : null
 
   const Empty = ({ description }: any) => <div>{description}</div>
+  const Tooltip = ({ children }: any) => <>{children}</>
   const Button = ({ children, onClick, disabled, ...rest }: any) => (
     <button type="button" onClick={() => onClick?.()} disabled={Boolean(disabled)} {...rest}>
       {children}
     </button>
   )
-  return { Alert, Tabs, Empty, Button, Modal }
+  const Switch = ({ checked, onChange, ...rest }: any) => (
+    <button
+      type="button"
+      aria-label={rest["aria-label"] || "Toggle"}
+      aria-pressed={Boolean(checked)}
+      onClick={() => onChange?.(!checked)}
+      {...rest}
+    />
+  )
+  return { ...actual, Alert, Tabs, Empty, Button, Modal, Drawer, Tooltip, Switch }
 })
 
 vi.mock("@/hooks/useAntdNotification", () => ({
@@ -96,6 +123,20 @@ vi.mock("@/hooks/useAntdNotification", () => ({
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
 }))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => connectionMocks.useConnectionUxState()
+}))
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: () => navigationMocks.navigate
+  }
+})
 
 vi.mock("@/services/watchlists", () => ({
   fetchWatchlistRuns: (...args: any[]) => mocks.fetchWatchlistRunsMock(...args),
@@ -113,6 +154,7 @@ vi.mock("@/store/watchlists", () => ({
     selector({
       activeTab: mocks.state.activeTab,
       setActiveTab: mocks.state.setActiveTab,
+      openSourceForm: mocks.openSourceFormMock,
       openRunDetail: vi.fn(),
       resetStore: vi.fn()
     })
@@ -142,10 +184,17 @@ vi.mock("../SettingsTab/SettingsTab", () => ({
 vi.mock("../ItemsTab/ItemsTab", () => ({
   ItemsTab: () => <div>Items tab</div>
 }))
+vi.mock("../shared/WatchlistsHealthBar", () => ({
+  WatchlistsHealthBar: () => <div data-testid="watchlists-health-bar" />
+}))
 
 describe("WatchlistsPlaygroundPage experimental IA", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "connected_ok",
+      hasCompletedFirstRun: true
+    })
     mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.recordWatchlistsIaExperimentTelemetryMock.mockResolvedValue({ accepted: true })
     mocks.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)
@@ -160,6 +209,9 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     localStorage.removeItem(IA_STORAGE_KEY)
     localStorage.removeItem(IA_ROLLOUT_STORAGE_KEY)
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
+    delete (
+      window as { __TLDW_WATCHLISTS_IA_EXPERIMENT_ROLLOUT_PERCENT__?: unknown }
+    ).__TLDW_WATCHLISTS_IA_EXPERIMENT_ROLLOUT_PERCENT__
   })
 
   it("shows task-centered primary tabs and exposes implementation tabs via More views", () => {
@@ -211,6 +263,17 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     expect(screen.getByTestId("watchlists-task-view-briefings")).toHaveAttribute("aria-pressed", "true")
   })
 
+  it("routes the new-entity keyboard shortcut to feeds before opening the source form", () => {
+    mocks.state.activeTab = "items"
+
+    render(<WatchlistsPlaygroundPage />)
+
+    fireEvent.keyDown(document, { key: "n" })
+
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("sources")
+    expect(mocks.openSourceFormMock).toHaveBeenCalledTimes(1)
+  })
+
   it("records tab transition telemetry when experiment mode is active", () => {
     const { rerender } = render(<WatchlistsPlaygroundPage />)
 
@@ -228,10 +291,12 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     expect(mocks.recordWatchlistsIaExperimentTelemetryMock).toHaveBeenCalled()
   })
 
-  it("uses the legacy tab map and records baseline telemetry when experiment is disabled", () => {
+  it("can opt into the full tab map and records baseline telemetry when experiment is disabled", () => {
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = false
 
     render(<WatchlistsPlaygroundPage />)
+
+    fireEvent.click(screen.getByTestId("watchlists-show-all-views-toggle"))
 
     expect(screen.getByTestId("watchlists-tab-jobs")).toBeInTheDocument()
     expect(screen.getByTestId("watchlists-tab-items")).toBeInTheDocument()
@@ -245,12 +310,11 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     )
   })
 
-  it("honors persisted rollout assignment when runtime override is absent", () => {
+  it("honors rollout percentage when runtime override is absent", () => {
     delete (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__
-    localStorage.setItem(
-      IA_ROLLOUT_STORAGE_KEY,
-      JSON.stringify({ version: 1, variant: "experimental" })
-    )
+    ;(
+      window as { __TLDW_WATCHLISTS_IA_EXPERIMENT_ROLLOUT_PERCENT__?: unknown }
+    ).__TLDW_WATCHLISTS_IA_EXPERIMENT_ROLLOUT_PERCENT__ = 100
 
     render(<WatchlistsPlaygroundPage />)
 
@@ -259,5 +323,7 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
 
     const payload = JSON.parse(localStorage.getItem(IA_STORAGE_KEY) || "{}")
     expect(payload.variant).toBe("experimental")
+    const rolloutSnapshot = JSON.parse(localStorage.getItem(IA_ROLLOUT_STORAGE_KEY) || "{}")
+    expect(rolloutSnapshot.variant).toBe("experimental")
   })
 })

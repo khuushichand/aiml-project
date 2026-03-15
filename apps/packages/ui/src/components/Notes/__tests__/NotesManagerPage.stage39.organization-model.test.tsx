@@ -289,8 +289,15 @@ describe("NotesManagerPage stage 39 organization model", () => {
       expect(screen.getByTestId("notes-notebook-select")).toBeInTheDocument()
     })
 
-    fireEvent.change(screen.getByTestId("notes-notebook-select"), {
-      target: { value: "11" }
+    // Select option from Ant Design Select
+    const notebookContainer = screen.getByTestId("notes-notebook-select")
+    const notebookContent = notebookContainer.querySelector('.ant-select-content') || notebookContainer
+    fireEvent.mouseDown(notebookContent)
+    await waitFor(() => {
+      const options = document.querySelectorAll('.ant-select-item-option')
+      const match = Array.from(options).find(el => el.textContent === 'Research (2)')
+      if (!match) throw new Error('Option "Research (2)" not found')
+      fireEvent.click(match)
     })
 
     await waitFor(() => {
@@ -305,7 +312,7 @@ describe("NotesManagerPage stage 39 organization model", () => {
     })
 
     expect(screen.getByTestId("notes-active-filter-summary-details")).toHaveTextContent(
-      "Notebook: Research"
+      "Smart collection: Research"
     )
   })
 
@@ -314,14 +321,20 @@ describe("NotesManagerPage stage 39 organization model", () => {
     renderPage()
 
     fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
-    const applyFiltersButton = await screen.findByRole("button", { name: "Apply filters" })
-    const pickerDialog = applyFiltersButton.closest(".ant-modal") || document.body
+    const modalBody = await screen.findByTestId("notes-keyword-picker-modal")
+    const pickerDialog =
+      (modalBody.closest(".ant-modal") as HTMLElement | null) ??
+      (modalBody.closest(".ant-modal-root") as HTMLElement | null) ??
+      document.body
     fireEvent.click(within(pickerDialog).getByText(/^research\b/i))
-    fireEvent.click(screen.getByRole("button", { name: "Apply filters" }))
+    fireEvent.click(within(pickerDialog).getByRole("button", { name: "Apply filters" }))
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-save-notebook")).not.toBeDisabled()
+    })
     fireEvent.click(screen.getByTestId("notes-save-notebook"))
 
     await waitFor(() => {
-      expect(mockMessageSuccess).toHaveBeenCalledWith('Saved notebook "Research Notebook"')
+      expect(mockMessageSuccess).toHaveBeenCalledWith('Saved smart collection "Research Notebook"')
     })
 
     expect(mockBgRequest).toHaveBeenCalledWith(
@@ -340,7 +353,7 @@ describe("NotesManagerPage stage 39 organization model", () => {
     })
     expect(notebookPersistCall).toBeTruthy()
     expect(screen.getByTestId("notes-active-filter-summary-details")).toHaveTextContent(
-      "Notebook: Research Notebook"
+      "Smart collection: Research Notebook"
     )
 
     promptSpy.mockRestore()

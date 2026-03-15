@@ -56,4 +56,21 @@ describe("quizzes service", () => {
       })
     )
   })
+
+  it("sends sources[] in quiz generation body", async () => {
+    await generateQuiz({
+      num_questions: 8,
+      sources: [{ source_type: "note", source_id: "note-1" }]
+    })
+
+    expect(mockBgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/quizzes/generate",
+        method: "POST",
+        body: expect.objectContaining({
+          sources: [{ source_type: "note", source_id: "note-1" }]
+        })
+      })
+    )
+  })
 })

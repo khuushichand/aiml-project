@@ -7,6 +7,38 @@ import {
   inferProviderFromModel
 } from "@/utils/provider-registry"
 
+const IMAGE_MODEL_HINTS = [
+  "image",
+  "dall-e",
+  "dalle",
+  "flux",
+  "stable-diffusion",
+  "sdxl",
+  "midjourney",
+  "recraft",
+  "pixart",
+  "playground",
+  "kolors",
+  "imagen"
+]
+
+const VIDEO_MODEL_HINTS = ["video", "veo", "sora", "kling", "hunyuan-video"]
+
+const AUDIO_MODEL_HINTS = [
+  "whisper",
+  "transcribe",
+  "asr",
+  "tts",
+  "speech",
+  "audio",
+  "voice"
+]
+
+const NON_CHAT_MODEL_HINTS = ["rerank", "moderation", "safety"]
+
+const hasAnyHint = (value: string, hints: string[]): boolean =>
+  hints.some((hint) => value.includes(hint))
+
 export interface ModelInfo {
   id: string
   name: string
@@ -24,7 +56,9 @@ export interface ModelInfo {
 export class TldwModelsService {
   private cachedModels: ModelInfo[] | null = null
   private lastFetchTime: number = 0
+  private lastForcedFetchTime: number = 0
   private readonly CACHE_DURATION = 15 * 60 * 1000 // 15 minutes
+  private readonly FORCE_REFRESH_COOLDOWN = 30 * 1000
   private readonly CACHE_KEY = "tldwModelsCache"
   private readonly CACHE_SCHEMA_VERSION = 2
   private storage = createSafeStorage({ area: "local" })
@@ -113,6 +147,7 @@ export class TldwModelsService {
     if (this.cacheScopeKey && this.cacheScopeKey !== scopeKey) {
       this.cachedModels = null
       this.lastFetchTime = 0
+      this.lastForcedFetchTime = 0
     }
     this.cacheScopeKey = scopeKey
 
@@ -120,6 +155,13 @@ export class TldwModelsService {
     
     // Return cached models if available and not expired
     if (!forceRefresh && this.cachedModels && (now - this.lastFetchTime) < this.CACHE_DURATION) {
+      return this.cachedModels
+    }
+    if (
+      forceRefresh &&
+      this.cachedModels &&
+      (now - this.lastForcedFetchTime) < this.FORCE_REFRESH_COOLDOWN
+    ) {
       return this.cachedModels
     }
     if (this.inFlightFetch) {
@@ -139,6 +181,9 @@ export class TldwModelsService {
       // Transform tldw models to our format
       this.cachedModels = models.map(model => this.transformModel(model))
       this.lastFetchTime = Date.now()
+      if (forceRefresh) {
+        this.lastForcedFetchTime = this.lastFetchTime
+      }
       await this.persistCache()
       
       return this.cachedModels
@@ -175,6 +220,19 @@ export class TldwModelsService {
   ): Promise<ModelInfo[]> {
     const models = await this.getModels(forceRefresh, options)
     return models.filter(m => m.type === 'chat')
+  }
+
+  async getCachedChatModels(): Promise<ModelInfo[]> {
+    await this.ensureStorageLoaded()
+    const config = await tldwClient.getConfig().catch(() => null)
+    const scopeKey = this.buildCacheScope(config)
+    if (this.cacheScopeKey && this.cacheScopeKey !== scopeKey) {
+      this.cachedModels = null
+      this.lastFetchTime = 0
+      this.lastForcedFetchTime = 0
+    }
+    this.cacheScopeKey = scopeKey
+    return (this.cachedModels || []).filter((model) => model.type === "chat")
   }
 
   /**
@@ -273,14 +331,30 @@ export class TldwModelsService {
       type = 'image'
     } else if (declaredType === 'embedding') {
       type = 'embedding'
+    } else if (declaredType === 'video' || declaredType === 'audio') {
+      type = 'other'
     } else if (outputMods.includes('image')) {
       type = 'image'
     } else if (outputMods.includes('embedding')) {
       type = 'embedding'
     } else if (capsNormalized.includes('image') || capsNormalized.includes('image_generation')) {
       type = 'image'
+    } else if (
+      hasAnyHint(nameLower, IMAGE_MODEL_HINTS) ||
+      hasAnyHint(tldwModel.id.toLowerCase(), IMAGE_MODEL_HINTS)
+    ) {
+      type = 'image'
     } else if (nameLower.includes('embed') || nameLower.includes('embedding')) {
       type = 'embedding'
+    } else if (
+      hasAnyHint(nameLower, VIDEO_MODEL_HINTS) ||
+      hasAnyHint(tldwModel.id.toLowerCase(), VIDEO_MODEL_HINTS) ||
+      hasAnyHint(nameLower, AUDIO_MODEL_HINTS) ||
+      hasAnyHint(tldwModel.id.toLowerCase(), AUDIO_MODEL_HINTS) ||
+      hasAnyHint(nameLower, NON_CHAT_MODEL_HINTS) ||
+      hasAnyHint(tldwModel.id.toLowerCase(), NON_CHAT_MODEL_HINTS)
+    ) {
+      type = 'other'
     }
 
     // Extract provider from model ID or name if not provided
@@ -307,6 +381,7 @@ export class TldwModelsService {
   async clearCache(): Promise<void> {
     this.cachedModels = null
     this.lastFetchTime = 0
+    this.lastForcedFetchTime = 0
     this.inFlightFetch = null
     this.cacheScopeKey = null
     await this.persistCache()
