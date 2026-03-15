@@ -2072,6 +2072,94 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: `/api/v1/admin/router-analytics/providers${query}`, method: "GET" })
   }
 
+  // ── Admin Organizations & Teams ──
+
+  async createOrg(payload: { name: string; slug?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/orgs",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listOrgs(params?: { search?: string; limit?: number; offset?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/orgs${query}`, method: "GET" })
+  }
+
+  async listOrgMembers(orgId: number, params?: { role?: string; status?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/orgs/${orgId}/members${query}`, method: "GET" })
+  }
+
+  async addOrgMember(orgId: number, payload: { user_id: number; role?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/orgs/${orgId}/members`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async removeOrgMember(orgId: number, userId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/orgs/${orgId}/members/${userId}`,
+      method: "DELETE"
+    })
+  }
+
+  async updateOrgMemberRole(orgId: number, userId: number, payload: { role: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/orgs/${orgId}/members/${userId}`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async createTeam(orgId: number, payload: { name: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/orgs/${orgId}/teams`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listTeams(orgId: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/admin/orgs/${orgId}/teams`, method: "GET" })
+  }
+
+  async listTeamMembers(teamId: number): Promise<any> {
+    return await bgRequest<any>({ path: `/api/v1/admin/teams/${teamId}/members`, method: "GET" })
+  }
+
+  async addTeamMember(teamId: number, payload: { user_id: number; role?: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/teams/${teamId}/members`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async removeTeamMember(teamId: number, userId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/teams/${teamId}/members/${userId}`,
+      method: "DELETE"
+    })
+  }
+
+  async updateTeamMemberRole(teamId: number, userId: number, payload: { role: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/teams/${teamId}/members/${userId}`,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
