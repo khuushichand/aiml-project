@@ -2126,6 +2126,65 @@ def migration_070_add_mcp_capability_adapter_mappings(conn: sqlite3.Connection) 
     logger.info("Migration 070: Added MCP capability adapter mapping schema")
 
 
+def migration_071_add_governance_pack_upgrade_lineage(conn: sqlite3.Connection) -> None:
+    """Add governance-pack install-state and upgrade-lineage tracking."""
+
+    governance_pack_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_governance_packs)").fetchall()
+    }
+    if "is_active_install" not in governance_pack_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_packs ADD COLUMN is_active_install INTEGER NOT NULL DEFAULT 1"
+        )
+    if "superseded_by_governance_pack_id" not in governance_pack_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_packs ADD COLUMN superseded_by_governance_pack_id INTEGER"
+        )
+    if "installed_from_upgrade_id" not in governance_pack_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_packs ADD COLUMN installed_from_upgrade_id INTEGER"
+        )
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_active_scope "
+        "ON mcp_governance_packs(pack_id, owner_scope_type, IFNULL(owner_scope_id, -1)) "
+        "WHERE is_active_install = 1"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_upgrades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pack_id TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            from_governance_pack_id INTEGER NOT NULL,
+            to_governance_pack_id INTEGER NOT NULL,
+            from_pack_version TEXT NOT NULL,
+            to_pack_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            planned_by INTEGER,
+            executed_by INTEGER,
+            planner_inputs_fingerprint TEXT,
+            adapter_state_fingerprint TEXT,
+            plan_summary_json TEXT NOT NULL DEFAULT '{}',
+            accepted_resolutions_json TEXT NOT NULL DEFAULT '{}',
+            failure_summary TEXT,
+            planned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            executed_at TIMESTAMP,
+            FOREIGN KEY (from_governance_pack_id) REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            FOREIGN KEY (to_governance_pack_id) REFERENCES mcp_governance_packs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_upgrades_scope "
+        "ON mcp_governance_pack_upgrades(pack_id, owner_scope_type, owner_scope_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 071: Added governance-pack upgrade lineage schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -3963,6 +4022,11 @@ def get_authnz_migrations() -> list[Migration]:
             70,
             "Add MCP capability adapter mapping schema",
             migration_070_add_mcp_capability_adapter_mappings,
+        ),
+        Migration(
+            71,
+            "Add governance pack upgrade lineage schema",
+            migration_071_add_governance_pack_upgrade_lineage,
         ),
     ]
 

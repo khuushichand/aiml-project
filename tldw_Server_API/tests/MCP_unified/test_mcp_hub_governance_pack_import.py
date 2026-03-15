@@ -232,6 +232,75 @@ async def test_import_governance_pack_materializes_immutable_base_objects_with_p
 
 
 @pytest.mark.asyncio
+async def test_governance_pack_repo_tracks_active_install_state_and_upgrade_lineage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo = await _make_repo(tmp_path, monkeypatch)
+
+    created = await repo.create_governance_pack(
+        pack_id="researcher-pack",
+        pack_version="1.0.0",
+        pack_schema_version=1,
+        capability_taxonomy_version=1,
+        adapter_contract_version=1,
+        title="Researcher Pack",
+        description="Initial install",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        bundle_digest="a" * 64,
+        manifest={"pack_id": "researcher-pack", "pack_version": "1.0.0"},
+        normalized_ir={"profiles": []},
+        actor_id=7,
+    )
+
+    assert created["is_active_install"] is True
+    assert created["superseded_by_governance_pack_id"] is None
+
+    upgraded = await repo.create_governance_pack(
+        pack_id="researcher-pack",
+        pack_version="1.1.0",
+        pack_schema_version=1,
+        capability_taxonomy_version=1,
+        adapter_contract_version=1,
+        title="Researcher Pack",
+        description="Upgrade target",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        bundle_digest="b" * 64,
+        manifest={"pack_id": "researcher-pack", "pack_version": "1.1.0"},
+        normalized_ir={"profiles": []},
+        actor_id=7,
+        is_active_install=False,
+    )
+
+    lineage = await repo.create_governance_pack_upgrade(
+        pack_id="researcher-pack",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        from_governance_pack_id=int(created["id"]),
+        to_governance_pack_id=int(upgraded["id"]),
+        from_pack_version="1.0.0",
+        to_pack_version="1.1.0",
+        status="planned",
+        planned_by=7,
+        plan_summary={"changed_objects": 2},
+    )
+
+    assert lineage["from_pack_version"] == "1.0.0"
+    assert lineage["to_pack_version"] == "1.1.0"
+    assert lineage["status"] == "planned"
+
+    history = await repo.list_governance_pack_upgrades(
+        pack_id="researcher-pack",
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    assert [item["to_pack_version"] for item in history] == ["1.1.0"]
+
+
+@pytest.mark.asyncio
 async def test_import_governance_pack_rejects_duplicate_scope_identity(
     tmp_path,
     monkeypatch,

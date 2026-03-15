@@ -382,6 +382,9 @@ class McpHubRepo:
         if row is None:
             return None
         out = dict(row)
+        out["is_active_install"] = _to_bool(out.get("is_active_install"))
+        out["superseded_by_governance_pack_id"] = out.get("superseded_by_governance_pack_id")
+        out["installed_from_upgrade_id"] = out.get("installed_from_upgrade_id")
         out["manifest"] = _load_json_dict(out.pop("manifest_json", None))
         out["normalized_ir"] = _load_json_dict(out.pop("normalized_ir_json", None))
         return out
@@ -394,6 +397,15 @@ class McpHubRepo:
         out["object_type"] = str(out.get("object_type") or "").strip().lower()
         out["object_id"] = str(out.get("object_id") or "").strip()
         out["source_object_id"] = str(out.get("source_object_id") or "").strip()
+        return out
+
+    @staticmethod
+    def _normalize_governance_pack_upgrade_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["plan_summary"] = _load_json_dict(out.pop("plan_summary_json", None))
+        out["accepted_resolutions"] = _load_json_dict(out.pop("accepted_resolutions_json", None))
         return out
 
     @staticmethod
@@ -444,18 +456,22 @@ class McpHubRepo:
         manifest: dict[str, Any],
         normalized_ir: dict[str, Any],
         actor_id: int | None,
+        is_active_install: bool = True,
     ) -> dict[str, Any]:
         scope_type = _normalize_scope_type(owner_scope_type)
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_install_value: bool | int = (
+            is_active_install if getattr(self.db_pool, "pool", None) is not None else int(is_active_install)
+        )
         await self.db_pool.execute(
             """
             INSERT INTO mcp_governance_packs (
                 pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
                 adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
-                bundle_digest, manifest_json, normalized_ir_json, created_by, updated_by,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                bundle_digest, manifest_json, normalized_ir_json, is_active_install, created_by,
+                updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(pack_id or "").strip(),
@@ -470,6 +486,7 @@ class McpHubRepo:
                 str(bundle_digest or "").strip(),
                 json.dumps(manifest or {}),
                 json.dumps(normalized_ir or {}),
+                active_install_value,
                 actor_id,
                 actor_id,
                 ts,
@@ -508,7 +525,8 @@ class McpHubRepo:
             """
             SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
                    adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
-                   bundle_digest, manifest_json, normalized_ir_json, created_by, updated_by,
+                   bundle_digest, manifest_json, normalized_ir_json, is_active_install,
+                   superseded_by_governance_pack_id, installed_from_upgrade_id, created_by, updated_by,
                    created_at, updated_at
             FROM mcp_governance_packs
             WHERE id = ?
@@ -530,7 +548,8 @@ class McpHubRepo:
             """
             SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
                    adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
-                   bundle_digest, manifest_json, normalized_ir_json, created_by, updated_by,
+                   bundle_digest, manifest_json, normalized_ir_json, is_active_install,
+                   superseded_by_governance_pack_id, installed_from_upgrade_id, created_by, updated_by,
                    created_at, updated_at
             FROM mcp_governance_packs
             WHERE pack_id = ?
@@ -569,7 +588,8 @@ class McpHubRepo:
             """
             SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
                    adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
-                   bundle_digest, manifest_json, normalized_ir_json, created_by, updated_by,
+                   bundle_digest, manifest_json, normalized_ir_json, is_active_install,
+                   superseded_by_governance_pack_id, installed_from_upgrade_id, created_by, updated_by,
                    created_at, updated_at
             FROM mcp_governance_packs
             WHERE (? IS NULL OR owner_scope_type = ?)
@@ -595,6 +615,137 @@ class McpHubRepo:
         )
         rowcount = getattr(cursor, "rowcount", 0)
         return bool(rowcount and rowcount > 0)
+
+    async def create_governance_pack_upgrade(
+        self,
+        *,
+        pack_id: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        from_governance_pack_id: int,
+        to_governance_pack_id: int,
+        from_pack_version: str,
+        to_pack_version: str,
+        status: str,
+        planned_by: int | None = None,
+        executed_by: int | None = None,
+        planner_inputs_fingerprint: str | None = None,
+        adapter_state_fingerprint: str | None = None,
+        plan_summary: dict[str, Any] | None = None,
+        accepted_resolutions: dict[str, Any] | None = None,
+        failure_summary: str | None = None,
+        executed_at: datetime | str | None = None,
+    ) -> dict[str, Any]:
+        scope_type = _normalize_scope_type(owner_scope_type)
+        now = datetime.now(timezone.utc)
+        planned_ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        executed_ts = executed_at
+        if getattr(self.db_pool, "pool", None) is None and isinstance(executed_at, datetime):
+            executed_ts = executed_at.isoformat()
+        await self.db_pool.execute(
+            """
+            INSERT INTO mcp_governance_pack_upgrades (
+                pack_id, owner_scope_type, owner_scope_id, from_governance_pack_id, to_governance_pack_id,
+                from_pack_version, to_pack_version, status, planned_by, executed_by,
+                planner_inputs_fingerprint, adapter_state_fingerprint, plan_summary_json,
+                accepted_resolutions_json, failure_summary, planned_at, executed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(pack_id or "").strip(),
+                scope_type,
+                owner_scope_id,
+                int(from_governance_pack_id),
+                int(to_governance_pack_id),
+                str(from_pack_version or "").strip(),
+                str(to_pack_version or "").strip(),
+                str(status or "").strip(),
+                planned_by,
+                executed_by,
+                str(planner_inputs_fingerprint).strip() if planner_inputs_fingerprint else None,
+                str(adapter_state_fingerprint).strip() if adapter_state_fingerprint else None,
+                json.dumps(plan_summary or {}),
+                json.dumps(accepted_resolutions or {}),
+                failure_summary,
+                planned_ts,
+                executed_ts,
+            ),
+        )
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id
+            FROM mcp_governance_pack_upgrades
+            WHERE pack_id = ?
+              AND owner_scope_type = ?
+              AND (
+                (owner_scope_id IS NULL AND ? IS NULL)
+                OR owner_scope_id = ?
+              )
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (
+                str(pack_id or "").strip(),
+                scope_type,
+                owner_scope_id,
+                owner_scope_id,
+            ),
+        )
+        if not row:
+            return {}
+        created = await self.get_governance_pack_upgrade(int(row["id"]))
+        return created or {}
+
+    async def get_governance_pack_upgrade(self, governance_pack_upgrade_id: int) -> dict[str, Any] | None:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, pack_id, owner_scope_type, owner_scope_id, from_governance_pack_id,
+                   to_governance_pack_id, from_pack_version, to_pack_version, status,
+                   planned_by, executed_by, planner_inputs_fingerprint, adapter_state_fingerprint,
+                   plan_summary_json, accepted_resolutions_json, failure_summary,
+                   planned_at, executed_at
+            FROM mcp_governance_pack_upgrades
+            WHERE id = ?
+            """,
+            (int(governance_pack_upgrade_id),),
+        )
+        return self._normalize_governance_pack_upgrade_row(self._row_to_dict(row) if row else None)
+
+    async def list_governance_pack_upgrades(
+        self,
+        *,
+        pack_id: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> list[dict[str, Any]]:
+        scope_type = _normalize_scope_type(owner_scope_type)
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, pack_id, owner_scope_type, owner_scope_id, from_governance_pack_id,
+                   to_governance_pack_id, from_pack_version, to_pack_version, status,
+                   planned_by, executed_by, planner_inputs_fingerprint, adapter_state_fingerprint,
+                   plan_summary_json, accepted_resolutions_json, failure_summary,
+                   planned_at, executed_at
+            FROM mcp_governance_pack_upgrades
+            WHERE pack_id = ?
+              AND owner_scope_type = ?
+              AND (
+                (owner_scope_id IS NULL AND ? IS NULL)
+                OR owner_scope_id = ?
+              )
+            ORDER BY id
+            """,
+            (
+                str(pack_id or "").strip(),
+                scope_type,
+                owner_scope_id,
+                owner_scope_id,
+            ),
+        )
+        return [
+            self._normalize_governance_pack_upgrade_row(self._row_to_dict(row)) or {}
+            for row in rows
+        ]
 
     async def create_governance_pack_object(
         self,
