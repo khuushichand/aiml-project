@@ -97,6 +97,19 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
+    ConflictError,
+    DatabaseError,
+    InputError,
+    SchemaError,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.rows import (
+    BackendCursorAdapter,
+    RowAdapter,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.execution import (
+    close_sqlite_ephemeral,
+)
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     convert_sqlite_placeholders_to_postgres,
@@ -109,36 +122,6 @@ from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 from tldw_Server_API.app.core.testing import is_test_mode
 
 # Use application-wide logging configuration; avoid configuring here.
-
-# --- Custom Exceptions ---
-class DatabaseError(Exception):
-    """Base exception for database related errors."""
-    pass
-
-class SchemaError(DatabaseError):
-    """Exception for schema version mismatches or migration failures."""
-    pass
-
-class InputError(ValueError):
-    """Custom exception for input validation errors."""
-    pass
-
-class ConflictError(DatabaseError):
-    """Indicates a conflict due to concurrent modification (version mismatch)."""
-    def __init__(self, message="Conflict detected: Record modified concurrently.", entity=None, identifier=None):
-        super().__init__(message)
-        self.entity = entity
-        self.identifier = identifier  # Can be id or uuid
-
-    def __str__(self):
-        base = super().__str__()
-        details = []
-        if self.entity:
-            details.append(f"Entity: {self.entity}")
-        if self.identifier:
-            details.append(f"ID: {self.identifier}")
-        return f"{base} ({', '.join(details)})" if details else base
-
 
 _MEDIA_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
@@ -243,97 +226,7 @@ def media_dedupe_url_candidates(url: str | None) -> tuple[str, ...]:
     return tuple(candidates)
 
 
-class _RowAdapter:
-    """Row adapter that supports both key and index access.
-
-    Wraps an underlying dict row and optional description metadata to preserve
-    column order for index-based access (row[0]). Behaves like a mapping so
-    dict(row) works and existing code expecting dict-like rows continues to work.
-    """
-
-    def __init__(self, row_dict: dict[str, Any], description: list[tuple] | None = None):
-        self._data = row_dict
-        # Build ordered column list from description when available
-        self._cols = [d[0] for d in (description or []) if d and len(d) > 0]
-
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            # Index-based access: prefer description ordering; fallback to dict order
-            if self._cols and 0 <= key < len(self._cols):
-                col = self._cols[key]
-                return self._data.get(col)
-            try:
-                return list(self._data.values())[key]
-            except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-                raise KeyError(key) from e
-        # String key access
-        return self._data[key]
-
-    def get(self, key, default=None):
-        return self._data.get(key, default)
-
-    def keys(self):
-        return self._data.keys()
-
-    def values(self):
-        return self._data.values()
-
-    def items(self):
-        return self._data.items()
-
-    def __iter__(self):
-        # Iterate over keys so dict(row) behaves as expected
-        return iter(self._data)
-
-    def __len__(self):
-        return len(self._data)
-
-    def __contains__(self, key):
-        return key in self._data
-
-    def __repr__(self):
-        return f"RowAdapter({self._data!r})"
-
-
-class BackendCursorAdapter:
-    """Adapter exposing QueryResult via a sqlite3-like cursor interface."""
-
-    def __init__(self, result: QueryResult):
-        self._result = result
-        self._index = 0
-        self.rowcount = result.rowcount
-        self.lastrowid = result.lastrowid
-        self.description = result.description
-
-    def _wrap(self, row: dict[str, Any]):
-        return _RowAdapter(row, self.description)
-
-    def fetchall(self):
-        return [self._wrap(r) for r in self._result.rows]
-
-    def fetchone(self):
-        if self._index >= len(self._result.rows):
-            return None
-        row = self._result.rows[self._index]
-        self._index += 1
-        return self._wrap(row)
-
-    def fetchmany(self, size: int | None = None):
-        if size is None or size <= 0:
-            size = len(self._result.rows) - self._index
-        end = min(self._index + size, len(self._result.rows))
-        rows = self._result.rows[self._index:end]
-        self._index = end
-        return [self._wrap(r) for r in rows]
-
-    def __iter__(self):
-        return iter(self.fetchall())
-
-    def close(self):
-        self._result = QueryResult(rows=[], rowcount=0)
-        self.rowcount = 0
-        self.lastrowid = None
-        self.description = None
+_RowAdapter = RowAdapter
 
 
 # --- Database Class ---
@@ -1873,11 +1766,7 @@ class MediaDatabase:
                         result = QueryResult(rows=rows, rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
                         return BackendCursorAdapter(result)
                     finally:
-                        if cur is not None:
-                            with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
-                                cur.close()
-                        with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
-                            eph.close()
+                        close_sqlite_ephemeral(cur, eph)
                 else:
                     # Use transaction/persistent connection (required for :memory: databases)
                     conn_use = eff_conn or self.get_connection()
@@ -1971,11 +1860,7 @@ class MediaDatabase:
                         result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
                         return BackendCursorAdapter(result)
                     finally:
-                        if cur is not None:
-                            with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
-                                cur.close()
-                        with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
-                            eph.close()
+                        close_sqlite_ephemeral(cur, eph)
                 else:
                     conn_use = eff_conn or self.get_connection()
                     cur = conn_use.cursor()

@@ -4,6 +4,18 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime.session import (
     MediaDbFactory,
     MediaDbSession,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.rows import (
+    BackendCursorAdapter,
+    RowAdapter,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.execution import (
+    close_sqlite_ephemeral,
+)
 
-__all__ = ["MediaDbFactory", "MediaDbSession"]
-
+__all__ = [
+    "BackendCursorAdapter",
+    "MediaDbFactory",
+    "MediaDbSession",
+    "RowAdapter",
+    "close_sqlite_ephemeral",
+]
