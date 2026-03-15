@@ -774,6 +774,77 @@ export type McpHubGovernancePackDryRunResponse = {
   report: McpHubGovernancePackDryRunReport
 }
 
+export type McpHubGovernancePackUpgradeObjectDiff = {
+  object_type: string
+  source_object_id: string
+  change_type: string
+  previous_digest?: string | null
+  next_digest?: string | null
+}
+
+export type McpHubGovernancePackUpgradeDependencyImpact = {
+  object_type: string
+  source_object_id: string
+  change_type: string
+  impact: string
+  dependent_type: string
+  dependent_id: number
+  reference_field: string
+  target_type?: string | null
+  target_id?: string | null
+}
+
+export type McpHubGovernancePackUpgradePlan = {
+  source_governance_pack_id: number
+  source_manifest: Record<string, unknown>
+  target_manifest: Record<string, unknown>
+  object_diff: McpHubGovernancePackUpgradeObjectDiff[]
+  dependency_impact: McpHubGovernancePackUpgradeDependencyImpact[]
+  structural_conflicts: string[]
+  behavioral_conflicts: string[]
+  warnings: string[]
+  planner_inputs_fingerprint: string
+  adapter_state_fingerprint: string
+  upgradeable: boolean
+}
+
+export type McpHubGovernancePackUpgradeDryRunResponse = {
+  plan: McpHubGovernancePackUpgradePlan
+}
+
+export type McpHubGovernancePackUpgradeExecutionResponse = {
+  upgrade_id: number
+  source_governance_pack_id: number
+  target_governance_pack_id: number
+  from_pack_version: string
+  to_pack_version: string
+  planner_inputs_fingerprint: string
+  adapter_state_fingerprint: string
+  imported_object_ids: Record<string, number[]>
+  imported_object_counts: Record<string, number>
+}
+
+export type McpHubGovernancePackUpgradeHistoryEntry = {
+  id: number
+  pack_id: string
+  owner_scope_type: McpHubScopeType
+  owner_scope_id?: number | null
+  from_governance_pack_id: number
+  to_governance_pack_id: number
+  from_pack_version: string
+  to_pack_version: string
+  status: string
+  planned_by?: number | null
+  executed_by?: number | null
+  planner_inputs_fingerprint?: string | null
+  adapter_state_fingerprint?: string | null
+  plan_summary: Record<string, unknown>
+  accepted_resolutions: Record<string, unknown>
+  failure_summary?: string | null
+  planned_at?: string | null
+  executed_at?: string | null
+}
+
 export type McpHubGovernancePackObjectProvenance = {
   object_type: string
   object_id: string
@@ -790,6 +861,9 @@ export type McpHubGovernancePackSummary = {
   owner_scope_id?: number | null
   bundle_digest: string
   manifest: Record<string, unknown>
+  is_active_install: boolean
+  superseded_by_governance_pack_id?: number | null
+  installed_from_upgrade_id?: number | null
   created_by?: number | null
   updated_by?: number | null
   created_at?: string | null
@@ -1584,6 +1658,19 @@ export const dryRunGovernancePack = async (payload: {
   })
 }
 
+export const dryRunGovernancePackUpgrade = async (payload: {
+  source_governance_pack_id: number
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  pack: McpHubGovernancePackDocument
+}): Promise<McpHubGovernancePackUpgradeDryRunResponse> => {
+  return await bgRequestClient<McpHubGovernancePackUpgradeDryRunResponse>({
+    path: "/api/v1/mcp/hub/governance-packs/dry-run-upgrade",
+    method: "POST",
+    body: payload
+  })
+}
+
 export const importGovernancePack = async (payload: {
   owner_scope_type?: McpHubScopeType
   owner_scope_id?: number | null
@@ -1593,5 +1680,29 @@ export const importGovernancePack = async (payload: {
     path: "/api/v1/mcp/hub/governance-packs/import",
     method: "POST",
     body: payload
+  })
+}
+
+export const executeGovernancePackUpgrade = async (payload: {
+  source_governance_pack_id: number
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  planner_inputs_fingerprint: string
+  adapter_state_fingerprint: string
+  pack: McpHubGovernancePackDocument
+}): Promise<McpHubGovernancePackUpgradeExecutionResponse> => {
+  return await bgRequestClient<McpHubGovernancePackUpgradeExecutionResponse>({
+    path: "/api/v1/mcp/hub/governance-packs/execute-upgrade",
+    method: "POST",
+    body: payload
+  })
+}
+
+export const listGovernancePackUpgradeHistory = async (
+  governancePackId: number
+): Promise<McpHubGovernancePackUpgradeHistoryEntry[]> => {
+  return await bgRequestClient<McpHubGovernancePackUpgradeHistoryEntry[]>({
+    path: `/api/v1/mcp/hub/governance-packs/${governancePackId}/upgrade-history`,
+    method: "GET"
   })
 }
