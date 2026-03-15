@@ -160,6 +160,7 @@ const OptionSettingsPromptStudio = createSettingsRoute(
 const OptionAdminServer = lazy(() => import("./option-admin-server"))
 const OptionAdminLlamacpp = lazy(() => import("./option-admin-llamacpp"))
 const OptionAdminMlx = lazy(() => import("./option-admin-mlx"))
+const OptionAdminRuntimeConfig = lazy(() => import("./option-admin-runtime-config"))
 const OptionChatSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/ChatSettings"),
   "ChatSettings"
@@ -890,6 +891,19 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "option:header.adminMlx",
       icon: Gauge,
       order: 8
+    }
+  },
+  {
+    kind: "options",
+    path: "/admin/runtime-config",
+    element: <OptionAdminRuntimeConfig />,
+    targets: ALL_TARGETS,
+    nav: {
+      group: "server",
+      labelToken: "option:header.adminRuntimeConfig",
+      icon: SlidersHorizontal,
+      order: 10,
+      beta: true
     }
   },
   {

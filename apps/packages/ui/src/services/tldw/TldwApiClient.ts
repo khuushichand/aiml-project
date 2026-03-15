@@ -8117,6 +8117,34 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: `/api/v1/monitoring/alerts/${id}`, method: "DELETE" })
   }
 
+  // ── Runtime Config ──
+
+  async getCleanupSettings(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/cleanup-settings", method: "GET" })
+  }
+
+  async updateCleanupSettings(payload: any): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/cleanup-settings",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getRegistrationSettings(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/registration-settings", method: "GET" })
+  }
+
+  async updateRegistrationSettings(payload: any): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/registration-settings",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
   // ── Rate Limiting / Resource Governor ──
 
   async getGovernorPolicy(): Promise<any> {
