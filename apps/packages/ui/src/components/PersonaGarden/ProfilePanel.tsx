@@ -2,6 +2,10 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 
 import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
+import {
+  PersonaSetupAnalyticsCard,
+  type PersonaSetupAnalyticsResponse
+} from "@/components/PersonaGarden/PersonaSetupAnalyticsCard"
 import type { PersonaVoiceAnalytics } from "@/components/PersonaGarden/CommandAnalyticsSummary"
 import { PersonaSetupStatusCard } from "@/components/PersonaGarden/PersonaSetupStatusCard"
 import type { PersonaSetupState } from "@/hooks/usePersonaSetupWizard"
@@ -21,6 +25,8 @@ type ProfilePanelProps = {
   onRerunSetup?: () => void
   onDefaultsSaved?: () => void
   isActive?: boolean
+  setupAnalytics?: PersonaSetupAnalyticsResponse | null
+  setupAnalyticsLoading?: boolean
   analytics?: PersonaVoiceAnalytics | null
   analyticsLoading?: boolean
   handoffFocusRequest?: {
@@ -43,6 +49,8 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
   onRerunSetup,
   onDefaultsSaved,
   isActive = false,
+  setupAnalytics = null,
+  setupAnalyticsLoading = false,
   analytics = null,
   analyticsLoading = false,
   handoffFocusRequest = null,
@@ -115,6 +123,10 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
         onResumeSetup={onResumeSetup}
         onResetSetup={onResetSetup}
         onRerunSetup={onRerunSetup}
+      />
+      <PersonaSetupAnalyticsCard
+        analytics={setupAnalytics}
+        loading={setupAnalyticsLoading}
       />
       <AssistantDefaultsPanel
         selectedPersonaId={selectedPersonaId}

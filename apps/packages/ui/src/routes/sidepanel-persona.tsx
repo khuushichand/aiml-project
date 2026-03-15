@@ -14,6 +14,7 @@ import { PersonaPolicySummary } from "@/components/Option/MCPHub"
 import {
   type PersonaVoiceAnalytics
 } from "@/components/PersonaGarden/CommandAnalyticsSummary"
+import type { PersonaSetupAnalyticsResponse } from "@/components/PersonaGarden/PersonaSetupAnalyticsCard"
 import type { PersonaTurnDetectionValues } from "@/components/PersonaGarden/PersonaTurnDetectionControls"
 import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCard"
 import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
@@ -730,6 +731,9 @@ const SidepanelPersona = ({
     null
   )
   const [voiceAnalyticsLoading, setVoiceAnalyticsLoading] = React.useState(false)
+  const [setupAnalytics, setSetupAnalytics] =
+    React.useState<PersonaSetupAnalyticsResponse | null>(null)
+  const [setupAnalyticsLoading, setSetupAnalyticsLoading] = React.useState(false)
   const [savingLiveVoiceDefaults, setSavingLiveVoiceDefaults] = React.useState(false)
   const [setupIntentTargetTab, setSetupIntentTargetTab] =
     React.useState<PersonaGardenTabKey | null>(null)
@@ -1646,6 +1650,57 @@ const SidepanelPersona = ({
       cancelled = true
     }
   }, [activeTab, selectedPersonaId])
+
+  React.useEffect(() => {
+    let cancelled = false
+    const normalizedPersonaId = String(selectedPersonaId || "").trim()
+
+    if (!normalizedPersonaId) {
+      setSetupAnalytics(null)
+      setSetupAnalyticsLoading(false)
+      return
+    }
+
+    if (setupAnalytics?.persona_id !== normalizedPersonaId) {
+      setSetupAnalytics(null)
+    }
+
+    if (activeTab !== "profiles") {
+      setSetupAnalyticsLoading(false)
+      return
+    }
+
+    setSetupAnalyticsLoading(true)
+
+    const loadSetupAnalytics = async () => {
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(normalizedPersonaId)}/setup-analytics?days=30&limit=5` as any,
+          { method: "GET" }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to load persona setup analytics.")
+        }
+        const payload = (await response.json()) as PersonaSetupAnalyticsResponse
+        if (!cancelled) {
+          setSetupAnalytics(payload)
+        }
+      } catch {
+        if (!cancelled) {
+          setSetupAnalytics(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setSetupAnalyticsLoading(false)
+        }
+      }
+    }
+
+    void loadSetupAnalytics()
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, selectedPersonaId, setupAnalytics?.persona_id])
 
   React.useEffect(() => {
     if (!isCompanionMode || capsLoading || !capabilities?.hasPersonalization) {
@@ -4625,6 +4680,8 @@ const SidepanelPersona = ({
           onRerunSetup={handleRerunSetup}
           onDefaultsSaved={handleProfileDefaultsSaved}
           isActive={activeTab === "profiles"}
+          setupAnalytics={setupAnalytics}
+          setupAnalyticsLoading={setupAnalyticsLoading}
           analytics={voiceAnalytics}
           analyticsLoading={voiceAnalyticsLoading}
           handoffFocusRequest={

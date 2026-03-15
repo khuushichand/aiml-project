@@ -1,5 +1,7 @@
 # Persona Setup Analytics Summary Card Implementation Plan
 
+**Status:** Complete on 2026-03-14.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add a compact setup analytics summary card to `Profiles` using the

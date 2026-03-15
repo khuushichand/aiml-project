@@ -68,6 +68,24 @@ describe("Persona Garden panel i18n", () => {
           connected={false}
           sessionId={null}
           isActive={false}
+          setupAnalytics={{
+            persona_id: "persona-1",
+            summary: {
+              total_runs: 1,
+              completed_runs: 1,
+              completion_rate: 1,
+              dry_run_completion_count: 1,
+              live_session_completion_count: 0,
+              most_common_dropoff_step: null,
+              handoff_click_rate: 1,
+              handoff_target_reach_rate: 1,
+              first_post_setup_action_rate: 1,
+              handoff_target_reached_counts: {},
+              detour_started_counts: {},
+              detour_returned_counts: {}
+            },
+            recent_runs: []
+          }}
         />
         <CommandsPanel
           selectedPersonaId=""
@@ -102,6 +120,9 @@ describe("Persona Garden panel i18n", () => {
     ).not.toBeInTheDocument()
     expect(
       screen.getByText("sidepanel:personaGarden.profile.assistantDefaultsHeading")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("sidepanel:personaGarden.profile.setupAnalyticsHeading")
     ).toBeInTheDocument()
     expect(
       screen.getByText("sidepanel:personaGarden.commands.heading")

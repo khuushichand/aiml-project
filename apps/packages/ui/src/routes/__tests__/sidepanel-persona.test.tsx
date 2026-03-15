@@ -469,6 +469,245 @@ describe("SidepanelPersona", () => {
     )
   })
 
+  it("loads and renders setup analytics in profiles", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/setup-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: {
+              total_runs: 4,
+              completed_runs: 3,
+              completion_rate: 0.75,
+              dry_run_completion_count: 2,
+              live_session_completion_count: 1,
+              most_common_dropoff_step: "commands",
+              handoff_click_rate: 0.5,
+              handoff_target_reach_rate: 0.25,
+              first_post_setup_action_rate: 0.5,
+              handoff_target_reached_counts: {},
+              detour_started_counts: {},
+              detour_returned_counts: {}
+            },
+            recent_runs: []
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_events: 0, direct_command_count: 0, planner_fallback_count: 0 }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            voice_defaults: {},
+            setup: {
+              status: "completed",
+              version: 1,
+              current_step: "test",
+              completed_steps: ["persona", "voice", "commands", "safety", "test"],
+              completed_at: "2026-03-14T10:00:00Z",
+              last_test_type: "dry_run"
+            },
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("persona-setup-analytics-card")).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId("persona-setup-analytics-card")).toHaveTextContent("75%")
+    expect(
+      mocks.fetchWithAuth.mock.calls.some(([path]) =>
+        String(path).includes("/persona/profiles/garden-helper/setup-analytics")
+      )
+    ).toBe(true)
+  })
+
+  it("hides setup analytics in profiles when the persona has no recorded runs", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=profiles"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/setup-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: {
+              total_runs: 0,
+              completed_runs: 0,
+              completion_rate: 0,
+              dry_run_completion_count: 0,
+              live_session_completion_count: 0,
+              most_common_dropoff_step: null,
+              handoff_click_rate: 0,
+              handoff_target_reach_rate: 0,
+              first_post_setup_action_rate: 0,
+              handoff_target_reached_counts: {},
+              detour_started_counts: {},
+              detour_returned_counts: {}
+            },
+            recent_runs: []
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_events: 0, direct_command_count: 0, planner_fallback_count: 0 }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            voice_defaults: {},
+            setup: {
+              status: "completed",
+              version: 1,
+              current_step: "test",
+              completed_steps: ["persona", "voice", "commands", "safety", "test"],
+              completed_at: "2026-03-14T10:00:00Z",
+              last_test_type: "dry_run"
+            },
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(screen.getByText("Assistant Defaults")).toBeInTheDocument()
+    })
+
+    expect(screen.queryByTestId("persona-setup-analytics-card")).not.toBeInTheDocument()
+    expect(
+      mocks.fetchWithAuth.mock.calls.some(([path]) =>
+        String(path).includes("/persona/profiles/garden-helper/setup-analytics")
+      )
+    ).toBe(true)
+  })
+
+  it("does not fetch setup analytics outside profiles", async () => {
+    mocks.location.search = "?persona_id=garden-helper&tab=commands"
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: ""
+    })
+
+    mocks.fetchWithAuth.mockImplementation((path: string) => {
+      if (path.includes("/persona/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            persona_id: "garden-helper",
+            summary: { total_events: 0, direct_command_count: 0, planner_fallback_count: 0 },
+            commands: [],
+            fallbacks: { total_invocations: 0 }
+          })
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            id: "garden-helper",
+            voice_defaults: {},
+            setup: {
+              status: "completed",
+              version: 1,
+              current_step: "test",
+              completed_steps: ["persona", "voice", "commands", "safety", "test"],
+              completed_at: "2026-03-14T10:00:00Z",
+              last_test_type: "dry_run"
+            },
+            use_persona_state_context_default: true
+          })
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `unhandled path: ${path}`,
+        json: async () => ({})
+      })
+    })
+
+    render(<SidepanelPersona />)
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Commands" })).toHaveAttribute(
+        "aria-selected",
+        "true"
+      )
+    })
+
+    expect(
+      mocks.fetchWithAuth.mock.calls.some(([path]) =>
+        String(path).includes("/persona/profiles/garden-helper/setup-analytics")
+      )
+    ).toBe(false)
+  })
+
   it("captures starter command and safety choices into the setup handoff summary", async () => {
     mocks.location.search = "?persona_id=garden-helper&tab=profiles"
     mocks.getConfig.mockResolvedValue({
