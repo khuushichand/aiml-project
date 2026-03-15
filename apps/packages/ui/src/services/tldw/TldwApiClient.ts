@@ -2160,6 +2160,119 @@ export class TldwApiClient {
     })
   }
 
+  // ── Admin Data Operations ──
+
+  async listBackups(params?: { dataset?: string; user_id?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/backups${query}`, method: "GET" })
+  }
+
+  async createBackup(payload: { dataset: string; user_id?: number }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/backups",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async restoreBackup(backupId: string): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/backups/${encodeURIComponent(backupId)}/restore`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async listBackupSchedules(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/backup-schedules", method: "GET" })
+  }
+
+  async createBackupSchedule(payload: { dataset: string; cron?: string; retention_days?: number }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/backup-schedules",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteBackupSchedule(scheduleId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/backup-schedules/${scheduleId}`,
+      method: "DELETE"
+    })
+  }
+
+  async previewDsr(payload: { requester_identifier: string; request_type?: string; categories?: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/data-subject-requests/preview",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async createDsr(payload: {
+    requester_identifier: string; request_type: string;
+    categories?: string[]; client_request_id?: string; notes?: string
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/data-subject-requests",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listDsrs(params?: { limit?: number; offset?: number }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/data-subject-requests${query}`, method: "GET" })
+  }
+
+  async executeDsr(requestId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/data-subject-requests/${requestId}/execute`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async listRetentionPolicies(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/retention-policies", method: "GET" })
+  }
+
+  async updateRetentionPolicy(policyKey: string, payload: { retention_days: number }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/retention-policies/${encodeURIComponent(policyKey)}`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async listBundles(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/backups/bundles", method: "GET" })
+  }
+
+  async createBundle(payload: { datasets: string[] }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/backups/bundles",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteBundle(bundleId: string): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/backups/bundles/${encodeURIComponent(bundleId)}`,
+      method: "DELETE"
+    })
+  }
+
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
