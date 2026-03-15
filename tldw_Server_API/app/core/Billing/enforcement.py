@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 # Environment variable for cache TTL (default 60 seconds)
 BILLING_CACHE_TTL_SECONDS = float(os.environ.get("BILLING_CACHE_TTL_SECONDS", "60.0"))
 
+from tldw_Server_API.app.core.Billing.overage_config import OveragePolicy
 from tldw_Server_API.app.core.Billing.plan_limits import SOFT_LIMIT_PERCENT
 from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
 
@@ -757,36 +758,54 @@ class BillingEnforcer:
         after_operation = current + requested_units
         percent_used = (after_operation / limit_value * 100) if limit_value > 0 else 100
 
-        # Determine action
+        # Determine base action
         if after_operation > limit_value:
             # Would exceed limit
-            return LimitCheckResult(
-                category=category.value,
-                action=EnforcementAction.SOFT_BLOCK,
-                current=current,
-                limit=limit_value,
-                percent_used=percent_used,
-                message=f"Limit exceeded for {category.value}. Current: {current}, Limit: {limit_value}",
-            )
+            action = EnforcementAction.SOFT_BLOCK
+            message = f"Limit exceeded for {category.value}. Current: {current}, Limit: {limit_value}"
         elif percent_used >= self.soft_limit_percent:
             # Approaching limit - warn
-            return LimitCheckResult(
-                category=category.value,
-                action=EnforcementAction.WARN,
-                current=current,
-                limit=limit_value,
-                percent_used=percent_used,
-                message=f"Approaching limit for {category.value}: {percent_used:.0f}% used",
-            )
+            action = EnforcementAction.WARN
+            message = f"Approaching limit for {category.value}: {percent_used:.0f}% used"
         else:
             # Well within limits
-            return LimitCheckResult(
-                category=category.value,
-                action=EnforcementAction.ALLOW,
-                current=current,
-                limit=limit_value,
-                percent_used=percent_used,
-            )
+            action = EnforcementAction.ALLOW
+            message = None
+
+        # Apply overage policy to potentially upgrade the enforcement action
+        try:
+            overage_policy = OveragePolicy.from_env()
+            overage_result = overage_policy.evaluate(percent_used)
+
+            if overage_result["blocked"]:
+                action = EnforcementAction.HARD_BLOCK
+                message = (
+                    f"Hard blocked by overage policy for {category.value}: "
+                    f"{percent_used:.0f}% used (mode={overage_result['mode']})"
+                )
+            elif overage_result["degraded"]:
+                action = EnforcementAction.SOFT_BLOCK
+                message = (
+                    f"Degraded by overage policy for {category.value}: "
+                    f"{percent_used:.0f}% used (mode={overage_result['mode']})"
+                )
+            elif overage_result["notify"] and action == EnforcementAction.ALLOW:
+                action = EnforcementAction.WARN
+                message = (
+                    f"Overage notification for {category.value}: "
+                    f"{percent_used:.0f}% used"
+                )
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"Overage policy evaluation skipped: {exc}")
+
+        return LimitCheckResult(
+            category=category.value,
+            action=action,
+            current=current,
+            limit=limit_value,
+            percent_used=percent_used,
+            message=message,
+        )
 
     async def check_feature_access(
         self,
