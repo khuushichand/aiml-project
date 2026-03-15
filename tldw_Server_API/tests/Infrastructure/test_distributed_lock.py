@@ -3,12 +3,12 @@
 
 import os
 import time
-import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import tldw_Server_API.app.core.Infrastructure.distributed_lock as distributed_lock_module
 from tldw_Server_API.app.core.Infrastructure.distributed_lock import (
     FileLock,
     LockAcquisitionError,
@@ -64,11 +64,8 @@ class TestFileLockContextManager:
 
     def test_context_manager_raises_on_timeout(self, tmp_path: Path) -> None:
         lock_path = tmp_path / "timeout.lock"
-
-        # Hold the lock from the main thread via a raw fd.
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-        import fcntl
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        holder = FileLock(lock_path, timeout=5, stale_timeout=9999)
+        assert holder.acquire() is True
 
         try:
             with pytest.raises(LockAcquisitionError):
@@ -76,8 +73,7 @@ class TestFileLockContextManager:
                 with FileLock(lock_path, timeout=0.3, stale_timeout=9999):
                     pass  # Should never reach here.
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
+            holder.release()
 
 
 class TestFileLockConcurrency:
@@ -121,6 +117,45 @@ class TestFileLockStaleLock:
         lock = FileLock(lock_path, timeout=2, stale_timeout=60)
         assert lock.acquire() is True
         lock.release()
+
+
+class _FakeMsvcrt:
+    LK_NBLCK = 1
+    LK_UNLCK = 2
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int, int, int]] = []
+
+    def locking(self, fd: int, mode: int, length: int) -> None:
+        position = os.lseek(fd, 0, os.SEEK_CUR)
+        self.calls.append((fd, mode, length, position))
+
+
+class TestFileLockPlatformSupport:
+    """Platform adapter behaviour."""
+
+    def test_windows_fallback_uses_msvcrt_for_acquire_and_release(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_msvcrt = _FakeMsvcrt()
+        lock_path = tmp_path / "msvcrt.lock"
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            monkeypatch.setattr(distributed_lock_module, "_fcntl_mod", None, raising=False)
+            monkeypatch.setattr(distributed_lock_module, "_msvcrt_mod", fake_msvcrt, raising=False)
+
+            distributed_lock_module._acquire_platform_file_lock(fd)
+            os.lseek(fd, 3, os.SEEK_SET)
+            distributed_lock_module._release_platform_file_lock(fd)
+        finally:
+            os.close(fd)
+
+        assert fake_msvcrt.calls == [
+            (fd, fake_msvcrt.LK_NBLCK, 1, 0),
+            (fd, fake_msvcrt.LK_UNLCK, 1, 0),
+        ]
 
 
 # ======================================================================
@@ -215,7 +250,12 @@ class TestAcquireMigrationLock:
         ) as lock:
             assert isinstance(lock, FileLock)
 
-    def test_file_lock_uses_default_dir_when_none(self) -> None:
+    def test_file_lock_uses_default_dir_when_none(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(distributed_lock_module.Path, "home", lambda: tmp_path)
         with acquire_migration_lock(lock_name="default_dir_test", timeout=5) as lock:
             assert isinstance(lock, FileLock)
             assert ".tldw" in str(lock.path)

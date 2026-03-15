@@ -8,7 +8,6 @@
 #
 from __future__ import annotations
 
-import fcntl
 import os
 import time
 import uuid
@@ -17,6 +16,16 @@ from pathlib import Path
 from typing import Any, Generator, Optional
 
 from loguru import logger
+
+try:  # pragma: no cover - platform guard
+    import fcntl as _fcntl_mod  # type: ignore
+except ImportError:  # pragma: no cover
+    _fcntl_mod = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - platform guard
+    import msvcrt as _msvcrt_mod  # type: ignore
+except ImportError:  # pragma: no cover
+    _msvcrt_mod = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - import guard
     import redis as _redis_mod  # type: ignore
@@ -28,8 +37,36 @@ class LockAcquisitionError(RuntimeError):
     """Raised when a distributed lock cannot be acquired within the timeout."""
 
 
+def _acquire_platform_file_lock(fd: int) -> None:
+    """Acquire a non-blocking exclusive lock for *fd* on the current platform."""
+    if _fcntl_mod is not None:
+        _fcntl_mod.flock(fd, _fcntl_mod.LOCK_EX | _fcntl_mod.LOCK_NB)
+        return
+
+    if _msvcrt_mod is not None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        _msvcrt_mod.locking(fd, _msvcrt_mod.LK_NBLCK, 1)
+        return
+
+    raise OSError("No supported file locking backend is available on this platform")
+
+
+def _release_platform_file_lock(fd: int) -> None:
+    """Release the platform-specific lock for *fd*."""
+    if _fcntl_mod is not None:
+        _fcntl_mod.flock(fd, _fcntl_mod.LOCK_UN)
+        return
+
+    if _msvcrt_mod is not None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        _msvcrt_mod.locking(fd, _msvcrt_mod.LK_UNLCK, 1)
+        return
+
+    raise OSError("No supported file locking backend is available on this platform")
+
+
 class FileLock:
-    """Cross-process file-based lock using ``fcntl.flock``.
+    """Cross-process file-based lock using the native platform backend.
 
     Parameters:
         path: Path to the lock file.
@@ -64,13 +101,14 @@ class FileLock:
 
         while True:
             attempt += 1
+            fd: Optional[int] = None
             try:
                 fd = os.open(
                     str(self.path),
                     os.O_CREAT | os.O_RDWR,
                     0o644,
                 )
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _acquire_platform_file_lock(fd)
                 # Write our PID so stale detection works from other processes.
                 os.ftruncate(fd, 0)
                 os.lseek(fd, 0, os.SEEK_SET)
@@ -82,7 +120,8 @@ class FileLock:
             except OSError:
                 # Could not lock — close fd and retry.
                 try:
-                    os.close(fd)  # type: ignore[possibly-undefined]
+                    if fd is not None:
+                        os.close(fd)
                 except OSError:
                     pass
 
@@ -99,7 +138,7 @@ class FileLock:
         """Release the lock and remove the lock file."""
         if self._fd is not None:
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                _release_platform_file_lock(self._fd)
             except OSError:
                 pass
             try:
