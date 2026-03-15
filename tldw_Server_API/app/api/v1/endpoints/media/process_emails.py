@@ -10,6 +10,7 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Email.Email_Processing_Lib as email_lib  # type: ignore
+from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_emails_form,
@@ -38,6 +39,7 @@ router = APIRouter()
     "/process-emails",
     summary="Extract, chunk, analyse Emails (NO DB Persistence)",
     tags=["Media Processing (No DB)"],
+    dependencies=[Depends(guard_storage_quota)],
 )
 async def process_emails_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),

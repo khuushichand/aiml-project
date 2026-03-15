@@ -15,6 +15,7 @@ from fastapi import (
 from loguru import logger
 from starlette.responses import JSONResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_audios_form,
@@ -52,6 +53,7 @@ router = APIRouter()
     "/process-audios",
     summary="Transcribe / chunk / analyse audio and return full artefacts (no DB write)",
     tags=["Media Processing (No DB)"],
+    dependencies=[Depends(guard_storage_quota)],
 )
 async def process_audios_endpoint(
     background_tasks: BackgroundTasks,
