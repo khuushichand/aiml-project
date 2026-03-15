@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+from tldw_Server_API.app.core.AuthNZ.exceptions import TransactionError
 from tldw_Server_API.app.core.MCP_unified.governance_packs import (
     ApprovalTemplate,
     AssignmentTemplate,
@@ -48,6 +50,16 @@ def _imported_name(display_name: str, *, pack_id: str, source_object_id: str) ->
     return f"{display_name} [{pack_id}:{source_object_id}]"
 
 
+def _imported_upgrade_name(
+    display_name: str,
+    *,
+    pack_id: str,
+    pack_version: str,
+    source_object_id: str,
+) -> str:
+    return f"{display_name} [{pack_id}:{source_object_id}@{pack_version}]"
+
+
 class GovernancePackImportResult(BaseModel):
     governance_pack_id: int
     imported_object_ids: dict[str, list[int]] = Field(default_factory=dict)
@@ -82,6 +94,18 @@ class GovernancePackUpgradePlan(BaseModel):
     upgradeable: bool
 
 
+class GovernancePackUpgradeExecutionResult(BaseModel):
+    upgrade_id: int
+    source_governance_pack_id: int
+    target_governance_pack_id: int
+    from_pack_version: str
+    to_pack_version: str
+    planner_inputs_fingerprint: str
+    adapter_state_fingerprint: str
+    imported_object_ids: dict[str, list[int]] = Field(default_factory=dict)
+    imported_object_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class GovernancePackAlreadyExistsError(ValueError):
     """Raised when a governance pack identity already exists in the target scope."""
 
@@ -104,6 +128,14 @@ class GovernancePackAlreadyExistsError(ValueError):
         self.pack_version = pack_version
         self.owner_scope_type = owner_scope_type
         self.owner_scope_id = owner_scope_id
+
+
+class GovernancePackUpgradeConflictError(ValueError):
+    """Raised when an upgrade plan has blocking conflicts."""
+
+
+class GovernancePackUpgradeStaleError(ValueError):
+    """Raised when execute-upgrade inputs no longer match current planner state."""
 
 
 def _is_duplicate_governance_pack_error(exc: Exception) -> bool:
@@ -708,6 +740,12 @@ class McpHubGovernancePackService:
                 "requested_scope_id": owner_scope_id,
                 "object_diff": object_diff,
                 "dependency_impact": dependency_impact,
+                "dependency_snapshot": {
+                    f"{object_type}:{source_object_id}": dependents
+                    for (object_type, source_object_id), dependents in sorted(
+                        dependencies_by_object.items()
+                    )
+                },
             }
         )
         adapter_state_fingerprint = _stable_digest(
@@ -752,6 +790,409 @@ class McpHubGovernancePackService:
             pack=pack,
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,
+        )
+
+    async def _stage_upgrade_import(
+        self,
+        *,
+        conn: Any,
+        pack: GovernancePack,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+    ) -> tuple[GovernancePackImportResult, dict[str, dict[str, int]]]:
+        normalized_ir = normalize_governance_pack(pack)
+        bundle = build_opa_bundle(pack)
+        manifest = pack.manifest
+        pack_row = await self.repo.create_governance_pack(
+            pack_id=manifest.pack_id,
+            pack_version=manifest.pack_version,
+            pack_schema_version=manifest.pack_schema_version,
+            capability_taxonomy_version=manifest.capability_taxonomy_version,
+            adapter_contract_version=manifest.adapter_contract_version,
+            title=manifest.title,
+            description=manifest.description,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            bundle_digest=bundle.digest,
+            manifest=_dump_model(manifest),
+            normalized_ir=normalized_ir.to_dict(),
+            actor_id=actor_id,
+            is_active_install=False,
+            conn=conn,
+        )
+        if not pack_row:
+            raise RuntimeError("Failed to stage governance pack upgrade manifest")
+
+        governance_pack_id = int(pack_row["id"])
+        imported_object_ids: dict[str, list[int]] = {
+            "approval_policies": [],
+            "permission_profiles": [],
+            "policy_assignments": [],
+        }
+        runtime_id_map: dict[str, dict[str, int]] = {
+            "approval_policy": {},
+            "permission_profile": {},
+            "policy_assignment": {},
+        }
+        approval_policy_ids_by_template: dict[str, int] = {}
+        profile_ids_by_template: dict[str, int] = {}
+        persona_ids_by_template: dict[str, str] = {
+            persona.persona_template_id: persona.persona_template_id
+            for persona in pack.personas
+        }
+        persona_approval_ids: dict[str, str] = {
+            persona.persona_template_id: persona.approval_template_id
+            for persona in pack.personas
+        }
+
+        for approval in pack.approvals:
+            runtime_mode = _RUNTIME_APPROVAL_MODE_MAP.get(str(approval.mode or "").strip().lower())
+            if runtime_mode is None:
+                raise RuntimeError(
+                    f"approval template '{approval.approval_template_id}' cannot map to a local runtime approval mode"
+                )
+            created = await self.repo.create_approval_policy(
+                name=_imported_upgrade_name(
+                    approval.name,
+                    pack_id=manifest.pack_id,
+                    pack_version=manifest.pack_version,
+                    source_object_id=approval.approval_template_id,
+                ),
+                owner_scope_type=owner_scope_type,
+                owner_scope_id=owner_scope_id,
+                mode=runtime_mode,
+                rules={
+                    "portable_mode": approval.mode,
+                    "approval_template_id": approval.approval_template_id,
+                    "governance_pack": {
+                        "pack_id": manifest.pack_id,
+                        "pack_version": manifest.pack_version,
+                        "source_object_id": approval.approval_template_id,
+                    },
+                },
+                actor_id=actor_id,
+                description=approval.name,
+                is_active=True,
+                is_immutable=True,
+                conn=conn,
+            )
+            approval_id = int(created["id"])
+            approval_policy_ids_by_template[approval.approval_template_id] = approval_id
+            runtime_id_map["approval_policy"][approval.approval_template_id] = approval_id
+            imported_object_ids["approval_policies"].append(approval_id)
+            await self.repo.create_governance_pack_object(
+                governance_pack_id=governance_pack_id,
+                object_type="approval_policy",
+                object_id=approval_id,
+                source_object_id=approval.approval_template_id,
+                conn=conn,
+            )
+
+        for profile in pack.profiles:
+            created = await self.repo.create_permission_profile(
+                name=_imported_upgrade_name(
+                    profile.name,
+                    pack_id=manifest.pack_id,
+                    pack_version=manifest.pack_version,
+                    source_object_id=profile.profile_id,
+                ),
+                owner_scope_type=owner_scope_type,
+                owner_scope_id=owner_scope_id,
+                mode="preset",
+                policy_document={
+                    "capabilities": list(profile.capabilities.allow),
+                    "denied_capabilities": list(profile.capabilities.deny),
+                    "environment_requirements": list(profile.environment_requirements),
+                    "approval_intent": profile.approval_intent,
+                    "governance_pack": {
+                        "pack_id": manifest.pack_id,
+                        "pack_version": manifest.pack_version,
+                        "source_object_id": profile.profile_id,
+                    },
+                },
+                actor_id=actor_id,
+                description=profile.description,
+                is_active=True,
+                is_immutable=True,
+                conn=conn,
+            )
+            profile_id = int(created["id"])
+            profile_ids_by_template[profile.profile_id] = profile_id
+            runtime_id_map["permission_profile"][profile.profile_id] = profile_id
+            imported_object_ids["permission_profiles"].append(profile_id)
+            await self.repo.create_governance_pack_object(
+                governance_pack_id=governance_pack_id,
+                object_type="permission_profile",
+                object_id=profile_id,
+                source_object_id=profile.profile_id,
+                conn=conn,
+            )
+
+        for assignment in pack.assignments:
+            profile_id = profile_ids_by_template.get(assignment.capability_profile_id)
+            if profile_id is None:
+                raise RuntimeError(
+                    f"assignment template '{assignment.assignment_template_id}' has no staged capability profile"
+                )
+
+            approval_template_id = assignment.approval_template_id
+            if approval_template_id is None and assignment.persona_template_id is not None:
+                approval_template_id = persona_approval_ids.get(assignment.persona_template_id)
+            approval_policy_id = (
+                approval_policy_ids_by_template.get(approval_template_id)
+                if approval_template_id is not None
+                else None
+            )
+            if approval_template_id is not None and approval_policy_id is None:
+                raise RuntimeError(
+                    f"assignment template '{assignment.assignment_template_id}' has no staged approval policy"
+                )
+
+            target_id = None
+            if assignment.target_type == "persona" and assignment.persona_template_id is not None:
+                target_id = persona_ids_by_template.get(assignment.persona_template_id)
+
+            created = await self.repo.create_policy_assignment(
+                target_type=assignment.target_type,
+                target_id=target_id,
+                owner_scope_type=owner_scope_type,
+                owner_scope_id=owner_scope_id,
+                profile_id=profile_id,
+                inline_policy_document={
+                    "persona_template_id": assignment.persona_template_id,
+                    "approval_template_id": approval_template_id,
+                    "capability_profile_id": assignment.capability_profile_id,
+                    "governance_pack": {
+                        "pack_id": manifest.pack_id,
+                        "pack_version": manifest.pack_version,
+                        "source_object_id": assignment.assignment_template_id,
+                    },
+                },
+                approval_policy_id=approval_policy_id,
+                actor_id=actor_id,
+                is_active=True,
+                is_immutable=True,
+                conn=conn,
+            )
+            assignment_id = int(created["id"])
+            runtime_id_map["policy_assignment"][assignment.assignment_template_id] = assignment_id
+            imported_object_ids["policy_assignments"].append(assignment_id)
+            await self.repo.create_governance_pack_object(
+                governance_pack_id=governance_pack_id,
+                object_type="policy_assignment",
+                object_id=assignment_id,
+                source_object_id=assignment.assignment_template_id,
+                conn=conn,
+            )
+
+        return (
+            GovernancePackImportResult(
+                governance_pack_id=governance_pack_id,
+                imported_object_ids=imported_object_ids,
+                imported_object_counts={
+                    key: len(value) for key, value in imported_object_ids.items()
+                },
+                blocked_objects=[],
+            ),
+            runtime_id_map,
+        )
+
+    async def execute_upgrade_pack(
+        self,
+        *,
+        source_governance_pack_id: int,
+        pack: GovernancePack,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+        planner_inputs_fingerprint: str,
+        adapter_state_fingerprint: str,
+    ) -> GovernancePackUpgradeExecutionResult:
+        plan = await self.dry_run_upgrade_pack(
+            source_governance_pack_id=source_governance_pack_id,
+            pack=pack,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+        )
+        if (
+            str(planner_inputs_fingerprint).strip() != plan.planner_inputs_fingerprint
+            or str(adapter_state_fingerprint).strip() != plan.adapter_state_fingerprint
+        ):
+            raise GovernancePackUpgradeStaleError(
+                "Governance pack upgrade plan is stale; rerun dry-run-upgrade"
+            )
+        if not plan.upgradeable:
+            raise GovernancePackUpgradeConflictError(
+                "Governance pack upgrade has blocking conflicts"
+            )
+
+        source_pack = await self.repo.get_governance_pack(source_governance_pack_id)
+        if source_pack is None:
+            raise ValueError(
+                f"mcp_governance_pack '{source_governance_pack_id}' was not found"
+            )
+
+        source_scope_type = str(source_pack.get("owner_scope_type") or "").strip().lower()
+        source_scope_id = source_pack.get("owner_scope_id")
+        imported_objects, dependencies_by_object = await self._collect_upgrade_dependencies(
+            governance_pack_id=source_governance_pack_id,
+            owner_scope_type=source_scope_type,
+            owner_scope_id=source_scope_id,
+        )
+
+        try:
+            async with self.repo.db_pool.transaction() as conn:
+                source_pack_tx = await self.repo.get_governance_pack(
+                    source_governance_pack_id,
+                    conn=conn,
+                )
+                if source_pack_tx is None or not bool(source_pack_tx.get("is_active_install")):
+                    raise GovernancePackUpgradeStaleError(
+                        "Governance pack upgrade source install is no longer active"
+                    )
+                existing_target = await self.repo.get_governance_pack_by_identity(
+                    pack_id=pack.manifest.pack_id,
+                    pack_version=pack.manifest.pack_version,
+                    owner_scope_type=source_scope_type,
+                    owner_scope_id=source_scope_id,
+                    conn=conn,
+                )
+                if existing_target is not None:
+                    raise GovernancePackAlreadyExistsError(
+                        pack.manifest.pack_id,
+                        pack.manifest.pack_version,
+                        source_scope_type,
+                        source_scope_id,
+                    )
+
+                staged_import, runtime_id_map = await self._stage_upgrade_import(
+                    conn=conn,
+                    pack=pack,
+                    owner_scope_type=source_scope_type,
+                    owner_scope_id=source_scope_id,
+                    actor_id=actor_id,
+                )
+                for imported_object in imported_objects:
+                    object_type = str(imported_object.get("object_type") or "").strip().lower()
+                    source_object_id = str(imported_object.get("source_object_id") or "").strip()
+                    old_object_id = int(imported_object["object_id"])
+                    new_object_id = runtime_id_map.get(object_type, {}).get(source_object_id)
+                    if new_object_id is None:
+                        continue
+                    dependents = dependencies_by_object.get((object_type, source_object_id), [])
+                    if object_type == "permission_profile":
+                        for dependent in dependents:
+                            if dependent["dependent_type"] != "policy_assignment":
+                                continue
+                            await self.repo.update_policy_assignment(
+                                int(dependent["dependent_id"]),
+                                profile_id=new_object_id,
+                                actor_id=actor_id,
+                                conn=conn,
+                            )
+                    elif object_type == "approval_policy":
+                        for dependent in dependents:
+                            if dependent["dependent_type"] != "policy_assignment":
+                                continue
+                            await self.repo.update_policy_assignment(
+                                int(dependent["dependent_id"]),
+                                approval_policy_id=new_object_id,
+                                actor_id=actor_id,
+                                conn=conn,
+                            )
+                    elif object_type == "policy_assignment":
+                        await self.repo.rebind_policy_assignment_workspaces(
+                            old_assignment_id=old_object_id,
+                            new_assignment_id=new_object_id,
+                            conn=conn,
+                        )
+                        for dependent in dependents:
+                            if dependent["dependent_type"] != "policy_override":
+                                continue
+                            await self.repo.rebind_policy_override_assignment(
+                                old_assignment_id=old_object_id,
+                                new_assignment_id=new_object_id,
+                                actor_id=actor_id,
+                                conn=conn,
+                            )
+
+                executed_at = datetime.now(timezone.utc)
+                upgrade_row = await self.repo.create_governance_pack_upgrade(
+                    pack_id=str(source_pack_tx.get("pack_id") or ""),
+                    owner_scope_type=source_scope_type,
+                    owner_scope_id=source_scope_id,
+                    from_governance_pack_id=int(source_governance_pack_id),
+                    to_governance_pack_id=int(staged_import.governance_pack_id),
+                    from_pack_version=str(source_pack_tx.get("pack_version") or ""),
+                    to_pack_version=pack.manifest.pack_version,
+                    status="executed",
+                    planned_by=actor_id,
+                    executed_by=actor_id,
+                    planner_inputs_fingerprint=plan.planner_inputs_fingerprint,
+                    adapter_state_fingerprint=plan.adapter_state_fingerprint,
+                    plan_summary={
+                        "object_diff_count": len(plan.object_diff),
+                        "dependency_impact_count": len(plan.dependency_impact),
+                    },
+                    accepted_resolutions={},
+                    executed_at=executed_at,
+                    conn=conn,
+                )
+                if not upgrade_row:
+                    raise RuntimeError("Failed to persist governance pack upgrade lineage")
+
+                await self.repo.update_governance_pack_install_state(
+                    int(source_governance_pack_id),
+                    is_active_install=False,
+                    superseded_by_governance_pack_id=int(staged_import.governance_pack_id),
+                    actor_id=actor_id,
+                    conn=conn,
+                )
+                await self.repo.update_governance_pack_install_state(
+                    int(staged_import.governance_pack_id),
+                    is_active_install=True,
+                    installed_from_upgrade_id=int(upgrade_row["id"]),
+                    actor_id=actor_id,
+                    conn=conn,
+                )
+        except TransactionError as exc:
+            if exc.__cause__ is not None:
+                raise exc.__cause__
+            raise
+
+        return GovernancePackUpgradeExecutionResult(
+            upgrade_id=int(upgrade_row["id"]),
+            source_governance_pack_id=int(source_governance_pack_id),
+            target_governance_pack_id=int(staged_import.governance_pack_id),
+            from_pack_version=str(source_pack.get("pack_version") or ""),
+            to_pack_version=pack.manifest.pack_version,
+            planner_inputs_fingerprint=plan.planner_inputs_fingerprint,
+            adapter_state_fingerprint=plan.adapter_state_fingerprint,
+            imported_object_ids=staged_import.imported_object_ids,
+            imported_object_counts=staged_import.imported_object_counts,
+        )
+
+    async def execute_upgrade_document(
+        self,
+        *,
+        source_governance_pack_id: int,
+        document: dict[str, Any],
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+        planner_inputs_fingerprint: str,
+        adapter_state_fingerprint: str,
+    ) -> GovernancePackUpgradeExecutionResult:
+        pack = self.build_pack_from_document(document)
+        return await self.execute_upgrade_pack(
+            source_governance_pack_id=source_governance_pack_id,
+            pack=pack,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope_id,
+            actor_id=actor_id,
+            planner_inputs_fingerprint=planner_inputs_fingerprint,
+            adapter_state_fingerprint=adapter_state_fingerprint,
         )
 
     async def import_pack_document(

@@ -7,7 +7,12 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import (
+    DatabasePool,
+    _convert_question_mark_to_dollar,
+    _flatten_params,
+    _normalize_sqlite_sql,
+)
 
 _VALID_SCOPE_TYPES = {"global", "org", "team", "user"}
 _VALID_CAPABILITY_ADAPTER_SCOPE_TYPES = {"global", "org", "team"}
@@ -440,6 +445,36 @@ class McpHubRepo:
             return rowcount > 0
         return False
 
+    async def _conn_execute(self, conn: Any, query: str, params: tuple[Any, ...]) -> Any:
+        if getattr(self.db_pool, "pool", None) is not None:
+            flat_params = _flatten_params((params,))
+            pg_query = _convert_question_mark_to_dollar(query, flat_params)
+            return await conn.execute(pg_query, *flat_params)
+        normalized_query = _normalize_sqlite_sql(query)
+        return await conn.execute(normalized_query, params)
+
+    async def _conn_fetchone(self, conn: Any, query: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+        if getattr(self.db_pool, "pool", None) is not None:
+            flat_params = _flatten_params((params,))
+            pg_query = _convert_question_mark_to_dollar(query, flat_params)
+            row = await conn.fetchrow(pg_query, *flat_params)
+            return self._row_to_dict(row) if row else None
+        normalized_query = _normalize_sqlite_sql(query)
+        cursor = await conn.execute(normalized_query, params)
+        row = await cursor.fetchone()
+        return self._row_to_dict(row) if row else None
+
+    async def _conn_fetchall(self, conn: Any, query: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+        if getattr(self.db_pool, "pool", None) is not None:
+            flat_params = _flatten_params((params,))
+            pg_query = _convert_question_mark_to_dollar(query, flat_params)
+            rows = await conn.fetch(pg_query, *flat_params)
+            return [self._row_to_dict(row) for row in rows]
+        normalized_query = _normalize_sqlite_sql(query)
+        cursor = await conn.execute(normalized_query, params)
+        rows = await cursor.fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
     async def create_governance_pack(
         self,
         *,
@@ -457,6 +492,7 @@ class McpHubRepo:
         normalized_ir: dict[str, Any],
         actor_id: int | None,
         is_active_install: bool = True,
+        conn: Any | None = None,
     ) -> dict[str, Any]:
         scope_type = _normalize_scope_type(owner_scope_type)
         now = datetime.now(timezone.utc)
@@ -464,37 +500,172 @@ class McpHubRepo:
         active_install_value: bool | int = (
             is_active_install if getattr(self.db_pool, "pool", None) is not None else int(is_active_install)
         )
-        await self.db_pool.execute(
-            """
+        params = (
+            str(pack_id or "").strip(),
+            str(pack_version or "").strip(),
+            int(pack_schema_version),
+            int(capability_taxonomy_version),
+            int(adapter_contract_version),
+            str(title or "").strip(),
+            description,
+            scope_type,
+            owner_scope_id,
+            str(bundle_digest or "").strip(),
+            json.dumps(manifest or {}),
+            json.dumps(normalized_ir or {}),
+            active_install_value,
+            actor_id,
+            actor_id,
+            ts,
+            ts,
+        )
+        query = """
             INSERT INTO mcp_governance_packs (
                 pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
                 adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
                 bundle_digest, manifest_json, normalized_ir_json, is_active_install, created_by,
                 updated_by, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(pack_id or "").strip(),
-                str(pack_version or "").strip(),
-                int(pack_schema_version),
-                int(capability_taxonomy_version),
-                int(adapter_contract_version),
-                str(title or "").strip(),
-                description,
-                scope_type,
-                owner_scope_id,
-                str(bundle_digest or "").strip(),
-                json.dumps(manifest or {}),
-                json.dumps(normalized_ir or {}),
-                active_install_value,
-                actor_id,
-                actor_id,
-                ts,
-                ts,
-            ),
-        )
-        row = await self.db_pool.fetchone(
             """
+        if conn is None:
+            await self.db_pool.execute(query, params)
+            row = await self.db_pool.fetchone(
+                """
+                SELECT id
+                FROM mcp_governance_packs
+                WHERE pack_id = ?
+                  AND pack_version = ?
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (
+                    str(pack_id or "").strip(),
+                    str(pack_version or "").strip(),
+                    scope_type,
+                    owner_scope_id,
+                    owner_scope_id,
+                ),
+            )
+        else:
+            await self._conn_execute(conn, query, params)
+            row = await self._conn_fetchone(
+                conn,
+                """
+                SELECT id
+                FROM mcp_governance_packs
+                WHERE pack_id = ?
+                  AND pack_version = ?
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (
+                    str(pack_id or "").strip(),
+                    str(pack_version or "").strip(),
+                    scope_type,
+                    owner_scope_id,
+                    owner_scope_id,
+                ),
+            )
+        if not row:
+            return {}
+        created = await self.get_governance_pack(int(row["id"]), conn=conn)
+        return created or {}
+
+    async def get_governance_pack(self, governance_pack_id: int, *, conn: Any | None = None) -> dict[str, Any] | None:
+        query = """
+            SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
+                   adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
+                   bundle_digest, manifest_json, normalized_ir_json, is_active_install,
+                   superseded_by_governance_pack_id, installed_from_upgrade_id, created_by, updated_by,
+                   created_at, updated_at
+            FROM mcp_governance_packs
+            WHERE id = ?
+            """
+        row = (
+            await self.db_pool.fetchone(query, (int(governance_pack_id),))
+            if conn is None
+            else await self._conn_fetchone(conn, query, (int(governance_pack_id),))
+        )
+        return self._normalize_governance_pack_row(self._row_to_dict(row) if row else None)
+
+    async def update_governance_pack_install_state(
+        self,
+        governance_pack_id: int,
+        *,
+        is_active_install: bool | object = _UNSET,
+        superseded_by_governance_pack_id: int | None | object = _UNSET,
+        installed_from_upgrade_id: int | None | object = _UNSET,
+        actor_id: int | None = None,
+        conn: Any | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_governance_pack(governance_pack_id, conn=conn)
+        if not existing:
+            return None
+
+        next_is_active = (
+            _to_bool(existing.get("is_active_install"))
+            if is_active_install is _UNSET
+            else _to_bool(is_active_install)
+        )
+        next_superseded_by = (
+            existing.get("superseded_by_governance_pack_id")
+            if superseded_by_governance_pack_id is _UNSET
+            else superseded_by_governance_pack_id
+        )
+        next_installed_from_upgrade_id = (
+            existing.get("installed_from_upgrade_id")
+            if installed_from_upgrade_id is _UNSET
+            else installed_from_upgrade_id
+        )
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        active_value: bool | int = (
+            next_is_active if getattr(self.db_pool, "pool", None) is not None else int(next_is_active)
+        )
+        params = (
+            active_value,
+            next_superseded_by,
+            next_installed_from_upgrade_id,
+            actor_id,
+            ts,
+            int(governance_pack_id),
+        )
+        query = """
+            UPDATE mcp_governance_packs
+            SET is_active_install = ?,
+                superseded_by_governance_pack_id = ?,
+                installed_from_upgrade_id = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE id = ?
+            """
+        if conn is None:
+            await self.db_pool.execute(query, params)
+        else:
+            await self._conn_execute(conn, query, params)
+        return await self.get_governance_pack(governance_pack_id, conn=conn)
+
+    async def get_governance_pack_by_identity(
+        self,
+        *,
+        pack_id: str,
+        pack_version: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        conn: Any | None = None,
+    ) -> dict[str, Any] | None:
+        scope_type = _normalize_scope_type(owner_scope_type)
+        query = """
             SELECT id
             FROM mcp_governance_packs
             WHERE pack_id = ?
@@ -506,71 +677,34 @@ class McpHubRepo:
               )
             ORDER BY id DESC
             LIMIT 1
-            """,
-            (
-                str(pack_id or "").strip(),
-                str(pack_version or "").strip(),
-                scope_type,
-                owner_scope_id,
-                owner_scope_id,
-            ),
+            """
+        row = (
+            await self.db_pool.fetchone(
+                query,
+                (
+                    str(pack_id or "").strip(),
+                    str(pack_version or "").strip(),
+                    scope_type,
+                    owner_scope_id,
+                    owner_scope_id,
+                ),
+            )
+            if conn is None
+            else await self._conn_fetchone(
+                conn,
+                query,
+                (
+                    str(pack_id or "").strip(),
+                    str(pack_version or "").strip(),
+                    scope_type,
+                    owner_scope_id,
+                    owner_scope_id,
+                ),
+            )
         )
         if not row:
-            return {}
-        created = await self.get_governance_pack(int(row["id"]))
-        return created or {}
-
-    async def get_governance_pack(self, governance_pack_id: int) -> dict[str, Any] | None:
-        row = await self.db_pool.fetchone(
-            """
-            SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
-                   adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
-                   bundle_digest, manifest_json, normalized_ir_json, is_active_install,
-                   superseded_by_governance_pack_id, installed_from_upgrade_id, created_by, updated_by,
-                   created_at, updated_at
-            FROM mcp_governance_packs
-            WHERE id = ?
-            """,
-            (int(governance_pack_id),),
-        )
-        return self._normalize_governance_pack_row(self._row_to_dict(row) if row else None)
-
-    async def get_governance_pack_by_identity(
-        self,
-        *,
-        pack_id: str,
-        pack_version: str,
-        owner_scope_type: str,
-        owner_scope_id: int | None,
-    ) -> dict[str, Any] | None:
-        scope_type = _normalize_scope_type(owner_scope_type)
-        row = await self.db_pool.fetchone(
-            """
-            SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
-                   adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
-                   bundle_digest, manifest_json, normalized_ir_json, is_active_install,
-                   superseded_by_governance_pack_id, installed_from_upgrade_id, created_by, updated_by,
-                   created_at, updated_at
-            FROM mcp_governance_packs
-            WHERE pack_id = ?
-              AND pack_version = ?
-              AND owner_scope_type = ?
-              AND (
-                (owner_scope_id IS NULL AND ? IS NULL)
-                OR owner_scope_id = ?
-              )
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (
-                str(pack_id or "").strip(),
-                str(pack_version or "").strip(),
-                scope_type,
-                owner_scope_id,
-                owner_scope_id,
-            ),
-        )
-        return self._normalize_governance_pack_row(self._row_to_dict(row) if row else None)
+            return None
+        return await self.get_governance_pack(int(row["id"]), conn=conn)
 
     async def list_governance_packs(
         self,
@@ -635,6 +769,7 @@ class McpHubRepo:
         accepted_resolutions: dict[str, Any] | None = None,
         failure_summary: str | None = None,
         executed_at: datetime | str | None = None,
+        conn: Any | None = None,
     ) -> dict[str, Any]:
         scope_type = _normalize_scope_type(owner_scope_type)
         now = datetime.now(timezone.utc)
@@ -642,63 +777,90 @@ class McpHubRepo:
         executed_ts = executed_at
         if getattr(self.db_pool, "pool", None) is None and isinstance(executed_at, datetime):
             executed_ts = executed_at.isoformat()
-        await self.db_pool.execute(
-            """
+        params = (
+            str(pack_id or "").strip(),
+            scope_type,
+            owner_scope_id,
+            int(from_governance_pack_id),
+            int(to_governance_pack_id),
+            str(from_pack_version or "").strip(),
+            str(to_pack_version or "").strip(),
+            str(status or "").strip(),
+            planned_by,
+            executed_by,
+            str(planner_inputs_fingerprint).strip() if planner_inputs_fingerprint else None,
+            str(adapter_state_fingerprint).strip() if adapter_state_fingerprint else None,
+            json.dumps(plan_summary or {}),
+            json.dumps(accepted_resolutions or {}),
+            failure_summary,
+            planned_ts,
+            executed_ts,
+        )
+        query = """
             INSERT INTO mcp_governance_pack_upgrades (
                 pack_id, owner_scope_type, owner_scope_id, from_governance_pack_id, to_governance_pack_id,
                 from_pack_version, to_pack_version, status, planned_by, executed_by,
                 planner_inputs_fingerprint, adapter_state_fingerprint, plan_summary_json,
                 accepted_resolutions_json, failure_summary, planned_at, executed_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(pack_id or "").strip(),
-                scope_type,
-                owner_scope_id,
-                int(from_governance_pack_id),
-                int(to_governance_pack_id),
-                str(from_pack_version or "").strip(),
-                str(to_pack_version or "").strip(),
-                str(status or "").strip(),
-                planned_by,
-                executed_by,
-                str(planner_inputs_fingerprint).strip() if planner_inputs_fingerprint else None,
-                str(adapter_state_fingerprint).strip() if adapter_state_fingerprint else None,
-                json.dumps(plan_summary or {}),
-                json.dumps(accepted_resolutions or {}),
-                failure_summary,
-                planned_ts,
-                executed_ts,
-            ),
-        )
-        row = await self.db_pool.fetchone(
             """
-            SELECT id
-            FROM mcp_governance_pack_upgrades
-            WHERE pack_id = ?
-              AND owner_scope_type = ?
-              AND (
-                (owner_scope_id IS NULL AND ? IS NULL)
-                OR owner_scope_id = ?
-              )
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (
-                str(pack_id or "").strip(),
-                scope_type,
-                owner_scope_id,
-                owner_scope_id,
-            ),
-        )
+        if conn is None:
+            await self.db_pool.execute(query, params)
+            row = await self.db_pool.fetchone(
+                """
+                SELECT id
+                FROM mcp_governance_pack_upgrades
+                WHERE pack_id = ?
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (
+                    str(pack_id or "").strip(),
+                    scope_type,
+                    owner_scope_id,
+                    owner_scope_id,
+                ),
+            )
+        else:
+            await self._conn_execute(conn, query, params)
+            row = await self._conn_fetchone(
+                conn,
+                """
+                SELECT id
+                FROM mcp_governance_pack_upgrades
+                WHERE pack_id = ?
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (
+                    str(pack_id or "").strip(),
+                    scope_type,
+                    owner_scope_id,
+                    owner_scope_id,
+                ),
+            )
         if not row:
             return {}
-        created = await self.get_governance_pack_upgrade(int(row["id"]))
+        created = await self.get_governance_pack_upgrade(int(row["id"]), conn=conn)
         return created or {}
 
-    async def get_governance_pack_upgrade(self, governance_pack_upgrade_id: int) -> dict[str, Any] | None:
-        row = await self.db_pool.fetchone(
-            """
+    async def get_governance_pack_upgrade(
+        self,
+        governance_pack_upgrade_id: int,
+        *,
+        conn: Any | None = None,
+    ) -> dict[str, Any] | None:
+        query = """
             SELECT id, pack_id, owner_scope_type, owner_scope_id, from_governance_pack_id,
                    to_governance_pack_id, from_pack_version, to_pack_version, status,
                    planned_by, executed_by, planner_inputs_fingerprint, adapter_state_fingerprint,
@@ -706,8 +868,11 @@ class McpHubRepo:
                    planned_at, executed_at
             FROM mcp_governance_pack_upgrades
             WHERE id = ?
-            """,
-            (int(governance_pack_upgrade_id),),
+            """
+        row = (
+            await self.db_pool.fetchone(query, (int(governance_pack_upgrade_id),))
+            if conn is None
+            else await self._conn_fetchone(conn, query, (int(governance_pack_upgrade_id),))
         )
         return self._normalize_governance_pack_upgrade_row(self._row_to_dict(row) if row else None)
 
@@ -754,30 +919,34 @@ class McpHubRepo:
         object_type: str,
         object_id: int | str,
         source_object_id: str,
+        conn: Any | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         normalized_object_type = str(object_type or "").strip().lower()
         normalized_object_id = str(object_id).strip()
         normalized_source_object_id = str(source_object_id or "").strip()
-        await self.db_pool.execute(
-            """
+        params = (
+            int(governance_pack_id),
+            normalized_object_type,
+            normalized_object_id,
+            normalized_source_object_id,
+            ts,
+        )
+        query = """
             INSERT INTO mcp_governance_pack_objects (
                 governance_pack_id, object_type, object_id, source_object_id, created_at
             ) VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                int(governance_pack_id),
-                normalized_object_type,
-                normalized_object_id,
-                normalized_source_object_id,
-                ts,
-            ),
-        )
+            """
+        if conn is None:
+            await self.db_pool.execute(query, params)
+        else:
+            await self._conn_execute(conn, query, params)
         return (
             await self.get_governance_pack_object(
                 object_type=normalized_object_type,
                 object_id=normalized_object_id,
+                conn=conn,
             )
             or {}
         )
@@ -787,15 +956,25 @@ class McpHubRepo:
         *,
         object_type: str,
         object_id: int | str,
+        conn: Any | None = None,
     ) -> dict[str, Any] | None:
-        row = await self.db_pool.fetchone(
-            """
+        query = """
             SELECT id, governance_pack_id, object_type, object_id, source_object_id, created_at
             FROM mcp_governance_pack_objects
             WHERE object_type = ?
               AND object_id = ?
-            """,
-            (str(object_type or "").strip().lower(), str(object_id).strip()),
+            """
+        row = (
+            await self.db_pool.fetchone(
+                query,
+                (str(object_type or "").strip().lower(), str(object_id).strip()),
+            )
+            if conn is None
+            else await self._conn_fetchone(
+                conn,
+                query,
+                (str(object_type or "").strip().lower(), str(object_id).strip()),
+            )
         )
         return self._normalize_governance_pack_object_row(self._row_to_dict(row) if row else None)
 
@@ -1311,6 +1490,7 @@ class McpHubRepo:
         description: str | None = None,
         is_active: bool = True,
         is_immutable: bool = False,
+        conn: Any | None = None,
     ) -> dict[str, Any]:
         scope_type = _normalize_scope_type(owner_scope_type)
         profile_mode = _normalize_profile_mode(mode)
@@ -1320,59 +1500,79 @@ class McpHubRepo:
         immutable_value: bool | int = (
             is_immutable if getattr(self.db_pool, "pool", None) is not None else int(is_immutable)
         )
-        await self.db_pool.execute(
-            """
+        params = (
+            name.strip(),
+            description,
+            scope_type,
+            owner_scope_id,
+            profile_mode,
+            path_scope_object_id,
+            json.dumps(policy_document or {}),
+            active_value,
+            immutable_value,
+            actor_id,
+            actor_id,
+            ts,
+            ts,
+        )
+        query = """
             INSERT INTO mcp_permission_profiles (
                 name, description, owner_scope_type, owner_scope_id, mode, path_scope_object_id,
                 policy_document_json, is_active, is_immutable, created_by, updated_by, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                name.strip(),
-                description,
-                scope_type,
-                owner_scope_id,
-                profile_mode,
-                path_scope_object_id,
-                json.dumps(policy_document or {}),
-                active_value,
-                immutable_value,
-                actor_id,
-                actor_id,
-                ts,
-                ts,
-            ),
-        )
-        row = await self.db_pool.fetchone(
             """
-            SELECT id
-            FROM mcp_permission_profiles
-            WHERE name = ?
-              AND owner_scope_type = ?
-              AND (
-                (owner_scope_id IS NULL AND ? IS NULL)
-                OR owner_scope_id = ?
-              )
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (name.strip(), scope_type, owner_scope_id, owner_scope_id),
-        )
+        if conn is None:
+            await self.db_pool.execute(query, params)
+            row = await self.db_pool.fetchone(
+                """
+                SELECT id
+                FROM mcp_permission_profiles
+                WHERE name = ?
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (name.strip(), scope_type, owner_scope_id, owner_scope_id),
+            )
+        else:
+            await self._conn_execute(conn, query, params)
+            row = await self._conn_fetchone(
+                conn,
+                """
+                SELECT id
+                FROM mcp_permission_profiles
+                WHERE name = ?
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (name.strip(), scope_type, owner_scope_id, owner_scope_id),
+            )
         if not row:
             return {}
-        created = await self.get_permission_profile(int(row["id"]))
+        created = await self.get_permission_profile(int(row["id"]), conn=conn)
         return created or {}
 
-    async def get_permission_profile(self, profile_id: int) -> dict[str, Any] | None:
-        row = await self.db_pool.fetchone(
-            """
+    async def get_permission_profile(self, profile_id: int, *, conn: Any | None = None) -> dict[str, Any] | None:
+        query = """
             SELECT id, name, description, owner_scope_type, owner_scope_id, mode, path_scope_object_id,
                    policy_document_json, is_active, is_immutable,
                    created_by, updated_by, created_at, updated_at
             FROM mcp_permission_profiles
             WHERE id = ?
-            """,
-            (int(profile_id),),
+            """
+        row = (
+            await self.db_pool.fetchone(query, (int(profile_id),))
+            if conn is None
+            else await self._conn_fetchone(conn, query, (int(profile_id),))
         )
         return self._normalize_permission_profile_row(self._row_to_dict(row) if row else None)
 
@@ -1423,8 +1623,9 @@ class McpHubRepo:
         policy_document: dict[str, Any] | None | object = _UNSET,
         is_active: bool | object = _UNSET,
         actor_id: int | None = None,
+        conn: Any | None = None,
     ) -> dict[str, Any] | None:
-        existing = await self.get_permission_profile(profile_id)
+        existing = await self.get_permission_profile(profile_id, conn=conn)
         if not existing:
             return None
 
@@ -1452,8 +1653,20 @@ class McpHubRepo:
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
 
-        await self.db_pool.execute(
-            """
+        params = (
+            next_name,
+            next_description,
+            next_scope,
+            next_scope_id,
+            next_mode,
+            next_path_scope_object_id,
+            json.dumps(next_policy_document or {}),
+            active_value,
+            actor_id,
+            ts,
+            int(profile_id),
+        )
+        query = """
             UPDATE mcp_permission_profiles
             SET name = ?,
                 description = ?,
@@ -1466,22 +1679,12 @@ class McpHubRepo:
                 updated_by = ?,
                 updated_at = ?
             WHERE id = ?
-            """,
-            (
-                next_name,
-                next_description,
-                next_scope,
-                next_scope_id,
-                next_mode,
-                next_path_scope_object_id,
-                json.dumps(next_policy_document or {}),
-                active_value,
-                actor_id,
-                ts,
-                int(profile_id),
-            ),
-        )
-        return await self.get_permission_profile(profile_id)
+            """
+        if conn is None:
+            await self.db_pool.execute(query, params)
+        else:
+            await self._conn_execute(conn, query, params)
+        return await self.get_permission_profile(profile_id, conn=conn)
 
     async def delete_permission_profile(self, profile_id: int) -> bool:
         cursor = await self.db_pool.execute(
@@ -2076,6 +2279,7 @@ class McpHubRepo:
         actor_id: int | None,
         is_active: bool = True,
         is_immutable: bool = False,
+        conn: Any | None = None,
     ) -> dict[str, Any]:
         normalized_target_type = _normalize_target_type(target_type)
         normalized_target_id = str(target_id).strip() if target_id is not None else None
@@ -2086,68 +2290,96 @@ class McpHubRepo:
         immutable_value: bool | int = (
             is_immutable if getattr(self.db_pool, "pool", None) is not None else int(is_immutable)
         )
-        await self.db_pool.execute(
-            """
+        params = (
+            normalized_target_type,
+            normalized_target_id,
+            scope_type,
+            owner_scope_id,
+            profile_id,
+            path_scope_object_id,
+            str(workspace_source_mode or "").strip().lower() or None,
+            workspace_set_object_id,
+            json.dumps(inline_policy_document or {}),
+            approval_policy_id,
+            active_value,
+            immutable_value,
+            actor_id,
+            actor_id,
+            ts,
+            ts,
+        )
+        query = """
             INSERT INTO mcp_policy_assignments (
                 target_type, target_id, owner_scope_type, owner_scope_id, profile_id,
                 path_scope_object_id, workspace_source_mode, workspace_set_object_id,
                 inline_policy_document_json, approval_policy_id, is_active, is_immutable,
                 created_by, updated_by, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                normalized_target_type,
-                normalized_target_id,
-                scope_type,
-                owner_scope_id,
-                profile_id,
-                path_scope_object_id,
-                str(workspace_source_mode or "").strip().lower() or None,
-                workspace_set_object_id,
-                json.dumps(inline_policy_document or {}),
-                approval_policy_id,
-                active_value,
-                immutable_value,
-                actor_id,
-                actor_id,
-                ts,
-                ts,
-            ),
-        )
-        row = await self.db_pool.fetchone(
             """
-            SELECT id
-            FROM mcp_policy_assignments
-            WHERE target_type = ?
-              AND (
-                (target_id IS NULL AND ? IS NULL)
-                OR target_id = ?
-              )
-              AND owner_scope_type = ?
-              AND (
-                (owner_scope_id IS NULL AND ? IS NULL)
-                OR owner_scope_id = ?
-              )
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (
-                normalized_target_type,
-                normalized_target_id,
-                normalized_target_id,
-                scope_type,
-                owner_scope_id,
-                owner_scope_id,
-            ),
-        )
+        if conn is None:
+            await self.db_pool.execute(query, params)
+            row = await self.db_pool.fetchone(
+                """
+                SELECT id
+                FROM mcp_policy_assignments
+                WHERE target_type = ?
+                  AND (
+                    (target_id IS NULL AND ? IS NULL)
+                    OR target_id = ?
+                  )
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (
+                    normalized_target_type,
+                    normalized_target_id,
+                    normalized_target_id,
+                    scope_type,
+                    owner_scope_id,
+                    owner_scope_id,
+                ),
+            )
+        else:
+            await self._conn_execute(conn, query, params)
+            row = await self._conn_fetchone(
+                conn,
+                """
+                SELECT id
+                FROM mcp_policy_assignments
+                WHERE target_type = ?
+                  AND (
+                    (target_id IS NULL AND ? IS NULL)
+                    OR target_id = ?
+                  )
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (
+                    normalized_target_type,
+                    normalized_target_id,
+                    normalized_target_id,
+                    scope_type,
+                    owner_scope_id,
+                    owner_scope_id,
+                ),
+            )
         if not row:
             return {}
-        created = await self.get_policy_assignment(int(row["id"]))
+        created = await self.get_policy_assignment(int(row["id"]), conn=conn)
         return created or {}
 
-    async def get_policy_assignment(self, assignment_id: int) -> dict[str, Any] | None:
-        row = await self.db_pool.fetchone(
-            """
+    async def get_policy_assignment(self, assignment_id: int, *, conn: Any | None = None) -> dict[str, Any] | None:
+        query = """
             SELECT a.id, a.target_type, a.target_id, a.owner_scope_type, a.owner_scope_id, a.profile_id,
                    a.path_scope_object_id, a.workspace_source_mode, a.workspace_set_object_id,
                    a.inline_policy_document_json, a.approval_policy_id, a.is_active, a.is_immutable,
@@ -2159,8 +2391,11 @@ class McpHubRepo:
             FROM mcp_policy_assignments AS a
             LEFT JOIN mcp_policy_overrides AS o ON o.assignment_id = a.id
             WHERE a.id = ?
-            """,
-            (int(assignment_id),),
+            """
+        row = (
+            await self.db_pool.fetchone(query, (int(assignment_id),))
+            if conn is None
+            else await self._conn_fetchone(conn, query, (int(assignment_id),))
         )
         return self._normalize_policy_assignment_row(self._row_to_dict(row) if row else None)
 
@@ -2234,8 +2469,9 @@ class McpHubRepo:
         approval_policy_id: int | None | object = _UNSET,
         is_active: bool | object = _UNSET,
         actor_id: int | None = None,
+        conn: Any | None = None,
     ) -> dict[str, Any] | None:
-        existing = await self.get_policy_assignment(assignment_id)
+        existing = await self.get_policy_assignment(assignment_id, conn=conn)
         if not existing:
             return None
 
@@ -2287,8 +2523,23 @@ class McpHubRepo:
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
 
-        await self.db_pool.execute(
-            """
+        params = (
+            next_target_type,
+            next_target_id,
+            next_scope,
+            next_scope_id,
+            next_profile_id,
+            next_path_scope_object_id,
+            next_workspace_source_mode,
+            next_workspace_set_object_id,
+            json.dumps(next_inline_policy_document or {}),
+            next_approval_policy_id,
+            active_value,
+            actor_id,
+            ts,
+            int(assignment_id),
+        )
+        query = """
             UPDATE mcp_policy_assignments
             SET target_type = ?,
                 target_id = ?,
@@ -2304,25 +2555,12 @@ class McpHubRepo:
                 updated_by = ?,
                 updated_at = ?
             WHERE id = ?
-            """,
-            (
-                next_target_type,
-                next_target_id,
-                next_scope,
-                next_scope_id,
-                next_profile_id,
-                next_path_scope_object_id,
-                next_workspace_source_mode,
-                next_workspace_set_object_id,
-                json.dumps(next_inline_policy_document or {}),
-                next_approval_policy_id,
-                active_value,
-                actor_id,
-                ts,
-                int(assignment_id),
-            ),
-        )
-        return await self.get_policy_assignment(assignment_id)
+            """
+        if conn is None:
+            await self.db_pool.execute(query, params)
+        else:
+            await self._conn_execute(conn, query, params)
+        return await self.get_policy_assignment(assignment_id, conn=conn)
 
     async def delete_policy_assignment(self, assignment_id: int) -> bool:
         cursor = await self.db_pool.execute(
@@ -2353,27 +2591,40 @@ class McpHubRepo:
         *,
         workspace_id: str,
         actor_id: int | None,
+        conn: Any | None = None,
     ) -> dict[str, Any]:
         workspace_value = str(workspace_id or "").strip()
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
-        await self.db_pool.execute(
-            """
+        params = (int(assignment_id), workspace_value, actor_id, ts)
+        query = """
             INSERT INTO mcp_policy_assignment_workspaces (
                 assignment_id, workspace_id, created_by, created_at
             ) VALUES (?, ?, ?, ?)
-            """,
-            (int(assignment_id), workspace_value, actor_id, ts),
-        )
-        row = await self.db_pool.fetchone(
             """
-            SELECT assignment_id, workspace_id, created_by, created_at
-            FROM mcp_policy_assignment_workspaces
-            WHERE assignment_id = ?
-              AND workspace_id = ?
-            """,
-            (int(assignment_id), workspace_value),
-        )
+        if conn is None:
+            await self.db_pool.execute(query, params)
+            row = await self.db_pool.fetchone(
+                """
+                SELECT assignment_id, workspace_id, created_by, created_at
+                FROM mcp_policy_assignment_workspaces
+                WHERE assignment_id = ?
+                  AND workspace_id = ?
+                """,
+                (int(assignment_id), workspace_value),
+            )
+        else:
+            await self._conn_execute(conn, query, params)
+            row = await self._conn_fetchone(
+                conn,
+                """
+                SELECT assignment_id, workspace_id, created_by, created_at
+                FROM mcp_policy_assignment_workspaces
+                WHERE assignment_id = ?
+                  AND workspace_id = ?
+                """,
+                (int(assignment_id), workspace_value),
+            )
         return self._normalize_policy_assignment_workspace_row(self._row_to_dict(row) if row else None) or {}
 
     async def delete_policy_assignment_workspace(self, assignment_id: int, workspace_id: str) -> bool:
@@ -2388,15 +2639,22 @@ class McpHubRepo:
         rowcount = getattr(cursor, "rowcount", 0)
         return bool(rowcount and rowcount > 0)
 
-    async def get_policy_override_by_assignment(self, assignment_id: int) -> dict[str, Any] | None:
-        row = await self.db_pool.fetchone(
-            """
+    async def get_policy_override_by_assignment(
+        self,
+        assignment_id: int,
+        *,
+        conn: Any | None = None,
+    ) -> dict[str, Any] | None:
+        query = """
             SELECT id, assignment_id, override_document_json, is_active, broadens_access,
                    grant_authority_snapshot_json, created_by, updated_by, created_at, updated_at
             FROM mcp_policy_overrides
             WHERE assignment_id = ?
-            """,
-            (int(assignment_id),),
+            """
+        row = (
+            await self.db_pool.fetchone(query, (int(assignment_id),))
+            if conn is None
+            else await self._conn_fetchone(conn, query, (int(assignment_id),))
         )
         return self._normalize_policy_override_row(self._row_to_dict(row) if row else None)
 
@@ -2409,8 +2667,9 @@ class McpHubRepo:
         grant_authority_snapshot: dict[str, Any],
         actor_id: int | None,
         is_active: bool = True,
+        conn: Any | None = None,
     ) -> dict[str, Any] | None:
-        assignment = await self.get_policy_assignment(int(assignment_id))
+        assignment = await self.get_policy_assignment(int(assignment_id), conn=conn)
         if assignment is None:
             return None
 
@@ -2421,8 +2680,18 @@ class McpHubRepo:
             broadens_access if getattr(self.db_pool, "pool", None) is not None else int(broadens_access)
         )
 
-        await self.db_pool.execute(
-            """
+        params = (
+            int(assignment_id),
+            json.dumps(override_policy_document or {}),
+            active_value,
+            broadens_value,
+            json.dumps(grant_authority_snapshot or {}),
+            actor_id,
+            actor_id,
+            ts,
+            ts,
+        )
+        query = """
             INSERT INTO mcp_policy_overrides (
                 assignment_id, override_document_json, is_active, broadens_access,
                 grant_authority_snapshot_json, created_by, updated_by, created_at, updated_at
@@ -2434,20 +2703,59 @@ class McpHubRepo:
                 grant_authority_snapshot_json = excluded.grant_authority_snapshot_json,
                 updated_by = excluded.updated_by,
                 updated_at = excluded.updated_at
-            """,
-            (
-                int(assignment_id),
-                json.dumps(override_policy_document or {}),
-                active_value,
-                broadens_value,
-                json.dumps(grant_authority_snapshot or {}),
-                actor_id,
-                actor_id,
-                ts,
-                ts,
-            ),
+            """
+        if conn is None:
+            await self.db_pool.execute(query, params)
+        else:
+            await self._conn_execute(conn, query, params)
+        return await self.get_policy_override_by_assignment(int(assignment_id), conn=conn)
+
+    async def rebind_policy_override_assignment(
+        self,
+        *,
+        old_assignment_id: int,
+        new_assignment_id: int,
+        actor_id: int | None,
+        conn: Any | None = None,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_policy_override_by_assignment(old_assignment_id, conn=conn)
+        if existing is None:
+            return None
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        params = (int(new_assignment_id), actor_id, ts, int(old_assignment_id))
+        query = """
+            UPDATE mcp_policy_overrides
+            SET assignment_id = ?,
+                updated_by = ?,
+                updated_at = ?
+            WHERE assignment_id = ?
+            """
+        if conn is None:
+            await self.db_pool.execute(query, params)
+        else:
+            await self._conn_execute(conn, query, params)
+        return await self.get_policy_override_by_assignment(int(new_assignment_id), conn=conn)
+
+    async def rebind_policy_assignment_workspaces(
+        self,
+        *,
+        old_assignment_id: int,
+        new_assignment_id: int,
+        conn: Any | None = None,
+    ) -> bool:
+        params = (int(new_assignment_id), int(old_assignment_id))
+        query = """
+            UPDATE mcp_policy_assignment_workspaces
+            SET assignment_id = ?
+            WHERE assignment_id = ?
+            """
+        result = (
+            await self.db_pool.execute(query, params)
+            if conn is None
+            else await self._conn_execute(conn, query, params)
         )
-        return await self.get_policy_override_by_assignment(int(assignment_id))
+        return self._command_touched_rows(result)
 
     async def delete_policy_override_by_assignment(self, assignment_id: int) -> bool:
         cursor = await self.db_pool.execute(
@@ -2469,6 +2777,7 @@ class McpHubRepo:
         description: str | None = None,
         is_active: bool = True,
         is_immutable: bool = False,
+        conn: Any | None = None,
     ) -> dict[str, Any]:
         scope_type = _normalize_scope_type(owner_scope_type)
         approval_mode = _normalize_approval_mode(mode)
@@ -2478,58 +2787,78 @@ class McpHubRepo:
         immutable_value: bool | int = (
             is_immutable if getattr(self.db_pool, "pool", None) is not None else int(is_immutable)
         )
-        await self.db_pool.execute(
-            """
+        params = (
+            name.strip(),
+            description,
+            scope_type,
+            owner_scope_id,
+            approval_mode,
+            json.dumps(rules or {}),
+            active_value,
+            immutable_value,
+            actor_id,
+            actor_id,
+            ts,
+            ts,
+        )
+        query = """
             INSERT INTO mcp_approval_policies (
                 name, description, owner_scope_type, owner_scope_id, mode, rules_json, is_active,
                 is_immutable, created_by, updated_by, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                name.strip(),
-                description,
-                scope_type,
-                owner_scope_id,
-                approval_mode,
-                json.dumps(rules or {}),
-                active_value,
-                immutable_value,
-                actor_id,
-                actor_id,
-                ts,
-                ts,
-            ),
-        )
-        row = await self.db_pool.fetchone(
             """
-            SELECT id
-            FROM mcp_approval_policies
-            WHERE name = ?
-              AND owner_scope_type = ?
-              AND (
-                (owner_scope_id IS NULL AND ? IS NULL)
-                OR owner_scope_id = ?
-              )
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (name.strip(), scope_type, owner_scope_id, owner_scope_id),
-        )
+        if conn is None:
+            await self.db_pool.execute(query, params)
+            row = await self.db_pool.fetchone(
+                """
+                SELECT id
+                FROM mcp_approval_policies
+                WHERE name = ?
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (name.strip(), scope_type, owner_scope_id, owner_scope_id),
+            )
+        else:
+            await self._conn_execute(conn, query, params)
+            row = await self._conn_fetchone(
+                conn,
+                """
+                SELECT id
+                FROM mcp_approval_policies
+                WHERE name = ?
+                  AND owner_scope_type = ?
+                  AND (
+                    (owner_scope_id IS NULL AND ? IS NULL)
+                    OR owner_scope_id = ?
+                  )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (name.strip(), scope_type, owner_scope_id, owner_scope_id),
+            )
         if not row:
             return {}
-        created = await self.get_approval_policy(int(row["id"]))
+        created = await self.get_approval_policy(int(row["id"]), conn=conn)
         return created or {}
 
-    async def get_approval_policy(self, approval_policy_id: int) -> dict[str, Any] | None:
-        row = await self.db_pool.fetchone(
-            """
+    async def get_approval_policy(self, approval_policy_id: int, *, conn: Any | None = None) -> dict[str, Any] | None:
+        query = """
             SELECT id, name, description, owner_scope_type, owner_scope_id, mode, rules_json, is_active,
                    is_immutable,
                    created_by, updated_by, created_at, updated_at
             FROM mcp_approval_policies
             WHERE id = ?
-            """,
-            (int(approval_policy_id),),
+            """
+        row = (
+            await self.db_pool.fetchone(query, (int(approval_policy_id),))
+            if conn is None
+            else await self._conn_fetchone(conn, query, (int(approval_policy_id),))
         )
         return self._normalize_approval_policy_row(self._row_to_dict(row) if row else None)
 
@@ -2579,8 +2908,9 @@ class McpHubRepo:
         rules: dict[str, Any] | None | object = _UNSET,
         is_active: bool | object = _UNSET,
         actor_id: int | None = None,
+        conn: Any | None = None,
     ) -> dict[str, Any] | None:
-        existing = await self.get_approval_policy(approval_policy_id)
+        existing = await self.get_approval_policy(approval_policy_id, conn=conn)
         if not existing:
             return None
 
@@ -2607,8 +2937,19 @@ class McpHubRepo:
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         active_value: bool | int = next_active if getattr(self.db_pool, "pool", None) is not None else int(next_active)
 
-        await self.db_pool.execute(
-            """
+        params = (
+            next_name,
+            next_description,
+            next_scope,
+            next_scope_id,
+            next_mode,
+            json.dumps(next_rules or {}),
+            active_value,
+            actor_id,
+            ts,
+            int(approval_policy_id),
+        )
+        query = """
             UPDATE mcp_approval_policies
             SET name = ?,
                 description = ?,
@@ -2620,21 +2961,12 @@ class McpHubRepo:
                 updated_by = ?,
                 updated_at = ?
             WHERE id = ?
-            """,
-            (
-                next_name,
-                next_description,
-                next_scope,
-                next_scope_id,
-                next_mode,
-                json.dumps(next_rules or {}),
-                active_value,
-                actor_id,
-                ts,
-                int(approval_policy_id),
-            ),
-        )
-        return await self.get_approval_policy(approval_policy_id)
+            """
+        if conn is None:
+            await self.db_pool.execute(query, params)
+        else:
+            await self._conn_execute(conn, query, params)
+        return await self.get_approval_policy(approval_policy_id, conn=conn)
 
     async def delete_approval_policy(self, approval_policy_id: int) -> bool:
         cursor = await self.db_pool.execute(
