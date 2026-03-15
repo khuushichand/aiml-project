@@ -184,6 +184,7 @@ async def test_import_governance_pack_materializes_immutable_base_objects_with_p
     assert governance_pack is not None
     assert governance_pack["pack_id"] == "researcher-pack"
     assert governance_pack["pack_version"] == "1.0.0"
+    assert governance_pack["is_active_install"] is True
     assert len(str(governance_pack["bundle_digest"])) == 64
 
     approval_policy = await repo.get_approval_policy(result.imported_object_ids["approval_policies"][0])
