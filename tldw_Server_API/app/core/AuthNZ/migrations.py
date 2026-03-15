@@ -15,6 +15,7 @@ from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.DB_Management.migrations import Migration, MigrationManager
+from tldw_Server_API.app.core.Infrastructure.distributed_lock import acquire_migration_lock
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.core.testing import is_truthy as _is_truthy
 
@@ -3974,6 +3975,22 @@ def apply_authnz_migrations(db_path: Path, target_version: int = None) -> None:
         db_path: Path to the database file
         target_version: Target migration version (None = latest)
     """
+    import os as _os
+
+    redis_url = _os.getenv("REDIS_URL")
+    lock_dir = str(Path(db_path).parent) if db_path else None
+
+    with acquire_migration_lock(
+        lock_dir=lock_dir,
+        lock_name="authnz_migration",
+        redis_url=redis_url,
+        timeout=60,
+    ):
+        _apply_authnz_migrations_locked(db_path, target_version)
+
+
+def _apply_authnz_migrations_locked(db_path: Path, target_version: int = None) -> None:
+    """Inner migration logic, called while holding the distributed lock."""
     manager = MigrationManager(db_path)
     try:
         from loguru import logger as _logger
