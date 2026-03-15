@@ -10,6 +10,7 @@ export type PersonaSetupAnalyticsEventType =
   | "detour_returned"
   | "setup_completed"
   | "handoff_action_clicked"
+  | "handoff_target_reached"
   | "handoff_dismissed"
   | "first_post_setup_action"
 
@@ -34,14 +35,32 @@ const createEventId = (): string => {
 export const buildSetupEventKey = ({
   eventType,
   step,
-  detourSource
-}: Pick<PersonaSetupAnalyticsEvent, "eventType" | "step" | "detourSource">):
+  detourSource,
+  actionTarget,
+  metadata
+}: Pick<
+  PersonaSetupAnalyticsEvent,
+  "eventType" | "step" | "detourSource" | "actionTarget" | "metadata"
+>):
   | string
   | undefined => {
   if (eventType === "setup_started") return "setup_started"
   if (eventType === "setup_completed") return "setup_completed"
   if (eventType === "handoff_dismissed") return "handoff_dismissed"
   if (eventType === "first_post_setup_action") return "first_post_setup_action"
+  if (eventType === "handoff_target_reached" && actionTarget) {
+    const metadataRecord =
+      metadata && typeof metadata === "object" ? metadata : undefined
+    const connectionId = String(metadataRecord?.connection_id || "").trim()
+    if (connectionId) {
+      return `handoff_target_reached:${actionTarget}:${connectionId}`
+    }
+    const connectionName = String(metadataRecord?.connection_name || "").trim()
+    if (connectionName) {
+      return `handoff_target_reached:${actionTarget}:${connectionName}`
+    }
+    return `handoff_target_reached:${actionTarget}`
+  }
   if (eventType === "step_viewed" && step) return `step_viewed:${step}`
   if (eventType === "step_completed" && step) return `step_completed:${step}`
   if (eventType === "detour_returned" && detourSource) {

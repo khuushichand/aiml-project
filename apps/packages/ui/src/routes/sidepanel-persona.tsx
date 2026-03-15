@@ -678,6 +678,7 @@ const SidepanelPersona = ({
   const emittedSetupEventKeysRef = React.useRef<Set<string>>(new Set())
   const setupLiveDetourRef = React.useRef<SetupLiveDetourState | null>(null)
   const setupHandoffRef = React.useRef<SetupHandoffState | null>(null)
+  const setupHandoffFocusRequestRef = React.useRef<SetupHandoffFocusRequest | null>(null)
   const activeTabRef = React.useRef<PersonaGardenTabKey>("live")
   const resolvedApprovalFadeTimerRef = React.useRef<number | null>(null)
   const approvalHighlightPhaseTimerRef = React.useRef<number | null>(null)
@@ -813,6 +814,10 @@ const SidepanelPersona = ({
   React.useEffect(() => {
     setupHandoffRef.current = setupHandoff
   }, [setupHandoff])
+
+  React.useEffect(() => {
+    setupHandoffFocusRequestRef.current = setupHandoffFocusRequest
+  }, [setupHandoffFocusRequest])
 
   React.useEffect(() => {
     activeTabRef.current = activeTab
@@ -1033,7 +1038,9 @@ const SidepanelPersona = ({
       const eventKey = buildSetupEventKey({
         eventType,
         step: event.step,
-        detourSource: event.detourSource || undefined
+        detourSource: event.detourSource || undefined,
+        actionTarget: event.actionTarget || undefined,
+        metadata: event.metadata
       })
       if (eventKey) {
         const dedupeKey = `${personaId}:${runId}:${eventKey}`
@@ -4430,12 +4437,28 @@ const SidepanelPersona = ({
   }, [emitSetupAnalyticsEvent])
 
   const handleSetupHandoffFocusConsumed = React.useCallback((token: number) => {
+    const currentRequest = setupHandoffFocusRequestRef.current
+    if (!currentRequest || currentRequest.token !== token) return
+
+    const actionTarget = `${currentRequest.tab}.${currentRequest.section}`
+    void emitSetupAnalyticsEvent({
+      runId: setupHandoffRef.current?.runId,
+      eventType: "handoff_target_reached",
+      actionTarget,
+      metadata: {
+        connection_id: currentRequest.connectionId || undefined,
+        connection_name: currentRequest.connectionName || undefined,
+        recommended_action: setupHandoffRef.current?.recommendedAction || undefined,
+        completion_type: setupHandoffRef.current?.completionType || undefined
+      }
+    })
+
     setSetupHandoffFocusRequest((current) => {
       if (!current) return current
       if (current.token !== token) return current
       return null
     })
-  }, [])
+  }, [emitSetupAnalyticsEvent])
 
   const handleProfileDefaultsSaved = React.useCallback(() => {
     consumeSetupHandoffAction("voice_defaults_saved")

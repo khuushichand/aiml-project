@@ -44,6 +44,19 @@ describe("buildSetupEventKey", () => {
         detourSource: "live_failure"
       })
     ).toBe("detour_returned:live_failure")
+    expect(
+      buildSetupEventKey({
+        eventType: "handoff_target_reached",
+        actionTarget: "commands.command_form"
+      })
+    ).toBe("handoff_target_reached:commands.command_form")
+    expect(
+      buildSetupEventKey({
+        eventType: "handoff_target_reached",
+        actionTarget: "connections.saved_connections",
+        metadata: { connection_id: "conn-123" }
+      })
+    ).toBe("handoff_target_reached:connections.saved_connections:conn-123")
     expect(buildSetupEventKey({ eventType: "retry_clicked" })).toBeUndefined()
   })
 })

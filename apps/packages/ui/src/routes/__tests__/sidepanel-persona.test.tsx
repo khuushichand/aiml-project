@@ -2145,6 +2145,7 @@ describe("SidepanelPersona", () => {
     const currentVoiceDefaults = {
       confirmation_mode: "destructive_only"
     }
+    const setupEventBodies: Array<Record<string, unknown>> = []
 
     mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string; body?: any }) => {
       const method = String(init?.method || "GET").toUpperCase()
@@ -2152,6 +2153,19 @@ describe("SidepanelPersona", () => {
         return Promise.resolve({
           ok: true,
           json: async () => [{ id: "garden-helper", name: "Garden Helper" }]
+        })
+      }
+      if (path.includes("/persona/profiles/garden-helper/setup-events") && method === "POST") {
+        setupEventBodies.push(init?.body || {})
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            event_id: init?.body?.event_id || "evt-1",
+            run_id: init?.body?.run_id || "setup-run-1",
+            event_type: init?.body?.event_type || "step_viewed",
+            deduped: false,
+            created_at: "2026-03-14T10:00:00.000Z"
+          })
         })
       }
       if (path.includes("/persona/profiles/garden-helper/voice-analytics")) {
@@ -2261,6 +2275,26 @@ describe("SidepanelPersona", () => {
     await waitFor(() => {
       expect(screen.getByTestId("persona-commands-name-input")).toHaveFocus()
     })
+    expect(
+      setupEventBodies.filter(
+        (body) =>
+          body.event_type === "handoff_target_reached" &&
+          body.action_target === "commands.command_list"
+      )
+    ).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole("button", { name: "Review commands" }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("persona-commands-name-input")).toHaveFocus()
+    })
+    expect(
+      setupEventBodies.filter(
+        (body) =>
+          body.event_type === "handoff_target_reached" &&
+          body.action_target === "commands.command_list"
+      )
+    ).toHaveLength(1)
   })
 
   it("retargets the setup handoff and targets the saved connection action after a cross-tab handoff action", async () => {

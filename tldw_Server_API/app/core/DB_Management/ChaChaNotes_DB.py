@@ -8462,8 +8462,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     "completion_type": None,
                     "terminal_step": None,
                     "handoff_clicked": False,
+                    "handoff_target_reached": False,
                     "handoff_dismissed": False,
                     "first_post_setup_action": False,
+                    "_reached_targets": set(),
                     "_latest_id": -1,
                     "_earliest_created_at": None,
                     "_latest_step_id": -1,
@@ -8498,6 +8500,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 run["terminal_step"] = step
             if event_type == "handoff_action_clicked":
                 run["handoff_clicked"] = True
+            elif event_type == "handoff_target_reached":
+                run["handoff_target_reached"] = True
+                action_target = str(event.get("action_target") or "").strip()
+                if action_target:
+                    reached_targets = run["_reached_targets"]
+                    if isinstance(reached_targets, set):
+                        reached_targets.add(action_target)
             elif event_type == "handoff_dismissed":
                 run["handoff_dismissed"] = True
             elif event_type == "first_post_setup_action":
@@ -8516,7 +8525,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         dry_run_completion_count = 0
         live_session_completion_count = 0
         handoff_clicked_runs = 0
+        handoff_target_reached_runs = 0
         first_post_setup_action_runs = 0
+        handoff_target_reached_counts: dict[str, int] = {}
         dropoff_counts: dict[str, int] = {}
 
         for run in sorted(
@@ -8540,8 +8551,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
             if bool(run.get("handoff_clicked")):
                 handoff_clicked_runs += 1
+            if bool(run.get("handoff_target_reached")):
+                handoff_target_reached_runs += 1
             if bool(run.get("first_post_setup_action")):
                 first_post_setup_action_runs += 1
+            reached_targets = run.get("_reached_targets")
+            if isinstance(reached_targets, set):
+                for action_target in reached_targets:
+                    handoff_target_reached_counts[action_target] = (
+                        handoff_target_reached_counts.get(action_target, 0) + 1
+                    )
 
             recent_runs.append(
                 {
@@ -8551,6 +8570,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     "completion_type": completion_type,
                     "terminal_step": run["terminal_step"],
                     "handoff_clicked": bool(run["handoff_clicked"]),
+                    "handoff_target_reached": bool(run["handoff_target_reached"]),
                     "handoff_dismissed": bool(run["handoff_dismissed"]),
                     "first_post_setup_action": bool(run["first_post_setup_action"]),
                 }
@@ -8581,11 +8601,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if total_runs
                     else 0.0
                 ),
+                "handoff_target_reach_rate": (
+                    float(handoff_target_reached_runs) / float(handoff_clicked_runs)
+                    if handoff_clicked_runs
+                    else 0.0
+                ),
                 "first_post_setup_action_rate": (
                     float(first_post_setup_action_runs) / float(total_runs)
                     if total_runs
                     else 0.0
                 ),
+                "handoff_target_reached_counts": handoff_target_reached_counts,
                 "detour_started_counts": detour_started_counts,
                 "detour_returned_counts": detour_returned_counts,
             },

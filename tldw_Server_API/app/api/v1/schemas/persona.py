@@ -31,6 +31,7 @@ PersonaSetupEventType = Literal[
     "detour_returned",
     "setup_completed",
     "handoff_action_clicked",
+    "handoff_target_reached",
     "handoff_dismissed",
     "first_post_setup_action",
 ]
@@ -202,6 +203,7 @@ class PersonaSetupAnalyticsRunSummary(BaseModel):
     completion_type: PersonaSetupTestType | None = None
     terminal_step: PersonaSetupStep | None = None
     handoff_clicked: bool = False
+    handoff_target_reached: bool = False
     handoff_dismissed: bool = False
     first_post_setup_action: bool = False
 
@@ -216,7 +218,9 @@ class PersonaSetupAnalyticsSummary(BaseModel):
     live_session_completion_count: int = 0
     most_common_dropoff_step: PersonaSetupStep | None = None
     handoff_click_rate: float = 0.0
+    handoff_target_reach_rate: float = 0.0
     first_post_setup_action_rate: float = 0.0
+    handoff_target_reached_counts: dict[str, int] = Field(default_factory=dict)
     detour_started_counts: dict[str, int] = Field(default_factory=dict)
     detour_returned_counts: dict[str, int] = Field(default_factory=dict)
 
