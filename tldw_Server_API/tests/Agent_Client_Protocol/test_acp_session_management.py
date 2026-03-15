@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import types
+from types import SimpleNamespace
 
 import pytest
 
@@ -267,3 +268,202 @@ def test_audit_db_double_flush_is_idempotent():
         assert db.flush() == 1
         assert db.flush() == 0  # No new events
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_permission_response_audit_records_policy_snapshot_fingerprint(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+    from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
+        ACPRunnerClient,
+        PendingPermission,
+        SessionWebSocketRegistry,
+    )
+
+    cfg = SimpleNamespace(
+        command="echo",
+        args=[],
+        env={},
+        cwd=None,
+        startup_timeout_sec=0,
+    )
+    client = ACPRunnerClient(cfg)
+    session_id = "audit-session"
+    request_id = "perm-1"
+    future = asyncio.get_running_loop().create_future()
+
+    registry = SessionWebSocketRegistry(session_id=session_id)
+    registry.pending_permissions[request_id] = PendingPermission(
+        request_id=request_id,
+        session_id=session_id,
+        tool_name="fs.write",
+        tool_arguments={"path": "README.md"},
+        acp_message_id="acp-1",
+        future=future,
+        policy_snapshot_fingerprint="snapshot-audit-123",
+        approval_requirement="approval_required",
+        governance_reason="policy_approval_required",
+    )
+    client._ws_registry[session_id] = registry
+
+    recorded: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        acp_endpoints,
+        "_acp_record_audit_event",
+        lambda *, action, user_id, session_id, metadata=None: recorded.append(
+            {
+                "action": action,
+                "user_id": user_id,
+                "session_id": session_id,
+                "metadata": metadata or {},
+            }
+        ),
+    )
+
+    class _Stream:
+        async def send_json(self, payload):
+            raise AssertionError(f"unexpected error payload: {payload}")
+
+    await acp_endpoints._handle_client_message(
+        client,
+        session_id,
+        {
+            "type": "permission_response",
+            "request_id": request_id,
+            "approved": True,
+        },
+        _Stream(),
+        user_id=7,
+    )
+
+    assert recorded
+    event = recorded[-1]
+    assert event["action"] == "permission_response"
+    assert event["metadata"]["approved"] is True
+    assert event["metadata"]["policy_snapshot_fingerprint"] == "snapshot-audit-123"
+    assert event["metadata"]["approval_requirement"] == "approval_required"
+
+
+@pytest.mark.asyncio
+async def test_permission_response_audit_uses_client_metadata_accessor(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+    recorded: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        acp_endpoints,
+        "_acp_record_audit_event",
+        lambda *, action, user_id, session_id, metadata=None: recorded.append(
+            {
+                "action": action,
+                "user_id": user_id,
+                "session_id": session_id,
+                "metadata": metadata or {},
+            }
+        ),
+    )
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, bool, str | None]] = []
+
+        def get_pending_permission_metadata(self, session_id: str, request_id: str) -> dict[str, object]:
+            assert session_id == "audit-accessor-session"
+            assert request_id == "perm-accessor"
+            return {
+                "tool_name": "fs.read",
+                "approval_requirement": "approval_required",
+                "policy_snapshot_fingerprint": "snapshot-accessor",
+            }
+
+        async def respond_to_permission(
+            self,
+            session_id: str,
+            request_id: str,
+            approved: bool,
+            batch_approve_tier: str | None = None,
+        ) -> bool:
+            self.calls.append((session_id, request_id, approved, batch_approve_tier))
+            return True
+
+    class _Stream:
+        async def send_json(self, payload):
+            raise AssertionError(f"unexpected error payload: {payload}")
+
+    client = _Client()
+    await acp_endpoints._handle_client_message(
+        client,
+        "audit-accessor-session",
+        {
+            "type": "permission_response",
+            "request_id": "perm-accessor",
+            "approved": True,
+        },
+        _Stream(),
+        user_id=11,
+    )
+
+    assert client.calls == [("audit-accessor-session", "perm-accessor", True, None)]
+    assert recorded[-1]["metadata"]["tool_name"] == "fs.read"
+    assert recorded[-1]["metadata"]["policy_snapshot_fingerprint"] == "snapshot-accessor"
+
+
+@pytest.mark.asyncio
+async def test_permission_response_audit_logs_metadata_accessor_failure(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.agent_client_protocol as acp_endpoints
+
+    warnings: list[str] = []
+    recorded: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        acp_endpoints,
+        "_acp_record_audit_event",
+        lambda *, action, user_id, session_id, metadata=None: recorded.append(
+            {
+                "action": action,
+                "user_id": user_id,
+                "session_id": session_id,
+                "metadata": metadata or {},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        acp_endpoints.logger,
+        "warning",
+        lambda message, *args: warnings.append(str(message).format(*args)),
+    )
+
+    class _Client:
+        def get_pending_permission_metadata(self, session_id: str, request_id: str) -> dict[str, object]:
+            del session_id, request_id
+            raise RuntimeError("metadata lookup failed")
+
+        async def respond_to_permission(
+            self,
+            session_id: str,
+            request_id: str,
+            approved: bool,
+            batch_approve_tier: str | None = None,
+        ) -> bool:
+            del session_id, request_id, approved, batch_approve_tier
+            return True
+
+    class _Stream:
+        async def send_json(self, payload):
+            raise AssertionError(f"unexpected error payload: {payload}")
+
+    await acp_endpoints._handle_client_message(
+        _Client(),
+        "audit-accessor-failure",
+        {
+            "type": "permission_response",
+            "request_id": "perm-accessor-failure",
+            "approved": False,
+        },
+        _Stream(),
+        user_id=13,
+    )
+
+    assert recorded[-1]["metadata"]["approved"] is False
+    assert "policy_snapshot_fingerprint" not in recorded[-1]["metadata"]
+    assert any("Failed to load ACP pending permission metadata" in warning for warning in warnings)

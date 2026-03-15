@@ -152,6 +152,30 @@ class ACPWSPermissionRequestMessage(BaseModel):
     tool_name: str
     tool_arguments: dict[str, Any] = Field(default_factory=dict)
     tier: ACPPermissionTier = ACPPermissionTier.INDIVIDUAL
+    approval_requirement: str | None = Field(
+        default=None,
+        description="Resolved runtime approval requirement for this tool request",
+    )
+    governance_reason: str | None = Field(
+        default=None,
+        description="Human-readable reason the runtime policy required approval",
+    )
+    deny_reason: str | None = Field(
+        default=None,
+        description="Reason the runtime policy denied the request",
+    )
+    provenance_summary: dict[str, Any] | None = Field(
+        default=None,
+        description="Compact provenance summary for the runtime policy decision",
+    )
+    runtime_narrowing_reason: str | None = Field(
+        default=None,
+        description="Reason local runtime safety narrowed the effective policy",
+    )
+    policy_snapshot_fingerprint: str | None = Field(
+        default=None,
+        description="Fingerprint of the ACP runtime policy snapshot used for the decision",
+    )
     timeout_seconds: int = Field(default=300, description="Seconds until auto-cancel if no response")
 
 
@@ -278,6 +302,24 @@ class ACPSessionNewResponse(BaseModel):
     scope_snapshot_id: str | None = Field(
         default=None, description="Scope snapshot identifier bound to this ACP session"
     )
+    policy_snapshot_version: str | None = Field(
+        default=None, description="Version identifier for the current ACP policy snapshot"
+    )
+    policy_snapshot_fingerprint: str | None = Field(
+        default=None, description="Fingerprint of the current ACP policy snapshot"
+    )
+    policy_snapshot_refreshed_at: str | None = Field(
+        default=None, description="ISO 8601 timestamp when the ACP policy snapshot last refreshed"
+    )
+    policy_summary: dict[str, Any] | None = Field(
+        default=None, description="Compact summary of the ACP runtime policy snapshot"
+    )
+    policy_provenance_summary: dict[str, Any] | None = Field(
+        default=None, description="Compact provenance summary for the ACP runtime policy snapshot"
+    )
+    policy_refresh_error: str | None = Field(
+        default=None, description="Last ACP policy snapshot refresh error, if any"
+    )
 
 
 class ACPSessionPromptRequest(BaseModel):
@@ -347,6 +389,24 @@ class ACPSessionInfo(BaseModel):
     )
     scope_snapshot_id: str | None = Field(
         default=None, description="Scope snapshot identifier bound to this ACP session"
+    )
+    policy_snapshot_version: str | None = Field(
+        default=None, description="Version identifier for the current ACP policy snapshot"
+    )
+    policy_snapshot_fingerprint: str | None = Field(
+        default=None, description="Fingerprint of the current ACP policy snapshot"
+    )
+    policy_snapshot_refreshed_at: str | None = Field(
+        default=None, description="ISO 8601 timestamp when the ACP policy snapshot last refreshed"
+    )
+    policy_summary: dict[str, Any] | None = Field(
+        default=None, description="Compact summary of the ACP runtime policy snapshot"
+    )
+    policy_provenance_summary: dict[str, Any] | None = Field(
+        default=None, description="Compact provenance summary for the ACP runtime policy snapshot"
+    )
+    policy_refresh_error: str | None = Field(
+        default=None, description="Last ACP policy snapshot refresh error, if any"
     )
     forked_from: str | None = Field(default=None, description="Source session ID when this session was forked")
 
