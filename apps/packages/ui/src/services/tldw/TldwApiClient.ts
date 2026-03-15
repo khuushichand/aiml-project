@@ -2273,6 +2273,84 @@ export class TldwApiClient {
     })
   }
 
+  // ── Admin RBAC & Permissions ──
+
+  async listPermissions(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/permissions", method: "GET" })
+  }
+
+  async listPermissionCategories(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/permissions/categories", method: "GET" })
+  }
+
+  async getRolePermissionMatrix(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/roles/matrix-boolean", method: "GET" })
+  }
+
+  async listRolePermissions(roleId: number): Promise<any[]> {
+    return await bgRequest<any[]>({ path: `/api/v1/admin/roles/${roleId}/permissions`, method: "GET" })
+  }
+
+  async grantRolePermission(roleId: number, permissionId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/roles/${roleId}/permissions/${permissionId}`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async revokeRolePermission(roleId: number, permissionId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/roles/${roleId}/permissions/${permissionId}`,
+      method: "DELETE"
+    })
+  }
+
+  async listUserRoles(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({ path: `/api/v1/admin/users/${userId}/roles`, method: "GET" })
+  }
+
+  async assignUserRole(userId: number, roleId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/roles/${roleId}`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async removeUserRole(userId: number, roleId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/roles/${roleId}`,
+      method: "DELETE"
+    })
+  }
+
+  async listUserOverrides(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({ path: `/api/v1/admin/users/${userId}/overrides`, method: "GET" })
+  }
+
+  async getUserEffectivePermissions(userId: number): Promise<any[]> {
+    return await bgRequest<any[]>({ path: `/api/v1/admin/users/${userId}/effective-permissions`, method: "GET" })
+  }
+
+  async addUserOverride(userId: number, payload: { permission_id: number; effect: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/overrides`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteUserOverride(userId: number, permissionId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/users/${userId}/overrides/${permissionId}`,
+      method: "DELETE"
+    })
+  }
+
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
