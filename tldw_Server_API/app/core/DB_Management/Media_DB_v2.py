@@ -110,6 +110,28 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime.rows import (
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.execution import (
     close_sqlite_ephemeral,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.schema.bootstrap import (
+    ensure_media_schema,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.schema.features.core_media import (
+    apply_postgres_core_media_schema,
+    apply_sqlite_core_media_schema,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.schema.features.fts import (
+    ensure_postgres_fts,
+    ensure_sqlite_fts_structures,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.schema.features.policies import (
+    ensure_postgres_policies,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.schema.migrations import (
+    get_postgres_migrations,
+    run_postgres_migrations,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.repositories import (
+    KeywordsRepository,
+    MediaFilesRepository,
+)
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     convert_sqlite_placeholders_to_postgres,
@@ -2062,64 +2084,15 @@ class MediaDatabase:
         mime_type: str | None = None,
         checksum: str | None = None,
     ) -> str:
-        """
-        Insert a new MediaFiles row for a given media item.
-
-        Args:
-            media_id: ID of the parent media item
-            file_type: Type of file ('original', 'thumbnail', etc.)
-            storage_path: Path in storage backend (relative to base)
-            original_filename: Original filename from upload
-            file_size: Size in bytes
-            mime_type: MIME type (e.g., 'application/pdf')
-            checksum: SHA-256 hash of file contents
-
-        Returns:
-            The generated UUID for the inserted file record.
-        """
-        conn = self.get_connection()
-        new_uuid = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        data: dict[str, Any] = {
-            "media_id": media_id,
-            "file_type": file_type,
-            "storage_path": storage_path,
-            "original_filename": original_filename,
-            "file_size": file_size,
-            "mime_type": mime_type,
-            "checksum": checksum,
-            "uuid": new_uuid,
-            "created_at": now,
-            "last_modified": now,
-            "version": 1,
-            "client_id": self.client_id,
-            "deleted": 0,
-            "prev_version": None,
-            "merge_parent_uuid": None,
-        }
-        placeholders = ", ".join([f":{k}" for k in data])
-        columns = ", ".join(data.keys())
-        sql = f"INSERT INTO MediaFiles ({columns}) VALUES ({placeholders})"  # nosec B608
-        try:
-            self._execute_with_connection(conn, sql, data)
-            with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
-                self._log_sync_event(
-                    conn,
-                    "MediaFiles",
-                    new_uuid,
-                    "create",
-                    1,
-                    json.dumps(
-                        {
-                            "media_id": media_id,
-                            "file_type": file_type,
-                            "storage_path": storage_path,
-                        }
-                    ),
-                )
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
-            raise DatabaseError(f"Failed to insert MediaFile: {exc}") from exc  # noqa: TRY003
-        return new_uuid
+        return MediaFilesRepository.from_legacy_db(self).insert(
+            media_id=media_id,
+            file_type=file_type,
+            storage_path=storage_path,
+            original_filename=original_filename,
+            file_size=file_size,
+            mime_type=mime_type,
+            checksum=checksum,
+        )
 
     def get_media_file(
         self,
@@ -2128,29 +2101,11 @@ class MediaDatabase:
         *,
         include_deleted: bool = False,
     ) -> dict[str, Any] | None:
-        """
-        Get a specific file record for a media item by type.
-
-        Args:
-            media_id: ID of the media item
-            file_type: Type of file to retrieve (default: 'original')
-            include_deleted: Whether to include soft-deleted records
-
-        Returns:
-            Dict with file record or None if not found.
-        """
-        conn = self.get_connection()
-        clauses: list[str] = ["media_id = :media_id", "file_type = :file_type"]
-        params: dict[str, Any] = {"media_id": media_id, "file_type": file_type}
-        if not include_deleted:
-            clauses.append("deleted = 0")
-        where_sql = " AND ".join(clauses)
-        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} LIMIT 1"  # nosec B608
-        try:
-            rows = self._fetchall_with_connection(conn, sql, params)
-            return rows[0] if rows else None
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
-            raise DatabaseError(f"Failed to get MediaFile for media_id={media_id}: {exc}") from exc  # noqa: TRY003
+        return MediaFilesRepository.from_legacy_db(self).get_for_media(
+            media_id=media_id,
+            file_type=file_type,
+            include_deleted=include_deleted,
+        )
 
     def get_media_files(
         self,
@@ -2158,83 +2113,19 @@ class MediaDatabase:
         *,
         include_deleted: bool = False,
     ) -> list[dict[str, Any]]:
-        """
-        Get all file records for a media item.
-
-        Args:
-            media_id: ID of the media item
-            include_deleted: Whether to include soft-deleted records
-
-        Returns:
-            List of file record dicts.
-        """
-        conn = self.get_connection()
-        clauses: list[str] = ["media_id = :media_id"]
-        params: dict[str, Any] = {"media_id": media_id}
-        if not include_deleted:
-            clauses.append("deleted = 0")
-        where_sql = " AND ".join(clauses)
-        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} ORDER BY file_type, id"  # nosec B608
-        try:
-            return self._fetchall_with_connection(conn, sql, params)
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
-            raise DatabaseError(f"Failed to list MediaFiles for media_id={media_id}: {exc}") from exc  # noqa: TRY003
+        return MediaFilesRepository.from_legacy_db(self).list_for_media(
+            media_id=media_id,
+            include_deleted=include_deleted,
+        )
 
     def has_original_file(self, media_id: int) -> bool:
-        """
-        Check if a media item has an original file stored.
-
-        Args:
-            media_id: ID of the media item
-
-        Returns:
-            True if an original file exists and is not deleted.
-        """
-        file_record = self.get_media_file(media_id, "original", include_deleted=False)
-        return file_record is not None
+        return MediaFilesRepository.from_legacy_db(self).has_original_file(media_id)
 
     def soft_delete_media_file(
         self,
         file_id: int,
     ) -> None:
-        """
-        Soft-delete a MediaFile record by ID.
-
-        Args:
-            file_id: ID of the file record to delete
-        """
-        conn = self.get_connection()
-        try:
-            # Get current record for version bump
-            rows = self._fetchall_with_connection(
-                conn,
-                "SELECT uuid, version FROM MediaFiles WHERE id = :id",
-                {"id": file_id},
-            )
-            if not rows:
-                return
-            row = rows[0]
-            file_uuid = row.get("uuid")
-            current_version = int(row.get("version") or 1)
-            new_version = current_version + 1
-            now = datetime.now(timezone.utc).isoformat()
-
-            self._execute_with_connection(
-                conn,
-                "UPDATE MediaFiles SET deleted = 1, version = :version, last_modified = :last_modified WHERE id = :id",
-                {"id": file_id, "version": new_version, "last_modified": now},
-            )
-            with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
-                self._log_sync_event(
-                    conn,
-                    "MediaFiles",
-                    file_uuid,
-                    "delete",
-                    new_version,
-                    json.dumps({"file_id": file_id}),
-                )
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
-            raise DatabaseError(f"Failed to soft-delete MediaFile id={file_id}: {exc}") from exc  # noqa: TRY003
+        MediaFilesRepository.from_legacy_db(self).soft_delete(file_id)
 
     def soft_delete_media_files_for_media(
         self,
@@ -2242,58 +2133,10 @@ class MediaDatabase:
         *,
         hard_delete: bool = False,
     ) -> None:
-        """
-        Soft-delete (or hard-delete) all MediaFiles for a media item.
-
-        Args:
-            media_id: ID of the media item
-            hard_delete: If True, permanently delete records instead of soft-delete
-        """
-        conn = self.get_connection()
-        try:
-            if hard_delete:
-                self._execute_with_connection(
-                    conn,
-                    "DELETE FROM MediaFiles WHERE media_id = :media_id",
-                    {"media_id": media_id},
-                )
-                with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
-                    self._log_sync_event(
-                        conn,
-                        "MediaFiles",
-                        "",
-                        "delete",
-                        1,
-                        json.dumps({"media_id": media_id, "hard_delete": True}),
-                    )
-            else:
-                # Soft delete each record with version bump
-                rows = self._fetchall_with_connection(
-                    conn,
-                    "SELECT id, uuid, version FROM MediaFiles WHERE media_id = :media_id AND deleted = 0",
-                    {"media_id": media_id},
-                )
-                now = datetime.now(timezone.utc).isoformat()
-                for row in rows:
-                    file_uuid = row.get("uuid")
-                    current_version = int(row.get("version") or 1)
-                    new_version = current_version + 1
-                    self._execute_with_connection(
-                        conn,
-                        "UPDATE MediaFiles SET deleted = 1, version = :version, last_modified = :last_modified WHERE uuid = :uuid",
-                        {"uuid": file_uuid, "version": new_version, "last_modified": now},
-                    )
-                    with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
-                        self._log_sync_event(
-                            conn,
-                            "MediaFiles",
-                            file_uuid,
-                            "delete",
-                            new_version,
-                            json.dumps({"media_id": media_id}),
-                        )
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
-            raise DatabaseError(f"Failed to delete MediaFiles for media_id={media_id}: {exc}") from exc  # noqa: TRY003
+        MediaFilesRepository.from_legacy_db(self).soft_delete_for_media(
+            media_id=media_id,
+            hard_delete=hard_delete,
+        )
 
     # -------------------------
     # Chunk-level FTS helpers
@@ -2786,14 +2629,7 @@ class MediaDatabase:
         )
     def _initialize_schema(self):
         """Checks schema version and applies initial schema or migrations."""
-        if self.backend_type == BackendType.SQLITE:
-            self._initialize_schema_sqlite()
-        elif self.backend_type == BackendType.POSTGRESQL:
-            self._initialize_schema_postgres()
-        else:
-            raise NotImplementedError(
-                f"Schema initialization not implemented for backend {self.backend_type}"
-            )
+        ensure_media_schema(self)
 
     def _initialize_schema_sqlite(self):
         conn = self.get_connection()
@@ -2815,7 +2651,7 @@ class MediaDatabase:
                     conn.executescript(self._TTS_HISTORY_TABLE_SQL)
                     # Ensure Data Tables schema exists for generated tables
                     self._ensure_sqlite_data_tables(conn)
-                    self._ensure_fts_structures(conn)
+                    ensure_sqlite_fts_structures(self, conn)
                     # Ensure Collections tables exist
                     conn.executescript(
                         """
@@ -2922,7 +2758,7 @@ class MediaDatabase:
             # --- Apply Migrations ---
             if current_db_version == 0:
                 # Fresh database, apply base schema directly at current version
-                self._apply_schema_v1_sqlite(conn)
+                apply_sqlite_core_media_schema(self, conn)
                 # Verify version update
                 final_db_version = self._get_db_version(conn)
                 if final_db_version != target_version:
@@ -2935,7 +2771,7 @@ class MediaDatabase:
                 # since migration helpers open separate connections that won't share :memory: state.
                 try:
                     if self.is_memory_db:
-                        self._apply_schema_v1_sqlite(conn)
+                        apply_sqlite_core_media_schema(self, conn)
                     else:
                         # Close the current connection to avoid locks
                         conn.close()
@@ -2992,7 +2828,7 @@ class MediaDatabase:
                                     f"(status={status}, current={final_db_version}, expected={target_version})."
                                 )
                             # Ensure FTS tables exist
-                            self._ensure_fts_structures(conn)
+                            ensure_sqlite_fts_structures(self, conn)
                             # Ensure Data Tables schema exists for upgraded DBs
                             self._ensure_sqlite_data_tables(conn)
                             # Ensure Collections tables exist
@@ -3114,8 +2950,8 @@ class MediaDatabase:
             schema_exists = backend.table_exists('schema_version', connection=conn)
 
             if not schema_exists:
-                self._apply_schema_v1_postgres(conn)
-                self._ensure_postgres_fts(conn)
+                apply_postgres_core_media_schema(self, conn)
+                ensure_postgres_fts(self, conn)
                 # Ensure Collections tables exist
                 try:
                     backend.execute(
@@ -3204,7 +3040,7 @@ class MediaDatabase:
                 self._ensure_postgres_claims_extensions(conn)
                 self._ensure_postgres_email_schema(conn)
                 self._sync_postgres_sequences(conn)
-                self._ensure_postgres_rls(conn)
+                ensure_postgres_policies(self, conn)
                 return
 
             result = backend.execute("SELECT version FROM schema_version LIMIT 1", connection=conn)
@@ -3228,9 +3064,9 @@ class MediaDatabase:
                 logger.warning(
                     "Postgres schema_version exists but base tables missing: {}. Applying base schema.", missing
                 )
-                self._apply_schema_v1_postgres(conn)
+                apply_postgres_core_media_schema(self, conn)
                 current_version = target_version  # base schema applies current version
-                self._ensure_postgres_fts(conn)
+                ensure_postgres_fts(self, conn)
                 # Ensure Collections tables exist
                 try:
                     backend.execute(
@@ -3318,13 +3154,13 @@ class MediaDatabase:
                 self._ensure_postgres_claims_extensions(conn)
                 self._ensure_postgres_email_schema(conn)
                 self._sync_postgres_sequences(conn)
-                self._ensure_postgres_rls(conn)
+                ensure_postgres_policies(self, conn)
                 return
 
             if current_version < target_version:
-                self._run_postgres_migrations(conn, current_version, target_version)
+                run_postgres_migrations(self, conn, current_version, target_version)
 
-            self._ensure_postgres_fts(conn)
+            ensure_postgres_fts(self, conn)
             # Ensure Collections tables exist
             try:
                 backend.execute(
@@ -3413,12 +3249,12 @@ class MediaDatabase:
             self._ensure_postgres_claims_extensions(conn)
             self._ensure_postgres_email_schema(conn)
             self._sync_postgres_sequences(conn)
-            self._ensure_postgres_rls(conn)
+            ensure_postgres_policies(self, conn)
 
     def _run_postgres_migrations(self, conn, current_version: int, target_version: int) -> None:
         """Execute sequential PostgreSQL migrations until the target version is reached."""
 
-        migrations = self._get_postgres_migrations()
+        migrations = get_postgres_migrations(self)
         applied_version = current_version
 
         for version in sorted(migrations.keys()):
@@ -3427,7 +3263,7 @@ class MediaDatabase:
                 self._update_schema_version_postgres(conn, version)
                 applied_version = version
 
-        self._ensure_postgres_rls(conn)
+        ensure_postgres_policies(self, conn)
 
         if applied_version < target_version:
             raise SchemaError(  # noqa: TRY003
@@ -13165,187 +13001,7 @@ class MediaDatabase:
         else:
             return rows, total
     def add_keyword(self, keyword: str, conn: Any | None = None) -> tuple[int | None, str | None]:
-        """
-        Adds a new keyword or undeletes an existing soft-deleted one.
-
-        Handles case-insensitivity (stores lowercase) and ensures uniqueness.
-        Logs a 'create' or 'update' (for undelete) sync event.
-        Updates the `keyword_fts` table accordingly.
-
-        Args:
-            keyword (str): The keyword text to add or activate.
-
-        Returns:
-            Tuple[Optional[int], Optional[str]]: A tuple containing the keyword's
-                database ID and UUID. Returns (None, None) or raises error on failure.
-
-        Raises:
-            InputError: If the keyword is empty or whitespace only.
-            ConflictError: If an update (undelete) fails due to version mismatch.
-            DatabaseError: For other database errors during insert/update or sync logging.
-        """
-        if not keyword or not keyword.strip():
-            raise InputError("Keyword cannot be empty.")  # noqa: TRY003
-        keyword = keyword.strip().lower()
-        current_time = self._get_current_utc_timestamp_str()  # Get current time once
-        client_id = self.client_id
-
-        try:
-            # If a connection is provided, perform all operations within that
-            # transaction to avoid nested write transactions on separate connections
-            if conn is not None:
-                existing = self._fetchone_with_connection(
-                    conn,
-                    'SELECT id, uuid, deleted, version FROM Keywords WHERE keyword = ?',
-                    (keyword,),
-                )
-
-                if existing:
-                    kw_id = existing['id']
-                    kw_uuid = existing['uuid']
-                    is_deleted = existing['deleted']
-                    current_version = existing['version']
-                    if is_deleted:
-                        new_version = current_version + 1
-                        logger.info(f"Undeleting keyword '{keyword}' (ID: {kw_id}). New ver: {new_version}")
-                        update_cursor = self._execute_with_connection(
-                            conn,
-                            "UPDATE Keywords SET deleted=0, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                            (current_time, new_version, client_id, kw_id, current_version),
-                        )
-                        if update_cursor.rowcount == 0:
-                            raise ConflictError("Keywords", kw_id)  # noqa: TRY301
-
-                        # Fetch data for payload AFTER update to get correct last_modified
-                        payload_data = self._fetchone_with_connection(
-                            conn,
-                            "SELECT * FROM Keywords WHERE id=?",
-                            (kw_id,),
-                        ) or {}
-                        self._log_sync_event(conn, 'Keywords', kw_uuid, 'update', new_version, payload_data)
-                        self._update_fts_keyword(conn, kw_id, keyword)
-                        return kw_id, kw_uuid
-                    else:
-                        logger.debug(f"Keyword '{keyword}' already active.")
-                        return kw_id, kw_uuid
-                else:
-                    new_uuid = self._generate_uuid()
-                    new_version = 1
-                    logger.info(f"Adding new keyword '{keyword}' UUID {new_uuid}")
-                    # Omit 'deleted' to rely on DEFAULT (FALSE) across backends
-                    insert_sql = (
-                        "INSERT INTO Keywords (keyword, uuid, last_modified, version, client_id) "
-                        "VALUES (?, ?, ?, ?, ?)"
-                    )
-                    if self.backend_type == BackendType.POSTGRESQL:
-                        insert_sql += " RETURNING id"
-
-                    insert_cursor = self._execute_with_connection(
-                        conn,
-                        insert_sql,
-                        (keyword, new_uuid, current_time, new_version, client_id),
-                    )
-
-                    if self.backend_type == BackendType.POSTGRESQL:
-                        inserted_row = insert_cursor.fetchone()
-                        kw_id = inserted_row["id"] if inserted_row else None
-                    else:
-                        kw_id = insert_cursor.lastrowid
-
-                    if not kw_id:
-                        raise DatabaseError("Failed to get last row ID for new keyword.")  # noqa: TRY003, TRY301
-
-                    # Fetch data for payload AFTER insert to get correct last_modified
-                    payload_data = self._fetchone_with_connection(
-                        conn,
-                        "SELECT * FROM Keywords WHERE id=?",
-                        (kw_id,),
-                    ) or {}
-                    self._log_sync_event(conn, 'Keywords', new_uuid, 'create', new_version, payload_data)
-                    self._update_fts_keyword(conn, kw_id, keyword)
-                    return kw_id, new_uuid
-            else:
-                # No connection provided: create a transaction-scoped connection
-                with self.transaction() as tx_conn:
-                    existing = self._fetchone_with_connection(
-                        tx_conn,
-                        'SELECT id, uuid, deleted, version FROM Keywords WHERE keyword = ?',
-                        (keyword,),
-                    )
-
-                    if existing:
-                        kw_id = existing['id']
-                        kw_uuid = existing['uuid']
-                        is_deleted = existing['deleted']
-                        current_version = existing['version']
-                        if is_deleted:
-                            new_version = current_version + 1
-                            logger.info(f"Undeleting keyword '{keyword}' (ID: {kw_id}). New ver: {new_version}")
-                            update_cursor = self._execute_with_connection(
-                                tx_conn,
-                                "UPDATE Keywords SET deleted=0, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                                (current_time, new_version, client_id, kw_id, current_version),
-                            )
-                            if update_cursor.rowcount == 0:
-                                raise ConflictError("Keywords", kw_id)  # noqa: TRY301
-
-                            # Fetch data for payload AFTER update to get correct last_modified
-                            payload_data = self._fetchone_with_connection(
-                                tx_conn,
-                                "SELECT * FROM Keywords WHERE id=?",
-                                (kw_id,),
-                            ) or {}
-                            self._log_sync_event(tx_conn, 'Keywords', kw_uuid, 'update', new_version, payload_data)
-                            self._update_fts_keyword(tx_conn, kw_id, keyword)
-                            return kw_id, kw_uuid
-                        else:
-                            logger.debug(f"Keyword '{keyword}' already active.")
-                            return kw_id, kw_uuid
-                    else:
-                        new_uuid = self._generate_uuid()
-                        new_version = 1
-                        logger.info(f"Adding new keyword '{keyword}' UUID {new_uuid}")
-                        # Omit 'deleted' to rely on DEFAULT (FALSE) across backends
-                        insert_sql = (
-                            "INSERT INTO Keywords (keyword, uuid, last_modified, version, client_id) "
-                            "VALUES (?, ?, ?, ?, ?)"
-                        )
-                        if self.backend_type == BackendType.POSTGRESQL:
-                            insert_sql += " RETURNING id"
-
-                        insert_cursor = self._execute_with_connection(
-                            tx_conn,
-                            insert_sql,
-                            (keyword, new_uuid, current_time, new_version, client_id),
-                        )
-
-                        if self.backend_type == BackendType.POSTGRESQL:
-                            inserted_row = insert_cursor.fetchone()
-                            kw_id = inserted_row["id"] if inserted_row else None
-                        else:
-                            kw_id = insert_cursor.lastrowid
-
-                        if not kw_id:
-                            raise DatabaseError("Failed to get last row ID for new keyword.")  # noqa: TRY003, TRY301
-
-                        # Fetch data for payload AFTER insert to get correct last_modified
-                        payload_data = self._fetchone_with_connection(
-                            tx_conn,
-                            "SELECT * FROM Keywords WHERE id=?",
-                            (kw_id,),
-                        ) or {}
-                        self._log_sync_event(tx_conn, 'Keywords', new_uuid, 'create', new_version, payload_data)
-                        self._update_fts_keyword(tx_conn, kw_id, keyword)
-                        return kw_id, new_uuid
-        except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
-            logger.exception(f"Error in add_keyword for '{keyword}'", exc_info=isinstance(e, (DatabaseError, sqlite3.Error)))
-            if isinstance(e, (InputError, ConflictError, DatabaseError)):
-                raise
-            else:
-                raise DatabaseError(f"Failed to add/update keyword: {e}") from e  # noqa: TRY003
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-            logger.error(f"Unexpected error in add_keyword for '{keyword}': {e}", exc_info=True)
-            raise DatabaseError(f"Unexpected error adding/updating keyword: {e}") from e  # noqa: TRY003
+        return KeywordsRepository.from_legacy_db(self).add(keyword, conn=conn)
 
     def fetch_media_for_keywords(self, keywords: list[str], include_trash: bool = False) -> dict[
         str, list[dict[str, Any]]]:
@@ -15373,235 +15029,14 @@ class MediaDatabase:
         keywords: list[str],
         conn: Any | None = None,
     ):
-        """
-        Synchronizes the keywords linked to a specific media item.
-
-        Compares the provided list of keywords with the currently linked active
-        keywords. Adds missing links (calling `add_keyword` if needed for the
-        keyword itself) and removes outdated links. Logs 'link' and 'unlink'
-        sync events for changes in the `MediaKeywords` junction table.
-
-        Assumes it's called within an existing transaction context.
-
-        Args:
-            media_id (int): The ID of the Media item whose keywords to update.
-            keywords (List[str]): The desired list of keyword strings for the media item.
-                                  Empty list removes all keywords.
-
-        Returns:
-            bool: True if the operation completed (even if no changes were needed).
-
-        Raises:
-            InputError: If the parent `media_id` does not exist or is deleted.
-            DatabaseError: For underlying database errors, issues adding keywords,
-                           or sync logging failures.
-            ConflictError: If `add_keyword` encounters a conflict during undelete.
-        """
-        valid_keywords = sorted({k.strip().lower() for k in keywords if k and k.strip()})
-        # Assumes called within an existing transaction
-        connection = conn or self.get_connection()
-        try:
-            media_info = self._fetchone_with_connection(
-                connection,
-                "SELECT uuid FROM Media WHERE id = ? AND deleted = 0",
-                (media_id,),
-            )
-            if not media_info:
-                raise InputError(f"Cannot update keywords: Media ID {media_id} not found or deleted.")  # noqa: TRY003, TRY301
-            media_uuid = media_info['uuid']
-
-            current_rows = self._fetchall_with_connection(
-                connection,
-                "SELECT mk.keyword_id, k.uuid AS keyword_uuid "
-                "FROM MediaKeywords mk JOIN Keywords k ON k.id = mk.keyword_id "
-                "WHERE mk.media_id = ? AND k.deleted = 0",
-                (media_id,),
-            )
-            current_links = {row['keyword_id']: row['keyword_uuid'] for row in current_rows}
-            current_keyword_ids = set(current_links.keys())
-
-            target_keyword_data = {}
-            if valid_keywords:
-                for kw_text in valid_keywords:
-                    # Use per-keyword transaction to match legacy behavior and tests
-                    # When called inside an outer transaction, this nests without starting a new BEGIN
-                    kw_id, kw_uuid = self.add_keyword(kw_text)  # Handles create/undelete/logging/FTS
-                    if kw_id and kw_uuid:
-                        target_keyword_data[kw_id] = kw_uuid
-                    else:
-                        raise DatabaseError(f"Failed get/add keyword '{kw_text}'")  # noqa: TRY003, TRY301
-
-            target_keyword_ids = set(target_keyword_data.keys())
-            ids_to_add = target_keyword_ids - current_keyword_ids
-            ids_to_remove = current_keyword_ids - target_keyword_ids
-            link_sync_version = 1
-
-            if ids_to_remove:
-                remove_placeholders = ','.join('?' * len(ids_to_remove))
-                params = (media_id, *list(ids_to_remove))
-                self._execute_with_connection(
-                    connection,
-                    f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({remove_placeholders})",  # nosec B608
-                    params,
-                )
-                for removed_id in ids_to_remove:
-                    keyword_uuid = current_links.get(removed_id)
-                    if keyword_uuid:
-                        link_uuid = f"{media_uuid}_{keyword_uuid}"
-                        payload = {'media_uuid': media_uuid, 'keyword_uuid': keyword_uuid}
-                        self._log_sync_event(connection, 'MediaKeywords', link_uuid, 'unlink', link_sync_version, payload)
-
-            if ids_to_add:
-                insert_params = [(media_id, kid) for kid in ids_to_add]
-                insert_sql = "INSERT INTO MediaKeywords (media_id, keyword_id) VALUES (?, ?)"
-                if self.backend_type == BackendType.POSTGRESQL:
-                    insert_sql += " ON CONFLICT DO NOTHING"
-                self._executemany_with_connection(connection, insert_sql, insert_params)
-                # Log links - Note: IGNORE means we might log links that weren't actually inserted if race condition. Robust check is complex.
-                for added_id in ids_to_add:
-                    keyword_uuid = target_keyword_data.get(added_id)
-                    if keyword_uuid:
-                        link_uuid = f"{media_uuid}_{keyword_uuid}"
-                        payload = {'media_uuid': media_uuid, 'keyword_uuid': keyword_uuid}
-                        self._log_sync_event(connection, 'MediaKeywords', link_uuid, 'link', link_sync_version, payload)
-
-            if ids_to_add or ids_to_remove:
-                logger.debug(f"Keywords updated media {media_id}. Added: {len(ids_to_add)}, Removed: {len(ids_to_remove)}.")
-            else:
-                logger.debug(f"No keyword changes media {media_id}.")
-        except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
-            logger.error(f"Error updating keywords media {media_id}: {e}", exc_info=True)
-            if isinstance(e, (InputError, ConflictError, DatabaseError)):
-                raise
-            else:
-                raise DatabaseError(f"Keyword update failed: {e}") from e  # noqa: TRY003
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-            logger.error(f"Unexpected keywords error media {media_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Unexpected keyword update error: {e}") from e  # noqa: TRY003
-        else:
-            return True
+        return KeywordsRepository.from_legacy_db(self).replace_keywords(
+            media_id=media_id,
+            keywords=keywords,
+            conn=conn,
+        )
 
     def soft_delete_keyword(self, keyword: str) -> bool:
-        """
-        Soft deletes a keyword by setting its 'deleted' flag to 1.
-
-        Handles case-insensitivity. Increments the version number, updates
-        `last_modified`, logs a 'delete' sync event for the Keyword, and removes
-        its FTS entry. It also removes all links between this keyword and any
-        media items in the `MediaKeywords` table, logging 'unlink' events for each.
-
-        Args:
-            keyword (str): The keyword text to soft delete (case-insensitive).
-
-        Returns:
-            bool: True if the keyword was successfully soft-deleted,
-                  False if the keyword was not found or already deleted.
-
-        Raises:
-            InputError: If the keyword string is empty or whitespace only.
-            ConflictError: If the keyword's version has changed since being read.
-            DatabaseError: For other database errors or sync logging failures.
-        """
-        if not keyword or not keyword.strip():
-            raise InputError("Keyword cannot be empty.")  # noqa: TRY003
-        keyword = keyword.strip().lower()
-        current_time = self._get_current_utc_timestamp_str()  # Get time
-        client_id = self.client_id
-
-        try:
-            with self.transaction() as conn:
-                keyword_info = self._fetchone_with_connection(
-                    conn,
-                    "SELECT id, uuid, version FROM Keywords WHERE keyword = ? AND deleted = 0",
-                    (keyword,),
-                )
-                if not keyword_info:
-                    logger.warning(f"Keyword '{keyword}' not found/deleted.")
-                    return False
-
-                keyword_id = keyword_info['id']
-                keyword_uuid = keyword_info['uuid']
-                current_version = keyword_info['version']
-                new_version = current_version + 1
-
-                logger.info(f"Soft deleting keyword '{keyword}' (ID: {keyword_id}). New ver: {new_version}")
-                update_cursor = self._execute_with_connection(
-                    conn,
-                    "UPDATE Keywords SET deleted=1, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
-                    (current_time, new_version, client_id, keyword_id, current_version),
-                )
-                if getattr(update_cursor, "rowcount", 0) == 0:
-                    raise ConflictError("Keywords", keyword_id)  # noqa: TRY301
-
-                delete_payload = {
-                    'uuid': keyword_uuid,
-                    'last_modified': current_time,
-                    'version': new_version,
-                    'client_id': client_id,
-                    'deleted': 1,
-                }
-                self._log_sync_event(conn, 'Keywords', keyword_uuid, 'delete', new_version, delete_payload)
-                self._delete_fts_keyword(conn, keyword_id)
-
-                linked_cursor = self._execute_with_connection(
-                    conn,
-                    "SELECT mk.media_id, m.uuid AS media_uuid FROM MediaKeywords mk JOIN Media m ON mk.media_id = m.id WHERE mk.keyword_id = ? AND m.deleted = 0",
-                    (keyword_id,),
-                )
-                media_to_unlink = linked_cursor.fetchall()
-                if media_to_unlink:
-                    media_mappings: list[dict[str, Any]] = []
-                    for record in media_to_unlink:
-                        if isinstance(record, dict):
-                            media_mappings.append(record)
-                            continue
-                        try:
-                            media_mappings.append(dict(record))
-                        except _MEDIA_NONCRITICAL_EXCEPTIONS:
-                            try:
-                                media_id_val = record[0]
-                            except _MEDIA_NONCRITICAL_EXCEPTIONS:
-                                media_id_val = None
-                            media_uuid_val = None
-                            with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
-                                media_uuid_val = record[1]
-                            media_mappings.append(
-                                {
-                                    "media_id": media_id_val,
-                                    "media_uuid": media_uuid_val,
-                                }
-                            )
-
-                    media_ids = [mapping["media_id"] for mapping in media_mappings if mapping.get("media_id") is not None]
-                    if media_ids:
-                        placeholders = ",".join("?" for _ in media_ids)
-                        delete_cursor = self._execute_with_connection(
-                            conn,
-                            f"DELETE FROM MediaKeywords WHERE keyword_id = ? AND media_id IN ({placeholders})",  # nosec B608
-                            (keyword_id, *media_ids),
-                        )
-                        deleted_link_count = getattr(delete_cursor, "rowcount", 0) or 0
-                        unlink_version = 1
-                        for mapping in media_mappings:
-                            media_uuid_val = mapping.get("media_uuid")
-                            link_uuid = f"{media_uuid_val}_{keyword_uuid}"
-                            unlink_payload = {
-                                'media_uuid': media_uuid_val,
-                                'keyword_uuid': keyword_uuid,
-                            }
-                            self._log_sync_event(conn, 'MediaKeywords', link_uuid, 'unlink', unlink_version, unlink_payload)
-                        logger.info(f"Unlinked keyword '{keyword}' from {deleted_link_count} items.")
-        except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
-            logger.error(f"Error soft delete keyword '{keyword}': {e}", exc_info=True)
-            if isinstance(e, (InputError, ConflictError, DatabaseError)):
-                raise
-            else:
-                raise DatabaseError(f"Failed soft delete keyword: {e}") from e  # noqa: TRY003
-        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-            logger.error(f"Unexpected soft delete keyword error '{keyword}': {e}", exc_info=True)
-            raise DatabaseError(f"Unexpected soft delete keyword error: {e}") from e  # noqa: TRY003
-        else:
-            return True
+        return KeywordsRepository.from_legacy_db(self).soft_delete(keyword)
 
     def soft_delete_document_version(self, version_uuid: str) -> bool:
         """

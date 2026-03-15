@@ -12,6 +12,9 @@ Tests cover:
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_files_repository import (
+    MediaFilesRepository,
+)
 
 
 @pytest.fixture
@@ -257,6 +260,32 @@ class TestSoftDeleteMediaFile:
         record = db.get_media_file(media_id, "original", include_deleted=True)
         assert record is not None
         assert record["deleted"] == 1
+
+
+class TestMediaFilesRepository:
+    @pytest.mark.unit
+    def test_repository_lists_active_files(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        repo.insert(media_id=media_id, file_type="original", storage_path="repo/original.pdf")
+        repo.insert(media_id=media_id, file_type="thumbnail", storage_path="repo/thumb.png")
+
+        assert repo.has_original_file(media_id) is True
+        assert len(repo.list_for_media(media_id)) == 2
+
+    @pytest.mark.unit
+    def test_repository_soft_delete_hides_file(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        repo.insert(media_id=media_id, file_type="original", storage_path="repo/original.pdf")
+        record = repo.get_for_media(media_id, "original")
+
+        repo.soft_delete(record["id"])
+
+        assert repo.get_for_media(media_id, "original") is None
+        assert repo.get_for_media(media_id, "original", include_deleted=True)["deleted"] == 1
 
     @pytest.mark.unit
     def test_soft_delete_increments_version(self, db_with_media):
