@@ -478,9 +478,9 @@ and this project adheres to Some kind of Versioning
   - Added/updated regression coverage for MLX path handling, notes frontmatter escaping, and admin auth API key storage behavior.
 
 
-## [0.1.26] 2026-03-11
+## [0.1.26] 2026-03-15
 
-### Consolidated Release Summary (Merged PRs #790-#829)
+### Consolidated Release Summary (Merged PRs #790-#897)
 
 - Added: Repo2Txt shipped across shared UI, web, and extension surfaces with GitHub and local sources, file-tree filtering, preview/copy/download flows, and better launcher discoverability. (PR #790)
 - Added: Safety and admin surfaces expanded with the Family Guardrails Wizard, per-user moderation phrase lists, and router analytics usage tabs plus aggregate APIs for operators. (PRs #804, #810, #797)
@@ -496,6 +496,16 @@ and this project adheres to Some kind of Versioning
 - Fixed: Chat reliability issues were addressed for tool routing parity, OpenRouter freeze cases, selected-chat failure states, and conflict/retry behavior. (PRs #811, #814)
 - Fixed: ACP and admin surfaces received remediation for control auth, persistence, forks, login/auth proxy paths, privileged actions, and users views. (PRs #825, #829)
 - Fixed: Repo2Txt was hardened for local source selection, GitHub provider permissions, worker recovery, and deterministic compile behavior. (PR #790)
+
+- Added: Admin and operator surfaces became more authoritative across billing and feature gating, monitoring, DSR intake, backup scheduling, incident management, maintenance rotation, BYOK retention previews, and privileged-admin backend verification. (PRs #834, #862, #864, #868, #879, #880, #883, #877)
+- Added: ACP and MCP Hub governance expanded with production-readiness hardening, persisted session and registry state, tool permissions and persona approvals, path-policy controls, OPA governance packs, capability adapter registries, runtime policy integration, and governance pack upgrade workflows. (PRs #838, #847, #848, #853, #875, #891, #893, #895, #897)
+- Added: Persona, assistant, and flashcard workflows grew with Persona Garden chat integration, live exemplars, structured Q&A preview import, study assistant and scheduler follow-ups, per-deck FSRS, voice assistant building, and tighter persona setup targeting and handoff analytics. (PRs #833, #841, #845, #878, #889, #890, #892, #894, #896)
+- Added: Workspace, ingestion, and companion capture capabilities expanded with ingestion source sync, explicit and bulk companion capture, source folders and collections, document workspace upgrades, MinerU PDF OCR, and git repository source sync for notes. (PRs #846, #860, #866, #873, #874, #882, #887)
+- Added: Prompting, presentation, and workflow tooling expanded with structured prompts across Prompt Studio, llama.cpp grammar and thinking controls, Presentation Studio, and workflow diagnostics with investigation APIs and run inspection. (PRs #858, #850, #881, #888, #869)
+- Added: Sandbox and model runtime capabilities expanded with macOS sandbox runtimes, admin diagnostics, real seatbelt execution, and runtime-aware Qwen3 TTS backend support. (PRs #852, #856, #859, #870)
+- Changed: Major interface redesigns landed across the Writing Playground, Speech Playground Compose & Compare flow, Workspace Playground, Media Review, Moderation Playground, and the shared `/tts` speech route. (PRs #835, #836, #837, #840, #865, #871)
+- Changed: Companion and chat coordination were tightened with quality controls, proactive follow-ups, workspace chat isolation and full sync, and reduced request bursts from lazy hydration. (PRs #867, #876, #872)
+- Fixed: Reliability fixes addressed Quick Ingest session wiring, chat-workflows route exposure, sandbox workspace locking, media-review preview rendering, and admin UI prod-readiness fallbacks for local-only flows. (PRs #830, #832, #839, #855, #857)
 
 ### Added
 
