@@ -1962,6 +1962,71 @@ export class TldwApiClient {
     })
   }
 
+  // ── Admin Monitoring & Alerting ──
+
+  async listAlertRules(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/monitoring/alert-rules", method: "GET" })
+  }
+
+  async createAlertRule(payload: {
+    metric: string; operator: string; threshold: number;
+    duration_minutes?: number; severity?: string
+  }): Promise<any> {
+    return await bgRequest<any>({
+      path: "/api/v1/admin/monitoring/alert-rules",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async deleteAlertRule(ruleId: number): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/monitoring/alert-rules/${ruleId}`,
+      method: "DELETE"
+    })
+  }
+
+  async assignAlert(alertIdentity: string, payload: { user_id?: number | null }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/monitoring/alerts/${encodeURIComponent(alertIdentity)}/assign`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async snoozeAlert(alertIdentity: string, payload: { until: string }): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/monitoring/alerts/${encodeURIComponent(alertIdentity)}/snooze`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async escalateAlert(alertIdentity: string): Promise<any> {
+    return await bgRequest<any>({
+      path: `/api/v1/admin/monitoring/alerts/${encodeURIComponent(alertIdentity)}/escalate`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {}
+    })
+  }
+
+  async listAlertHistory(): Promise<any[]> {
+    return await bgRequest<any[]>({ path: "/api/v1/admin/monitoring/alerts/history", method: "GET" })
+  }
+
+  async getSecurityAlertStatus(): Promise<any> {
+    return await bgRequest<any>({ path: "/api/v1/admin/security/alert-status", method: "GET" })
+  }
+
+  async getDashboardActivity(params?: { days?: number; granularity?: string }): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({ path: `/api/v1/admin/activity${query}`, method: "GET" })
+  }
+
   async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
