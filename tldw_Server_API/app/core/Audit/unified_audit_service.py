@@ -51,6 +51,7 @@ from uuid import uuid4
 # 3rd-Party Imports
 import aiosqlite
 from loguru import logger
+from tldw_Server_API.app.core.AuthNZ.audit_integrity import compute_event_hash
 from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection_async,
 )
@@ -469,6 +470,9 @@ class AuditEvent:
     # Additional metadata
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    # Hash chain for tamper-proofing
+    chain_hash: str = ""
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage"""
         normalized_metadata = _normalize_json_value(self.metadata)
@@ -495,6 +499,7 @@ class AuditEvent:
             "pii_detected": self.pii_detected,
             "compliance_flags": json.dumps(normalized_flags, ensure_ascii=False),
             "metadata": json.dumps(normalized_metadata, ensure_ascii=False),
+            "chain_hash": self.chain_hash,
         }
 
         # Add context fields
@@ -1034,6 +1039,9 @@ class UnifiedAuditService:
         self.event_buffer: list[AuditEvent] = []
         self.buffer_lock = asyncio.Lock()
 
+        # Hash chain state for tamper-proofing
+        self._last_chain_hash: str = ""
+
         # Background tasks
         self._flush_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -1093,6 +1101,7 @@ class UnifiedAuditService:
             "resource_type", "resource_id", "action", "result", "error_message",
             "duration_ms", "tokens_used", "estimated_cost", "result_count",
             "risk_score", "pii_detected", "compliance_flags", "metadata",
+            "chain_hash",
         ])
         return columns
 
@@ -1191,7 +1200,10 @@ class UnifiedAuditService:
                     compliance_flags TEXT,
 
                     -- Metadata
-                    metadata TEXT
+                    metadata TEXT,
+
+                    -- Hash chain for tamper-proofing
+                    chain_hash TEXT
                 )
             """
         else:
@@ -1233,7 +1245,10 @@ class UnifiedAuditService:
                     compliance_flags TEXT,
 
                     -- Metadata
-                    metadata TEXT
+                    metadata TEXT,
+
+                    -- Hash chain for tamper-proofing
+                    chain_hash TEXT
                 )
             """
         expected_types = {
@@ -1265,6 +1280,7 @@ class UnifiedAuditService:
             "pii_detected": "BOOLEAN",
             "compliance_flags": "TEXT",
             "metadata": "TEXT",
+            "chain_hash": "TEXT",
         }
         if not self._shared_mode:
             expected_types.pop("tenant_user_id", None)
@@ -2330,6 +2346,26 @@ class UnifiedAuditService:
             return deduped
         return [event for event in deduped if event.event_id not in existing_ids]
 
+    def _apply_chain_hashes(self, records: list[dict[str, Any]]) -> None:
+        """Compute and assign chain hashes to a batch of event records.
+
+        Mutates each record in-place, setting the ``chain_hash`` key.
+        Updates ``self._last_chain_hash`` so subsequent batches continue
+        the chain.
+        """
+        prev = self._last_chain_hash
+        for rec in records:
+            event_dict = {
+                "action": rec.get("action", ""),
+                "user_id": rec.get("context_user_id"),
+                "timestamp": rec.get("timestamp", ""),
+                "detail": rec.get("event_type", ""),
+            }
+            h = compute_event_hash(event_dict, prev)
+            rec["chain_hash"] = h
+            prev = h
+        self._last_chain_hash = prev
+
     async def flush(self, *, raise_on_failure: bool = False) -> bool:
         """Flush buffered events to database.
 
@@ -2362,6 +2398,7 @@ class UnifiedAuditService:
                             # Prepare batch data
                             records = [event.to_dict() for event in new_events]
                             self._ensure_record_tenant_ids(records)
+                            self._apply_chain_hashes(records)
                             await db.executemany(self._event_insert_sql, records)
                             await self._update_daily_stats(db, new_events)
                             await db.commit()
@@ -2376,6 +2413,7 @@ class UnifiedAuditService:
 
                             # Batch insert
                             self._ensure_record_tenant_ids(records)
+                            self._apply_chain_hashes(records)
                             await db.executemany(self._event_insert_sql, records)
 
                             # Update daily statistics
