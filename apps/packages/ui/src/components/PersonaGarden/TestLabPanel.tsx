@@ -44,6 +44,11 @@ type TestLabPanelProps = {
   selectedPersonaName: string
   isActive?: boolean
   analytics?: PersonaVoiceAnalytics | null
+  handoffFocusRequest?: {
+    section: "dry_run_form"
+    token: number
+  } | null
+  onSetupHandoffFocusConsumed?: (token: number) => void
   onOpenCommand?: (commandId: string, heardText: string) => void
   onCreateCommandDraft?: (heardText: string) => void
   onDryRunCompleted?: (result: TestLabDryRunCompletedResult) => void
@@ -59,6 +64,8 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
   selectedPersonaName,
   isActive = false,
   analytics = null,
+  handoffFocusRequest = null,
+  onSetupHandoffFocusConsumed,
   onOpenCommand,
   onCreateCommandDraft,
   onDryRunCompleted,
@@ -74,6 +81,8 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
   const [repairConfirmedVisible, setRepairConfirmedVisible] = React.useState(false)
   const heardTextRef = React.useRef(heardText)
   const lastHandledRerunTokenRef = React.useRef(0)
+  const heardTextInputRef = React.useRef<HTMLTextAreaElement | null>(null)
+  const lastHandledHandoffTokenRef = React.useRef<number | null>(null)
   const hasMissingConnection = Boolean(
     result &&
       (result.connection_status === "missing" ||
@@ -97,6 +106,22 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
     if (!isActive) return
     setError(null)
   }, [isActive])
+
+  React.useEffect(() => {
+    if (!isActive || !selectedPersonaId || !handoffFocusRequest) return
+    if (lastHandledHandoffTokenRef.current === handoffFocusRequest.token) return
+    const target = heardTextInputRef.current
+    if (!target) return
+    target.scrollIntoView?.({ block: "nearest", behavior: "smooth" })
+    target.focus()
+    lastHandledHandoffTokenRef.current = handoffFocusRequest.token
+    onSetupHandoffFocusConsumed?.(handoffFocusRequest.token)
+  }, [
+    handoffFocusRequest,
+    isActive,
+    onSetupHandoffFocusConsumed,
+    selectedPersonaId
+  ])
 
   React.useEffect(() => {
     heardTextRef.current = heardText
@@ -252,6 +277,7 @@ export const TestLabPanel: React.FC<TestLabPanelProps> = ({
                 defaultValue: "Heard text"
               })}
               <textarea
+                ref={heardTextInputRef}
                 data-testid="persona-test-lab-heard-input"
                 className="mt-1 min-h-[88px] w-full rounded-md border border-border bg-bg px-2 py-1 text-sm text-text"
                 value={heardText}

@@ -188,6 +188,10 @@ const analytics = {
 
 describe("CommandsPanel", () => {
   beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn()
+    })
     mocks.fetchWithAuth.mockReset()
     mocks.serverCapabilities = {
       capabilities: { hasMcp: true },
@@ -904,5 +908,72 @@ describe("CommandsPanel", () => {
     expect(screen.getByTestId("persona-commands-analytics-cmd-external")).toHaveTextContent(
       "1 run"
     )
+  })
+
+  it("focuses the command name input for handoff command_form requests", async () => {
+    const onSetupHandoffFocusConsumed = vi.fn()
+
+    renderWithQueryClient(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        handoffFocusRequest={{ section: "command_form", token: 1 }}
+        onSetupHandoffFocusConsumed={onSetupHandoffFocusConsumed}
+      />
+    )
+
+    await screen.findByText("Search Notes")
+
+    await waitFor(() =>
+      expect(screen.getByTestId("persona-commands-name-input")).toHaveFocus()
+    )
+    expect(onSetupHandoffFocusConsumed).toHaveBeenCalledWith(1)
+  })
+
+  it("falls back to the command form for handoff command_list requests when no commands exist", async () => {
+    mocks.fetchWithAuth.mockImplementation((path: string, init?: { method?: string }) => {
+      if (
+        path === "/api/v1/persona/profiles/persona-1/voice-commands" &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ commands: [] })
+        })
+      }
+      if (
+        path === "/api/v1/persona/profiles/persona-1/connections" &&
+        (!init?.method || init.method === "GET")
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => []
+        })
+      }
+      return Promise.resolve({
+        ok: false,
+        error: `Unhandled path: ${path}`
+      })
+    })
+
+    const onSetupHandoffFocusConsumed = vi.fn()
+
+    renderWithQueryClient(
+      <CommandsPanel
+        selectedPersonaId="persona-1"
+        selectedPersonaName="Garden Helper"
+        isActive
+        handoffFocusRequest={{ section: "command_list", token: 2 }}
+        onSetupHandoffFocusConsumed={onSetupHandoffFocusConsumed}
+      />
+    )
+
+    await screen.findByTestId("persona-commands-empty")
+
+    await waitFor(() =>
+      expect(screen.getByTestId("persona-commands-name-input")).toHaveFocus()
+    )
+    expect(onSetupHandoffFocusConsumed).toHaveBeenCalledWith(2)
   })
 })

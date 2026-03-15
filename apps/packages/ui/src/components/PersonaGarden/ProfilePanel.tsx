@@ -2,6 +2,10 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 
 import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
+import {
+  PersonaSetupAnalyticsCard,
+  type PersonaSetupAnalyticsResponse
+} from "@/components/PersonaGarden/PersonaSetupAnalyticsCard"
 import type { PersonaVoiceAnalytics } from "@/components/PersonaGarden/CommandAnalyticsSummary"
 import { PersonaSetupStatusCard } from "@/components/PersonaGarden/PersonaSetupStatusCard"
 import type { PersonaSetupState } from "@/hooks/usePersonaSetupWizard"
@@ -21,8 +25,15 @@ type ProfilePanelProps = {
   onRerunSetup?: () => void
   onDefaultsSaved?: () => void
   isActive?: boolean
+  setupAnalytics?: PersonaSetupAnalyticsResponse | null
+  setupAnalyticsLoading?: boolean
   analytics?: PersonaVoiceAnalytics | null
   analyticsLoading?: boolean
+  handoffFocusRequest?: {
+    section: "assistant_defaults" | "confirmation_mode"
+    token: number
+  } | null
+  onSetupHandoffFocusConsumed?: (token: number) => void
 }
 
 export const ProfilePanel: React.FC<ProfilePanelProps> = ({
@@ -38,8 +49,12 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
   onRerunSetup,
   onDefaultsSaved,
   isActive = false,
+  setupAnalytics = null,
+  setupAnalyticsLoading = false,
   analytics = null,
-  analyticsLoading = false
+  analyticsLoading = false,
+  handoffFocusRequest = null,
+  onSetupHandoffFocusConsumed
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const setupProgressItems = React.useMemo(() => buildPersonaSetupProgress(setup), [setup])
@@ -109,12 +124,18 @@ export const ProfilePanel: React.FC<ProfilePanelProps> = ({
         onResetSetup={onResetSetup}
         onRerunSetup={onRerunSetup}
       />
+      <PersonaSetupAnalyticsCard
+        analytics={setupAnalytics}
+        loading={setupAnalyticsLoading}
+      />
       <AssistantDefaultsPanel
         selectedPersonaId={selectedPersonaId}
         selectedPersonaName={selectedPersonaName}
         isActive={isActive}
         analytics={analytics}
         analyticsLoading={analyticsLoading}
+        handoffFocusRequest={handoffFocusRequest}
+        onSetupHandoffFocusConsumed={onSetupHandoffFocusConsumed}
         onSaved={() => {
           onDefaultsSaved?.()
         }}

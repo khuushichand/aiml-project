@@ -28,6 +28,7 @@ type PersonaSetupHandoffCardProps = {
   recommendedAction: SetupHandoffRecommendedAction
   compact?: boolean
   onDismiss: () => void
+  onAddCommand: () => void
   onOpenCommands: () => void
   onOpenTestLab: () => void
   onOpenLive: () => void
@@ -100,6 +101,7 @@ export const PersonaSetupHandoffCard: React.FC<PersonaSetupHandoffCardProps> = (
   recommendedAction,
   compact = false,
   onDismiss,
+  onAddCommand,
   onOpenCommands,
   onOpenTestLab,
   onOpenLive,
@@ -107,12 +109,17 @@ export const PersonaSetupHandoffCard: React.FC<PersonaSetupHandoffCardProps> = (
   onOpenConnections
 }) => {
   const primaryAction =
-    recommendedAction === "add_command" || recommendedAction === "review_commands"
+    recommendedAction === "add_command"
       ? {
           label: getRecommendedActionButtonLabel(recommendedAction),
-          onClick: onOpenCommands
+          onClick: onAddCommand
         }
-      : recommendedAction === "add_connection"
+      : recommendedAction === "review_commands"
+        ? {
+            label: getRecommendedActionButtonLabel(recommendedAction),
+            onClick: onOpenCommands
+          }
+        : recommendedAction === "add_connection"
         ? {
             label: getRecommendedActionButtonLabel(recommendedAction),
             onClick: onOpenConnections

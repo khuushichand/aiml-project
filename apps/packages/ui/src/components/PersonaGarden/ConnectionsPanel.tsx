@@ -42,6 +42,13 @@ type ConnectionsPanelProps = {
   isActive?: boolean
   onConnectionSaved?: () => void
   onConnectionTestSucceeded?: () => void
+  handoffFocusRequest?: {
+    section: "connection_form" | "saved_connections"
+    token: number
+    connectionId?: string | null
+    connectionName?: string | null
+  } | null
+  onSetupHandoffFocusConsumed?: (token: number) => void
 }
 
 const DEFAULT_FORM_STATE: ConnectionFormState = {
@@ -116,10 +123,13 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
   selectedPersonaName,
   isActive = false,
   onConnectionSaved,
-  onConnectionTestSucceeded
+  onConnectionTestSucceeded,
+  handoffFocusRequest = null,
+  onSetupHandoffFocusConsumed
 }) => {
   const { t } = useTranslation(["sidepanel", "common"])
   const [connections, setConnections] = React.useState<PersonaConnection[]>([])
+  const [connectionsLoaded, setConnectionsLoaded] = React.useState(false)
   const [loading, setLoading] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -130,6 +140,9 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
   const [testResults, setTestResults] = React.useState<Record<string, PersonaConnectionTestResult>>({})
   const [formState, setFormState] =
     React.useState<ConnectionFormState>(DEFAULT_FORM_STATE)
+  const connectionNameInputRef = React.useRef<HTMLInputElement | null>(null)
+  const connectionEditButtonRefs = React.useRef<Record<string, HTMLButtonElement | null>>({})
+  const lastHandledHandoffTokenRef = React.useRef<number | null>(null)
 
   const resetConnectionUiState = React.useCallback(() => {
     setEditingConnectionId(null)
@@ -146,11 +159,13 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
     const load = async () => {
       if (!isActive || !selectedPersonaId) {
         setConnections([])
+        setConnectionsLoaded(false)
         setError(null)
         resetConnectionUiState()
         return
       }
       setLoading(true)
+      setConnectionsLoaded(false)
       try {
         const response = await tldwClient.fetchWithAuth(
           toAllowedPath(
@@ -190,6 +205,7 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
       } finally {
         if (!cancelled) {
           setLoading(false)
+          setConnectionsLoaded(true)
         }
       }
     }
@@ -199,6 +215,59 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
       cancelled = true
     }
   }, [isActive, resetConnectionUiState, selectedPersonaId])
+
+  React.useEffect(() => {
+    if (!isActive || !selectedPersonaId || !handoffFocusRequest || loading) return
+    if (lastHandledHandoffTokenRef.current === handoffFocusRequest.token) return
+
+    const consume = () => {
+      lastHandledHandoffTokenRef.current = handoffFocusRequest.token
+      onSetupHandoffFocusConsumed?.(handoffFocusRequest.token)
+    }
+
+    const focusConnectionForm = () => {
+      const formTarget = connectionNameInputRef.current
+      if (!formTarget) return false
+      formTarget.scrollIntoView?.({ block: "nearest", behavior: "smooth" })
+      formTarget.focus()
+      consume()
+      return true
+    }
+
+    if (handoffFocusRequest.section === "connection_form") {
+      focusConnectionForm()
+      return
+    }
+
+    if (!connectionsLoaded) return
+
+    const normalizedConnectionId = String(handoffFocusRequest.connectionId || "").trim()
+    const normalizedConnectionName = String(handoffFocusRequest.connectionName || "").trim()
+
+    const matchedConnection = connections.find((connection) => {
+      if (normalizedConnectionId && connection.id === normalizedConnectionId) return true
+      return normalizedConnectionName.length > 0 && connection.name === normalizedConnectionName
+    })
+
+    if (matchedConnection) {
+      const editButton = connectionEditButtonRefs.current[matchedConnection.id]
+      if (!editButton) return
+      editButton.scrollIntoView?.({ block: "nearest", behavior: "smooth" })
+      editButton.focus()
+      consume()
+      return
+    }
+
+    focusConnectionForm()
+  }, [
+    connections,
+    connectionsLoaded,
+    handoffFocusRequest,
+    isActive,
+    loading,
+    onSetupHandoffFocusConsumed,
+    selectedPersonaId
+  ])
 
   const updateField = React.useCallback(
     (field: keyof ConnectionFormState, value: string) => {
@@ -438,6 +507,7 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
                     defaultValue: "Connection name"
                   })}
                   <input
+                    ref={connectionNameInputRef}
                     data-testid="persona-connections-name-input"
                     className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
                     value={formState.name}
@@ -627,6 +697,9 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         type="button"
+                        ref={(node) => {
+                          connectionEditButtonRefs.current[connection.id] = node
+                        }}
                         data-testid={`persona-connections-edit-${connection.id}`}
                         className="rounded-md border border-border px-2 py-1 text-xs text-text transition hover:bg-surface2"
                         onClick={() => loadConnectionIntoForm(connection)}

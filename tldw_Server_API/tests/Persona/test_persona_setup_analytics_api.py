@@ -144,6 +144,13 @@ def test_persona_setup_analytics_summary_returns_recent_runs_and_rates(
                 "action_target": "live",
             },
             {
+                "event_id": "run-1-handoff-target",
+                "event_key": "handoff_target_reached:commands.command_list",
+                "run_id": "setup-run-1",
+                "event_type": "handoff_target_reached",
+                "action_target": "commands.command_list",
+            },
+            {
                 "event_id": "run-1-first-action",
                 "event_key": "first_post_setup_action",
                 "run_id": "setup-run-1",
@@ -208,7 +215,9 @@ def test_persona_setup_analytics_summary_returns_recent_runs_and_rates(
             "live_session_completion_count": 0,
             "most_common_dropoff_step": "commands",
             "handoff_click_rate": 0.5,
+            "handoff_target_reach_rate": 1.0,
             "first_post_setup_action_rate": 0.5,
+            "handoff_target_reached_counts": {"commands.command_list": 1},
             "detour_started_counts": {"live_failure": 1},
             "detour_returned_counts": {"live_failure": 1},
         }
@@ -220,11 +229,13 @@ def test_persona_setup_analytics_summary_returns_recent_runs_and_rates(
         assert payload["recent_runs"][0]["completion_type"] is None
         assert payload["recent_runs"][0]["terminal_step"] == "commands"
         assert payload["recent_runs"][0]["handoff_clicked"] is False
+        assert payload["recent_runs"][0]["handoff_target_reached"] is False
         assert payload["recent_runs"][0]["handoff_dismissed"] is False
         assert payload["recent_runs"][0]["first_post_setup_action"] is False
         assert payload["recent_runs"][1]["completion_type"] == "dry_run"
         assert payload["recent_runs"][1]["terminal_step"] == "test"
         assert payload["recent_runs"][1]["handoff_clicked"] is True
+        assert payload["recent_runs"][1]["handoff_target_reached"] is True
         assert payload["recent_runs"][1]["handoff_dismissed"] is False
         assert payload["recent_runs"][1]["first_post_setup_action"] is True
         assert payload["recent_runs"][1]["completed_at"]
