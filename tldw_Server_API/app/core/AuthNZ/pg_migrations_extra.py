@@ -534,6 +534,53 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS is_active_install BOOLEAN NOT NULL DEFAULT TRUE",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS superseded_by_governance_pack_id INTEGER NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS installed_from_upgrade_id INTEGER NULL",
+        (),
+    ),
+    (
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE indexname = 'uq_mcp_governance_packs_active_scope'
+                  AND schemaname = ANY (current_schemas(false))
+            ) THEN
+                UPDATE mcp_governance_packs
+                SET is_active_install = FALSE;
+
+                WITH latest AS (
+                    SELECT MAX(id) AS id
+                    FROM mcp_governance_packs
+                    GROUP BY pack_id, owner_scope_type, COALESCE(owner_scope_id, -1)
+                )
+                UPDATE mcp_governance_packs
+                SET is_active_install = TRUE
+                WHERE id IN (SELECT id FROM latest);
+            END IF;
+        END $$;
+        """,
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_active_scope "
+        "ON mcp_governance_packs(pack_id, owner_scope_type, COALESCE(owner_scope_id, -1)) "
+        "WHERE is_active_install",
+        (),
+    ),
+    (
         """
         CREATE TABLE IF NOT EXISTS mcp_governance_pack_objects (
             id SERIAL PRIMARY KEY,
@@ -559,6 +606,36 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_object "
         "ON mcp_governance_pack_objects(object_type, object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_upgrades (
+            id SERIAL PRIMARY KEY,
+            pack_id TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            from_governance_pack_id INTEGER NOT NULL REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            to_governance_pack_id INTEGER NOT NULL REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            from_pack_version TEXT NOT NULL,
+            to_pack_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            planned_by INTEGER NULL,
+            executed_by INTEGER NULL,
+            planner_inputs_fingerprint TEXT NULL,
+            adapter_state_fingerprint TEXT NULL,
+            plan_summary_json TEXT NOT NULL DEFAULT '{}',
+            accepted_resolutions_json TEXT NOT NULL DEFAULT '{}',
+            failure_summary TEXT NULL,
+            planned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            executed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_upgrades_scope "
+        "ON mcp_governance_pack_upgrades(pack_id, owner_scope_type, owner_scope_id)",
         (),
     ),
     (

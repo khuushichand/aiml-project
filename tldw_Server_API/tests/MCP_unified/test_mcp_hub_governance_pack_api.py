@@ -13,6 +13,8 @@ from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
     GovernancePackAlreadyExistsError,
+    GovernancePackUpgradeConflictError,
+    GovernancePackUpgradeStaleError,
 )
 
 
@@ -77,6 +79,8 @@ class _FakeGovernancePackService:
     def __init__(self) -> None:
         self.dry_run_calls: list[dict] = []
         self.import_calls: list[dict] = []
+        self.upgrade_dry_run_calls: list[dict] = []
+        self.upgrade_execute_calls: list[dict] = []
         self.report = {
             "manifest": {
                 "pack_id": "researcher-pack",
@@ -147,6 +151,87 @@ class _FakeGovernancePackService:
                 },
             ],
         }
+        self.upgrade_plan = {
+            "source_governance_pack_id": 81,
+            "source_manifest": self.inventory[0]["manifest"],
+            "target_manifest": {
+                "pack_id": "researcher-pack",
+                "pack_version": "1.1.0",
+                "title": "Researcher Pack",
+            },
+            "object_diff": [
+                {
+                    "object_type": "permission_profile",
+                    "source_object_id": "researcher.profile",
+                    "change_type": "modified",
+                    "previous_digest": "1" * 64,
+                    "next_digest": "2" * 64,
+                }
+            ],
+            "dependency_impact": [
+                {
+                    "object_type": "permission_profile",
+                    "source_object_id": "researcher.profile",
+                    "change_type": "modified",
+                    "impact": "behavioral_conflict",
+                    "dependent_type": "policy_assignment",
+                    "dependent_id": 91,
+                    "reference_field": "profile_id",
+                    "target_type": "permission_profile",
+                    "target_id": "researcher.profile",
+                }
+            ],
+            "structural_conflicts": [],
+            "behavioral_conflicts": [],
+            "warnings": [],
+            "planner_inputs_fingerprint": "plan-fingerprint",
+            "adapter_state_fingerprint": "adapter-fingerprint",
+            "upgradeable": True,
+        }
+        self.upgrade_result = {
+            "upgrade_id": 12,
+            "source_governance_pack_id": 81,
+            "target_governance_pack_id": 82,
+            "from_pack_version": "1.0.0",
+            "to_pack_version": "1.1.0",
+            "planner_inputs_fingerprint": "plan-fingerprint",
+            "adapter_state_fingerprint": "adapter-fingerprint",
+            "imported_object_ids": {
+                "approval_policies": [31],
+                "permission_profiles": [41],
+                "policy_assignments": [51],
+            },
+            "imported_object_counts": {
+                "approval_policies": 1,
+                "permission_profiles": 1,
+                "policy_assignments": 1,
+            },
+        }
+        self.upgrade_history = [
+            {
+                "id": 12,
+                "pack_id": "researcher-pack",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "from_governance_pack_id": 81,
+                "to_governance_pack_id": 82,
+                "from_pack_version": "1.0.0",
+                "to_pack_version": "1.1.0",
+                "status": "executed",
+                "planned_by": 7,
+                "executed_by": 7,
+                "planner_inputs_fingerprint": "plan-fingerprint",
+                "adapter_state_fingerprint": "adapter-fingerprint",
+                "plan_summary": {
+                    "object_diff_count": 1,
+                    "dependency_impact_count": 1,
+                },
+                "accepted_resolutions": {},
+                "failure_summary": None,
+                "planned_at": datetime.now(timezone.utc).isoformat(),
+                "executed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
 
     async def dry_run_pack_document(
         self,
@@ -204,6 +289,55 @@ class _FakeGovernancePackService:
         if int(governance_pack_id) == 81:
             return dict(self.detail)
         return None
+
+    async def dry_run_upgrade_document(
+        self,
+        *,
+        source_governance_pack_id: int,
+        document: dict[str, object],
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> dict[str, object]:
+        self.upgrade_dry_run_calls.append(
+            {
+                "source_governance_pack_id": source_governance_pack_id,
+                "document": dict(document),
+                "owner_scope_type": owner_scope_type,
+                "owner_scope_id": owner_scope_id,
+            }
+        )
+        return dict(self.upgrade_plan)
+
+    async def execute_upgrade_document(
+        self,
+        *,
+        source_governance_pack_id: int,
+        document: dict[str, object],
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+        actor_id: int | None,
+        planner_inputs_fingerprint: str,
+        adapter_state_fingerprint: str,
+    ) -> dict[str, object]:
+        self.upgrade_execute_calls.append(
+            {
+                "source_governance_pack_id": source_governance_pack_id,
+                "document": dict(document),
+                "owner_scope_type": owner_scope_type,
+                "owner_scope_id": owner_scope_id,
+                "actor_id": actor_id,
+                "planner_inputs_fingerprint": planner_inputs_fingerprint,
+                "adapter_state_fingerprint": adapter_state_fingerprint,
+            }
+        )
+        return dict(self.upgrade_result)
+
+    async def list_governance_pack_upgrade_history(
+        self,
+        governance_pack_id: int,
+    ) -> list[dict[str, object]]:
+        assert governance_pack_id == 81
+        return list(self.upgrade_history)
 
 
 def _build_app(
@@ -324,6 +458,206 @@ def test_governance_pack_import_returns_import_result() -> None:
     assert payload["governance_pack_id"] == 81
     assert payload["imported_object_counts"]["permission_profiles"] == 1
     assert governance_service.import_calls
+
+
+def test_governance_pack_upgrade_dry_run_returns_plan() -> None:
+    governance_service = _FakeGovernancePackService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=governance_service,
+    )
+
+    upgraded_pack = _minimal_pack_document()
+    upgraded_pack["manifest"]["pack_version"] = "1.1.0"
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/dry-run-upgrade",
+            json={
+                "source_governance_pack_id": 81,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "pack": upgraded_pack,
+            },
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["plan"]["source_governance_pack_id"] == 81
+    assert payload["plan"]["upgradeable"] is True
+    assert governance_service.upgrade_dry_run_calls[0]["owner_scope_id"] == 7
+
+
+def test_governance_pack_execute_upgrade_returns_result() -> None:
+    governance_service = _FakeGovernancePackService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=governance_service,
+    )
+
+    upgraded_pack = _minimal_pack_document()
+    upgraded_pack["manifest"]["pack_version"] = "1.1.0"
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/execute-upgrade",
+            json={
+                "source_governance_pack_id": 81,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "planner_inputs_fingerprint": "plan-fingerprint",
+                "adapter_state_fingerprint": "adapter-fingerprint",
+                "pack": upgraded_pack,
+            },
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["upgrade_id"] == 12
+    assert payload["target_governance_pack_id"] == 82
+    assert governance_service.upgrade_execute_calls[0]["actor_id"] == 7
+
+
+def test_governance_pack_execute_upgrade_requires_grant_authority() -> None:
+    governance_service = _FakeGovernancePackService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read"]),
+        governance_service=governance_service,
+    )
+
+    upgraded_pack = _minimal_pack_document()
+    upgraded_pack["manifest"]["pack_version"] = "1.1.0"
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/execute-upgrade",
+            json={
+                "source_governance_pack_id": 81,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "planner_inputs_fingerprint": "plan-fingerprint",
+                "adapter_state_fingerprint": "adapter-fingerprint",
+                "pack": upgraded_pack,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "grant.tool.invoke" in resp.json()["detail"]
+    assert governance_service.upgrade_execute_calls == []
+
+
+def test_governance_pack_execute_upgrade_returns_conflict_for_blocking_plan() -> None:
+    class _ConflictGovernancePackService(_FakeGovernancePackService):
+        async def execute_upgrade_document(
+            self,
+            *,
+            source_governance_pack_id: int,
+            document: dict[str, object],
+            owner_scope_type: str,
+            owner_scope_id: int | None,
+            actor_id: int | None,
+            planner_inputs_fingerprint: str,
+            adapter_state_fingerprint: str,
+        ) -> dict[str, object]:
+            del (
+                source_governance_pack_id,
+                document,
+                owner_scope_type,
+                owner_scope_id,
+                actor_id,
+                planner_inputs_fingerprint,
+                adapter_state_fingerprint,
+            )
+            raise GovernancePackUpgradeConflictError("blocking conflicts")
+
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=_ConflictGovernancePackService(),
+    )
+
+    upgraded_pack = _minimal_pack_document()
+    upgraded_pack["manifest"]["pack_version"] = "1.1.0"
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/execute-upgrade",
+            json={
+                "source_governance_pack_id": 81,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "planner_inputs_fingerprint": "plan-fingerprint",
+                "adapter_state_fingerprint": "adapter-fingerprint",
+                "pack": upgraded_pack,
+            },
+        )
+
+    assert resp.status_code == 409
+    assert "blocking conflicts" in resp.json()["detail"]
+
+
+def test_governance_pack_execute_upgrade_returns_conflict_for_stale_plan() -> None:
+    class _StaleGovernancePackService(_FakeGovernancePackService):
+        async def execute_upgrade_document(
+            self,
+            *,
+            source_governance_pack_id: int,
+            document: dict[str, object],
+            owner_scope_type: str,
+            owner_scope_id: int | None,
+            actor_id: int | None,
+            planner_inputs_fingerprint: str,
+            adapter_state_fingerprint: str,
+        ) -> dict[str, object]:
+            del (
+                source_governance_pack_id,
+                document,
+                owner_scope_type,
+                owner_scope_id,
+                actor_id,
+                planner_inputs_fingerprint,
+                adapter_state_fingerprint,
+            )
+            raise GovernancePackUpgradeStaleError("stale plan")
+
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=_StaleGovernancePackService(),
+    )
+
+    upgraded_pack = _minimal_pack_document()
+    upgraded_pack["manifest"]["pack_version"] = "1.1.0"
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/execute-upgrade",
+            json={
+                "source_governance_pack_id": 81,
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
+                "planner_inputs_fingerprint": "plan-fingerprint",
+                "adapter_state_fingerprint": "adapter-fingerprint",
+                "pack": upgraded_pack,
+            },
+        )
+
+    assert resp.status_code == 409
+    assert "stale plan" in resp.json()["detail"]
+
+
+def test_governance_pack_upgrade_history_returns_lineage() -> None:
+    governance_service = _FakeGovernancePackService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=governance_service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/governance-packs/81/upgrade-history")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload[0]["from_pack_version"] == "1.0.0"
+    assert payload[0]["to_pack_version"] == "1.1.0"
 
 
 def test_governance_pack_dry_run_defaults_user_scope_id_from_principal() -> None:

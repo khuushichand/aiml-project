@@ -9,6 +9,8 @@ class _FakeRepo:
             1: {
                 "id": 1,
                 "name": "Default Read",
+                "owner_scope_type": "global",
+                "owner_scope_id": None,
                 "policy_document": {
                     "allowed_tools": ["notes.search"],
                     "capabilities": ["filesystem.read"],
@@ -21,6 +23,8 @@ class _FakeRepo:
             2: {
                 "id": 2,
                 "name": "Group External",
+                "owner_scope_type": "user",
+                "owner_scope_id": 7,
                 "policy_document": {
                     "allowed_tools": ["external.servers.list"],
                     "capabilities": ["network.external"],
@@ -28,6 +32,7 @@ class _FakeRepo:
                 "path_scope_object_id": None,
             },
         }
+        self.approval_policies: dict[int, dict] = {}
         self.path_scope_objects = {
             100: {
                 "id": 100,
@@ -91,6 +96,7 @@ class _FakeRepo:
         self.overrides: dict[int, dict] = {}
         self.assignment_workspaces: dict[int, list[str]] = {}
         self.capability_mappings: dict[tuple[str, int | None, str], dict] = {}
+        self.governance_packs: dict[tuple[str, str, str, int | None], dict] = {}
 
     async def list_policy_assignments(
         self,
@@ -120,6 +126,9 @@ class _FakeRepo:
     async def get_path_scope_object(self, path_scope_object_id: int) -> dict | None:
         return self.path_scope_objects.get(path_scope_object_id)
 
+    async def get_approval_policy(self, approval_policy_id: int) -> dict | None:
+        return self.approval_policies.get(approval_policy_id)
+
     async def list_policy_assignment_workspaces(self, assignment_id: int) -> list[dict]:
         return [
             {"assignment_id": assignment_id, "workspace_id": workspace_id}
@@ -134,6 +143,18 @@ class _FakeRepo:
         capability_name: str,
     ) -> dict | None:
         return self.capability_mappings.get((owner_scope_type, owner_scope_id, capability_name))
+
+    async def get_governance_pack_by_identity(
+        self,
+        *,
+        pack_id: str,
+        pack_version: str,
+        owner_scope_type: str,
+        owner_scope_id: int | None,
+    ) -> dict | None:
+        return self.governance_packs.get(
+            (pack_id, pack_version, owner_scope_type, owner_scope_id)
+        )
 
 
 @pytest.mark.asyncio
@@ -184,6 +205,100 @@ async def test_policy_resolver_returns_disabled_policy_when_no_assignments_apply
     assert policy["allowed_tools"] == []
     assert policy["denied_tools"] == []
     assert policy["sources"] == []
+
+
+@pytest.mark.asyncio
+async def test_policy_resolver_ignores_superseded_governance_pack_objects() -> None:
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = _FakeRepo()
+    repo.governance_packs = {
+        ("legacy-pack", "0.9.0", "user", 7): {
+            "id": 90,
+            "is_active_install": False,
+        },
+    }
+    repo.assignments.append(
+        {
+            "id": 13,
+            "target_type": "group",
+            "target_id": "ops",
+            "owner_scope_type": "user",
+            "owner_scope_id": 7,
+            "profile_id": None,
+            "path_scope_object_id": None,
+            "inline_policy_document": {
+                "allowed_tools": ["legacy.assignment"],
+                "governance_pack": {
+                    "pack_id": "legacy-pack",
+                    "pack_version": "0.9.0",
+                    "source_object_id": "legacy.assignment",
+                },
+            },
+            "approval_policy_id": None,
+            "is_active": True,
+        }
+    )
+    repo.profiles[3] = {
+        "id": 3,
+        "name": "Legacy Profile",
+        "owner_scope_type": "user",
+        "owner_scope_id": 7,
+        "policy_document": {
+            "allowed_tools": ["legacy.profile"],
+            "governance_pack": {
+                "pack_id": "legacy-pack",
+                "pack_version": "0.9.0",
+                "source_object_id": "legacy.profile",
+            },
+        },
+        "path_scope_object_id": None,
+        "is_active": True,
+    }
+    repo.assignments.append(
+        {
+            "id": 14,
+            "target_type": "persona",
+            "target_id": "researcher",
+            "owner_scope_type": "user",
+            "owner_scope_id": 7,
+            "profile_id": 3,
+            "path_scope_object_id": None,
+            "inline_policy_document": {},
+            "approval_policy_id": 55,
+            "is_active": True,
+        }
+    )
+    repo.approval_policies[55] = {
+        "id": 55,
+        "name": "Legacy Approval",
+        "owner_scope_type": "user",
+        "owner_scope_id": 7,
+        "mode": "ask_every_time",
+        "rules": {
+            "governance_pack": {
+                "pack_id": "legacy-pack",
+                "pack_version": "0.9.0",
+                "source_object_id": "legacy.approval",
+            }
+        },
+        "is_active": True,
+    }
+    resolver = McpHubPolicyResolver(repo=repo)
+
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={
+            "mcp_policy_context_enabled": True,
+            "group_id": "ops",
+            "persona_id": "researcher",
+        },
+    )
+
+    assert "legacy.assignment" not in policy["allowed_tools"]
+    assert "legacy.profile" not in policy["allowed_tools"]
+    assert policy["approval_policy_id"] is None
+    assert [source["assignment_id"] for source in policy["sources"]] == [10, 11, 12, 14]
 
 
 @pytest.mark.asyncio

@@ -759,7 +759,18 @@ class GovernancePackImportRequest(BaseModel):
     pack: GovernancePackDocumentRequest
 
 
+class GovernancePackUpgradeDryRunRequest(BaseModel):
+    """Request body for governance-pack upgrade planning."""
+
+    source_governance_pack_id: int = Field(..., ge=1)
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    pack: GovernancePackDocumentRequest
+
+
 class GovernancePackReportManifestResponse(BaseModel):
+    """Manifest summary returned in governance-pack dry-run reports."""
+
     pack_id: str
     pack_version: str
     title: str
@@ -767,6 +778,8 @@ class GovernancePackReportManifestResponse(BaseModel):
 
 
 class GovernancePackDryRunReportResponse(BaseModel):
+    """Portable governance-pack dry-run validation report."""
+
     manifest: GovernancePackReportManifestResponse
     digest: str
     resolved_capabilities: list[str] = Field(default_factory=list)
@@ -780,7 +793,103 @@ class GovernancePackDryRunReportResponse(BaseModel):
 
 
 class GovernancePackDryRunResponse(BaseModel):
+    """Envelope for governance-pack import dry-run responses."""
+
     report: GovernancePackDryRunReportResponse
+
+
+class GovernancePackUpgradeObjectDiffResponse(BaseModel):
+    """Object-level diff entry produced by governance-pack upgrade planning."""
+
+    object_type: str
+    source_object_id: str
+    change_type: str
+    previous_digest: str | None = None
+    next_digest: str | None = None
+
+
+class GovernancePackUpgradeDependencyImpactResponse(BaseModel):
+    """Dependency impact entry produced by governance-pack upgrade planning."""
+
+    object_type: str
+    source_object_id: str
+    change_type: str
+    impact: str
+    dependent_type: str
+    dependent_id: int
+    reference_field: str
+    target_type: str | None = None
+    target_id: str | None = None
+
+
+class GovernancePackUpgradePlanResponse(BaseModel):
+    """Planner output for a governance-pack upgrade dry run."""
+
+    source_governance_pack_id: int
+    source_manifest: dict[str, Any] = Field(default_factory=dict)
+    target_manifest: dict[str, Any] = Field(default_factory=dict)
+    object_diff: list[GovernancePackUpgradeObjectDiffResponse] = Field(default_factory=list)
+    dependency_impact: list[GovernancePackUpgradeDependencyImpactResponse] = Field(default_factory=list)
+    structural_conflicts: list[str] = Field(default_factory=list)
+    behavioral_conflicts: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    planner_inputs_fingerprint: str
+    adapter_state_fingerprint: str
+    upgradeable: bool
+
+
+class GovernancePackUpgradeDryRunResponse(BaseModel):
+    """Envelope for governance-pack upgrade dry-run responses."""
+
+    plan: GovernancePackUpgradePlanResponse
+
+
+class GovernancePackUpgradeExecuteRequest(BaseModel):
+    """Request body for transactional governance-pack upgrade execution."""
+
+    source_governance_pack_id: int = Field(..., ge=1)
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    planner_inputs_fingerprint: str = Field(..., min_length=1)
+    adapter_state_fingerprint: str = Field(..., min_length=1)
+    pack: GovernancePackDocumentRequest
+
+
+class GovernancePackUpgradeExecutionResponse(BaseModel):
+    """Execution result for a completed governance-pack upgrade."""
+
+    upgrade_id: int
+    source_governance_pack_id: int
+    target_governance_pack_id: int
+    from_pack_version: str
+    to_pack_version: str
+    planner_inputs_fingerprint: str
+    adapter_state_fingerprint: str
+    imported_object_ids: dict[str, list[int]] = Field(default_factory=dict)
+    imported_object_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class GovernancePackUpgradeHistoryEntryResponse(BaseModel):
+    """Lineage entry describing a past governance-pack upgrade."""
+
+    id: int
+    pack_id: str
+    owner_scope_type: ScopeType
+    owner_scope_id: int | None = None
+    from_governance_pack_id: int
+    to_governance_pack_id: int
+    from_pack_version: str
+    to_pack_version: str
+    status: str
+    planned_by: int | None = None
+    executed_by: int | None = None
+    planner_inputs_fingerprint: str | None = None
+    adapter_state_fingerprint: str | None = None
+    plan_summary: dict[str, Any] = Field(default_factory=dict)
+    accepted_resolutions: dict[str, Any] = Field(default_factory=dict)
+    failure_summary: str | None = None
+    planned_at: datetime | str | None = None
+    executed_at: datetime | str | None = None
 
 
 class GovernancePackObjectProvenanceResponse(BaseModel):
@@ -799,6 +908,9 @@ class GovernancePackSummaryResponse(BaseModel):
     owner_scope_id: int | None = None
     bundle_digest: str
     manifest: dict[str, Any] = Field(default_factory=dict)
+    is_active_install: bool = True
+    superseded_by_governance_pack_id: int | None = None
+    installed_from_upgrade_id: int | None = None
     created_by: int | None = None
     updated_by: int | None = None
     created_at: datetime | str | None = None

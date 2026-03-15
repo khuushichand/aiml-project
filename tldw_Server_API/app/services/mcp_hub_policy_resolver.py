@@ -75,6 +75,26 @@ def _collect_scope_ids(metadata: dict[str, Any], singular_key: str, plural_key: 
     return sorted(out)
 
 
+def _normalize_scope_id(value: Any) -> int | None:
+    """Return an integer scope id when present and parseable."""
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _governance_pack_reference(document: dict[str, Any]) -> tuple[str, str] | None:
+    """Extract governance-pack identity metadata from a stored policy document."""
+    metadata = _as_dict(document.get("governance_pack"))
+    pack_id = str(metadata.get("pack_id") or "").strip()
+    pack_version = str(metadata.get("pack_version") or "").strip()
+    if not pack_id or not pack_version:
+        return None
+    return pack_id, pack_version
+
+
 def _extract_targets(metadata: dict[str, Any]) -> list[tuple[str, str | None]]:
     """Return the ordered assignment targets applicable to the runtime metadata."""
     targets: list[tuple[str, str | None]] = [("default", None)]
@@ -247,6 +267,44 @@ class McpHubPolicyResolver:
             repo=repo
         )
 
+    async def _document_uses_active_governance_pack(
+        self,
+        *,
+        document: dict[str, Any],
+        owner_scope_type: str | None,
+        owner_scope_id: Any,
+        cache: dict[tuple[str, str, str, int | None], bool],
+    ) -> bool:
+        pack_ref = _governance_pack_reference(document)
+        if pack_ref is None:
+            return True
+        scope_type = str(owner_scope_type or "global").strip().lower() or "global"
+        scope_id = _normalize_scope_id(owner_scope_id)
+        cache_key = (pack_ref[0], pack_ref[1], scope_type, scope_id)
+        if cache_key not in cache:
+            pack_row = await self.repo.get_governance_pack_by_identity(
+                pack_id=pack_ref[0],
+                pack_version=pack_ref[1],
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+            cache[cache_key] = bool(pack_row and pack_row.get("is_active_install"))
+        return cache[cache_key]
+
+    async def _row_uses_active_governance_pack(
+        self,
+        *,
+        row: dict[str, Any],
+        document_field: str,
+        cache: dict[tuple[str, str, str, int | None], bool],
+    ) -> bool:
+        return await self._document_uses_active_governance_pack(
+            document=_as_dict(row.get(document_field)),
+            owner_scope_type=row.get("owner_scope_type"),
+            owner_scope_id=row.get("owner_scope_id"),
+            cache=cache,
+        )
+
     async def resolve_for_context(
         self,
         *,
@@ -286,8 +344,16 @@ class McpHubPolicyResolver:
         selected_workspace_scope_id: int | None = None
         path_scope_object_cache: dict[int, dict[str, Any] | None] = {}
         workspace_set_object_cache: dict[int, dict[str, Any] | None] = {}
+        approval_policy_cache: dict[int, dict[str, Any] | None] = {}
+        governance_pack_activity_cache: dict[tuple[str, str, str, int | None], bool] = {}
 
         for assignment in assignments:
+            if not await self._row_uses_active_governance_pack(
+                row=assignment,
+                document_field="inline_policy_document",
+                cache=governance_pack_activity_cache,
+            ):
+                continue
             assignment_document: dict[str, Any] = {}
             profile_id = assignment.get("profile_id")
             profile_key: int | None = int(profile_id) if profile_id is not None else None
@@ -296,7 +362,11 @@ class McpHubPolicyResolver:
                 if profile_key not in profile_cache:
                     profile_cache[profile_key] = await self.repo.get_permission_profile(profile_key)
                 profile_row = profile_cache.get(profile_key) or {}
-                if bool(profile_row.get("is_active", True)):
+                if bool(profile_row.get("is_active", True)) and await self._row_uses_active_governance_pack(
+                    row=profile_row,
+                    document_field="policy_document",
+                    cache=governance_pack_activity_cache,
+                ):
                     profile_path_scope_object_id = profile_row.get("path_scope_object_id")
                     profile_path_scope_key = (
                         int(profile_path_scope_object_id)
@@ -402,7 +472,18 @@ class McpHubPolicyResolver:
             merged_policy_document = _merge_policy_documents(merged_policy_document, assignment_document)
             approval_policy_id = assignment.get("approval_policy_id")
             if approval_policy_id is not None:
-                resolved_approval_policy_id = int(approval_policy_id)
+                approval_policy_key = int(approval_policy_id)
+                if approval_policy_key not in approval_policy_cache:
+                    approval_policy_cache[approval_policy_key] = await self.repo.get_approval_policy(
+                        approval_policy_key
+                    )
+                approval_policy_row = approval_policy_cache.get(approval_policy_key) or {}
+                if bool(approval_policy_row.get("is_active", True)) and await self._row_uses_active_governance_pack(
+                    row=approval_policy_row,
+                    document_field="rules",
+                    cache=governance_pack_activity_cache,
+                ):
+                    resolved_approval_policy_id = approval_policy_key
             selected_assignment_id = assignment_id
             selected_workspace_scope_type = str(assignment.get("owner_scope_type") or "global")
             selected_workspace_scope_id = assignment.get("owner_scope_id")
@@ -456,6 +537,9 @@ class McpHubPolicyResolver:
                     "path_scope_object_id": assignment.get("path_scope_object_id"),
                 }
             )
+
+        if not sources:
+            return self._disabled_policy()
 
         authored_policy_document = deepcopy(merged_policy_document)
         allow_capability_resolution = await self.capability_resolution_service.resolve_capabilities(

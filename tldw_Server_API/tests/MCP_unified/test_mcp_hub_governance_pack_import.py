@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 
-async def _make_repo(tmp_path, monkeypatch):
+
+async def _make_repo(tmp_path, monkeypatch) -> McpHubRepo:
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
@@ -24,6 +29,35 @@ async def _make_repo(tmp_path, monkeypatch):
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
     return repo
+
+
+async def _seed_research_capability_mappings(
+    repo: McpHubRepo,
+    *,
+    actor_id: int = 7,
+) -> None:
+    await repo.create_capability_adapter_mapping(
+        mapping_id="filesystem.read.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="filesystem.read",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["files.read"]},
+        supported_environment_requirements=["workspace_bounded_read"],
+        is_active=True,
+        actor_id=actor_id,
+    )
+    await repo.create_capability_adapter_mapping(
+        mapping_id="tool.invoke.research.global",
+        owner_scope_type="global",
+        owner_scope_id=None,
+        capability_name="tool.invoke.research",
+        adapter_contract_version=1,
+        resolved_policy_document={"allowed_tools": ["web.search"]},
+        supported_environment_requirements=[],
+        is_active=True,
+        actor_id=actor_id,
+    )
 
 
 @pytest.mark.asyncio
@@ -184,6 +218,7 @@ async def test_import_governance_pack_materializes_immutable_base_objects_with_p
     assert governance_pack is not None
     assert governance_pack["pack_id"] == "researcher-pack"
     assert governance_pack["pack_version"] == "1.0.0"
+    assert governance_pack["is_active_install"] is True
     assert len(str(governance_pack["bundle_digest"])) == 64
 
     approval_policy = await repo.get_approval_policy(result.imported_object_ids["approval_policies"][0])
@@ -229,6 +264,75 @@ async def test_import_governance_pack_materializes_immutable_base_objects_with_p
     )
     assert override is not None
     assert override["override_policy_document"]["allowed_tools"] == ["Read"]
+
+
+@pytest.mark.asyncio
+async def test_governance_pack_repo_tracks_active_install_state_and_upgrade_lineage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo = await _make_repo(tmp_path, monkeypatch)
+
+    created = await repo.create_governance_pack(
+        pack_id="researcher-pack",
+        pack_version="1.0.0",
+        pack_schema_version=1,
+        capability_taxonomy_version=1,
+        adapter_contract_version=1,
+        title="Researcher Pack",
+        description="Initial install",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        bundle_digest="a" * 64,
+        manifest={"pack_id": "researcher-pack", "pack_version": "1.0.0"},
+        normalized_ir={"profiles": []},
+        actor_id=7,
+    )
+
+    assert created["is_active_install"] is True
+    assert created["superseded_by_governance_pack_id"] is None
+
+    upgraded = await repo.create_governance_pack(
+        pack_id="researcher-pack",
+        pack_version="1.1.0",
+        pack_schema_version=1,
+        capability_taxonomy_version=1,
+        adapter_contract_version=1,
+        title="Researcher Pack",
+        description="Upgrade target",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        bundle_digest="b" * 64,
+        manifest={"pack_id": "researcher-pack", "pack_version": "1.1.0"},
+        normalized_ir={"profiles": []},
+        actor_id=7,
+        is_active_install=False,
+    )
+
+    lineage = await repo.create_governance_pack_upgrade(
+        pack_id="researcher-pack",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        from_governance_pack_id=int(created["id"]),
+        to_governance_pack_id=int(upgraded["id"]),
+        from_pack_version="1.0.0",
+        to_pack_version="1.1.0",
+        status="planned",
+        planned_by=7,
+        plan_summary={"changed_objects": 2},
+    )
+
+    assert lineage["from_pack_version"] == "1.0.0"
+    assert lineage["to_pack_version"] == "1.1.0"
+    assert lineage["status"] == "planned"
+
+    history = await repo.list_governance_pack_upgrades(
+        pack_id="researcher-pack",
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    assert [item["to_pack_version"] for item in history] == ["1.1.0"]
 
 
 @pytest.mark.asyncio
@@ -380,3 +484,519 @@ async def test_import_governance_pack_rolls_back_partial_objects_on_failure(
     assert await repo.list_permission_profiles(owner_scope_type="user", owner_scope_id=7) == []
     assert await repo.list_approval_policies(owner_scope_type="user", owner_scope_id=7) == []
     assert await repo.list_policy_assignments(owner_scope_type="user", owner_scope_id=7) == []
+
+
+@pytest.mark.asyncio
+async def test_dry_run_upgrade_accepts_newer_same_pack_and_reports_fingerprints(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    service = McpHubGovernancePackService(repo=repo)
+    source_pack = load_governance_pack_fixture("minimal_researcher_pack")
+    imported = await service.import_pack(
+        pack=source_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    target_pack = deepcopy(source_pack)
+    target_pack.manifest.pack_version = "1.0.1"
+    target_pack.manifest.description = "Minor pack refresh"
+
+    plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=target_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    assert plan.upgradeable is True
+    assert plan.source_manifest["pack_version"] == "1.0.0"
+    assert plan.target_manifest["pack_version"] == "1.0.1"
+    assert plan.structural_conflicts == []
+    assert plan.behavioral_conflicts == []
+    assert len(plan.planner_inputs_fingerprint) == 64
+    assert len(plan.adapter_state_fingerprint) == 64
+
+
+@pytest.mark.asyncio
+async def test_dry_run_upgrade_rejects_equal_version_and_cross_scope_target(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    service = McpHubGovernancePackService(repo=repo)
+    source_pack = load_governance_pack_fixture("minimal_researcher_pack")
+    imported = await service.import_pack(
+        pack=source_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    same_version_plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=deepcopy(source_pack),
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+    assert same_version_plan.upgradeable is False
+    assert any("newer than the installed version" in item for item in same_version_plan.structural_conflicts)
+
+    moved_scope_pack = deepcopy(source_pack)
+    moved_scope_pack.manifest.pack_version = "1.0.1"
+    moved_scope_plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=moved_scope_pack,
+        owner_scope_type="team",
+        owner_scope_id=21,
+    )
+    assert moved_scope_plan.upgradeable is False
+    assert any("same owner scope" in item for item in moved_scope_plan.structural_conflicts)
+
+
+@pytest.mark.asyncio
+async def test_dry_run_upgrade_blocks_removed_profile_with_local_assignment_dependency(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    service = McpHubGovernancePackService(repo=repo)
+    source_pack = load_governance_pack_fixture("minimal_researcher_pack")
+    imported = await service.import_pack(
+        pack=source_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    await repo.create_policy_assignment(
+        target_type="persona",
+        target_id="local.persona",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        profile_id=imported.imported_object_ids["permission_profiles"][0],
+        inline_policy_document={"source": "local-overlay"},
+        approval_policy_id=imported.imported_object_ids["approval_policies"][0],
+        actor_id=8,
+        is_active=True,
+        is_immutable=False,
+    )
+
+    target_pack = deepcopy(source_pack)
+    target_pack.manifest.pack_version = "1.1.0"
+    target_pack.profiles[0].profile_id = "researcher.profile.v2"
+    target_pack.personas[0].capability_profile_id = "researcher.profile.v2"
+    target_pack.assignments[0].capability_profile_id = "researcher.profile.v2"
+
+    plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=target_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    assert plan.upgradeable is False
+    assert any(
+        "permission_profile:researcher.profile" in item and "policy assignment" in item
+        for item in plan.structural_conflicts
+    )
+    assert any(
+        item["object_type"] == "permission_profile"
+        and item["source_object_id"] == "researcher.profile"
+        and item["impact"] == "structural_conflict"
+        for item in plan.dependency_impact
+    )
+
+
+@pytest.mark.asyncio
+async def test_dry_run_upgrade_blocks_semantic_profile_change_with_local_assignment_dependency(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    service = McpHubGovernancePackService(repo=repo)
+    source_pack = load_governance_pack_fixture("minimal_researcher_pack")
+    imported = await service.import_pack(
+        pack=source_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    await repo.create_policy_assignment(
+        target_type="persona",
+        target_id="local.persona",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        profile_id=imported.imported_object_ids["permission_profiles"][0],
+        inline_policy_document={"source": "local-overlay"},
+        approval_policy_id=imported.imported_object_ids["approval_policies"][0],
+        actor_id=8,
+        is_active=True,
+        is_immutable=False,
+    )
+
+    target_pack = deepcopy(source_pack)
+    target_pack.manifest.pack_version = "1.1.0"
+    target_pack.profiles[0].environment_requirements = []
+
+    plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=target_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    assert plan.upgradeable is False
+    assert any(
+        "permission_profile:researcher.profile" in item and "materially changes" in item
+        for item in plan.behavioral_conflicts
+    )
+    assert any(
+        item["object_type"] == "permission_profile"
+        and item["source_object_id"] == "researcher.profile"
+        and item["impact"] == "behavioral_conflict"
+        for item in plan.dependency_impact
+    )
+
+
+@pytest.mark.asyncio
+async def test_dry_run_upgrade_reports_workspace_rebind_for_modified_assignment(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    service = McpHubGovernancePackService(repo=repo)
+    source_pack = load_governance_pack_fixture("minimal_researcher_pack")
+    imported = await service.import_pack(
+        pack=source_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    await repo.add_policy_assignment_workspace(
+        int(imported.imported_object_ids["policy_assignments"][0]),
+        workspace_id="workspace-alpha",
+        actor_id=8,
+    )
+
+    target_pack = deepcopy(source_pack)
+    target_pack.manifest.pack_version = "1.0.1"
+    target_pack.assignments[0].approval_template_id = None
+
+    plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=target_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    assert plan.upgradeable is True
+    assert plan.structural_conflicts == []
+    assert plan.behavioral_conflicts == []
+    assert any(
+        item["object_type"] == "policy_assignment"
+        and item["source_object_id"] == "researcher.default"
+        and item["impact"] == "rebind_required"
+        and item["dependent_type"] == "policy_assignment_workspace"
+        and item["reference_field"] == "assignment_id"
+        and item["target_id"] == "workspace-alpha"
+        for item in plan.dependency_impact
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_upgrade_rebinds_dependents_and_marks_pack_lineage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    service = McpHubGovernancePackService(repo=repo)
+    source_pack = load_governance_pack_fixture("minimal_researcher_pack")
+    imported = await service.import_pack(
+        pack=source_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    local_assignment = await repo.create_policy_assignment(
+        target_type="persona",
+        target_id="local.persona",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        profile_id=imported.imported_object_ids["permission_profiles"][0],
+        inline_policy_document={"source": "local-overlay"},
+        approval_policy_id=imported.imported_object_ids["approval_policies"][0],
+        actor_id=8,
+        is_active=True,
+        is_immutable=False,
+    )
+    await repo.upsert_policy_override(
+        int(imported.imported_object_ids["policy_assignments"][0]),
+        override_policy_document={"allowed_tools": ["Read"]},
+        broadens_access=False,
+        grant_authority_snapshot={"source": "local-overlay"},
+        actor_id=8,
+        is_active=True,
+    )
+    await repo.add_policy_assignment_workspace(
+        int(imported.imported_object_ids["policy_assignments"][0]),
+        workspace_id="workspace-alpha",
+        actor_id=8,
+    )
+
+    target_pack = deepcopy(source_pack)
+    target_pack.manifest.pack_version = "1.0.1"
+    target_pack.manifest.description = "Upgrade target"
+    plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=target_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    result = await service.execute_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=target_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+        planner_inputs_fingerprint=plan.planner_inputs_fingerprint,
+        adapter_state_fingerprint=plan.adapter_state_fingerprint,
+    )
+
+    assert result.from_pack_version == "1.0.0"
+    assert result.to_pack_version == "1.0.1"
+
+    old_pack = await repo.get_governance_pack(imported.governance_pack_id)
+    new_pack = await repo.get_governance_pack(result.target_governance_pack_id)
+    assert old_pack is not None and new_pack is not None
+    assert old_pack["is_active_install"] is False
+    assert old_pack["superseded_by_governance_pack_id"] == result.target_governance_pack_id
+    assert new_pack["is_active_install"] is True
+    assert new_pack["installed_from_upgrade_id"] == result.upgrade_id
+
+    new_objects = await repo.list_governance_pack_objects(result.target_governance_pack_id)
+    new_profile_id = int(
+        next(
+            item["object_id"]
+            for item in new_objects
+            if item["object_type"] == "permission_profile"
+            and item["source_object_id"] == "researcher.profile"
+        )
+    )
+    new_approval_id = int(
+        next(
+            item["object_id"]
+            for item in new_objects
+            if item["object_type"] == "approval_policy"
+            and item["source_object_id"] == "researcher.ask"
+        )
+    )
+    new_assignment_id = int(
+        next(
+            item["object_id"]
+            for item in new_objects
+            if item["object_type"] == "policy_assignment"
+            and item["source_object_id"] == "researcher.default"
+        )
+    )
+
+    rebound_assignment = await repo.get_policy_assignment(int(local_assignment["id"]))
+    assert rebound_assignment is not None
+    assert int(rebound_assignment["profile_id"]) == new_profile_id
+    assert int(rebound_assignment["approval_policy_id"]) == new_approval_id
+
+    assert (
+        await repo.get_policy_override_by_assignment(
+            int(imported.imported_object_ids["policy_assignments"][0])
+        )
+        is None
+    )
+    rebound_override = await repo.get_policy_override_by_assignment(new_assignment_id)
+    assert rebound_override is not None
+    assert rebound_override["override_policy_document"]["allowed_tools"] == ["Read"]
+    assert await repo.list_policy_assignment_workspaces(
+        int(imported.imported_object_ids["policy_assignments"][0])
+    ) == []
+    assert [item["workspace_id"] for item in await repo.list_policy_assignment_workspaces(new_assignment_id)] == [
+        "workspace-alpha"
+    ]
+
+    history = await repo.list_governance_pack_upgrades(
+        pack_id="researcher-pack",
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+    assert history[-1]["status"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_execute_upgrade_rejects_stale_plan_fingerprints(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    service = McpHubGovernancePackService(repo=repo)
+    source_pack = load_governance_pack_fixture("minimal_researcher_pack")
+    imported = await service.import_pack(
+        pack=source_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    target_pack = deepcopy(source_pack)
+    target_pack.manifest.pack_version = "1.0.1"
+    plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=target_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    await repo.create_policy_assignment(
+        target_type="persona",
+        target_id="late.local.persona",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        profile_id=imported.imported_object_ids["permission_profiles"][0],
+        inline_policy_document={"source": "late-local-overlay"},
+        approval_policy_id=None,
+        actor_id=8,
+        is_active=True,
+        is_immutable=False,
+    )
+
+    with pytest.raises(ValueError, match="stale"):
+        await service.execute_upgrade_pack(
+            source_governance_pack_id=imported.governance_pack_id,
+            pack=target_pack,
+            owner_scope_type="user",
+            owner_scope_id=7,
+            actor_id=7,
+            planner_inputs_fingerprint=plan.planner_inputs_fingerprint,
+            adapter_state_fingerprint=plan.adapter_state_fingerprint,
+        )
+
+    source_row = await repo.get_governance_pack(imported.governance_pack_id)
+    assert source_row is not None
+    assert source_row["is_active_install"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_upgrade_rolls_back_when_staging_insert_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.MCP_unified.governance_packs import (
+        load_governance_pack_fixture,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    service = McpHubGovernancePackService(repo=repo)
+    source_pack = load_governance_pack_fixture("minimal_researcher_pack")
+    imported = await service.import_pack(
+        pack=source_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+    )
+
+    target_pack = deepcopy(source_pack)
+    target_pack.manifest.pack_version = "1.0.1"
+    plan = await service.dry_run_upgrade_pack(
+        source_governance_pack_id=imported.governance_pack_id,
+        pack=target_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+    )
+
+    original_create_policy_assignment = repo.create_policy_assignment
+
+    async def _boom_create_policy_assignment(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("upgrade assignment insert failed")
+
+    repo.create_policy_assignment = _boom_create_policy_assignment  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="upgrade assignment insert failed"):
+            await service.execute_upgrade_pack(
+                source_governance_pack_id=imported.governance_pack_id,
+                pack=target_pack,
+                owner_scope_type="user",
+                owner_scope_id=7,
+                actor_id=7,
+                planner_inputs_fingerprint=plan.planner_inputs_fingerprint,
+                adapter_state_fingerprint=plan.adapter_state_fingerprint,
+            )
+    finally:
+        repo.create_policy_assignment = original_create_policy_assignment  # type: ignore[method-assign]
+
+    inventory = await repo.list_governance_packs(owner_scope_type="user", owner_scope_id=7)
+    assert [(item["pack_version"], item["is_active_install"]) for item in inventory] == [("1.0.0", True)]
