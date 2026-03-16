@@ -37,6 +37,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     InputError,
     MediaDatabase,
     fetch_keywords_for_media_batch,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item,
 )
 from tldw_Server_API.app.core.config import settings

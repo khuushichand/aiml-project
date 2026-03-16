@@ -28,6 +28,8 @@ from ....DB_Management.Media_DB_v2 import (
     get_document_version,
     get_latest_transcription,
     get_media_transcripts,
+)
+from ....DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item,
 )
 from ...persona_scope import get_explicit_scope_ids, merge_requested_ids_with_scope

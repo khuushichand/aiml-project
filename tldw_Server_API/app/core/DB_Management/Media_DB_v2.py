@@ -143,9 +143,7 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
     upsert_transcript,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
-    check_media_and_whisper_model,
-    empty_trash,
-    permanently_delete_item,
+    permanently_delete_item as _permanently_delete_item,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.schema.bootstrap import (
     ensure_media_schema,
@@ -9721,7 +9719,7 @@ class MediaDatabase:
         for media_id in candidate_media_ids:
             try:
                 removed = (
-                    permanently_delete_item(self, media_id)
+                    _permanently_delete_item(self, media_id)
                     if hard_delete
                     else self.soft_delete_media(media_id, cascade=True)
                 )
@@ -9790,7 +9788,7 @@ class MediaDatabase:
         failed_media_ids: list[int] = []
         for media_id in media_ids:
             try:
-                removed = permanently_delete_item(self, int(media_id))
+                removed = _permanently_delete_item(self, int(media_id))
             except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(
                     "Tenant email hard delete failed for tenant={} media_id={}: {}",
