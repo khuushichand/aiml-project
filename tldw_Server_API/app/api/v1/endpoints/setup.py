@@ -19,6 +19,7 @@ from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_a
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Setup import install_manager, setup_manager
+from tldw_Server_API.app.core.Setup import audio_profile_service
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
@@ -104,6 +105,35 @@ async def get_install_status(_guard: None = Depends(require_local_setup_access))
         return {"status": "idle"}
 
     return install_status
+
+
+@router.get("/audio/recommendations", openapi_extra={"security": []})
+async def get_audio_recommendations(
+    prefer_offline_runtime: bool = True,
+    allow_hosted_fallbacks: bool = True,
+    _guard: None = Depends(require_local_setup_access),
+) -> dict[str, Any]:
+    """Return machine profile information and ranked audio setup bundle recommendations."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    machine_profile = audio_profile_service.detect_machine_profile()
+    recommendations = audio_profile_service.recommend_audio_bundles(
+        machine_profile,
+        prefer_offline_runtime=prefer_offline_runtime,
+        allow_hosted_fallbacks=allow_hosted_fallbacks,
+    )
+
+    return {
+        "machine_profile": (
+            machine_profile.model_dump()
+            if hasattr(machine_profile, "model_dump")
+            else dict(machine_profile)
+        ),
+        **recommendations,
+    }
 
 
 @router.post("/config", openapi_extra={"security": []})

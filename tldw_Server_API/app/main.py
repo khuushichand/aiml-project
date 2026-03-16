@@ -1134,6 +1134,7 @@ elif _MINIMAL_TEST_APP:
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
+    from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
 
     # Admin endpoints are used by several pytest modules; import for minimal app
     try:
@@ -5927,6 +5928,10 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _audit_min_err:
         logger.debug(f"Skipping audit router in minimal test app: {_audit_min_err}")
     # Config info endpoints (includes /api/v1/config/jobs used by OpenAPI tests)
+    try:
+        app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
+    except _IMPORT_EXCEPTIONS as _setup_min_err:
+        logger.debug(f"Skipping setup router in minimal test app: {_setup_min_err}")
     try:
         from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
 
